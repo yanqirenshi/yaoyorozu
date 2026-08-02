@@ -1,56 +1,36 @@
+import { NAV_MENU_ITEMS } from "./navigation";
+
+const NODE_WIDTH = 220;
+const NODE_HEIGHT = 100;
+const GAP_X = 100;
+const ROOT_ID = 1;
+
 export const SITEMAP_DATA = {
   nodes: [
     {
       type: "NODE",
-      id: 1,
-      label: { contents: "Home", position: { x: 20, y: 20 } },
-      size: { w: 220, h: 100 },
-      position: { x: 0, y: 0 },
+      id: ROOT_ID,
+      label: { contents: "YAOYOROZU", position: { x: 20, y: 20 } },
+      size: { w: NODE_WIDTH, h: NODE_HEIGHT },
+      position: {
+        x: ((NAV_MENU_ITEMS.length - 1) * (NODE_WIDTH + GAP_X)) / 2,
+        y: 0,
+      },
       children: [],
     },
-    {
+    ...NAV_MENU_ITEMS.map((item, index) => ({
       type: "NODE",
-      id: 2,
-      label: { contents: "About", position: { x: 20, y: 20 } },
-      size: { w: 220, h: 100 },
-      position: { x: 0, y: 260 },
+      id: ROOT_ID + index + 1,
+      label: { contents: item.label, position: { x: 20, y: 20 } },
+      size: { w: NODE_WIDTH, h: NODE_HEIGHT },
+      position: { x: index * (NODE_WIDTH + GAP_X), y: 260 },
       children: [],
-    },
-    {
-      type: "NODE",
-      id: 3,
-      label: { contents: "Products", position: { x: 20, y: 20 } },
-      size: { w: 220, h: 100 },
-      position: { x: 320, y: 260 },
-      children: [],
-    },
-    {
-      type: "NODE",
-      id: 4,
-      label: { contents: "Contact", position: { x: 20, y: 20 } },
-      size: { w: 220, h: 100 },
-      position: { x: 640, y: 260 },
-      children: [],
-    },
+    })),
   ],
-  edges: [
-    {
-      id: 100,
-      from: { id: 1, position: 0 },
-      to: { id: 2, position: 180 },
-      stroke: { color: "#333333", width: 1.5 },
-    },
-    {
-      id: 101,
-      from: { id: 1, position: 0 },
-      to: { id: 3, position: 180 },
-      stroke: { color: "#333333", width: 1.5 },
-    },
-    {
-      id: 102,
-      from: { id: 1, position: 0 },
-      to: { id: 4, position: 180 },
-      stroke: { color: "#333333", width: 1.5 },
-    },
-  ],
+  edges: NAV_MENU_ITEMS.map((_, index) => ({
+    id: 100 + index,
+    from: { id: ROOT_ID, position: 0 },
+    to: { id: ROOT_ID + index + 1, position: 180 },
+    stroke: { color: "#333333", width: 1.5 },
+  })),
 };

@@ -2,8 +2,8 @@
 @import "bulma/css/bulma.min.css";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #fbfbf8;
+  --foreground: #373737;
 }
 
 @theme inline {

@@ -1,5 +1,10 @@
+import DiagramPage from "../DiagramPage";
 import ClassesTab from "../tabs/ClassesTab";
 
 export default function ClassDiagramPage() {
-  return <ClassesTab />;
+  return (
+    <DiagramPage wbsStartId={25}>
+      <ClassesTab />
+    </DiagramPage>
+  );
 }

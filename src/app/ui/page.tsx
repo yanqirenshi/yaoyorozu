@@ -1,5 +1,10 @@
+import DiagramPage from "../DiagramPage";
 import UiDesignTab from "../tabs/UiDesignTab";
 
 export default function UiPage() {
-  return <UiDesignTab />;
+  return (
+    <DiagramPage wbsStartId={23}>
+      <UiDesignTab />
+    </DiagramPage>
+  );
 }
