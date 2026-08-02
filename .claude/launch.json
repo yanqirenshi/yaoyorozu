@@ -2,10 +2,17 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "yaoyorozu-dev",
+      "name": "yaoyorozu-web",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": ["run", "dev", "--workspace=web"],
       "port": 3000,
+      "autoPort": true
+    },
+    {
+      "name": "yaoyorozu-native",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--workspace=native"],
+      "port": 1420,
       "autoPort": true
     }
   ]

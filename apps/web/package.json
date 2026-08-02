@@ -1,0 +1,41 @@
+{
+  "name": "web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@mui/material": "^9.2.0",
+    "@mui/material-nextjs": "^9.1.1",
+    "@yanqirenshi/colonoscope": "^0.1.0",
+    "@yanqirenshi/d3.classes": "^0.5.0",
+    "@yanqirenshi/d3.deployment": "^0.8.4",
+    "@yanqirenshi/d3.sitemap": "^0.5.1",
+    "@yanqirenshi/d3.ter": "^0.1.16",
+    "@yanqirenshi/d3.wireframe": "^0.1.1",
+    "@yanqirenshi/table.wbs": "^0.0.16",
+    "@yanqirenshi/wnqi.big.size": "^0.0.2",
+    "bulma": "^0.9.1",
+    "next": "16.2.12",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "regenerator-runtime": "^0.14.1",
+    "tion": "^0.0.11"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.12",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
