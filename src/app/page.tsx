@@ -1,5 +1,5 @@
-import AppTabs from "./AppTabs";
+import { redirect } from "next/navigation";
 
 export default function Home() {
-  return <AppTabs />;
+  redirect("/wbs");
 }
