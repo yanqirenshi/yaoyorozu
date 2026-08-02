@@ -5,3 +5,7 @@
 - コード内のコメントは日本語で記述
 - エラーメッセージの解説は日本語で
 - README.mdなどのドキュメントも日本語で作成
+
+## Git Commit Guidelines
+
+- git commit のメッセージに Claude が生成した旨の記述(例: "Co-Authored-By: Claude" や "Generated with Claude Code" など)を含めない
