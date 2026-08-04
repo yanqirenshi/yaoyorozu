@@ -65,7 +65,7 @@ fn list_projects() -> Result<Vec<ProjectSummary>, String> {
         })
         .collect();
 
-    projects.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    projects.sort_by_key(|p| std::cmp::Reverse(p.updated_at));
     Ok(projects)
 }
 
@@ -120,7 +120,7 @@ fn get_latest_session(project: String) -> Result<Vec<ConversationMessage>, Strin
 
     let messages = BufReader::new(file)
         .lines()
-        .filter_map(|line| line.ok())
+        .map_while(Result::ok)
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
         .filter_map(|value| extract_message(&value))
         .collect();
