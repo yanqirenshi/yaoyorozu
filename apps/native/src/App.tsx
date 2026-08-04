@@ -1,50 +1,71 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 
-function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+type ProjectSummary = {
+  name: string;
+  updated_at: number;
+};
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+type ConversationMessage = {
+  role: string;
+  text: string;
+  timestamp: string;
+};
+
+function App() {
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [messages, setMessages] = useState<ConversationMessage[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    invoke<ProjectSummary[]>("list_projects")
+      .then(setProjects)
+      .catch((e) => setError(String(e)));
+  }, []);
+
+  useEffect(() => {
+    if (!selected) return;
+    setMessages([]);
+    invoke<ConversationMessage[]>("get_latest_session", { project: selected })
+      .then(setMessages)
+      .catch((e) => setError(String(e)));
+  }, [selected]);
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
-
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
+    <div className="app-shell">
+      <div className="project-list">
+        <h2>
+          c:/Users/yanqi/.claude/projects/
+          <br />
+          配下のフォルダ一覧
+        </h2>
+        {projects.map((p) => (
+          <button
+            key={p.name}
+            className={`project-item ${p.name === selected ? "selected" : ""}`}
+            onClick={() => setSelected(p.name)}
+          >
+            {p.name}
+          </button>
+        ))}
       </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
+      <div className="session-conversation">
+        <h2>セッションの会話</h2>
+        {error && <p className="error">{error}</p>}
+        <div className="messages">
+          {messages.map((m, i) => (
+            <div key={i} className={`message message-${m.role}`}>
+              <div className="message-role">
+                {m.role === "user" ? "User" : "Claude"}
+              </div>
+              <div className="message-text">{m.text}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 
