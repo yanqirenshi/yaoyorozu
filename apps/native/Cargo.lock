@@ -52,6 +52,7 @@ name = "app"
 version = "0.1.0"
 dependencies = [
  "domain",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -794,7 +795,6 @@ dependencies = [
 name = "domain"
 version = "0.1.0"
 dependencies = [
- "serde",
  "serde_json",
 ]
 
@@ -1714,6 +1714,7 @@ dependencies = [
 name = "infra"
 version = "0.1.0"
 dependencies = [
+ "app",
  "domain",
  "serde_json",
 ]
@@ -2023,8 +2024,10 @@ dependencies = [
 name = "native"
 version = "0.1.0"
 dependencies = [
+ "app",
+ "domain",
+ "infra",
  "serde",
- "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",

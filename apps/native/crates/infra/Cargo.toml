@@ -3,6 +3,11 @@ name = "infra"
 version = "0.1.0"
 edition = "2021"
 
+# native.md は「依存の向き: infra → domain」と記すが、ports(トレイト)は
+# app に定義される(crates/app/ ports をトレイトで定義)ため、infra がそれを
+# 実装するには app への依存が構造上必須(トレイトの orphan rule)。
+# domain のみに依存する経路は存在しないため、ここでは app にも依存する。
 [dependencies]
 domain = { path = "../domain" }
+app = { path = "../app" }
 serde_json = "1"

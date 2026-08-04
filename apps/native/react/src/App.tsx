@@ -1,36 +1,26 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { getLatestSession, isAppError, listProjects } from "./api";
+import type { MessageDto, ProjectDto } from "./api";
 import "./App.css";
 
-type ProjectSummary = {
-  name: string;
-  updated_at: number;
-};
-
-type ConversationMessage = {
-  role: string;
-  text: string;
-  timestamp: string;
-};
-
 function App() {
-  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [projects, setProjects] = useState<ProjectDto[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
-  const [messages, setMessages] = useState<ConversationMessage[]>([]);
+  const [messages, setMessages] = useState<MessageDto[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    invoke<ProjectSummary[]>("list_projects")
+    listProjects()
       .then(setProjects)
-      .catch((e) => setError(String(e)));
+      .catch((e) => setError(isAppError(e) ? e.message : String(e)));
   }, []);
 
   useEffect(() => {
     if (!selected) return;
     setMessages([]);
-    invoke<ConversationMessage[]>("get_latest_session", { project: selected })
+    getLatestSession(selected)
       .then(setMessages)
-      .catch((e) => setError(String(e)));
+      .catch((e) => setError(isAppError(e) ? e.message : String(e)));
   }, [selected]);
 
   return (
