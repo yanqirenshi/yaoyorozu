@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, type SyntheticEvent } from "react";
+import { Suspense, type ReactNode, type SyntheticEvent } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Box from "@mui/material/Box";
 import Tab from "@mui/material/Tab";
@@ -10,13 +10,20 @@ import WbsTab from "./tabs/WbsTab";
 const TAB_DIAGRAM = "diagram";
 const TAB_WBS = "wbs";
 
-export default function DiagramPage({
-  children,
-  wbsStartId,
-}: {
+type DiagramPageProps = {
   children: ReactNode;
   wbsStartId?: number;
-}) {
+};
+
+export default function DiagramPage(props: DiagramPageProps) {
+  return (
+    <Suspense>
+      <DiagramPageContent {...props} />
+    </Suspense>
+  );
+}
+
+function DiagramPageContent({ children, wbsStartId }: DiagramPageProps) {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
