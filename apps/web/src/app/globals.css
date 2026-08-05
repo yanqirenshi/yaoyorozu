@@ -2,6 +2,8 @@
 @import "bulma/css/bulma.min.css";
 
 :root {
+  /* COLOR_PALETTE(src/data/uiDesign.ts)の 真珠(#fbfbf8) / 墨(#373737) 由来。
+     CSS から TS の値を直接参照できないための値の重複であり、変更時は両方を揃えること。 */
   --background: #fbfbf8;
   --foreground: #373737;
 }
