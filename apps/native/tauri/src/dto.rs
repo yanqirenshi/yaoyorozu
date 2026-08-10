@@ -65,6 +65,10 @@ impl From<app::AppError> for AppErrorDto {
                 code: "io_error".to_string(),
                 message,
             },
+            app::AppError::InvalidInput(message) => Self {
+                code: "invalid_input".to_string(),
+                message,
+            },
         }
     }
 }

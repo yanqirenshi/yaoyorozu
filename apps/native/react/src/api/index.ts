@@ -11,6 +11,10 @@ export function getLatestSession(project: string): Promise<MessageDto[]> {
   return invoke<MessageDto[]>("get_latest_session", { project });
 }
 
+export function sendMessage(project: string, text: string): Promise<void> {
+  return invoke<void>("send_message", { project, text });
+}
+
 export function isAppError(error: unknown): error is AppErrorDto {
   return (
     typeof error === "object" &&

@@ -21,6 +21,11 @@ pub fn sort_projects_by_recency(projects: &mut [Project]) {
     projects.sort_by_key(|p| std::cmp::Reverse(p.updated_at_ms));
 }
 
+/// 会話ログは記録順(古い順)で保持されるため、表示直前に反転して新しい順にする。
+pub fn order_messages_newest_first(messages: &mut [Message]) {
+    messages.reverse();
+}
+
 fn message_text(content: &serde_json::Value) -> String {
     match content {
         serde_json::Value::String(s) => s.clone(),
@@ -63,6 +68,11 @@ pub fn extract_message(value: &serde_json::Value) -> Option<Message> {
     })
 }
 
+/// 1行分のJSONLエントリから、そのセッションの作業ディレクトリ(cwd)を取り出す。
+pub fn extract_cwd(value: &serde_json::Value) -> Option<String> {
+    value.get("cwd").and_then(|c| c.as_str()).map(String::from)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,6 +99,27 @@ mod tests {
 
         let names: Vec<&str> = projects.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, vec!["new", "mid", "old"]);
+    }
+
+    #[test]
+    fn order_messages_newest_first_reverses_record_order() {
+        let mut messages = vec![
+            Message {
+                role: Role::User,
+                text: "first".to_string(),
+                timestamp: "1".to_string(),
+            },
+            Message {
+                role: Role::Assistant,
+                text: "second".to_string(),
+                timestamp: "2".to_string(),
+            },
+        ];
+
+        order_messages_newest_first(&mut messages);
+
+        let texts: Vec<&str> = messages.iter().map(|m| m.text.as_str()).collect();
+        assert_eq!(texts, vec!["second", "first"]);
     }
 
     #[test]
@@ -153,5 +184,20 @@ mod tests {
     fn extract_message_skips_when_message_field_missing() {
         let value = json!({ "type": "user" });
         assert!(extract_message(&value).is_none());
+    }
+
+    #[test]
+    fn extract_cwd_reads_field_when_present() {
+        let value = json!({ "cwd": "C:\\Users\\yanqi\\prj\\yaoyorozu" });
+        assert_eq!(
+            extract_cwd(&value).as_deref(),
+            Some("C:\\Users\\yanqi\\prj\\yaoyorozu")
+        );
+    }
+
+    #[test]
+    fn extract_cwd_returns_none_when_missing() {
+        let value = json!({ "type": "user" });
+        assert!(extract_cwd(&value).is_none());
     }
 }

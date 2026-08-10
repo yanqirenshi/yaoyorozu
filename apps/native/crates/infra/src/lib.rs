@@ -1,9 +1,14 @@
 use app::{AppError, ProjectRepository, SessionRepository};
-use domain::{extract_message, Message, Project};
+use domain::{extract_cwd, extract_message, Message, Project};
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
+use std::process::{Command, ExitStatus, Stdio};
+use std::time::{Duration, Instant, UNIX_EPOCH};
+
+/// `send_message` の待ち上限。ツール実行なしのテキスト応答のみを想定するため、
+/// フルツールのエージェント実行を前提とした一般的な目安(600秒)より短く取る。
+const SEND_MESSAGE_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub struct FileSystemRepository {
     projects_dir: PathBuf,
@@ -39,6 +44,110 @@ fn latest_session_file(project_dir: &Path) -> Option<PathBuf> {
         .map(|entry| entry.path())
         .filter(|path| path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("jsonl"))
         .max_by_key(|path| to_millis(fs::metadata(path).and_then(|m| m.modified())))
+}
+
+/// 最新セッションファイルに記録されている、セッション開始時点の作業ディレクトリ(cwd)を返す。
+/// `claude` はカレントディレクトリ配下のプロジェクトとしてセッションを保存するため、
+/// 元の会話と同じプロジェクトに新規セッションを作るには同じ cwd で起動する必要がある。
+/// セッション途中で(Bash の cd 等により)cwd が変わることがあるため、
+/// 最後の値ではなく最初に記録された値(＝プロジェクトのルート)を使う。
+fn latest_session_cwd(project_dir: &Path) -> Result<PathBuf, AppError> {
+    let path = latest_session_file(project_dir)
+        .ok_or_else(|| AppError::NotFound("セッションが見つかりません".to_string()))?;
+
+    let file = fs::File::open(&path)
+        .map_err(|e| AppError::Io(format!("{} を開けませんでした: {}", path.display(), e)))?;
+
+    let cwd = BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
+        .find_map(|value| extract_cwd(&value))
+        .ok_or_else(|| {
+            AppError::Io("セッションの作業ディレクトリを取得できませんでした".to_string())
+        })?;
+
+    Ok(PathBuf::from(cwd))
+}
+
+/// プロセス起動時の `io::Error` を分類する。
+/// 実行ファイル自体が見つからない場合と、それ以外の起動失敗を区別する。
+fn map_spawn_error(program: &str, e: std::io::Error) -> AppError {
+    if e.kind() == std::io::ErrorKind::NotFound {
+        AppError::Io(format!(
+            "{program} コマンドが見つかりません。インストールされているか確認してください。"
+        ))
+    } else {
+        AppError::Io(format!("{program} の起動に失敗しました: {e}"))
+    }
+}
+
+/// 終了ステータスの短い説明(シークレットを含まない)。
+fn describe_exit(status: &ExitStatus) -> String {
+    match status.code() {
+        Some(code) => format!("終了コード {code}"),
+        None => "シグナルにより終了".to_string(),
+    }
+}
+
+/// `command` をタイムアウト付きで実行し、標準出力を文字列で返す。
+///
+/// stderr は `Stdio::null()` で握りつぶす。トークンやパス等が含まれうるため、
+/// エラーメッセージに生のstderrを埋め込まない(失敗理由は終了ステータスのみ)。
+/// 標準出力はブロッキング取得によるパイプ詰まりを避けるため、別スレッドで
+/// 待機と並行して読み進める。タイムアウト時はプロセスを kill する。
+fn run_with_timeout(mut command: Command, timeout: Duration) -> Result<String, AppError> {
+    command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .stdin(Stdio::null());
+
+    let program = command.get_program().to_string_lossy().to_string();
+    let mut child = command.spawn().map_err(|e| map_spawn_error(&program, e))?;
+
+    let mut stdout_pipe = child
+        .stdout
+        .take()
+        .ok_or_else(|| AppError::Io(format!("{program} の標準出力を取得できませんでした")))?;
+    let reader = std::thread::spawn(move || {
+        let mut buf = String::new();
+        let _ = stdout_pipe.read_to_string(&mut buf);
+        buf
+    });
+
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = reader.join();
+                    return Err(AppError::Io(format!(
+                        "{program} がタイムアウトしました({}秒)",
+                        timeout.as_secs()
+                    )));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                let _ = reader.join();
+                return Err(AppError::Io(format!("{program} の待機に失敗しました: {e}")));
+            }
+        }
+    };
+
+    let stdout = reader.join().unwrap_or_default();
+
+    if !status.success() {
+        return Err(AppError::Io(format!(
+            "{program} が失敗しました({})",
+            describe_exit(&status)
+        )));
+    }
+
+    Ok(stdout)
 }
 
 impl ProjectRepository for FileSystemRepository {
@@ -87,5 +196,127 @@ impl SessionRepository for FileSystemRepository {
             .collect();
 
         Ok(messages)
+    }
+
+    fn send_message(&self, project: &str, text: &str) -> Result<(), AppError> {
+        let project_dir = self.projects_dir.join(project);
+        let cwd = latest_session_cwd(&project_dir)?;
+
+        if !cwd.is_dir() {
+            return Err(AppError::NotFound(format!(
+                "作業ディレクトリが見つかりません: {}",
+                cwd.display()
+            )));
+        }
+
+        // claude-desktop 起源のセッションは CLI の --resume では継続できないため、
+        // 同じプロジェクト配下に新規セッションとして送信する(既存の会話とは別の会話になる)。
+        // ツール実行(Bash/Edit等)は許可しない。GUIのテキスト欄からの入力で
+        // ファイル操作やコマンド実行まで確認なしに行わせるのは危険なため。
+        let mut command = Command::new("claude");
+        command
+            .current_dir(&cwd)
+            .arg("--tools")
+            .arg("")
+            .arg("--print")
+            .arg(text);
+
+        run_with_timeout(command, SEND_MESSAGE_TIMEOUT)?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// プラットフォームのシェル経由で `body` を標準出力に書き出すコマンド。
+    /// 実際の `claude` を起動せず、プロセス実行の骨格(spawn/wait/timeout/stdout取得)
+    /// だけをテストするためのフェイク。
+    fn echo_command(body: &str) -> Command {
+        if cfg!(windows) {
+            let mut c = Command::new("cmd");
+            c.args(["/C", "echo", body]);
+            c
+        } else {
+            let mut c = Command::new("sh");
+            c.args(["-c", &format!("printf '%s' '{body}'")]);
+            c
+        }
+    }
+
+    fn exit_with(code: i32) -> Command {
+        if cfg!(windows) {
+            let mut c = Command::new("cmd");
+            c.args(["/C", "exit", &code.to_string()]);
+            c
+        } else {
+            let mut c = Command::new("sh");
+            c.args(["-c", &format!("exit {code}")]);
+            c
+        }
+    }
+
+    fn sleep_command(secs: u64) -> Command {
+        if cfg!(windows) {
+            // ping の間隔待ちで代用(sleepに相当するコマンドが標準にないため)。
+            let mut c = Command::new("cmd");
+            c.args([
+                "/C",
+                "ping",
+                "-n",
+                &(secs + 1).to_string(),
+                "127.0.0.1",
+                ">nul",
+            ]);
+            c
+        } else {
+            let mut c = Command::new("sh");
+            c.args(["-c", &format!("sleep {secs}")]);
+            c
+        }
+    }
+
+    #[test]
+    fn run_with_timeout_captures_stdout_on_success() {
+        let stdout = run_with_timeout(echo_command("hello"), Duration::from_secs(5))
+            .expect("fake echo should succeed");
+        assert!(stdout.contains("hello"), "got: {stdout:?}");
+    }
+
+    #[test]
+    fn run_with_timeout_fails_on_nonzero_exit_without_leaking_stderr() {
+        let error = run_with_timeout(exit_with(1), Duration::from_secs(5))
+            .expect_err("nonzero exit should be an error");
+        let message = match error {
+            AppError::Io(message) => message,
+            other => panic!("expected Io error, got {other:?}"),
+        };
+        assert!(message.contains("終了コード"), "got: {message}");
+    }
+
+    #[test]
+    fn run_with_timeout_kills_overrunning_process() {
+        let error = run_with_timeout(sleep_command(5), Duration::from_millis(200))
+            .expect_err("should time out");
+        let message = match error {
+            AppError::Io(message) => message,
+            other => panic!("expected Io error, got {other:?}"),
+        };
+        assert!(message.contains("タイムアウト"), "got: {message}");
+    }
+
+    #[test]
+    fn run_with_timeout_reports_missing_program_distinctly() {
+        let error = run_with_timeout(
+            Command::new("definitely-not-a-real-program-xyz-987"),
+            Duration::from_secs(5),
+        )
+        .expect_err("missing program should error");
+        let message = match error {
+            AppError::Io(message) => message,
+            other => panic!("expected Io error, got {other:?}"),
+        };
+        assert!(message.contains("見つかりません"), "got: {message}");
     }
 }

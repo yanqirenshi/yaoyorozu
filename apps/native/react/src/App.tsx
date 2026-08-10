@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
-import { getLatestSession, isAppError, listProjects } from "./api";
+import type { FormEvent } from "react";
+import { getLatestSession, isAppError, listProjects, sendMessage } from "./api";
 import type { MessageDto, ProjectDto } from "./api";
+import MessageText from "./MessageText";
 import "./App.css";
 
 function App() {
@@ -8,6 +10,8 @@ function App() {
   const [selected, setSelected] = useState<string | null>(null);
   const [messages, setMessages] = useState<MessageDto[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
 
   useEffect(() => {
     listProjects()
@@ -22,6 +26,22 @@ function App() {
       .then(setMessages)
       .catch((e) => setError(isAppError(e) ? e.message : String(e)));
   }, [selected]);
+
+  const handleSubmit = (event: FormEvent) => {
+    event.preventDefault();
+    if (!selected || sending || !draft.trim()) return;
+
+    setSending(true);
+    setError(null);
+    sendMessage(selected, draft)
+      .then(() => {
+        setDraft("");
+        return getLatestSession(selected);
+      })
+      .then(setMessages)
+      .catch((e) => setError(isAppError(e) ? e.message : String(e)))
+      .finally(() => setSending(false));
+  };
 
   return (
     <div className="app-shell">
@@ -42,17 +62,32 @@ function App() {
         ))}
       </div>
       <div className="session-conversation">
-        <h2>セッションの会話</h2>
-        {error && <p className="error">{error}</p>}
-        <div className="messages">
-          {messages.map((m, i) => (
-            <div key={i} className={`message message-${m.role}`}>
-              <div className="message-role">
-                {m.role === "user" ? "User" : "Claude"}
+        <form className="message-form" onSubmit={handleSubmit}>
+          <input
+            type="text"
+            className="message-input"
+            placeholder="AIにメッセージを送る"
+            value={draft}
+            disabled={!selected || sending}
+            onChange={(e) => setDraft(e.target.value)}
+          />
+          <button
+            type="submit"
+            className="message-send"
+            disabled={!selected || sending || !draft.trim()}
+          >
+            {sending ? "送信中…" : "送信"}
+          </button>
+        </form>
+        <div className="conversation-scroll">
+          {error && <p className="error">{error}</p>}
+          <div className="messages">
+            {messages.map((m, i) => (
+              <div key={i} className={`message message-${m.role}`}>
+                <MessageText text={m.text} />
               </div>
-              <div className="message-text">{m.text}</div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       </div>
     </div>
