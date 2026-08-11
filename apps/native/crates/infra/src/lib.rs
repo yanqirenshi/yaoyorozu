@@ -47,15 +47,36 @@ fn to_millis(time: std::io::Result<std::time::SystemTime>) -> u64 {
         .unwrap_or(0)
 }
 
-/// ディレクトリ直下(サブディレクトリは見ない)の *.jsonl のうち、
-/// 最終更新が最も新しいものを返す。
-fn latest_session_file(project_dir: &Path) -> Option<PathBuf> {
-    fs::read_dir(project_dir)
-        .ok()?
+/// ディレクトリ直下(サブディレクトリは見ない)の *.jsonl を、
+/// 最終更新が新しい順に並べて返す。
+fn session_files_by_recency(project_dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(project_dir) else {
+        return Vec::new();
+    };
+    let mut files: Vec<PathBuf> = entries
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path())
         .filter(|path| path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("jsonl"))
-        .max_by_key(|path| to_millis(fs::metadata(path).and_then(|m| m.modified())))
+        .collect();
+    files.sort_by_key(|path| {
+        std::cmp::Reverse(to_millis(fs::metadata(path).and_then(|m| m.modified())))
+    });
+    files
+}
+
+/// ディレクトリ直下の *.jsonl のうち、最終更新が最も新しいものを返す。
+fn latest_session_file(project_dir: &Path) -> Option<PathBuf> {
+    session_files_by_recency(project_dir).into_iter().next()
+}
+
+/// セッションファイルに記録されている entrypoint を読み取る。
+fn session_entrypoint(path: &Path) -> Option<String> {
+    let file = fs::File::open(path).ok()?;
+    BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
+        .find_map(|value| extract_entrypoint(&value))
 }
 
 /// 最新セッションファイルに記録されている、セッション開始時点の作業ディレクトリ(cwd)を返す。
@@ -82,24 +103,22 @@ fn latest_session_cwd(project_dir: &Path) -> Result<PathBuf, AppError> {
     Ok(PathBuf::from(cwd))
 }
 
-/// 最新セッションが `claude` CLI から resume 可能なら、その ID(ファイル名)を返す。
-/// Claude Desktop 由来のセッションは resume できないため `None` を返し、
-/// 呼び出し側は新規セッションとして送信する。
+/// 新しい順に見て、`claude` CLI から resume 可能な直近のセッションIDを返す。
+///
+/// 単純に「最新の1件」だけを見ると、その後に(Claude Desktop等の)
+/// resume不可能なセッションが割り込んだ時点でアプリ自身の会話を見失う。
+/// resume可能なものが見つかるまで新しい順に遡って探すことで、
+/// 間に別のセッションが挟まっても継続対象を取りこぼさないようにする。
 fn latest_resumable_session_id(project_dir: &Path) -> Option<String> {
-    let path = latest_session_file(project_dir)?;
-    let file = fs::File::open(&path).ok()?;
-
-    let entrypoint = BufReader::new(file)
-        .lines()
-        .map_while(Result::ok)
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
-        .find_map(|value| extract_entrypoint(&value))?;
-
-    if !is_resumable_entrypoint(&entrypoint) {
-        return None;
-    }
-
-    path.file_stem().and_then(|s| s.to_str()).map(String::from)
+    session_files_by_recency(project_dir)
+        .into_iter()
+        .find_map(|path| {
+            let entrypoint = session_entrypoint(&path)?;
+            if !is_resumable_entrypoint(&entrypoint) {
+                return None;
+            }
+            path.file_stem().and_then(|s| s.to_str()).map(String::from)
+        })
 }
 
 /// `send_message` 用の `claude` コマンドを組み立てる。
@@ -356,6 +375,29 @@ mod tests {
     fn latest_resumable_session_id_returns_none_when_no_sessions() {
         let dir = tempfile::tempdir().unwrap();
         assert!(latest_resumable_session_id(dir.path()).is_none());
+    }
+
+    #[test]
+    fn latest_resumable_session_id_skips_over_a_newer_unresumable_session() {
+        // 実際に起きたケース: アプリが作った resume 可能なセッションの後に、
+        // 別の(Claude Desktop等の)セッションが新しく作られても、
+        // アプリ自身の会話を見失わずに継続対象として見つけられる必要がある。
+        let dir = tempfile::tempdir().unwrap();
+        write_session(dir.path(), "app-session", "sdk-cli");
+        std::thread::sleep(Duration::from_millis(20));
+        write_session(dir.path(), "desktop-session", "claude-desktop");
+
+        assert_eq!(
+            latest_session_file(dir.path())
+                .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string())),
+            Some("desktop-session".to_string()),
+            "最新ファイル自体はDesktopセッションのはず"
+        );
+        assert_eq!(
+            latest_resumable_session_id(dir.path()).as_deref(),
+            Some("app-session"),
+            "resume対象は新しい順に遡ってアプリのセッションを見つけるはず"
+        );
     }
 
     /// プラットフォームのシェル経由で `body` を標準出力に書き出すコマンド。
