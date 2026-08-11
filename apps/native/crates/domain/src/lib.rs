@@ -73,6 +73,21 @@ pub fn extract_cwd(value: &serde_json::Value) -> Option<String> {
     value.get("cwd").and_then(|c| c.as_str()).map(String::from)
 }
 
+/// 1行分のJSONLエントリから、そのセッションの起点(entrypoint)を取り出す。
+pub fn extract_entrypoint(value: &serde_json::Value) -> Option<String> {
+    value
+        .get("entrypoint")
+        .and_then(|e| e.as_str())
+        .map(String::from)
+}
+
+/// Claude Desktop 由来のセッション(entrypoint = "claude-desktop")は
+/// スタンドアロンの claude CLI の `--resume` では見つけられないため、
+/// それ以外の entrypoint のみ再開可能とみなす。
+pub fn is_resumable_entrypoint(entrypoint: &str) -> bool {
+    entrypoint != "claude-desktop"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,5 +214,24 @@ mod tests {
     fn extract_cwd_returns_none_when_missing() {
         let value = json!({ "type": "user" });
         assert!(extract_cwd(&value).is_none());
+    }
+
+    #[test]
+    fn extract_entrypoint_reads_field_when_present() {
+        let value = json!({ "entrypoint": "sdk-cli" });
+        assert_eq!(extract_entrypoint(&value).as_deref(), Some("sdk-cli"));
+    }
+
+    #[test]
+    fn extract_entrypoint_returns_none_when_missing() {
+        let value = json!({ "type": "user" });
+        assert!(extract_entrypoint(&value).is_none());
+    }
+
+    #[test]
+    fn is_resumable_entrypoint_rejects_claude_desktop_only() {
+        assert!(!is_resumable_entrypoint("claude-desktop"));
+        assert!(is_resumable_entrypoint("sdk-cli"));
+        assert!(is_resumable_entrypoint("cli"));
     }
 }

@@ -1,5 +1,7 @@
 use app::{AppError, ProjectRepository, SessionRepository};
-use domain::{extract_cwd, extract_message, Message, Project};
+use domain::{
+    extract_cwd, extract_entrypoint, extract_message, is_resumable_entrypoint, Message, Project,
+};
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -9,6 +11,16 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 /// `send_message` の待ち上限。ツール実行なしのテキスト応答のみを想定するため、
 /// フルツールのエージェント実行を前提とした一般的な目安(600秒)より短く取る。
 const SEND_MESSAGE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// 起動元(Claude Desktop等)を示す環境変数。子プロセスがこれを引き継ぐと
+/// `entrypoint: "claude-desktop"` として記録され、CLI の `--resume` で
+/// 見つけられなくなる。`claude` 起動前に必ず取り除く。
+const DESKTOP_LINEAGE_ENV_VARS: &[&str] = &[
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDECODE",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_PID",
+];
 
 pub struct FileSystemRepository {
     projects_dir: PathBuf,
@@ -68,6 +80,44 @@ fn latest_session_cwd(project_dir: &Path) -> Result<PathBuf, AppError> {
         })?;
 
     Ok(PathBuf::from(cwd))
+}
+
+/// 最新セッションが `claude` CLI から resume 可能なら、その ID(ファイル名)を返す。
+/// Claude Desktop 由来のセッションは resume できないため `None` を返し、
+/// 呼び出し側は新規セッションとして送信する。
+fn latest_resumable_session_id(project_dir: &Path) -> Option<String> {
+    let path = latest_session_file(project_dir)?;
+    let file = fs::File::open(&path).ok()?;
+
+    let entrypoint = BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
+        .find_map(|value| extract_entrypoint(&value))?;
+
+    if !is_resumable_entrypoint(&entrypoint) {
+        return None;
+    }
+
+    path.file_stem().and_then(|s| s.to_str()).map(String::from)
+}
+
+/// `send_message` 用の `claude` コマンドを組み立てる。
+/// `resume_id` を渡すと該当セッションの継続、`None` なら新規セッションになる。
+fn build_send_message_command(cwd: &Path, text: &str, resume_id: Option<&str>) -> Command {
+    let mut command = Command::new("claude");
+    command.current_dir(cwd);
+    for var in DESKTOP_LINEAGE_ENV_VARS {
+        command.env_remove(var);
+    }
+    // ツール実行(Bash/Edit等)は許可しない。GUIのテキスト欄からの入力で
+    // ファイル操作やコマンド実行まで確認なしに行わせるのは危険なため。
+    command.arg("--tools").arg("");
+    if let Some(id) = resume_id {
+        command.arg("--resume").arg(id);
+    }
+    command.arg("--print").arg(text);
+    command
 }
 
 /// プロセス起動時の `io::Error` を分類する。
@@ -209,18 +259,20 @@ impl SessionRepository for FileSystemRepository {
             )));
         }
 
-        // claude-desktop 起源のセッションは CLI の --resume では継続できないため、
-        // 同じプロジェクト配下に新規セッションとして送信する(既存の会話とは別の会話になる)。
-        // ツール実行(Bash/Edit等)は許可しない。GUIのテキスト欄からの入力で
-        // ファイル操作やコマンド実行まで確認なしに行わせるのは危険なため。
-        let mut command = Command::new("claude");
-        command
-            .current_dir(&cwd)
-            .arg("--tools")
-            .arg("")
-            .arg("--print")
-            .arg(text);
+        // 直前がアプリ自身の作成したセッション(resume可能)なら継続し、
+        // そうでなければ(claude-desktop起源、またはまだセッションが無い場合)
+        // 新規セッションとして送信する。
+        let resume_id = latest_resumable_session_id(&project_dir);
 
+        if let Some(id) = &resume_id {
+            let command = build_send_message_command(&cwd, text, Some(id));
+            if run_with_timeout(command, SEND_MESSAGE_TIMEOUT).is_ok() {
+                return Ok(());
+            }
+            // resumeに失敗した場合は新規セッションとして送り直す。
+        }
+
+        let command = build_send_message_command(&cwd, text, None);
         run_with_timeout(command, SEND_MESSAGE_TIMEOUT)?;
         Ok(())
     }
@@ -229,6 +281,82 @@ impl SessionRepository for FileSystemRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::File;
+    use std::io::Write;
+
+    fn args_of(command: &Command) -> Vec<String> {
+        command
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn build_send_message_command_without_resume_has_no_resume_flag() {
+        let cwd = std::env::current_dir().unwrap();
+        let command = build_send_message_command(&cwd, "hello", None);
+        assert_eq!(args_of(&command), vec!["--tools", "", "--print", "hello"]);
+    }
+
+    #[test]
+    fn build_send_message_command_with_resume_includes_resume_flag() {
+        let cwd = std::env::current_dir().unwrap();
+        let command = build_send_message_command(&cwd, "hello", Some("abc-123"));
+        assert_eq!(
+            args_of(&command),
+            vec!["--tools", "", "--resume", "abc-123", "--print", "hello"]
+        );
+    }
+
+    #[test]
+    fn build_send_message_command_removes_desktop_lineage_env_vars() {
+        let cwd = std::env::current_dir().unwrap();
+        let command = build_send_message_command(&cwd, "hello", None);
+        let removed: Vec<String> = command
+            .get_envs()
+            .filter(|(_, v)| v.is_none())
+            .map(|(k, _)| k.to_string_lossy().to_string())
+            .collect();
+        for var in DESKTOP_LINEAGE_ENV_VARS {
+            assert!(
+                removed.contains(&(*var).to_string()),
+                "expected {var} to be removed, got {removed:?}"
+            );
+        }
+    }
+
+    fn write_session(dir: &Path, id: &str, entrypoint: &str) {
+        let mut file = File::create(dir.join(format!("{id}.jsonl"))).unwrap();
+        writeln!(
+            file,
+            r#"{{"type":"user","entrypoint":"{entrypoint}","cwd":"{}"}}"#,
+            dir.display().to_string().replace('\\', "\\\\")
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn latest_resumable_session_id_returns_none_for_claude_desktop() {
+        let dir = tempfile::tempdir().unwrap();
+        write_session(dir.path(), "d1", "claude-desktop");
+        assert!(latest_resumable_session_id(dir.path()).is_none());
+    }
+
+    #[test]
+    fn latest_resumable_session_id_returns_id_for_sdk_cli() {
+        let dir = tempfile::tempdir().unwrap();
+        write_session(dir.path(), "s1", "sdk-cli");
+        assert_eq!(
+            latest_resumable_session_id(dir.path()).as_deref(),
+            Some("s1")
+        );
+    }
+
+    #[test]
+    fn latest_resumable_session_id_returns_none_when_no_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(latest_resumable_session_id(dir.path()).is_none());
+    }
 
     /// プラットフォームのシェル経由で `body` を標準出力に書き出すコマンド。
     /// 実際の `claude` を起動せず、プロセス実行の骨格(spawn/wait/timeout/stdout取得)
