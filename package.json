@@ -1,0 +1,14 @@
+{
+  "name": "yaoyorozu",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "web:dev": "npm run dev --workspace=web",
+    "web:build": "npm run build --workspace=web",
+    "native:dev": "npm run tauri:dev --workspace=native",
+    "native:build": "npm run tauri:build --workspace=native"
+  }
+}
