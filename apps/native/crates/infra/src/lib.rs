@@ -1,7 +1,5 @@
 use app::{AppError, ProjectRepository, SessionRepository};
-use domain::{
-    extract_cwd, extract_entrypoint, extract_message, is_resumable_entrypoint, Message, Project,
-};
+use domain::{extract_cwd, extract_message, Message, Project};
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -12,9 +10,9 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 /// フルツールのエージェント実行を前提とした一般的な目安(600秒)より短く取る。
 const SEND_MESSAGE_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// 起動元(Claude Desktop等)を示す環境変数。子プロセスがこれを引き継ぐと
-/// `entrypoint: "claude-desktop"` として記録され、CLI の `--resume` で
-/// 見つけられなくなる。`claude` 起動前に必ず取り除く。
+/// 起動元(Claude Desktop等)を示す環境変数。子プロセスがこれを引き継ぐと、
+/// アプリが新規作成したセッションの記録上の起点が実態と異なる値
+/// (`entrypoint: "claude-desktop"`)になってしまう。`claude` 起動前に必ず取り除く。
 const DESKTOP_LINEAGE_ENV_VARS: &[&str] = &[
     "CLAUDE_CODE_ENTRYPOINT",
     "CLAUDECODE",
@@ -69,16 +67,6 @@ fn latest_session_file(project_dir: &Path) -> Option<PathBuf> {
     session_files_by_recency(project_dir).into_iter().next()
 }
 
-/// セッションファイルに記録されている entrypoint を読み取る。
-fn session_entrypoint(path: &Path) -> Option<String> {
-    let file = fs::File::open(path).ok()?;
-    BufReader::new(file)
-        .lines()
-        .map_while(Result::ok)
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
-        .find_map(|value| extract_entrypoint(&value))
-}
-
 /// 最新セッションファイルに記録されている、セッション開始時点の作業ディレクトリ(cwd)を返す。
 /// `claude` はカレントディレクトリ配下のプロジェクトとしてセッションを保存するため、
 /// 元の会話と同じプロジェクトに新規セッションを作るには同じ cwd で起動する必要がある。
@@ -103,27 +91,13 @@ fn latest_session_cwd(project_dir: &Path) -> Result<PathBuf, AppError> {
     Ok(PathBuf::from(cwd))
 }
 
-/// 新しい順に見て、`claude` CLI から resume 可能な直近のセッションIDを返す。
-///
-/// 単純に「最新の1件」だけを見ると、その後に(Claude Desktop等の)
-/// resume不可能なセッションが割り込んだ時点でアプリ自身の会話を見失う。
-/// resume可能なものが見つかるまで新しい順に遡って探すことで、
-/// 間に別のセッションが挟まっても継続対象を取りこぼさないようにする。
-fn latest_resumable_session_id(project_dir: &Path) -> Option<String> {
-    session_files_by_recency(project_dir)
-        .into_iter()
-        .find_map(|path| {
-            let entrypoint = session_entrypoint(&path)?;
-            if !is_resumable_entrypoint(&entrypoint) {
-                return None;
-            }
-            path.file_stem().and_then(|s| s.to_str()).map(String::from)
-        })
-}
-
 /// `send_message` 用の `claude` コマンドを組み立てる。
-/// `resume_id` を渡すと該当セッションの継続、`None` なら新規セッションになる。
-fn build_send_message_command(cwd: &Path, text: &str, resume_id: Option<&str>) -> Command {
+/// `continue_session` が true なら `--continue`(カレントディレクトリの最新の
+/// 会話をそのまま継続)を付け、false なら新規セッションになる。
+///
+/// `--continue` は `--resume <id>` と異なり entrypoint に関係なく機能する
+/// (Claude Desktop起源のセッションにも追記できる)ため、こちらを使う。
+fn build_send_message_command(cwd: &Path, text: &str, continue_session: bool) -> Command {
     let mut command = Command::new("claude");
     command.current_dir(cwd);
     for var in DESKTOP_LINEAGE_ENV_VARS {
@@ -132,8 +106,8 @@ fn build_send_message_command(cwd: &Path, text: &str, resume_id: Option<&str>) -
     // ツール実行(Bash/Edit等)は許可しない。GUIのテキスト欄からの入力で
     // ファイル操作やコマンド実行まで確認なしに行わせるのは危険なため。
     command.arg("--tools").arg("");
-    if let Some(id) = resume_id {
-        command.arg("--resume").arg(id);
+    if continue_session {
+        command.arg("--continue");
     }
     command.arg("--print").arg(text);
     command
@@ -278,20 +252,14 @@ impl SessionRepository for FileSystemRepository {
             )));
         }
 
-        // 直前がアプリ自身の作成したセッション(resume可能)なら継続し、
-        // そうでなければ(claude-desktop起源、またはまだセッションが無い場合)
-        // 新規セッションとして送信する。
-        let resume_id = latest_resumable_session_id(&project_dir);
-
-        if let Some(id) = &resume_id {
-            let command = build_send_message_command(&cwd, text, Some(id));
-            if run_with_timeout(command, SEND_MESSAGE_TIMEOUT).is_ok() {
-                return Ok(());
-            }
-            // resumeに失敗した場合は新規セッションとして送り直す。
+        // そのプロジェクトの最新セッション(=表示中の会話)を --continue でそのまま
+        // 継続する。継続に失敗した場合のみ、新規セッションとして送り直す。
+        let command = build_send_message_command(&cwd, text, true);
+        if run_with_timeout(command, SEND_MESSAGE_TIMEOUT).is_ok() {
+            return Ok(());
         }
 
-        let command = build_send_message_command(&cwd, text, None);
+        let command = build_send_message_command(&cwd, text, false);
         run_with_timeout(command, SEND_MESSAGE_TIMEOUT)?;
         Ok(())
     }
@@ -300,8 +268,6 @@ impl SessionRepository for FileSystemRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs::File;
-    use std::io::Write;
 
     fn args_of(command: &Command) -> Vec<String> {
         command
@@ -311,26 +277,26 @@ mod tests {
     }
 
     #[test]
-    fn build_send_message_command_without_resume_has_no_resume_flag() {
+    fn build_send_message_command_without_continue_has_no_continue_flag() {
         let cwd = std::env::current_dir().unwrap();
-        let command = build_send_message_command(&cwd, "hello", None);
+        let command = build_send_message_command(&cwd, "hello", false);
         assert_eq!(args_of(&command), vec!["--tools", "", "--print", "hello"]);
     }
 
     #[test]
-    fn build_send_message_command_with_resume_includes_resume_flag() {
+    fn build_send_message_command_with_continue_includes_continue_flag() {
         let cwd = std::env::current_dir().unwrap();
-        let command = build_send_message_command(&cwd, "hello", Some("abc-123"));
+        let command = build_send_message_command(&cwd, "hello", true);
         assert_eq!(
             args_of(&command),
-            vec!["--tools", "", "--resume", "abc-123", "--print", "hello"]
+            vec!["--tools", "", "--continue", "--print", "hello"]
         );
     }
 
     #[test]
     fn build_send_message_command_removes_desktop_lineage_env_vars() {
         let cwd = std::env::current_dir().unwrap();
-        let command = build_send_message_command(&cwd, "hello", None);
+        let command = build_send_message_command(&cwd, "hello", false);
         let removed: Vec<String> = command
             .get_envs()
             .filter(|(_, v)| v.is_none())
@@ -342,62 +308,6 @@ mod tests {
                 "expected {var} to be removed, got {removed:?}"
             );
         }
-    }
-
-    fn write_session(dir: &Path, id: &str, entrypoint: &str) {
-        let mut file = File::create(dir.join(format!("{id}.jsonl"))).unwrap();
-        writeln!(
-            file,
-            r#"{{"type":"user","entrypoint":"{entrypoint}","cwd":"{}"}}"#,
-            dir.display().to_string().replace('\\', "\\\\")
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn latest_resumable_session_id_returns_none_for_claude_desktop() {
-        let dir = tempfile::tempdir().unwrap();
-        write_session(dir.path(), "d1", "claude-desktop");
-        assert!(latest_resumable_session_id(dir.path()).is_none());
-    }
-
-    #[test]
-    fn latest_resumable_session_id_returns_id_for_sdk_cli() {
-        let dir = tempfile::tempdir().unwrap();
-        write_session(dir.path(), "s1", "sdk-cli");
-        assert_eq!(
-            latest_resumable_session_id(dir.path()).as_deref(),
-            Some("s1")
-        );
-    }
-
-    #[test]
-    fn latest_resumable_session_id_returns_none_when_no_sessions() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(latest_resumable_session_id(dir.path()).is_none());
-    }
-
-    #[test]
-    fn latest_resumable_session_id_skips_over_a_newer_unresumable_session() {
-        // 実際に起きたケース: アプリが作った resume 可能なセッションの後に、
-        // 別の(Claude Desktop等の)セッションが新しく作られても、
-        // アプリ自身の会話を見失わずに継続対象として見つけられる必要がある。
-        let dir = tempfile::tempdir().unwrap();
-        write_session(dir.path(), "app-session", "sdk-cli");
-        std::thread::sleep(Duration::from_millis(20));
-        write_session(dir.path(), "desktop-session", "claude-desktop");
-
-        assert_eq!(
-            latest_session_file(dir.path())
-                .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string())),
-            Some("desktop-session".to_string()),
-            "最新ファイル自体はDesktopセッションのはず"
-        );
-        assert_eq!(
-            latest_resumable_session_id(dir.path()).as_deref(),
-            Some("app-session"),
-            "resume対象は新しい順に遡ってアプリのセッションを見つけるはず"
-        );
     }
 
     /// プラットフォームのシェル経由で `body` を標準出力に書き出すコマンド。
