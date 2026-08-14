@@ -1,7 +1,19 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AppErrorDto, MessageDto, ProjectDto } from "./types";
+import { listen } from "@tauri-apps/api/event";
+import type {
+  AppErrorDto,
+  MessageDto,
+  ProjectDto,
+  SessionChangedEvent,
+} from "./types";
 
-export type { AppErrorDto, MessageDto, ProjectDto, RoleDto } from "./types";
+export type {
+  AppErrorDto,
+  MessageDto,
+  ProjectDto,
+  RoleDto,
+  SessionChangedEvent,
+} from "./types";
 
 export function listProjects(): Promise<ProjectDto[]> {
   return invoke<ProjectDto[]>("list_projects");
@@ -13,6 +25,15 @@ export function getLatestSession(project: string): Promise<MessageDto[]> {
 
 export function sendMessage(project: string, text: string): Promise<void> {
   return invoke<void>("send_message", { project, text });
+}
+
+export function onSessionChanged(
+  callback: (event: SessionChangedEvent) => void,
+): Promise<() => void> {
+  const unlisten = listen<SessionChangedEvent>("session:changed", (event) => {
+    callback(event.payload);
+  });
+  return unlisten.then((fn) => fn);
 }
 
 export function isAppError(error: unknown): error is AppErrorDto {

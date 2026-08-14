@@ -15,3 +15,7 @@ export type AppErrorDto = {
   code: string;
   message: string;
 };
+
+export type SessionChangedEvent = {
+  project: string;
+};

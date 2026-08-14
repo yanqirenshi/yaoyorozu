@@ -48,6 +48,14 @@ impl From<domain::Message> for MessageDto {
     }
 }
 
+/// `session:changed` イベントのペイロード。変更のあったプロジェクト(フォルダ名)
+/// のみを通知し、データ本体はフロントが Query(get_latest_session 等)で
+/// 取り直す(native.md §3.2)。
+#[derive(Serialize, Clone)]
+pub struct SessionChangedEventDto {
+    pub project: String,
+}
+
 #[derive(Serialize, Clone)]
 pub struct AppErrorDto {
     pub code: String,

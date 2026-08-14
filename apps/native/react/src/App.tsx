@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
-import { getLatestSession, isAppError, listProjects, sendMessage } from "./api";
+import {
+  getLatestSession,
+  isAppError,
+  listProjects,
+  onSessionChanged,
+  sendMessage,
+} from "./api";
 import type { MessageDto, ProjectDto } from "./api";
 import MessageText from "./MessageText";
 import "./App.css";
@@ -25,6 +31,22 @@ function App() {
     getLatestSession(selected)
       .then(setMessages)
       .catch((e) => setError(isAppError(e) ? e.message : String(e)));
+  }, [selected]);
+
+  useEffect(() => {
+    const unlistenPromise = onSessionChanged(({ project }) => {
+      listProjects()
+        .then(setProjects)
+        .catch((e) => setError(isAppError(e) ? e.message : String(e)));
+      if (project === selected) {
+        getLatestSession(project)
+          .then(setMessages)
+          .catch((e) => setError(isAppError(e) ? e.message : String(e)));
+      }
+    });
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten());
+    };
   }, [selected]);
 
   const handleSubmit = (event: FormEvent) => {

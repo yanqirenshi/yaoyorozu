@@ -1,5 +1,8 @@
 use app::{AppError, ProjectRepository, SessionRepository};
 use domain::{extract_cwd, extract_message, Message, Project};
+use notify::RecursiveMode;
+use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
+use std::collections::HashSet;
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -9,6 +12,10 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 /// `send_message` の待ち上限。ツール実行なしのテキスト応答のみを想定するため、
 /// フルツールのエージェント実行を前提とした一般的な目安(600秒)より短く取る。
 const SEND_MESSAGE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// ファイル変更をイベントとして通知するまでのデバウンス時間。
+/// 短時間の連続書き込み(1メッセージ分の追記等)をまとめて1回の通知にする。
+const WATCH_DEBOUNCE: Duration = Duration::from_millis(400);
 
 /// 起動元(Claude Desktop等)を示す環境変数。子プロセスがこれを引き継ぐと、
 /// アプリが新規作成したセッションの記録上の起点が実態と異なる値
@@ -36,6 +43,57 @@ impl FileSystemRepository {
             .map_err(|_| AppError::Io("ホームディレクトリが見つかりません".to_string()))?;
         Ok(Self::new(home.join(".claude").join("projects")))
     }
+
+    /// プロジェクトディレクトリ配下の変更を監視し、変更のあったプロジェクト
+    /// (直下のフォルダ名)を `on_change` に通知する。
+    ///
+    /// 戻り値の `Debouncer` を drop すると監視が止まるため、呼び出し側は
+    /// 監視を続けたい間、値を保持し続ける必要がある(呼び出し元の tauri 層で
+    /// アプリの状態として保持する想定)。
+    pub fn watch_projects<F>(
+        &self,
+        on_change: F,
+    ) -> Result<Debouncer<notify::RecommendedWatcher, RecommendedCache>, AppError>
+    where
+        F: Fn(String) + Send + 'static,
+    {
+        let watch_root = self.projects_dir.clone();
+        let mut debouncer =
+            new_debouncer(WATCH_DEBOUNCE, None, move |result: DebounceEventResult| {
+                let Ok(events) = result else { return };
+                let mut notified = HashSet::new();
+                for event in events {
+                    for path in &event.paths {
+                        if let Some(project) = project_name_from_path(&watch_root, path) {
+                            if notified.insert(project.clone()) {
+                                on_change(project);
+                            }
+                        }
+                    }
+                }
+            })
+            .map_err(|e| AppError::Io(format!("ファイル監視の初期化に失敗しました: {e}")))?;
+
+        debouncer
+            .watch(&self.projects_dir, RecursiveMode::Recursive)
+            .map_err(|e| {
+                AppError::Io(format!(
+                    "{} の監視開始に失敗しました: {e}",
+                    self.projects_dir.display()
+                ))
+            })?;
+
+        Ok(debouncer)
+    }
+}
+
+/// `path` が `projects_dir` 配下のとき、直下のプロジェクトフォルダ名を返す。
+fn project_name_from_path(projects_dir: &Path, path: &Path) -> Option<String> {
+    let relative = path.strip_prefix(projects_dir).ok()?;
+    relative
+        .components()
+        .next()
+        .map(|c| c.as_os_str().to_string_lossy().to_string())
 }
 
 fn to_millis(time: std::io::Result<std::time::SystemTime>) -> u64 {
@@ -274,6 +332,28 @@ mod tests {
             .get_args()
             .map(|a| a.to_string_lossy().to_string())
             .collect()
+    }
+
+    #[test]
+    fn watch_projects_notifies_project_name_on_new_session_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("some-project");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _debouncer = repo
+            .watch_projects(move |project| {
+                let _ = tx.send(project);
+            })
+            .expect("should start watching");
+
+        fs::write(project_dir.join("s1.jsonl"), b"{}").unwrap();
+
+        let notified = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("should be notified of the change");
+        assert_eq!(notified, "some-project");
     }
 
     #[test]
