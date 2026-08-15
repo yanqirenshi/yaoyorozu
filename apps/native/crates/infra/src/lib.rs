@@ -1,5 +1,5 @@
 use app::{AppError, ProjectRepository, SessionRepository};
-use domain::{extract_cwd, extract_message, Message, Project};
+use domain::{extract_cwd, extract_message, extract_session_id, Project, Session};
 use notify::RecursiveMode;
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
 use std::collections::HashSet;
@@ -149,13 +149,33 @@ fn latest_session_cwd(project_dir: &Path) -> Result<PathBuf, AppError> {
     Ok(PathBuf::from(cwd))
 }
 
+/// 最新セッションファイルのID(`sessionId`)を、ファイル全体を読まずに求める。
+/// `sessionId` は通常どの行にも記録されているため、最初の1行で見つかる
+/// (`find_map` が短絡評価するので、送信前後の軽量チェックに使える)。
+fn latest_session_id_in_dir(project_dir: &Path) -> Result<String, AppError> {
+    let path = latest_session_file(project_dir)
+        .ok_or_else(|| AppError::NotFound("セッションが見つかりません".to_string()))?;
+
+    let file = fs::File::open(&path)
+        .map_err(|e| AppError::Io(format!("{} を開けませんでした: {}", path.display(), e)))?;
+
+    BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
+        .find_map(|value| extract_session_id(&value))
+        .ok_or_else(|| AppError::Io("セッションIDを取得できませんでした".to_string()))
+}
+
 /// `send_message` 用の `claude` コマンドを組み立てる。
-/// `continue_session` が true なら `--continue`(カレントディレクトリの最新の
-/// 会話をそのまま継続)を付け、false なら新規セッションになる。
+/// `--continue`(カレントディレクトリの最新の会話をそのまま継続)は常に付ける。
+/// 送信対象のセッションが本当に最新かどうかは、呼び出し側([`app::send_message`])
+/// が事前に検証済みであることを前提とする(不一致なら送信しないため、暗黙の
+/// 新規セッション作成は行わない)。
 ///
 /// `--continue` は `--resume <id>` と異なり entrypoint に関係なく機能する
 /// (Claude Desktop起源のセッションにも追記できる)ため、こちらを使う。
-fn build_send_message_command(cwd: &Path, text: &str, continue_session: bool) -> Command {
+fn build_send_message_command(cwd: &Path, text: &str) -> Command {
     let mut command = Command::new("claude");
     command.current_dir(cwd);
     for var in DESKTOP_LINEAGE_ENV_VARS {
@@ -164,9 +184,7 @@ fn build_send_message_command(cwd: &Path, text: &str, continue_session: bool) ->
     // ツール実行(Bash/Edit等)は許可しない。GUIのテキスト欄からの入力で
     // ファイル操作やコマンド実行まで確認なしに行わせるのは危険なため。
     command.arg("--tools").arg("");
-    if continue_session {
-        command.arg("--continue");
-    }
+    command.arg("--continue");
     command.arg("--print").arg(text);
     command
 }
@@ -175,7 +193,7 @@ fn build_send_message_command(cwd: &Path, text: &str, continue_session: bool) ->
 /// 実行ファイル自体が見つからない場合と、それ以外の起動失敗を区別する。
 fn map_spawn_error(program: &str, e: std::io::Error) -> AppError {
     if e.kind() == std::io::ErrorKind::NotFound {
-        AppError::Io(format!(
+        AppError::CliNotFound(format!(
             "{program} コマンドが見つかりません。インストールされているか確認してください。"
         ))
     } else {
@@ -225,7 +243,7 @@ fn run_with_timeout(mut command: Command, timeout: Duration) -> Result<String, A
                     let _ = child.kill();
                     let _ = child.wait();
                     let _ = reader.join();
-                    return Err(AppError::Io(format!(
+                    return Err(AppError::Timeout(format!(
                         "{program} がタイムアウトしました({}秒)",
                         timeout.as_secs()
                     )));
@@ -242,7 +260,7 @@ fn run_with_timeout(mut command: Command, timeout: Duration) -> Result<String, A
     let stdout = reader.join().unwrap_or_default();
 
     if !status.success() {
-        return Err(AppError::Io(format!(
+        return Err(AppError::CliFailed(format!(
             "{program} が失敗しました({})",
             describe_exit(&status)
         )));
@@ -282,21 +300,35 @@ impl ProjectRepository for FileSystemRepository {
 }
 
 impl SessionRepository for FileSystemRepository {
-    fn latest_session_messages(&self, project: &str) -> Result<Vec<Message>, AppError> {
+    fn latest_session(&self, project: &str) -> Result<Session, AppError> {
         let project_dir = self.projects_dir.join(project);
         let path = latest_session_file(&project_dir)
             .ok_or_else(|| AppError::NotFound(format!("{project} にセッションが見つかりません")))?;
         let file = fs::File::open(&path)
             .map_err(|e| AppError::Io(format!("{} を開けませんでした: {}", path.display(), e)))?;
 
-        let messages = BufReader::new(file)
+        let mut id: Option<String> = None;
+        let mut messages = Vec::new();
+        for value in BufReader::new(file)
             .lines()
             .map_while(Result::ok)
             .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
-            .filter_map(|value| extract_message(&value))
-            .collect();
+        {
+            if id.is_none() {
+                id = extract_session_id(&value);
+            }
+            if let Some(message) = extract_message(&value) {
+                messages.push(message);
+            }
+        }
 
-        Ok(messages)
+        let id =
+            id.ok_or_else(|| AppError::Io("セッションIDを取得できませんでした".to_string()))?;
+        Ok(Session { id, messages })
+    }
+
+    fn latest_session_id(&self, project: &str) -> Result<String, AppError> {
+        latest_session_id_in_dir(&self.projects_dir.join(project))
     }
 
     fn send_message(&self, project: &str, text: &str) -> Result<(), AppError> {
@@ -304,20 +336,17 @@ impl SessionRepository for FileSystemRepository {
         let cwd = latest_session_cwd(&project_dir)?;
 
         if !cwd.is_dir() {
-            return Err(AppError::NotFound(format!(
+            return Err(AppError::CwdMissing(format!(
                 "作業ディレクトリが見つかりません: {}",
                 cwd.display()
             )));
         }
 
-        // そのプロジェクトの最新セッション(=表示中の会話)を --continue でそのまま
-        // 継続する。継続に失敗した場合のみ、新規セッションとして送り直す。
-        let command = build_send_message_command(&cwd, text, true);
-        if run_with_timeout(command, SEND_MESSAGE_TIMEOUT).is_ok() {
-            return Ok(());
-        }
-
-        let command = build_send_message_command(&cwd, text, false);
+        // 送信対象が最新セッションと一致するかどうかは app::send_message が
+        // 事前に検証済み。ここでは --continue でそのまま継続するのみで、
+        // 失敗時に新規セッションへ暗黙にフォールバックすることはしない
+        // (無言で別の会話が生まれる事故を防ぐため)。
+        let command = build_send_message_command(&cwd, text);
         run_with_timeout(command, SEND_MESSAGE_TIMEOUT)?;
         Ok(())
     }
@@ -326,12 +355,77 @@ impl SessionRepository for FileSystemRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::File;
+    use std::io::Write;
 
     fn args_of(command: &Command) -> Vec<String> {
         command
             .get_args()
             .map(|a| a.to_string_lossy().to_string())
             .collect()
+    }
+
+    fn write_session_file(dir: &Path, id: &str, cwd: &Path) {
+        let mut file = File::create(dir.join(format!("{id}.jsonl"))).unwrap();
+        let cwd_escaped = cwd.display().to_string().replace('\\', "\\\\");
+        writeln!(
+            file,
+            r#"{{"type":"user","sessionId":"{id}","cwd":"{cwd_escaped}","message":{{"content":"hello"}}}}"#
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn latest_session_id_in_dir_reads_session_id_from_latest_file() {
+        let dir = tempfile::tempdir().unwrap();
+        write_session_file(dir.path(), "s1", dir.path());
+
+        let id = latest_session_id_in_dir(dir.path()).expect("should find session id");
+        assert_eq!(id, "s1");
+    }
+
+    #[test]
+    fn filesystem_repository_latest_session_returns_id_and_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        write_session_file(&project_dir, "s1", &project_dir);
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let session = repo.latest_session("proj").expect("should read session");
+
+        assert_eq!(session.id, "s1");
+        assert_eq!(session.messages.len(), 1);
+        assert_eq!(session.messages[0].text, "hello");
+    }
+
+    #[test]
+    fn filesystem_repository_latest_session_id_matches_latest_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        write_session_file(&project_dir, "s1", &project_dir);
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let id = repo.latest_session_id("proj").expect("should get id");
+
+        assert_eq!(id, "s1");
+    }
+
+    #[test]
+    fn send_message_fails_with_cwd_missing_when_recorded_directory_does_not_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        let missing_cwd = dir.path().join("this-directory-does-not-exist-surely-987");
+        write_session_file(&project_dir, "s1", &missing_cwd);
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let error = repo
+            .send_message("proj", "hello")
+            .expect_err("should fail when recorded cwd is missing");
+
+        assert!(matches!(error, AppError::CwdMissing(_)), "got: {error:?}");
     }
 
     #[test]
@@ -357,16 +451,9 @@ mod tests {
     }
 
     #[test]
-    fn build_send_message_command_without_continue_has_no_continue_flag() {
+    fn build_send_message_command_always_includes_continue_flag() {
         let cwd = std::env::current_dir().unwrap();
-        let command = build_send_message_command(&cwd, "hello", false);
-        assert_eq!(args_of(&command), vec!["--tools", "", "--print", "hello"]);
-    }
-
-    #[test]
-    fn build_send_message_command_with_continue_includes_continue_flag() {
-        let cwd = std::env::current_dir().unwrap();
-        let command = build_send_message_command(&cwd, "hello", true);
+        let command = build_send_message_command(&cwd, "hello");
         assert_eq!(
             args_of(&command),
             vec!["--tools", "", "--continue", "--print", "hello"]
@@ -376,7 +463,7 @@ mod tests {
     #[test]
     fn build_send_message_command_removes_desktop_lineage_env_vars() {
         let cwd = std::env::current_dir().unwrap();
-        let command = build_send_message_command(&cwd, "hello", false);
+        let command = build_send_message_command(&cwd, "hello");
         let removed: Vec<String> = command
             .get_envs()
             .filter(|(_, v)| v.is_none())
@@ -449,8 +536,8 @@ mod tests {
         let error = run_with_timeout(exit_with(1), Duration::from_secs(5))
             .expect_err("nonzero exit should be an error");
         let message = match error {
-            AppError::Io(message) => message,
-            other => panic!("expected Io error, got {other:?}"),
+            AppError::CliFailed(message) => message,
+            other => panic!("expected CliFailed error, got {other:?}"),
         };
         assert!(message.contains("終了コード"), "got: {message}");
     }
@@ -460,8 +547,8 @@ mod tests {
         let error = run_with_timeout(sleep_command(5), Duration::from_millis(200))
             .expect_err("should time out");
         let message = match error {
-            AppError::Io(message) => message,
-            other => panic!("expected Io error, got {other:?}"),
+            AppError::Timeout(message) => message,
+            other => panic!("expected Timeout error, got {other:?}"),
         };
         assert!(message.contains("タイムアウト"), "got: {message}");
     }
@@ -474,8 +561,8 @@ mod tests {
         )
         .expect_err("missing program should error");
         let message = match error {
-            AppError::Io(message) => message,
-            other => panic!("expected Io error, got {other:?}"),
+            AppError::CliNotFound(message) => message,
+            other => panic!("expected CliNotFound error, got {other:?}"),
         };
         assert!(message.contains("見つかりません"), "got: {message}");
     }

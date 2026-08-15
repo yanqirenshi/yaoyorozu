@@ -1,6 +1,6 @@
 mod dto;
 
-use dto::{AppErrorDto, MessageDto, ProjectDto, SessionChangedEventDto};
+use dto::{AppErrorDto, ProjectDto, SessionChangedEventDto, SessionDto};
 use infra::FileSystemRepository;
 use tauri::{Emitter, Manager};
 
@@ -16,19 +16,23 @@ fn get_latest_session(
     project: String,
     offset: usize,
     limit: usize,
-) -> Result<Vec<MessageDto>, AppErrorDto> {
+) -> Result<SessionDto, AppErrorDto> {
     let repo = FileSystemRepository::from_home_dir()?;
-    let messages = app::get_latest_session(&repo, &project, offset, limit)?;
-    Ok(messages.into_iter().map(MessageDto::from).collect())
+    let session = app::get_latest_session(&repo, &project, offset, limit)?;
+    Ok(session.into())
 }
 
 #[tauri::command]
-async fn send_message(project: String, text: String) -> Result<(), AppErrorDto> {
+async fn send_message(
+    project: String,
+    session_id: String,
+    text: String,
+) -> Result<(), AppErrorDto> {
     // claude CLI の起動は数秒〜数十秒かかるため、async ランタイムを塞がないよう
     // ブロッキングスレッドで実行する。
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<(), AppErrorDto> {
         let repo = FileSystemRepository::from_home_dir()?;
-        app::send_message(&repo, &project, &text)?;
+        app::send_message(&repo, &project, &session_id, &text)?;
         Ok(())
     })
     .await;

@@ -17,6 +17,13 @@ pub struct Message {
     pub timestamp: String,
 }
 
+/// 1つのセッション(`.jsonl` 1ファイル)。`id` は送信時の一致検証に使う。
+#[derive(Debug, Clone)]
+pub struct Session {
+    pub id: String,
+    pub messages: Vec<Message>,
+}
+
 pub fn sort_projects_by_recency(projects: &mut [Project]) {
     projects.sort_by_key(|p| std::cmp::Reverse(p.updated_at_ms));
 }
@@ -77,6 +84,15 @@ pub fn extract_message(value: &serde_json::Value) -> Option<Message> {
 /// 1行分のJSONLエントリから、そのセッションの作業ディレクトリ(cwd)を取り出す。
 pub fn extract_cwd(value: &serde_json::Value) -> Option<String> {
     value.get("cwd").and_then(|c| c.as_str()).map(String::from)
+}
+
+/// 1行分のJSONLエントリから、そのセッションのID(`sessionId`)を取り出す。
+/// 送信前後の一致検証に使う(表示中のセッション ≠ 追記先セッション、を防ぐため)。
+pub fn extract_session_id(value: &serde_json::Value) -> Option<String> {
+    value
+        .get("sessionId")
+        .and_then(|s| s.as_str())
+        .map(String::from)
 }
 
 #[cfg(test)]
@@ -205,6 +221,21 @@ mod tests {
     fn extract_cwd_returns_none_when_missing() {
         let value = json!({ "type": "user" });
         assert!(extract_cwd(&value).is_none());
+    }
+
+    #[test]
+    fn extract_session_id_reads_field_when_present() {
+        let value = json!({ "sessionId": "a36bcf64-6d83-4043-a1e5-e9eecd3bba80" });
+        assert_eq!(
+            extract_session_id(&value).as_deref(),
+            Some("a36bcf64-6d83-4043-a1e5-e9eecd3bba80")
+        );
+    }
+
+    #[test]
+    fn extract_session_id_returns_none_when_missing() {
+        let value = json!({ "type": "user" });
+        assert!(extract_session_id(&value).is_none());
     }
 
     fn message(text: &str) -> Message {

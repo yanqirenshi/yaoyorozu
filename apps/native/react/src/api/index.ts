@@ -2,9 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
   AppErrorDto,
-  MessageDto,
   ProjectDto,
   SessionChangedEvent,
+  SessionDto,
 } from "./types";
 
 export type {
@@ -13,6 +13,7 @@ export type {
   ProjectDto,
   RoleDto,
   SessionChangedEvent,
+  SessionDto,
 } from "./types";
 
 export function listProjects(): Promise<ProjectDto[]> {
@@ -23,12 +24,16 @@ export function getLatestSession(
   project: string,
   offset: number,
   limit: number,
-): Promise<MessageDto[]> {
-  return invoke<MessageDto[]>("get_latest_session", { project, offset, limit });
+): Promise<SessionDto> {
+  return invoke<SessionDto>("get_latest_session", { project, offset, limit });
 }
 
-export function sendMessage(project: string, text: string): Promise<void> {
-  return invoke<void>("send_message", { project, text });
+export function sendMessage(
+  project: string,
+  sessionId: string,
+  text: string,
+): Promise<void> {
+  return invoke<void>("send_message", { project, sessionId, text });
 }
 
 export function onSessionChanged(
