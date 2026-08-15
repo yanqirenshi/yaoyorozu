@@ -17,6 +17,7 @@ const PAGE_SIZE = 50;
 function App() {
   const [projects, setProjects] = useState<ProjectDto[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<MessageDto[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -32,11 +33,13 @@ function App() {
 
   const loadFirstPage = (project: string): Promise<void> => {
     setMessages([]);
+    setSessionId(null);
     setHasMore(false);
     return getLatestSession(project, 0, PAGE_SIZE)
-      .then((page) => {
-        setMessages(page);
-        setHasMore(page.length === PAGE_SIZE);
+      .then((session) => {
+        setSessionId(session.session_id);
+        setMessages(session.messages);
+        setHasMore(session.messages.length === PAGE_SIZE);
       })
       .catch((e) => setError(isAppError(e) ? e.message : String(e)));
   };
@@ -45,9 +48,10 @@ function App() {
     if (!selected || loadingMore) return;
     setLoadingMore(true);
     getLatestSession(selected, messages.length, PAGE_SIZE)
-      .then((page) => {
-        setMessages((prev) => [...prev, ...page]);
-        setHasMore(page.length === PAGE_SIZE);
+      .then((session) => {
+        setSessionId(session.session_id);
+        setMessages((prev) => [...prev, ...session.messages]);
+        setHasMore(session.messages.length === PAGE_SIZE);
       })
       .catch((e) => setError(isAppError(e) ? e.message : String(e)))
       .finally(() => setLoadingMore(false));
@@ -82,16 +86,23 @@ function App() {
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
-    if (!selected || sending || !draft.trim()) return;
+    if (!selected || !sessionId || sending || !draft.trim()) return;
 
     setSending(true);
     setError(null);
-    sendMessage(selected, draft)
+    sendMessage(selected, sessionId, draft)
       .then(() => {
         setDraft("");
         loadFirstPage(selected);
       })
-      .catch((e) => setError(isAppError(e) ? e.message : String(e)))
+      .catch((e) => {
+        if (isAppError(e) && e.code === "session_stale") {
+          setError("表示中の会話が最新ではありません。再読み込みします。");
+          loadFirstPage(selected);
+          return;
+        }
+        setError(isAppError(e) ? e.message : String(e));
+      })
       .finally(() => setSending(false));
   };
 
@@ -120,13 +131,13 @@ function App() {
             className="message-input"
             placeholder="AIにメッセージを送る"
             value={draft}
-            disabled={!selected || sending}
+            disabled={!selected || !sessionId || sending}
             onChange={(e) => setDraft(e.target.value)}
           />
           <button
             type="submit"
             className="message-send"
-            disabled={!selected || sending || !draft.trim()}
+            disabled={!selected || !sessionId || sending || !draft.trim()}
           >
             {sending ? "送信中…" : "送信"}
           </button>

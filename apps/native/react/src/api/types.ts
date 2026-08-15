@@ -11,6 +11,11 @@ export type MessageDto = {
   timestamp: string;
 };
 
+export type SessionDto = {
+  session_id: string;
+  messages: MessageDto[];
+};
+
 export type AppErrorDto = {
   code: string;
   message: string;
