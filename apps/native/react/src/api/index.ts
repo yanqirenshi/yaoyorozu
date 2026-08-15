@@ -19,8 +19,12 @@ export function listProjects(): Promise<ProjectDto[]> {
   return invoke<ProjectDto[]>("list_projects");
 }
 
-export function getLatestSession(project: string): Promise<MessageDto[]> {
-  return invoke<MessageDto[]>("get_latest_session", { project });
+export function getLatestSession(
+  project: string,
+  offset: number,
+  limit: number,
+): Promise<MessageDto[]> {
+  return invoke<MessageDto[]>("get_latest_session", { project, offset, limit });
 }
 
 export function sendMessage(project: string, text: string): Promise<void> {

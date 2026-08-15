@@ -1,4 +1,6 @@
-use domain::{order_messages_newest_first, sort_projects_by_recency, Message, Project};
+use domain::{
+    order_messages_newest_first, paginate_messages, sort_projects_by_recency, Message, Project,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
@@ -28,13 +30,17 @@ pub fn list_projects(repo: &dyn ProjectRepository) -> Result<Vec<Project>, AppEr
     Ok(projects)
 }
 
+/// 最新セッションのメッセージを新しい順に並べ、`offset`/`limit` で指定された
+/// 範囲だけを返す(1回のIPCで会話全件を返さないため)。
 pub fn get_latest_session(
     repo: &dyn SessionRepository,
     project: &str,
+    offset: usize,
+    limit: usize,
 ) -> Result<Vec<Message>, AppError> {
     let mut messages = repo.latest_session_messages(project)?;
     order_messages_newest_first(&mut messages);
-    Ok(messages)
+    Ok(paginate_messages(&messages, offset, limit))
 }
 
 pub fn send_message(
@@ -140,9 +146,30 @@ mod tests {
             },
         ]);
 
-        let messages = get_latest_session(&repo, "some-project").expect("should get messages");
+        let messages =
+            get_latest_session(&repo, "some-project", 0, 10).expect("should get messages");
         let texts: Vec<&str> = messages.iter().map(|m| m.text.as_str()).collect();
         assert_eq!(texts, vec!["second", "first"]);
+    }
+
+    #[test]
+    fn get_latest_session_applies_offset_and_limit() {
+        let repo = FakeSessionRepository::new(
+            ["a", "b", "c", "d"]
+                .into_iter()
+                .map(|text| Message {
+                    role: Role::User,
+                    text: text.to_string(),
+                    timestamp: "".to_string(),
+                })
+                .collect(),
+        );
+
+        // 記録順は a,b,c,d -> 新しい順は d,c,b,a -> offset 1, limit 2 で c,b
+        let messages =
+            get_latest_session(&repo, "some-project", 1, 2).expect("should get messages");
+        let texts: Vec<&str> = messages.iter().map(|m| m.text.as_str()).collect();
+        assert_eq!(texts, vec!["c", "b"]);
     }
 
     #[test]
