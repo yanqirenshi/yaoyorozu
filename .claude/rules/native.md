@@ -119,7 +119,18 @@ pub struct AppState {
 - MUST: `infra` のファイル I/O は `tempfile` を使い、実ユーザーディレクトリを触らない。
 - SHOULD: `tauri` クレートのテストは「command が正しくユースケースへ委譲しているか」の薄い確認に留める。
 
-## 6. コマンド
+## 6. フロントのルーティング
+
+- MUST: 画面遷移は react-router(v7、declarative モード)+ **HashRouter** で行う。
+  理由: Tauri 本番はビルド済み静的アセットの配信であり、パス直リロードのフォールバックに
+  依存する BrowserRouter は使わない。デスクトップアプリにはアドレスバーがないため
+  hash 方式の見た目の欠点は無関係。
+- MUST: ルート定義は `react/src/App.tsx` に集約し、画面本体は `react/src/pages/` に置く(1画面=1ファイル)。
+- MUST: 画面をまたいで保持したい UI 状態(選択中プロジェクト等)は URL(パス・クエリ)に置き、
+  リロードで復元できるようにする。
+- NEVER: ルーターの location state・メモリ上の Context に業務状態を載せる(業務状態は Rust 側。§2)。
+
+## 7. コマンド
 
 ```bash
 cargo test -p domain -p app     # ロジックの検証（高速）
