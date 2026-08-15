@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// 会話を生成しているエージェントの種類。現時点では `"claude-code"` のみを返す。
 /// 将来 Gemini / Codex 等が加わった際、フロントがどのアイコン・ラベルを
@@ -94,6 +94,24 @@ impl From<domain::Session> for SessionDto {
 pub struct SessionChangedEventDto {
     pub project: String,
     pub agent: AgentKindDto,
+}
+
+/// 送信時のツール実行権限モード。フロントから送られてくるため `Deserialize` が要る
+/// (他の DTO は Rust → フロントの一方向なので `Serialize` のみで足りていた)。
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentModeDto {
+    Chat,
+    Read,
+}
+
+impl From<AgentModeDto> for app::AgentMode {
+    fn from(mode: AgentModeDto) -> Self {
+        match mode {
+            AgentModeDto::Chat => app::AgentMode::Chat,
+            AgentModeDto::Read => app::AgentMode::Read,
+        }
+    }
 }
 
 /// `app:warning` イベントのペイロード。送信自体は成功しているが、送信前チェックと

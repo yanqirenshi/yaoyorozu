@@ -1,12 +1,23 @@
-use app::{AgentGateway, AppError, SendRequest};
+use app::{AgentGateway, AgentMode, AppError, SendRequest};
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
-/// 送信の待ち上限。ツール実行なしのテキスト応答のみを想定するため、
+/// `Chat` モードの待ち上限。ツール実行なしのテキスト応答のみを想定するため、
 /// フルツールのエージェント実行を前提とした一般的な目安(600秒)より短く取る。
-const SEND_MESSAGE_TIMEOUT: Duration = Duration::from_secs(120);
+const CHAT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// `Read` モードの待ち上限。読み取り専用とはいえツール実行(ファイル探索等)を
+/// 伴う分、`Chat` より長めに取る。
+const READ_TIMEOUT: Duration = Duration::from_secs(300);
+
+fn timeout_for(mode: AgentMode) -> Duration {
+    match mode {
+        AgentMode::Chat => CHAT_TIMEOUT,
+        AgentMode::Read => READ_TIMEOUT,
+    }
+}
 
 /// 起動元(Claude Desktop等)を示す環境変数。子プロセスがこれを引き継ぐと、
 /// アプリが新規作成したセッションの記録上の起点が実態と異なる値
@@ -40,14 +51,14 @@ impl AgentGateway for ClaudeCliAgent {
             )));
         }
 
-        // mode(AgentMode::Chat)/continuation(Continuation::Continue)は現状
-        // それぞれ単一のバリアントしか存在しないため分岐は設けていない。
-        // 送信対象が最新セッションと一致するかどうかは app::send_message が
-        // 事前に検証済み。ここでは --continue でそのまま継続するのみで、
-        // 失敗時に新規セッションへ暗黙にフォールバックすることはしない
-        // (無言で別の会話が生まれる事故を防ぐため)。
-        let command = build_send_message_command(&req.cwd, &req.text);
-        run_with_timeout(command, SEND_MESSAGE_TIMEOUT)?;
+        // continuation(Continuation::Continue)は現状単一のバリアントしか
+        // 存在しないため分岐は設けていない。送信対象が最新セッションと一致
+        // するかどうかは app::send_message が事前に検証済み。ここでは
+        // --continue でそのまま継続するのみで、失敗時に新規セッションへ
+        // 暗黙にフォールバックすることはしない(無言で別の会話が生まれる
+        // 事故を防ぐため)。
+        let command = build_send_message_command(&req.cwd, &req.text, req.mode);
+        run_with_timeout(command, timeout_for(req.mode))?;
         Ok(())
     }
 }
@@ -57,15 +68,29 @@ impl AgentGateway for ClaudeCliAgent {
 ///
 /// `--continue` は `--resume <id>` と異なり entrypoint に関係なく機能する
 /// (Claude Desktop起源のセッションにも追記できる)ため、こちらを使う。
-fn build_send_message_command(cwd: &Path, text: &str) -> Command {
+///
+/// モードによる分岐:
+/// - `Chat`: `--tools ""` でツール実行(Bash/Edit等)を一切許可しない。
+///   GUIのテキスト欄からの入力でファイル操作やコマンド実行まで確認なしに
+///   行わせるのは危険なため。
+/// - `Read`: `--permission-mode plan` を付け、既定のツールセットを使う。
+///   plan モードは変更を伴う操作を提案するのみで実行しない(`--print` の
+///   非対話実行では承認手段がないため、変更系操作は事実上常に未実行のまま
+///   終わることを実機で確認済み)。
+fn build_send_message_command(cwd: &Path, text: &str, mode: AgentMode) -> Command {
     let mut command = Command::new("claude");
     command.current_dir(cwd);
     for var in DESKTOP_LINEAGE_ENV_VARS {
         command.env_remove(var);
     }
-    // ツール実行(Bash/Edit等)は許可しない。GUIのテキスト欄からの入力で
-    // ファイル操作やコマンド実行まで確認なしに行わせるのは危険なため。
-    command.arg("--tools").arg("");
+    match mode {
+        AgentMode::Chat => {
+            command.arg("--tools").arg("");
+        }
+        AgentMode::Read => {
+            command.arg("--permission-mode").arg("plan");
+        }
+    }
     command.arg("--continue");
     command.arg("--print").arg(text);
     command
@@ -165,9 +190,9 @@ mod tests {
     }
 
     #[test]
-    fn build_send_message_command_always_includes_continue_flag() {
+    fn build_send_message_command_chat_mode_disables_all_tools() {
         let cwd = std::env::current_dir().unwrap();
-        let command = build_send_message_command(&cwd, "hello");
+        let command = build_send_message_command(&cwd, "hello", AgentMode::Chat);
         assert_eq!(
             args_of(&command),
             vec!["--tools", "", "--continue", "--print", "hello"]
@@ -175,9 +200,25 @@ mod tests {
     }
 
     #[test]
+    fn build_send_message_command_read_mode_uses_plan_permission_mode() {
+        let cwd = std::env::current_dir().unwrap();
+        let command = build_send_message_command(&cwd, "hello", AgentMode::Read);
+        assert_eq!(
+            args_of(&command),
+            vec![
+                "--permission-mode",
+                "plan",
+                "--continue",
+                "--print",
+                "hello"
+            ]
+        );
+    }
+
+    #[test]
     fn build_send_message_command_removes_desktop_lineage_env_vars() {
         let cwd = std::env::current_dir().unwrap();
-        let command = build_send_message_command(&cwd, "hello");
+        let command = build_send_message_command(&cwd, "hello", AgentMode::Chat);
         let removed: Vec<String> = command
             .get_envs()
             .filter(|(_, v)| v.is_none())
@@ -189,6 +230,11 @@ mod tests {
                 "expected {var} to be removed, got {removed:?}"
             );
         }
+    }
+
+    #[test]
+    fn timeout_for_read_mode_is_longer_than_chat_mode() {
+        assert!(timeout_for(AgentMode::Read) > timeout_for(AgentMode::Chat));
     }
 
     #[test]

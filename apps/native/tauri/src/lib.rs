@@ -1,7 +1,8 @@
 mod dto;
 
 use dto::{
-    AgentKindDto, AppErrorDto, AppWarningDto, ProjectDto, SessionChangedEventDto, SessionDto,
+    AgentKindDto, AgentModeDto, AppErrorDto, AppWarningDto, ProjectDto, SessionChangedEventDto,
+    SessionDto,
 };
 use infra::{ClaudeCliAgent, FileSystemRepository};
 use tauri::{Emitter, Manager};
@@ -30,6 +31,7 @@ async fn send_message(
     project: String,
     session_id: String,
     text: String,
+    mode: AgentModeDto,
 ) -> Result<(), AppErrorDto> {
     // claude CLI の起動は数秒〜数十秒かかるため、async ランタイムを塞がないよう
     // ブロッキングスレッドで実行する。
@@ -38,7 +40,7 @@ async fn send_message(
         move || -> Result<Option<app::SessionMismatch>, app::AppError> {
             let source = FileSystemRepository::from_home_dir()?;
             let agent = ClaudeCliAgent::new();
-            app::send_message(&source, &agent, &project, &session_id, &text)
+            app::send_message(&source, &agent, &project, &session_id, &text, mode.into())
         },
     )
     .await;
