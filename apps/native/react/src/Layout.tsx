@@ -4,7 +4,7 @@ import type { DockItem } from "command-dock";
 import AppDock from "./AppDock";
 import { onSettingsCorrupted } from "./api";
 import { DockItemsProvider } from "./DockItemsContext";
-import { NAV_ICON } from "./icons";
+import { SETTINGS_ICON, VIEWER_ICON } from "./icons";
 import "./App.css";
 
 // AppDock(グローバルメニュー)は全画面共通のためレイアウト側に置く
@@ -27,28 +27,33 @@ function Layout() {
     };
   }, []);
 
-  const navItem = useMemo<DockItem>(
-    () => ({
-      id: "nav",
-      label: NAV_ICON,
-      title: "画面切り替え",
-      popup: [
-        {
-          label: "ビューア",
-          active: location.pathname === "/",
-          onSelect: () => navigate("/"),
-        },
-        {
-          label: "設定",
-          active: location.pathname === "/settings",
-          onSelect: () => navigate("/settings"),
-        },
-      ],
-    }),
+  // ナビトリガーは即アクション型の丸アイコン2個。表示中ページのトリガーは
+  // disabled にして現在地を示す(即アクション型には active 述語がないため)。
+  // 常に先頭(ページ固有アイテムより前)に置き、ページ間で位置が揺れないようにする。
+  const navItems = useMemo<DockItem[]>(
+    () => [
+      {
+        id: "nav-sessions",
+        label: VIEWER_ICON,
+        title: "ビューア",
+        onClick: () => navigate("/"),
+        disabled: location.pathname === "/",
+      },
+      {
+        id: "nav-settings",
+        label: SETTINGS_ICON,
+        title: "設定",
+        onClick: () => navigate("/settings"),
+        disabled: location.pathname === "/settings",
+      },
+    ],
     [location.pathname, navigate],
   );
 
-  const items = useMemo<DockItem[]>(() => [navItem, ...pageItems], [navItem, pageItems]);
+  const items = useMemo<DockItem[]>(
+    () => [...navItems, ...pageItems],
+    [navItems, pageItems],
+  );
 
   return (
     <div className="app-shell">
