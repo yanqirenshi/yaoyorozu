@@ -11,13 +11,40 @@ import type { MessageDto, ProjectDto } from "./api";
 import MessageText from "./MessageText";
 import "./App.css";
 
+const PAGE_SIZE = 50;
+
 function App() {
   const [projects, setProjects] = useState<ProjectDto[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [messages, setMessages] = useState<MessageDto[]>([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+
+  const loadFirstPage = (project: string) => {
+    setMessages([]);
+    setHasMore(false);
+    getLatestSession(project, 0, PAGE_SIZE)
+      .then((page) => {
+        setMessages(page);
+        setHasMore(page.length === PAGE_SIZE);
+      })
+      .catch((e) => setError(isAppError(e) ? e.message : String(e)));
+  };
+
+  const loadMore = () => {
+    if (!selected || loadingMore) return;
+    setLoadingMore(true);
+    getLatestSession(selected, messages.length, PAGE_SIZE)
+      .then((page) => {
+        setMessages((prev) => [...prev, ...page]);
+        setHasMore(page.length === PAGE_SIZE);
+      })
+      .catch((e) => setError(isAppError(e) ? e.message : String(e)))
+      .finally(() => setLoadingMore(false));
+  };
 
   useEffect(() => {
     listProjects()
@@ -27,10 +54,7 @@ function App() {
 
   useEffect(() => {
     if (!selected) return;
-    setMessages([]);
-    getLatestSession(selected)
-      .then(setMessages)
-      .catch((e) => setError(isAppError(e) ? e.message : String(e)));
+    loadFirstPage(selected);
   }, [selected]);
 
   useEffect(() => {
@@ -39,9 +63,7 @@ function App() {
         .then(setProjects)
         .catch((e) => setError(isAppError(e) ? e.message : String(e)));
       if (project === selected) {
-        getLatestSession(project)
-          .then(setMessages)
-          .catch((e) => setError(isAppError(e) ? e.message : String(e)));
+        loadFirstPage(project);
       }
     });
     return () => {
@@ -58,9 +80,8 @@ function App() {
     sendMessage(selected, draft)
       .then(() => {
         setDraft("");
-        return getLatestSession(selected);
+        loadFirstPage(selected);
       })
-      .then(setMessages)
       .catch((e) => setError(isAppError(e) ? e.message : String(e)))
       .finally(() => setSending(false));
   };
@@ -110,6 +131,16 @@ function App() {
               </div>
             ))}
           </div>
+          {hasMore && (
+            <button
+              type="button"
+              className="load-more"
+              disabled={loadingMore}
+              onClick={loadMore}
+            >
+              {loadingMore ? "読み込み中…" : "もっと読み込む(過去の会話)"}
+            </button>
+          )}
         </div>
       </div>
     </div>

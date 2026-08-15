@@ -12,9 +12,13 @@ fn list_projects() -> Result<Vec<ProjectDto>, AppErrorDto> {
 }
 
 #[tauri::command]
-fn get_latest_session(project: String) -> Result<Vec<MessageDto>, AppErrorDto> {
+fn get_latest_session(
+    project: String,
+    offset: usize,
+    limit: usize,
+) -> Result<Vec<MessageDto>, AppErrorDto> {
     let repo = FileSystemRepository::from_home_dir()?;
-    let messages = app::get_latest_session(&repo, &project)?;
+    let messages = app::get_latest_session(&repo, &project, offset, limit)?;
     Ok(messages.into_iter().map(MessageDto::from).collect())
 }
 
