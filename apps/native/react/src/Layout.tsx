@@ -27,28 +27,29 @@ function Layout() {
     };
   }, []);
 
-  // ナビトリガーは即アクション型の丸アイコン2個。表示中ページのトリガーは
-  // disabled にして現在地を示す(即アクション型には active 述語がないため)。
+  // ナビトリガーは即アクション型の丸アイコン。表示中のページ自身へのトリガーは
+  // 出す意味がないため表示しない(遷移先が1つだけなら1個だけ出る)。
   // 常に先頭(ページ固有アイテムより前)に置き、ページ間で位置が揺れないようにする。
-  const navItems = useMemo<DockItem[]>(
-    () => [
-      {
+  const navItems = useMemo<DockItem[]>(() => {
+    const items: DockItem[] = [];
+    if (location.pathname !== "/") {
+      items.push({
         id: "nav-sessions",
         label: VIEWER_ICON,
         title: "ビューア",
         onClick: () => navigate("/"),
-        disabled: location.pathname === "/",
-      },
-      {
+      });
+    }
+    if (location.pathname !== "/settings") {
+      items.push({
         id: "nav-settings",
         label: SETTINGS_ICON,
         title: "設定",
         onClick: () => navigate("/settings"),
-        disabled: location.pathname === "/settings",
-      },
-    ],
-    [location.pathname, navigate],
-  );
+      });
+    }
+    return items;
+  }, [location.pathname, navigate]);
 
   const items = useMemo<DockItem[]>(
     () => [...navItems, ...pageItems],
