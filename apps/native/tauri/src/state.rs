@@ -8,6 +8,11 @@ use std::path::PathBuf;
 pub struct AppState {
     pub settings: Settings,
     pub save_path: PathBuf,
+    /// 認証済みGitHubアカウントのログイン名。トークン自体はここには置かず
+    /// `TokenStore`(OSキーチェーン)にのみ保管する(native.md §4)。
+    /// 起動時は `None` から始まり、既存トークンがあればバックグラウンドで
+    /// 検証して設定される(`start_github_session_check`)。
+    pub github_login: Option<String>,
 }
 
 /// [`AppState::load`] の結果。設定ファイルの破損から復旧した場合、呼び出し側
@@ -27,6 +32,7 @@ impl AppState {
             state: AppState {
                 settings: loaded.settings,
                 save_path,
+                github_login: None,
             },
             recovered_from_corruption: loaded.recovered_from_corruption,
         })

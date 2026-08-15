@@ -4,6 +4,11 @@ import type {
   AgentModeDto,
   AppErrorDto,
   AppWarningEvent,
+  DeviceCodeDto,
+  GithubAuthFailedEvent,
+  GithubAuthStatusDto,
+  GithubAuthenticatedEvent,
+  GithubProjectSummaryDto,
   ProjectDto,
   SessionChangedEvent,
   SessionDto,
@@ -18,7 +23,12 @@ export type {
   AgentModeDto,
   AppErrorDto,
   AppWarningEvent,
+  DeviceCodeDto,
+  GithubAuthFailedEvent,
+  GithubAuthStatusDto,
+  GithubAuthenticatedEvent,
   GithubProjectDto,
+  GithubProjectSummaryDto,
   MessageDto,
   ProjectDto,
   RoleDto,
@@ -91,6 +101,45 @@ export function onSettingsCorrupted(
   const unlisten = listen<SettingsCorruptedEvent>("settings:corrupted", (event) => {
     callback(event.payload);
   });
+  return unlisten.then((fn) => fn);
+}
+
+export function getGithubAuthStatus(): Promise<GithubAuthStatusDto> {
+  return invoke<GithubAuthStatusDto>("get_github_auth_status");
+}
+
+export function githubLoginStart(): Promise<DeviceCodeDto> {
+  return invoke<DeviceCodeDto>("github_login_start");
+}
+
+export function githubLogout(): Promise<void> {
+  return invoke<void>("github_logout");
+}
+
+export function listGithubProjects(): Promise<GithubProjectSummaryDto[]> {
+  return invoke<GithubProjectSummaryDto[]>("list_github_projects");
+}
+
+export function onGithubAuthenticated(
+  callback: (event: GithubAuthenticatedEvent) => void,
+): Promise<() => void> {
+  const unlisten = listen<GithubAuthenticatedEvent>("github:authenticated", (event) => {
+    callback(event.payload);
+  });
+  return unlisten.then((fn) => fn);
+}
+
+export function onGithubAuthFailed(
+  callback: (event: GithubAuthFailedEvent) => void,
+): Promise<() => void> {
+  const unlisten = listen<GithubAuthFailedEvent>("github:auth_failed", (event) => {
+    callback(event.payload);
+  });
+  return unlisten.then((fn) => fn);
+}
+
+export function onGithubLoggedOut(callback: () => void): Promise<() => void> {
+  const unlisten = listen("github:logged_out", () => callback());
   return unlisten.then((fn) => fn);
 }
 

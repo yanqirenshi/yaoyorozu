@@ -1,14 +1,27 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
+  getGithubAuthStatus,
   getProjectName,
   getSettings,
+  githubLoginStart,
+  githubLogout,
   isAppError,
+  listGithubProjects,
   listSessions,
+  onGithubAuthFailed,
+  onGithubAuthenticated,
+  onGithubLoggedOut,
   updateSettings,
 } from "../api";
-import type { SessionSummaryDto } from "../api";
+import type {
+  DeviceCodeDto,
+  GithubAuthStatusDto,
+  GithubProjectSummaryDto,
+  SessionSummaryDto,
+} from "../api";
 
 function SettingsPage() {
   const [loading, setLoading] = useState(true);
@@ -20,6 +33,16 @@ function SettingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  const [authStatus, setAuthStatus] = useState<GithubAuthStatusDto>({
+    authenticated: false,
+    login: null,
+  });
+  const [deviceCode, setDeviceCode] = useState<DeviceCodeDto | null>(null);
+  const [authenticating, setAuthenticating] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [codeCopied, setCodeCopied] = useState(false);
+  const [githubProjects, setGithubProjects] = useState<GithubProjectSummaryDto[]>([]);
 
   useEffect(() => {
     getSettings()
@@ -45,6 +68,87 @@ function SettingsPage() {
       .then(setSessions)
       .catch((e) => setError(isAppError(e) ? e.message : String(e)));
   }, [repositoryPath]);
+
+  useEffect(() => {
+    getGithubAuthStatus().then(setAuthStatus);
+  }, []);
+
+  useEffect(() => {
+    if (!authStatus.authenticated) {
+      setGithubProjects([]);
+      return;
+    }
+    listGithubProjects()
+      .then(setGithubProjects)
+      .catch((e) => setAuthError(isAppError(e) ? e.message : String(e)));
+  }, [authStatus.authenticated]);
+
+  useEffect(() => {
+    const unlistenPromise = onGithubAuthenticated(({ login }) => {
+      setAuthStatus({ authenticated: true, login });
+      setDeviceCode(null);
+      setAuthenticating(false);
+      setAuthError(null);
+    });
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
+
+  useEffect(() => {
+    const unlistenPromise = onGithubAuthFailed(({ message }) => {
+      setDeviceCode(null);
+      setAuthenticating(false);
+      setAuthError(message);
+    });
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
+
+  useEffect(() => {
+    const unlistenPromise = onGithubLoggedOut(() => {
+      setAuthStatus({ authenticated: false, login: null });
+    });
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
+
+  const handleGithubLogin = () => {
+    setAuthenticating(true);
+    setAuthError(null);
+    githubLoginStart()
+      .then(setDeviceCode)
+      .catch((e) => {
+        setAuthenticating(false);
+        setAuthError(isAppError(e) ? e.message : String(e));
+      });
+  };
+
+  const handleGithubLogout = () => {
+    githubLogout().catch((e) => setAuthError(isAppError(e) ? e.message : String(e)));
+  };
+
+  const handleCopyUserCode = () => {
+    if (!deviceCode) return;
+    navigator.clipboard.writeText(deviceCode.user_code).then(() => {
+      setCodeCopied(true);
+      setTimeout(() => setCodeCopied(false), 2000);
+    });
+  };
+
+  const handleOpenVerificationUri = () => {
+    if (!deviceCode) return;
+    void openUrl(deviceCode.verification_uri);
+  };
+
+  const handleSelectGithubProject = (numberValue: string) => {
+    setGithubNumber(numberValue);
+    if (numberValue && authStatus.login) {
+      setGithubOwner(authStatus.login);
+    }
+  };
 
   const handleChooseFolder = async () => {
     const path = await open({ directory: true, multiple: false });
@@ -107,25 +211,78 @@ function SettingsPage() {
         </section>
 
         <section className="settings-section">
+          <h3>GitHub認証</h3>
+          {authStatus.authenticated ? (
+            <div className="settings-github-auth">
+              <span>{authStatus.login} としてログイン中</span>
+              <button type="button" onClick={handleGithubLogout}>
+                ログアウト
+              </button>
+            </div>
+          ) : deviceCode ? (
+            <div className="settings-github-auth">
+              <p>
+                以下のコードをブラウザで入力してください:
+                <br />
+                <strong className="settings-user-code">{deviceCode.user_code}</strong>
+              </p>
+              <button type="button" onClick={handleCopyUserCode}>
+                {codeCopied ? "コピーしました" : "コードをコピー"}
+              </button>
+              <button type="button" onClick={handleOpenVerificationUri}>
+                ブラウザで開く
+              </button>
+            </div>
+          ) : (
+            <div className="settings-github-auth">
+              <button type="button" onClick={handleGithubLogin} disabled={authenticating}>
+                {authenticating ? "開始中…" : "GitHubでログイン"}
+              </button>
+            </div>
+          )}
+          {authError && <p className="error">{authError}</p>}
+        </section>
+
+        <section className="settings-section">
           <h3>GitHubプロジェクト</h3>
-          <label className="settings-field">
-            owner
-            <input
-              type="text"
-              value={githubOwner}
-              onChange={(e) => setGithubOwner(e.target.value)}
-              placeholder="例: yanqirenshi"
-            />
-          </label>
-          <label className="settings-field">
-            プロジェクト番号
-            <input
-              type="number"
-              value={githubNumber}
-              onChange={(e) => setGithubNumber(e.target.value)}
-              placeholder="例: 51"
-            />
-          </label>
+          {authStatus.authenticated ? (
+            <label className="settings-field">
+              プロジェクト
+              <select
+                value={githubNumber}
+                onChange={(e) => handleSelectGithubProject(e.target.value)}
+              >
+                <option value="">未選択</option>
+                {githubProjects.map((p) => (
+                  <option key={p.number} value={String(p.number)}>
+                    {p.title}
+                    {p.closed ? "(closed)" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <>
+              <label className="settings-field">
+                owner
+                <input
+                  type="text"
+                  value={githubOwner}
+                  onChange={(e) => setGithubOwner(e.target.value)}
+                  placeholder="例: yanqirenshi"
+                />
+              </label>
+              <label className="settings-field">
+                プロジェクト番号
+                <input
+                  type="number"
+                  value={githubNumber}
+                  onChange={(e) => setGithubNumber(e.target.value)}
+                  placeholder="例: 51"
+                />
+              </label>
+            </>
+          )}
         </section>
 
         <section className="settings-section">
