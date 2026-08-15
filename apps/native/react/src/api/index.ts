@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
+  AgentModeDto,
   AppErrorDto,
   AppWarningEvent,
   ProjectDto,
@@ -10,6 +11,7 @@ import type {
 
 export type {
   AgentKindDto,
+  AgentModeDto,
   AppErrorDto,
   AppWarningEvent,
   MessageDto,
@@ -35,8 +37,9 @@ export function sendMessage(
   project: string,
   sessionId: string,
   text: string,
+  mode: AgentModeDto,
 ): Promise<void> {
-  return invoke<void>("send_message", { project, sessionId, text });
+  return invoke<void>("send_message", { project, sessionId, text, mode });
 }
 
 export function onSessionChanged(

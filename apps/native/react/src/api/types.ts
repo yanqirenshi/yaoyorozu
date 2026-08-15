@@ -1,5 +1,8 @@
 export type AgentKindDto = "claude-code";
 
+// 送信時のツール実行権限モード。既定は "chat"。
+export type AgentModeDto = "chat" | "read";
+
 export type ProjectDto = {
   name: string;
   updated_at: number;

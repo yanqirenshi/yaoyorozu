@@ -8,7 +8,7 @@ import {
   onSessionChanged,
   sendMessage,
 } from "./api";
-import type { MessageDto, ProjectDto } from "./api";
+import type { AgentModeDto, MessageDto, ProjectDto } from "./api";
 import AppDock from "./AppDock";
 import MessageText from "./MessageText";
 import "./App.css";
@@ -25,6 +25,7 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [mode, setMode] = useState<AgentModeDto>("chat");
 
   const loadProjects = (): Promise<void> => {
     return listProjects()
@@ -104,7 +105,7 @@ function App() {
 
     setSending(true);
     setError(null);
-    sendMessage(selected, sessionId, draft)
+    sendMessage(selected, sessionId, draft, mode)
       .then(() => {
         setDraft("");
         loadFirstPage(selected);
@@ -177,7 +178,7 @@ function App() {
           )}
         </div>
       </div>
-      <AppDock onReload={reload} />
+      <AppDock onReload={reload} mode={mode} onModeChange={setMode} />
     </div>
   );
 }

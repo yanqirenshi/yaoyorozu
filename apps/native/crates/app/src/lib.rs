@@ -52,10 +52,18 @@ pub trait AgentGateway {
     fn send(&self, req: SendRequest) -> Result<(), AppError>;
 }
 
-/// 送信時に許可する権限モード。現時点ではツール実行を伴わない会話のみ。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 送信時に許可する権限モード。
+/// - `Chat`(既定): ツール実行を伴わない会話のみ
+/// - `Read`: 読み取り専用ツールの実行を許可する(plan モード相当)。書き込み系の
+///   操作は提案されるのみで実行されない
+///
+/// フルツール実行(`agent` モード)は、長時間実行の進捗表示・キャンセル・実行前
+/// 確認UIが揃うまでスコープ外(issue #8 参照)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AgentMode {
+    #[default]
     Chat,
+    Read,
 }
 
 /// 送信対象のセッションをどう扱うか。現時点では既存セッションの継続のみを
@@ -124,6 +132,7 @@ pub fn send_message(
     project: &str,
     expected_session_id: &str,
     text: &str,
+    mode: AgentMode,
 ) -> Result<Option<SessionMismatch>, AppError> {
     if text.trim().is_empty() {
         return Err(AppError::InvalidInput(
@@ -142,7 +151,7 @@ pub fn send_message(
     agent.send(SendRequest {
         cwd,
         text: text.to_string(),
-        mode: AgentMode::Chat,
+        mode,
         continuation: Continuation::Continue,
     })?;
 
@@ -317,8 +326,15 @@ mod tests {
     fn send_message_delegates_to_agent_when_session_matches() {
         let source = FakeSessionSource::new("s1", vec![]);
         let agent = FakeAgentGateway::default();
-        let outcome = send_message(&source, &agent, "some-project", "s1", "hello")
-            .expect("should send message");
+        let outcome = send_message(
+            &source,
+            &agent,
+            "some-project",
+            "s1",
+            "hello",
+            AgentMode::Chat,
+        )
+        .expect("should send message");
         assert_eq!(outcome, None, "no mismatch when session id is unchanged");
 
         let sent = agent.sent.borrow();
@@ -330,13 +346,43 @@ mod tests {
     }
 
     #[test]
+    fn send_message_passes_requested_mode_through_to_agent() {
+        let source = FakeSessionSource::new("s1", vec![]);
+        let agent = FakeAgentGateway::default();
+        send_message(
+            &source,
+            &agent,
+            "some-project",
+            "s1",
+            "hello",
+            AgentMode::Read,
+        )
+        .expect("should send message");
+
+        let sent = agent.sent.borrow();
+        assert_eq!(sent[0].mode, AgentMode::Read);
+    }
+
+    #[test]
+    fn agent_mode_defaults_to_chat() {
+        assert_eq!(AgentMode::default(), AgentMode::Chat);
+    }
+
+    #[test]
     fn send_message_returns_mismatch_when_session_changes_during_send() {
         let mut source = FakeSessionSource::new("s1", vec![]);
         source.post_send_session_id = Some("s2".to_string());
         let agent = FakeAgentGateway::default();
 
-        let outcome = send_message(&source, &agent, "some-project", "s1", "hello")
-            .expect("send itself should still succeed");
+        let outcome = send_message(
+            &source,
+            &agent,
+            "some-project",
+            "s1",
+            "hello",
+            AgentMode::Chat,
+        )
+        .expect("send itself should still succeed");
 
         assert_eq!(
             outcome,
@@ -353,8 +399,15 @@ mod tests {
     fn send_message_rejects_blank_text() {
         let source = FakeSessionSource::new("s1", vec![]);
         let agent = FakeAgentGateway::default();
-        let error =
-            send_message(&source, &agent, "some-project", "s1", "   ").expect_err("should reject");
+        let error = send_message(
+            &source,
+            &agent,
+            "some-project",
+            "s1",
+            "   ",
+            AgentMode::Chat,
+        )
+        .expect_err("should reject");
         assert!(matches!(error, AppError::InvalidInput(_)));
         assert!(agent.sent.borrow().is_empty());
     }
@@ -363,8 +416,15 @@ mod tests {
     fn send_message_rejects_stale_session_without_sending() {
         let source = FakeSessionSource::new("latest-id", vec![]);
         let agent = FakeAgentGateway::default();
-        let error = send_message(&source, &agent, "some-project", "displayed-id", "hello")
-            .expect_err("should reject stale session");
+        let error = send_message(
+            &source,
+            &agent,
+            "some-project",
+            "displayed-id",
+            "hello",
+            AgentMode::Chat,
+        )
+        .expect_err("should reject stale session");
         assert!(matches!(error, AppError::SessionStale(_)));
         assert!(
             agent.sent.borrow().is_empty(),
