@@ -25,10 +25,18 @@ export const MODE_ICON = `
   <circle cx="16" cy="11.5" r="1.5" fill="currentColor" stroke="none" />
 </svg>`;
 
-export const NAV_ICON = `
+export const VIEWER_ICON = `
 <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor"
      stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
      xmlns="http://www.w3.org/2000/svg">
-  <rect x="3" y="3" width="14" height="14" rx="2" />
-  <line x1="3" y1="8" x2="17" y2="8" />
+  <rect x="3" y="4" width="14" height="9" rx="1.5" />
+  <path d="M7 13v3l4-3" />
+</svg>`;
+
+export const SETTINGS_ICON = `
+<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor"
+     stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
+     xmlns="http://www.w3.org/2000/svg">
+  <circle cx="10" cy="10" r="2.5" />
+  <path d="M10 3v2M10 15v2M3 10h2M15 10h2M5.05 5.05l1.41 1.41M13.54 13.54l1.41 1.41M5.05 14.95l1.41-1.41M13.54 6.46l1.41-1.41" />
 </svg>`;
