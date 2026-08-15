@@ -8,6 +8,7 @@ import {
   sendMessage,
 } from "./api";
 import type { MessageDto, ProjectDto } from "./api";
+import AppDock from "./AppDock";
 import MessageText from "./MessageText";
 import "./App.css";
 
@@ -23,10 +24,16 @@ function App() {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
 
-  const loadFirstPage = (project: string) => {
+  const loadProjects = (): Promise<void> => {
+    return listProjects()
+      .then(setProjects)
+      .catch((e) => setError(isAppError(e) ? e.message : String(e)));
+  };
+
+  const loadFirstPage = (project: string): Promise<void> => {
     setMessages([]);
     setHasMore(false);
-    getLatestSession(project, 0, PAGE_SIZE)
+    return getLatestSession(project, 0, PAGE_SIZE)
       .then((page) => {
         setMessages(page);
         setHasMore(page.length === PAGE_SIZE);
@@ -46,10 +53,14 @@ function App() {
       .finally(() => setLoadingMore(false));
   };
 
+  const reload = (): Promise<void> => {
+    const tasks = [loadProjects()];
+    if (selected) tasks.push(loadFirstPage(selected));
+    return Promise.all(tasks).then(() => undefined);
+  };
+
   useEffect(() => {
-    listProjects()
-      .then(setProjects)
-      .catch((e) => setError(isAppError(e) ? e.message : String(e)));
+    loadProjects();
   }, []);
 
   useEffect(() => {
@@ -59,9 +70,7 @@ function App() {
 
   useEffect(() => {
     const unlistenPromise = onSessionChanged(({ project }) => {
-      listProjects()
-        .then(setProjects)
-        .catch((e) => setError(isAppError(e) ? e.message : String(e)));
+      loadProjects();
       if (project === selected) {
         loadFirstPage(project);
       }
@@ -143,6 +152,7 @@ function App() {
           )}
         </div>
       </div>
+      <AppDock onReload={reload} />
     </div>
   );
 }

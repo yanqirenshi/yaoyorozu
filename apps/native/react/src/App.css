@@ -12,6 +12,12 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   -webkit-text-size-adjust: 100%;
+
+  /* command-dock テーマ契約(既存の伝統色パレットに合わせる) */
+  --dock-bg: #fbfbf8;
+  --dock-fg: #373737;
+  --dock-border: #a1a1aa;
+  --dock-accent: #9d5b8b;
 }
 
 html,
@@ -22,6 +28,7 @@ body,
 }
 
 .app-shell {
+  position: relative;
   display: flex;
   height: 100vh;
   border: 1px solid #a1a1aa;
