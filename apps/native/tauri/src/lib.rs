@@ -1,13 +1,15 @@
 mod dto;
 
-use dto::{AppErrorDto, ProjectDto, SessionChangedEventDto, SessionDto};
-use infra::FileSystemRepository;
+use dto::{
+    AgentKindDto, AppErrorDto, AppWarningDto, ProjectDto, SessionChangedEventDto, SessionDto,
+};
+use infra::{ClaudeCliAgent, FileSystemRepository};
 use tauri::{Emitter, Manager};
 
 #[tauri::command]
 fn list_projects() -> Result<Vec<ProjectDto>, AppErrorDto> {
-    let repo = FileSystemRepository::from_home_dir()?;
-    let projects = app::list_projects(&repo)?;
+    let source = FileSystemRepository::from_home_dir()?;
+    let projects = app::list_projects(&source)?;
     Ok(projects.into_iter().map(ProjectDto::from).collect())
 }
 
@@ -17,32 +19,50 @@ fn get_latest_session(
     offset: usize,
     limit: usize,
 ) -> Result<SessionDto, AppErrorDto> {
-    let repo = FileSystemRepository::from_home_dir()?;
-    let session = app::get_latest_session(&repo, &project, offset, limit)?;
+    let source = FileSystemRepository::from_home_dir()?;
+    let session = app::get_latest_session(&source, &project, offset, limit)?;
     Ok(session.into())
 }
 
 #[tauri::command]
 async fn send_message(
+    app: tauri::AppHandle,
     project: String,
     session_id: String,
     text: String,
 ) -> Result<(), AppErrorDto> {
     // claude CLI の起動は数秒〜数十秒かかるため、async ランタイムを塞がないよう
     // ブロッキングスレッドで実行する。
-    let result = tauri::async_runtime::spawn_blocking(move || -> Result<(), AppErrorDto> {
-        let repo = FileSystemRepository::from_home_dir()?;
-        app::send_message(&repo, &project, &session_id, &text)?;
-        Ok(())
-    })
+    let project_for_warning = project.clone();
+    let result = tauri::async_runtime::spawn_blocking(
+        move || -> Result<Option<app::SessionMismatch>, app::AppError> {
+            let source = FileSystemRepository::from_home_dir()?;
+            let agent = ClaudeCliAgent::new();
+            app::send_message(&source, &agent, &project, &session_id, &text)
+        },
+    )
     .await;
 
-    result.unwrap_or_else(|_| {
-        Err(AppErrorDto {
+    match result {
+        Ok(Ok(Some(mismatch))) => {
+            // 送信は成功しているためエラーにはせず、警告イベントで通知する。
+            let _ = app.emit(
+                "app:warning",
+                AppWarningDto {
+                    project: project_for_warning,
+                    expected_session_id: mismatch.expected_session_id,
+                    actual_session_id: mismatch.actual_session_id,
+                },
+            );
+            Ok(())
+        }
+        Ok(Ok(None)) => Ok(()),
+        Ok(Err(e)) => Err(e.into()),
+        Err(_) => Err(AppErrorDto {
             code: "internal".to_string(),
             message: "バックグラウンド処理に失敗しました".to_string(),
-        })
-    })
+        }),
+    }
 }
 
 /// `~/.claude/projects/` の変更監視を開始し、`session:changed` イベントとして
@@ -59,7 +79,13 @@ fn start_session_watcher(app: &tauri::App) {
 
     let handle = app.handle().clone();
     match repo.watch_projects(move |project| {
-        let _ = handle.emit("session:changed", SessionChangedEventDto { project });
+        let _ = handle.emit(
+            "session:changed",
+            SessionChangedEventDto {
+                project,
+                agent: AgentKindDto::ClaudeCode,
+            },
+        );
     }) {
         Ok(debouncer) => {
             app.manage(debouncer);

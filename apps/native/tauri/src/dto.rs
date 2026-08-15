@@ -1,9 +1,28 @@
 use serde::Serialize;
 
+/// 会話を生成しているエージェントの種類。現時点では `"claude-code"` のみを返す。
+/// 将来 Gemini / Codex 等が加わった際、フロントがどのアイコン・ラベルを
+/// 出すか等の分岐に使う想定の席(native.md 3.4 と同様、値ではなく `code`
+/// 相当の識別子として扱う)。
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentKindDto {
+    ClaudeCode,
+}
+
+impl From<domain::AgentKind> for AgentKindDto {
+    fn from(kind: domain::AgentKind) -> Self {
+        match kind {
+            domain::AgentKind::ClaudeCode => AgentKindDto::ClaudeCode,
+        }
+    }
+}
+
 #[derive(Serialize, Clone)]
 pub struct ProjectDto {
     pub name: String,
     pub updated_at: u64,
+    pub agent: AgentKindDto,
 }
 
 impl From<domain::Project> for ProjectDto {
@@ -11,6 +30,7 @@ impl From<domain::Project> for ProjectDto {
         Self {
             name: project.name,
             updated_at: project.updated_at_ms,
+            agent: project.agent.into(),
         }
     }
 }
@@ -54,6 +74,7 @@ impl From<domain::Message> for MessageDto {
 pub struct SessionDto {
     pub session_id: String,
     pub messages: Vec<MessageDto>,
+    pub agent: AgentKindDto,
 }
 
 impl From<domain::Session> for SessionDto {
@@ -61,6 +82,7 @@ impl From<domain::Session> for SessionDto {
         Self {
             session_id: session.id,
             messages: session.messages.into_iter().map(MessageDto::from).collect(),
+            agent: session.agent.into(),
         }
     }
 }
@@ -71,6 +93,18 @@ impl From<domain::Session> for SessionDto {
 #[derive(Serialize, Clone)]
 pub struct SessionChangedEventDto {
     pub project: String,
+    pub agent: AgentKindDto,
+}
+
+/// `app:warning` イベントのペイロード。送信自体は成功しているが、送信前チェックと
+/// 実際の送信実行の間に別セッションが割り込んだ可能性がある場合に通知する
+/// (native.md §3.2)。エラーではなく警告のため、`send_message` の戻り値ではなく
+/// イベントとして届ける。
+#[derive(Serialize, Clone)]
+pub struct AppWarningDto {
+    pub project: String,
+    pub expected_session_id: String,
+    pub actual_session_id: String,
 }
 
 /// `code` の一覧はフロントの分岐先(native.md §3.4)。メッセージ文字列では

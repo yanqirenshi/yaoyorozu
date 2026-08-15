@@ -1,7 +1,16 @@
+/// 会話を生成しているエージェントの種類。現時点では Claude Code のみ。
+/// 将来 Gemini / Codex 等を追加する際、一覧・会話に「どのエージェントか」を
+/// 表示できるよう先んじて用意する(値は当面 `ClaudeCode` のみ)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentKind {
+    ClaudeCode,
+}
+
 #[derive(Debug, Clone)]
 pub struct Project {
     pub name: String,
     pub updated_at_ms: u64,
+    pub agent: AgentKind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,6 +31,7 @@ pub struct Message {
 pub struct Session {
     pub id: String,
     pub messages: Vec<Message>,
+    pub agent: AgentKind,
 }
 
 pub fn sort_projects_by_recency(projects: &mut [Project]) {
@@ -106,14 +116,17 @@ mod tests {
             Project {
                 name: "old".to_string(),
                 updated_at_ms: 1,
+                agent: AgentKind::ClaudeCode,
             },
             Project {
                 name: "new".to_string(),
                 updated_at_ms: 3,
+                agent: AgentKind::ClaudeCode,
             },
             Project {
                 name: "mid".to_string(),
                 updated_at_ms: 2,
+                agent: AgentKind::ClaudeCode,
             },
         ];
 

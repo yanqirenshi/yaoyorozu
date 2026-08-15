@@ -4,6 +4,7 @@ import {
   getLatestSession,
   isAppError,
   listProjects,
+  onAppWarning,
   onSessionChanged,
   sendMessage,
 } from "./api";
@@ -78,6 +79,19 @@ function App() {
       if (project === selected) {
         loadFirstPage(project);
       }
+    });
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, [selected]);
+
+  useEffect(() => {
+    const unlistenPromise = onAppWarning(({ project }) => {
+      if (project !== selected) return;
+      setError(
+        "メッセージが表示中とは別の会話に追記された可能性があります。再読み込みします。",
+      );
+      loadFirstPage(project);
     });
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
