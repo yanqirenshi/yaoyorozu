@@ -38,3 +38,30 @@ export type AppWarningEvent = {
   expected_session_id: string;
   actual_session_id: string;
 };
+
+export type GithubProjectDto = {
+  owner: string;
+  number: number;
+};
+
+export type SettingsDto = {
+  repository_path: string | null;
+  github_project: GithubProjectDto | null;
+  selected_session_ids: string[];
+};
+
+export type SettingsInputDto = {
+  repository_path: string | null;
+  github_project: GithubProjectDto | null;
+  selected_session_ids: string[];
+};
+
+export type SessionSummaryDto = {
+  id: string;
+  updated_at: number;
+  excerpt: string;
+};
+
+export type SettingsCorruptedEvent = {
+  message: string;
+};

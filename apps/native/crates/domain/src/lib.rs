@@ -105,6 +105,74 @@ pub fn extract_session_id(value: &serde_json::Value) -> Option<String> {
         .map(String::from)
 }
 
+/// `Settings` の現在のスキーマバージョン。マイグレーションが必要になったら
+/// 上げ、infra 側のマイグレーション関数で旧バージョンからの変換を行う。
+pub const CURRENT_SETTINGS_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GithubProject {
+    pub owner: String,
+    pub number: u32,
+}
+
+impl GithubProject {
+    /// owner が空文字のものは不正な入力とみなす(実在確認はスコープ外)。
+    pub fn is_valid(&self) -> bool {
+        !self.owner.trim().is_empty()
+    }
+}
+
+/// アプリの設定。対象リポジトリ(1つ)・GitHubプロジェクト・対象セッションの
+/// 3項目を持つ。永続化(JSON)は infra が担う。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Settings {
+    pub version: u32,
+    pub repository_path: Option<std::path::PathBuf>,
+    pub github_project: Option<GithubProject>,
+    pub selected_session_ids: Vec<String>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            version: CURRENT_SETTINGS_VERSION,
+            repository_path: None,
+            github_project: None,
+            selected_session_ids: Vec::new(),
+        }
+    }
+}
+
+/// `~/.claude/projects/` 配下のプロジェクトディレクトリ名を、リポジトリの
+/// 絶対パスから求める。実データで確認したエンコード規則: パス中の英数字
+/// (ASCII)以外の文字をすべて `-` に置き換える
+/// (例: `C:\Users\yanqi\prj\yaoyorozu` -> `C--Users-yanqi-prj-yaoyorozu`)。
+pub fn encode_project_dir_name(path: &str) -> String {
+    path.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
+/// 1つのセッションの一覧表示用サマリ。全メッセージを読まずに一覧を出すための
+/// 最小限の情報(ID・最終更新・先頭メッセージの抜粋)。
+#[derive(Debug, Clone)]
+pub struct SessionSummary {
+    pub id: String,
+    pub updated_at_ms: u64,
+    pub excerpt: String,
+}
+
+/// 表示用に文字列を切り詰める。長い本文を一覧にそのまま出さないため。
+pub fn excerpt(text: &str, max_chars: usize) -> String {
+    let trimmed = text.trim();
+    if trimmed.chars().count() <= max_chars {
+        trimmed.to_string()
+    } else {
+        let truncated: String = trimmed.chars().take(max_chars).collect();
+        format!("{truncated}…")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,5 +348,61 @@ mod tests {
         let messages = vec![message("a"), message("b")];
         let page = paginate_messages(&messages, 0, 10);
         assert_eq!(page.len(), 2);
+    }
+
+    #[test]
+    fn settings_default_has_current_version_and_empty_fields() {
+        let settings = Settings::default();
+        assert_eq!(settings.version, CURRENT_SETTINGS_VERSION);
+        assert_eq!(settings.repository_path, None);
+        assert_eq!(settings.github_project, None);
+        assert!(settings.selected_session_ids.is_empty());
+    }
+
+    #[test]
+    fn github_project_is_valid_rejects_blank_owner() {
+        let project = GithubProject {
+            owner: "   ".to_string(),
+            number: 1,
+        };
+        assert!(!project.is_valid());
+    }
+
+    #[test]
+    fn github_project_is_valid_accepts_non_blank_owner() {
+        let project = GithubProject {
+            owner: "yanqirenshi".to_string(),
+            number: 51,
+        };
+        assert!(project.is_valid());
+    }
+
+    #[test]
+    fn encode_project_dir_name_matches_observed_claude_code_encoding() {
+        // 実データで確認した実例(このリポジトリ自身の ~/.claude/projects/ 配下)。
+        assert_eq!(
+            encode_project_dir_name(r"C:\Users\yanqi\prj\yaoyorozu"),
+            "C--Users-yanqi-prj-yaoyorozu"
+        );
+    }
+
+    #[test]
+    fn encode_project_dir_name_replaces_each_non_alphanumeric_char_individually() {
+        // "\.claude\" のように非英数字が連続する場合、まとめず1文字ずつ置き換える
+        // (実データ: ".../Spinor/.claude/worktrees/..." -> "...-Spinor--claude-worktrees-...")。
+        assert_eq!(
+            encode_project_dir_name(r"Spinor\.claude\worktrees"),
+            "Spinor--claude-worktrees"
+        );
+    }
+
+    #[test]
+    fn excerpt_returns_trimmed_text_when_within_limit() {
+        assert_eq!(excerpt("  hello  ", 10), "hello");
+    }
+
+    #[test]
+    fn excerpt_truncates_and_appends_ellipsis_when_over_limit() {
+        assert_eq!(excerpt("hello world", 5), "hello…");
     }
 }

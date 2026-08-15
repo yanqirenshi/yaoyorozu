@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router";
 import type { DockItem } from "command-dock";
 import AppDock from "./AppDock";
+import { onSettingsCorrupted } from "./api";
 import { DockItemsProvider } from "./DockItemsContext";
 import { NAV_ICON } from "./icons";
 import "./App.css";
@@ -13,6 +14,18 @@ function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
   const [pageItems, setPageItems] = useState<DockItem[]>([]);
+  const [corruptionWarning, setCorruptionWarning] = useState<string | null>(null);
+
+  useEffect(() => {
+    // 設定ファイルの破損は起動直後(まだ /settings にいるとは限らない)に
+    // 届きうるため、常にマウントされているレイアウト側で受け取る。
+    const unlistenPromise = onSettingsCorrupted(({ message }) => {
+      setCorruptionWarning(message);
+    });
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
 
   const navItem = useMemo<DockItem>(
     () => ({
@@ -39,6 +52,9 @@ function Layout() {
 
   return (
     <div className="app-shell">
+      {corruptionWarning && (
+        <p className="corruption-warning">{corruptionWarning}</p>
+      )}
       <DockItemsProvider setItems={setPageItems}>
         <Outlet />
       </DockItemsProvider>
