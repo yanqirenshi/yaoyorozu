@@ -144,7 +144,8 @@ body,
   margin-bottom: 12px;
 }
 
-.settings-field input {
+.settings-field input,
+.settings-field select {
   box-sizing: border-box;
   border: 1px solid #a1a1aa;
   border-radius: 4px;
@@ -153,6 +154,18 @@ body,
   font-family: inherit;
   color: #373737;
   background: #fbfbf8;
+}
+
+.settings-github-auth {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.settings-user-code {
+  font-size: 1.2rem;
+  letter-spacing: 0.1em;
 }
 
 .settings-session-list {

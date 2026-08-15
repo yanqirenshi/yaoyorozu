@@ -1,15 +1,23 @@
 mod dto;
 mod state;
 
-use app::SettingsStore;
+use app::{SettingsStore, TokenStore};
 use dto::{
-    AgentKindDto, AgentModeDto, AppErrorDto, AppWarningDto, ProjectDto, SessionChangedEventDto,
-    SessionDto, SessionSummaryDto, SettingsCorruptedEventDto, SettingsDto, SettingsInputDto,
+    AgentKindDto, AgentModeDto, AppErrorDto, AppWarningDto, DeviceCodeDto,
+    GithubAuthFailedEventDto, GithubAuthStatusDto, GithubAuthenticatedEventDto,
+    GithubProjectSummaryDto, ProjectDto, SessionChangedEventDto, SessionDto, SessionSummaryDto,
+    SettingsCorruptedEventDto, SettingsDto, SettingsInputDto,
 };
-use infra::{ClaudeCliAgent, FileSettingsStore, FileSystemRepository};
+use infra::{
+    ClaudeCliAgent, FileSettingsStore, FileSystemRepository, GithubApiClient, KeyringTokenStore,
+};
 use state::AppState;
 use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
+
+/// GitHub OAuth App の client_id。デバイスフローは `client_secret` を使わない
+/// ため秘密情報ではなく、定数として埋め込んでよい(issue #24)。
+const GITHUB_CLIENT_ID: &str = "Ov23liqOl7JIbaGeJev4";
 
 #[tauri::command]
 fn list_projects() -> Result<Vec<ProjectDto>, AppErrorDto> {
@@ -128,6 +136,153 @@ async fn update_settings(
     Ok(())
 }
 
+#[tauri::command]
+async fn get_github_auth_status(
+    state: tauri::State<'_, Mutex<AppState>>,
+) -> Result<GithubAuthStatusDto, AppErrorDto> {
+    let guard = state.lock().await;
+    Ok(GithubAuthStatusDto {
+        authenticated: guard.github_login.is_some(),
+        login: guard.github_login.clone(),
+    })
+}
+
+/// デバイスコードを取得し、`user_code`/`verification_uri` を即座に返す。
+/// トークンのポーリング(最大15分程度)はバックグラウンドタスクで継続し、
+/// 完了時に `github:authenticated`、失敗時に `github:auth_failed` を emit する
+/// (コマンド自体を長時間ブロックしない)。
+#[tauri::command]
+async fn github_login_start(app: tauri::AppHandle) -> Result<DeviceCodeDto, AppErrorDto> {
+    let authorization = tauri::async_runtime::spawn_blocking(|| {
+        let gateway = GithubApiClient::new(GITHUB_CLIENT_ID);
+        app::start_github_login(&gateway)
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })?;
+
+    let device_code_dto = DeviceCodeDto::from(authorization.clone());
+
+    tauri::async_runtime::spawn(async move {
+        let poll_outcome = tauri::async_runtime::spawn_blocking(move || {
+            let gateway = GithubApiClient::new(GITHUB_CLIENT_ID);
+            let store = KeyringTokenStore::new();
+            app::poll_and_store_token(&gateway, &store, &authorization, |secs| {
+                std::thread::sleep(std::time::Duration::from_secs(secs));
+            })
+        })
+        .await
+        .unwrap_or_else(|_| {
+            Err(app::AppError::Io(
+                "バックグラウンド処理に失敗しました".to_string(),
+            ))
+        });
+
+        let token = match poll_outcome {
+            Ok(token) => token,
+            Err(e) => {
+                let _ = app.emit(
+                    "github:auth_failed",
+                    GithubAuthFailedEventDto {
+                        message: e.to_string(),
+                    },
+                );
+                return;
+            }
+        };
+
+        let viewer_outcome = tauri::async_runtime::spawn_blocking(move || {
+            let gateway = GithubApiClient::new(GITHUB_CLIENT_ID);
+            app::fetch_github_viewer(&gateway, &token)
+        })
+        .await
+        .unwrap_or_else(|_| {
+            Err(app::AppError::Io(
+                "バックグラウンド処理に失敗しました".to_string(),
+            ))
+        });
+
+        match viewer_outcome {
+            Ok(viewer) => {
+                let state = app.state::<Mutex<AppState>>();
+                {
+                    let mut guard = state.lock().await;
+                    guard.github_login = Some(viewer.login.clone());
+                }
+                let _ = app.emit(
+                    "github:authenticated",
+                    GithubAuthenticatedEventDto {
+                        login: viewer.login,
+                    },
+                );
+            }
+            Err(e) => {
+                let _ = app.emit(
+                    "github:auth_failed",
+                    GithubAuthFailedEventDto {
+                        message: e.to_string(),
+                    },
+                );
+            }
+        }
+    });
+
+    Ok(device_code_dto)
+}
+
+#[tauri::command]
+async fn github_logout(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Mutex<AppState>>,
+) -> Result<(), AppErrorDto> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let store = KeyringTokenStore::new();
+        store.delete()
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })?;
+
+    {
+        let mut guard = state.lock().await;
+        guard.github_login = None;
+    }
+
+    let _ = app.emit("github:logged_out", ());
+    Ok(())
+}
+
+#[tauri::command]
+async fn list_github_projects() -> Result<Vec<GithubProjectSummaryDto>, AppErrorDto> {
+    tauri::async_runtime::spawn_blocking(
+        || -> Result<Vec<GithubProjectSummaryDto>, app::AppError> {
+            let store = KeyringTokenStore::new();
+            let token = store.load()?.ok_or_else(|| {
+                app::AppError::GithubUnauthenticated("GitHubにログインしてください".to_string())
+            })?;
+            let gateway = GithubApiClient::new(GITHUB_CLIENT_ID);
+            let summaries = app::list_github_projects(&gateway, &token)?;
+            Ok(summaries
+                .into_iter()
+                .map(GithubProjectSummaryDto::from)
+                .collect())
+        },
+    )
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
+}
+
 /// `~/.claude/projects/` の変更監視を開始し、`session:changed` イベントとして
 /// フロントへ通知する。監視の失敗はアプリ起動を止めるほどの問題ではないため、
 /// 失敗してもログを出すのみでアプリ自体は起動を続ける。
@@ -178,6 +333,39 @@ fn setup_app_state(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// 起動時、既にGitHubトークンがキーチェーンにあれば有効性を確認し、
+/// `AppState.github_login` を埋めて `github:authenticated` を通知する。
+/// ネットワークI/Oを伴うため `.setup()` 自体をブロックしないよう
+/// バックグラウンドタスクにする(起動を待たせない)。
+fn start_github_session_check(app: &tauri::App) {
+    let app_handle = app.handle().clone();
+    tauri::async_runtime::spawn(async move {
+        let viewer = tauri::async_runtime::spawn_blocking(|| -> Option<app::GithubViewer> {
+            let store = KeyringTokenStore::new();
+            let token = store.load().ok().flatten()?;
+            let gateway = GithubApiClient::new(GITHUB_CLIENT_ID);
+            app::fetch_github_viewer(&gateway, &token).ok()
+        })
+        .await
+        .ok()
+        .flatten();
+
+        if let Some(viewer) = viewer {
+            let state = app_handle.state::<Mutex<AppState>>();
+            {
+                let mut guard = state.lock().await;
+                guard.github_login = Some(viewer.login.clone());
+            }
+            let _ = app_handle.emit(
+                "github:authenticated",
+                GithubAuthenticatedEventDto {
+                    login: viewer.login,
+                },
+            );
+        }
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -191,10 +379,15 @@ pub fn run() {
             list_sessions,
             get_settings,
             update_settings,
+            get_github_auth_status,
+            github_login_start,
+            github_logout,
+            list_github_projects,
         ])
         .setup(|app| {
             start_session_watcher(app);
             setup_app_state(app)?;
+            start_github_session_check(app);
             Ok(())
         })
         .run(tauri::generate_context!())

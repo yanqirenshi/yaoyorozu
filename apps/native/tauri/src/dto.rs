@@ -212,6 +212,62 @@ pub struct SettingsCorruptedEventDto {
     pub message: String,
 }
 
+/// `github_login_start` の戻り値。ユーザーに見せてよいのはこの2項目のみ
+/// (トークンは含めない。native.md §4 NEVER)。
+#[derive(Serialize, Clone)]
+pub struct DeviceCodeDto {
+    pub user_code: String,
+    pub verification_uri: String,
+}
+
+impl From<app::DeviceAuthorization> for DeviceCodeDto {
+    fn from(authorization: app::DeviceAuthorization) -> Self {
+        Self {
+            user_code: authorization.user_code,
+            verification_uri: authorization.verification_uri,
+        }
+    }
+}
+
+/// `get_github_auth_status` の戻り値。
+#[derive(Serialize, Clone)]
+pub struct GithubAuthStatusDto {
+    pub authenticated: bool,
+    pub login: Option<String>,
+}
+
+/// GitHub Projects(v2) 一覧の1件分(設定画面のプロジェクト選択に使う)。
+#[derive(Serialize, Clone)]
+pub struct GithubProjectSummaryDto {
+    pub number: u32,
+    pub title: String,
+    pub closed: bool,
+}
+
+impl From<domain::GithubProjectSummary> for GithubProjectSummaryDto {
+    fn from(summary: domain::GithubProjectSummary) -> Self {
+        Self {
+            number: summary.number,
+            title: summary.title,
+            closed: summary.closed,
+        }
+    }
+}
+
+/// `github:authenticated` イベントのペイロード。ログイン名のみ(トークンは
+/// 含めない。native.md §4 NEVER)。
+#[derive(Serialize, Clone)]
+pub struct GithubAuthenticatedEventDto {
+    pub login: String,
+}
+
+/// `github:auth_failed` イベントのペイロード。デバイスフローがタイムアウト・
+/// 拒否・エラーになった場合に通知する(フロントを待機表示のまま放置しない)。
+#[derive(Serialize, Clone)]
+pub struct GithubAuthFailedEventDto {
+    pub message: String,
+}
+
 /// `code` の一覧はフロントの分岐先(native.md §3.4)。メッセージ文字列では
 /// なく必ずこの `code` で分岐すること。
 #[derive(Serialize, Clone)]
@@ -231,6 +287,9 @@ impl From<app::AppError> for AppErrorDto {
             app::AppError::CliFailed(message) => ("cli_failed", message),
             app::AppError::Timeout(message) => ("timeout", message),
             app::AppError::CwdMissing(message) => ("cwd_missing", message),
+            app::AppError::GithubUnauthenticated(message) => ("github_unauthenticated", message),
+            app::AppError::GithubAuthExpired(message) => ("github_auth_expired", message),
+            app::AppError::GithubApiFailed(message) => ("github_api_failed", message),
         };
         Self {
             code: code.to_string(),

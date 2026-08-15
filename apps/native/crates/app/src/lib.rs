@@ -27,6 +27,15 @@ pub enum AppError {
     /// セッションの作業ディレクトリが存在しない。
     #[error("{0}")]
     CwdMissing(String),
+    /// GitHubにログインしていない状態で認証が必要な操作をした。
+    #[error("{0}")]
+    GithubUnauthenticated(String),
+    /// GitHubの認証(デバイスフロー)がタイムアウトしたか、ユーザーが拒否した。
+    #[error("{0}")]
+    GithubAuthExpired(String),
+    /// GitHub API(GraphQL含む)呼び出しが失敗した。
+    #[error("{0}")]
+    GithubApiFailed(String),
 }
 
 /// プロジェクト・セッションの読み取り(ports)。Claude Code のログ形式
@@ -66,6 +75,50 @@ pub trait SettingsStore {
 pub struct LoadedSettings {
     pub settings: Settings,
     pub recovered_from_corruption: bool,
+}
+
+/// GitHub OAuth(デバイスフロー)+ Projects(v2) 取得(port)。実体(HTTP通信)は
+/// infra に閉じ込める。将来 GitHub 以外の連携を足す可能性は現状ないため、
+/// `AgentGateway` のような抽象化はせず GitHub 固有の port として定義する。
+pub trait GithubGateway {
+    fn start_device_flow(&self) -> Result<DeviceAuthorization, AppError>;
+    fn poll_for_token(&self, device_code: &str) -> Result<PollResult, AppError>;
+    fn fetch_viewer(&self, token: &str) -> Result<GithubViewer, AppError>;
+    fn list_projects(&self, token: &str) -> Result<Vec<domain::GithubProjectSummary>, AppError>;
+}
+
+/// GitHubのアクセストークンの保管(port)。実体(OSキーチェーン)は infra に
+/// 閉じ込める。トークンは設定ファイル(JSON)には含めない(native.md §4)。
+pub trait TokenStore {
+    fn save(&self, token: &str) -> Result<(), AppError>;
+    fn load(&self) -> Result<Option<String>, AppError>;
+    fn delete(&self) -> Result<(), AppError>;
+}
+
+/// デバイスフロー開始時にGitHubから返る値。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceAuthorization {
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_uri: String,
+    pub interval_secs: u64,
+    pub expires_in_secs: u64,
+}
+
+/// トークンポーリング1回の結果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PollResult {
+    /// ユーザーがまだ認可していない。`interval_secs` 待って再試行する。
+    Pending,
+    /// ポーリング間隔が短すぎた。間隔を広げて再試行する。
+    SlowDown,
+    /// 認可完了。
+    Token(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GithubViewer {
+    pub login: String,
 }
 
 /// エージェントへのメッセージ送信(port)。将来 Gemini / Codex 等の別アダプタを
@@ -222,6 +275,65 @@ pub fn update_settings(store: &dyn SettingsStore, input: Settings) -> Result<Set
     validate_settings(&input)?;
     store.save(&input)?;
     Ok(input)
+}
+
+pub fn start_github_login(gateway: &dyn GithubGateway) -> Result<DeviceAuthorization, AppError> {
+    gateway.start_device_flow()
+}
+
+pub fn fetch_github_viewer(
+    gateway: &dyn GithubGateway,
+    token: &str,
+) -> Result<GithubViewer, AppError> {
+    gateway.fetch_viewer(token)
+}
+
+pub fn list_github_projects(
+    gateway: &dyn GithubGateway,
+    token: &str,
+) -> Result<Vec<domain::GithubProjectSummary>, AppError> {
+    gateway.list_projects(token)
+}
+
+/// デバイスフローのトークンをポーリングで取得し、`TokenStore` へ保存する。
+///
+/// `authorization.expires_in_secs` を超えて未認可のままなら `GithubAuthExpired`
+/// で打ち切る(GitHub側が `expired_token`/`access_denied` を返した場合は
+/// `poll_for_token` がそのまま `AppError` を返すため、`?` でここに伝播する)。
+/// `slow_down` を受けたらポーリング間隔を広げる。
+/// 実際の待機は `sleep` に注入する(テストで実時間を使わないため)。
+pub fn poll_and_store_token(
+    gateway: &dyn GithubGateway,
+    store: &dyn TokenStore,
+    authorization: &DeviceAuthorization,
+    sleep: impl Fn(u64),
+) -> Result<String, AppError> {
+    let mut interval = authorization.interval_secs;
+    let mut elapsed = 0u64;
+
+    loop {
+        if elapsed >= authorization.expires_in_secs {
+            return Err(AppError::GithubAuthExpired(
+                "GitHub認証がタイムアウトしました。再度ログインしてください".to_string(),
+            ));
+        }
+
+        match gateway.poll_for_token(&authorization.device_code)? {
+            PollResult::Token(token) => {
+                store.save(&token)?;
+                return Ok(token);
+            }
+            PollResult::Pending => {
+                sleep(interval);
+                elapsed += interval;
+            }
+            PollResult::SlowDown => {
+                interval += 5;
+                sleep(interval);
+                elapsed += interval;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -602,5 +714,184 @@ mod tests {
             update_settings(&store, input).expect_err("should reject invalid github project");
         assert!(matches!(error, AppError::InvalidInput(_)));
         assert!(store.saved.borrow().is_empty());
+    }
+
+    struct FakeGithubGateway {
+        device_authorization: DeviceAuthorization,
+        poll_responses:
+            std::cell::RefCell<std::collections::VecDeque<Result<PollResult, AppError>>>,
+        viewer: GithubViewer,
+        projects: Vec<domain::GithubProjectSummary>,
+    }
+
+    impl FakeGithubGateway {
+        fn new(authorization: DeviceAuthorization) -> Self {
+            Self {
+                device_authorization: authorization,
+                poll_responses: std::cell::RefCell::new(std::collections::VecDeque::new()),
+                viewer: GithubViewer {
+                    login: "yanqirenshi".to_string(),
+                },
+                projects: Vec::new(),
+            }
+        }
+    }
+
+    impl GithubGateway for FakeGithubGateway {
+        fn start_device_flow(&self) -> Result<DeviceAuthorization, AppError> {
+            Ok(self.device_authorization.clone())
+        }
+
+        fn poll_for_token(&self, _device_code: &str) -> Result<PollResult, AppError> {
+            self.poll_responses
+                .borrow_mut()
+                .pop_front()
+                .unwrap_or(Ok(PollResult::Pending))
+        }
+
+        fn fetch_viewer(&self, _token: &str) -> Result<GithubViewer, AppError> {
+            Ok(self.viewer.clone())
+        }
+
+        fn list_projects(
+            &self,
+            _token: &str,
+        ) -> Result<Vec<domain::GithubProjectSummary>, AppError> {
+            Ok(self.projects.clone())
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeTokenStore {
+        saved: std::cell::RefCell<Option<String>>,
+    }
+
+    impl TokenStore for FakeTokenStore {
+        fn save(&self, token: &str) -> Result<(), AppError> {
+            *self.saved.borrow_mut() = Some(token.to_string());
+            Ok(())
+        }
+
+        fn load(&self) -> Result<Option<String>, AppError> {
+            Ok(self.saved.borrow().clone())
+        }
+
+        fn delete(&self) -> Result<(), AppError> {
+            *self.saved.borrow_mut() = None;
+            Ok(())
+        }
+    }
+
+    fn test_authorization(interval_secs: u64, expires_in_secs: u64) -> DeviceAuthorization {
+        DeviceAuthorization {
+            device_code: "device-code".to_string(),
+            user_code: "USER-CODE".to_string(),
+            verification_uri: "https://github.com/login/device".to_string(),
+            interval_secs,
+            expires_in_secs,
+        }
+    }
+
+    #[test]
+    fn poll_and_store_token_returns_token_after_pending_responses() {
+        let gateway = FakeGithubGateway::new(test_authorization(5, 900));
+        gateway.poll_responses.borrow_mut().extend([
+            Ok(PollResult::Pending),
+            Ok(PollResult::Pending),
+            Ok(PollResult::Token("abc".to_string())),
+        ]);
+        let store = FakeTokenStore::default();
+        let sleeps = std::cell::RefCell::new(Vec::new());
+
+        let token = poll_and_store_token(&gateway, &store, &gateway.device_authorization, |secs| {
+            sleeps.borrow_mut().push(secs);
+        })
+        .expect("should eventually get a token");
+
+        assert_eq!(token, "abc");
+        assert_eq!(store.saved.borrow().as_deref(), Some("abc"));
+        assert_eq!(sleeps.borrow().as_slice(), [5, 5]);
+    }
+
+    #[test]
+    fn poll_and_store_token_increases_interval_on_slow_down() {
+        let gateway = FakeGithubGateway::new(test_authorization(5, 900));
+        gateway.poll_responses.borrow_mut().extend([
+            Ok(PollResult::SlowDown),
+            Ok(PollResult::Token("abc".to_string())),
+        ]);
+        let store = FakeTokenStore::default();
+        let sleeps = std::cell::RefCell::new(Vec::new());
+
+        poll_and_store_token(&gateway, &store, &gateway.device_authorization, |secs| {
+            sleeps.borrow_mut().push(secs);
+        })
+        .expect("should eventually get a token");
+
+        assert_eq!(
+            sleeps.borrow().as_slice(),
+            [10],
+            "interval should widen by 5 on slow_down"
+        );
+    }
+
+    #[test]
+    fn poll_and_store_token_times_out_when_expires_in_exceeded() {
+        let gateway = FakeGithubGateway::new(test_authorization(5, 5));
+        gateway.poll_responses.borrow_mut().extend([
+            Ok(PollResult::Pending),
+            Ok(PollResult::Pending),
+            Ok(PollResult::Pending),
+        ]);
+        let store = FakeTokenStore::default();
+
+        let error = poll_and_store_token(&gateway, &store, &gateway.device_authorization, |_| {})
+            .expect_err("should time out");
+
+        assert!(matches!(error, AppError::GithubAuthExpired(_)));
+        assert!(store.saved.borrow().is_none());
+    }
+
+    #[test]
+    fn poll_and_store_token_propagates_gateway_error() {
+        let gateway = FakeGithubGateway::new(test_authorization(5, 900));
+        gateway
+            .poll_responses
+            .borrow_mut()
+            .push_back(Err(AppError::GithubApiFailed("boom".to_string())));
+        let store = FakeTokenStore::default();
+
+        let error = poll_and_store_token(&gateway, &store, &gateway.device_authorization, |_| {})
+            .expect_err("should propagate gateway error");
+
+        assert!(matches!(error, AppError::GithubApiFailed(_)));
+    }
+
+    #[test]
+    fn start_github_login_delegates_to_gateway() {
+        let gateway = FakeGithubGateway::new(test_authorization(5, 900));
+        let authorization = start_github_login(&gateway).expect("should start device flow");
+        assert_eq!(authorization.user_code, "USER-CODE");
+    }
+
+    #[test]
+    fn fetch_github_viewer_delegates_to_gateway() {
+        let gateway = FakeGithubGateway::new(test_authorization(5, 900));
+        let viewer = fetch_github_viewer(&gateway, "token").expect("should fetch viewer");
+        assert_eq!(viewer.login, "yanqirenshi");
+    }
+
+    #[test]
+    fn list_github_projects_delegates_to_gateway() {
+        let mut gateway = FakeGithubGateway::new(test_authorization(5, 900));
+        gateway.projects = vec![domain::GithubProjectSummary {
+            number: 51,
+            title: "yaoyorozu".to_string(),
+            closed: false,
+        }];
+
+        let projects = list_github_projects(&gateway, "token").expect("should list projects");
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].number, 51);
     }
 }

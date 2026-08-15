@@ -65,3 +65,27 @@ export type SessionSummaryDto = {
 export type SettingsCorruptedEvent = {
   message: string;
 };
+
+export type DeviceCodeDto = {
+  user_code: string;
+  verification_uri: string;
+};
+
+export type GithubAuthStatusDto = {
+  authenticated: boolean;
+  login: string | null;
+};
+
+export type GithubProjectSummaryDto = {
+  number: number;
+  title: string;
+  closed: boolean;
+};
+
+export type GithubAuthenticatedEvent = {
+  login: string;
+};
+
+export type GithubAuthFailedEvent = {
+  message: string;
+};
