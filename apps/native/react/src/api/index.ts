@@ -8,6 +8,7 @@ import type {
 } from "./types";
 
 export type {
+  AgentKindDto,
   AppErrorDto,
   MessageDto,
   ProjectDto,

@@ -1,13 +1,13 @@
 mod dto;
 
-use dto::{AppErrorDto, ProjectDto, SessionChangedEventDto, SessionDto};
-use infra::FileSystemRepository;
+use dto::{AgentKindDto, AppErrorDto, ProjectDto, SessionChangedEventDto, SessionDto};
+use infra::{ClaudeCliAgent, FileSystemRepository};
 use tauri::{Emitter, Manager};
 
 #[tauri::command]
 fn list_projects() -> Result<Vec<ProjectDto>, AppErrorDto> {
-    let repo = FileSystemRepository::from_home_dir()?;
-    let projects = app::list_projects(&repo)?;
+    let source = FileSystemRepository::from_home_dir()?;
+    let projects = app::list_projects(&source)?;
     Ok(projects.into_iter().map(ProjectDto::from).collect())
 }
 
@@ -17,8 +17,8 @@ fn get_latest_session(
     offset: usize,
     limit: usize,
 ) -> Result<SessionDto, AppErrorDto> {
-    let repo = FileSystemRepository::from_home_dir()?;
-    let session = app::get_latest_session(&repo, &project, offset, limit)?;
+    let source = FileSystemRepository::from_home_dir()?;
+    let session = app::get_latest_session(&source, &project, offset, limit)?;
     Ok(session.into())
 }
 
@@ -31,8 +31,9 @@ async fn send_message(
     // claude CLI の起動は数秒〜数十秒かかるため、async ランタイムを塞がないよう
     // ブロッキングスレッドで実行する。
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<(), AppErrorDto> {
-        let repo = FileSystemRepository::from_home_dir()?;
-        app::send_message(&repo, &project, &session_id, &text)?;
+        let source = FileSystemRepository::from_home_dir()?;
+        let agent = ClaudeCliAgent::new();
+        app::send_message(&source, &agent, &project, &session_id, &text)?;
         Ok(())
     })
     .await;
@@ -59,7 +60,13 @@ fn start_session_watcher(app: &tauri::App) {
 
     let handle = app.handle().clone();
     match repo.watch_projects(move |project| {
-        let _ = handle.emit("session:changed", SessionChangedEventDto { project });
+        let _ = handle.emit(
+            "session:changed",
+            SessionChangedEventDto {
+                project,
+                agent: AgentKindDto::ClaudeCode,
+            },
+        );
     }) {
         Ok(debouncer) => {
             app.manage(debouncer);
