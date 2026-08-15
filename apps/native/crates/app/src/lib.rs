@@ -1,5 +1,6 @@
 use domain::{
     order_messages_newest_first, paginate_messages, sort_projects_by_recency, Project, Session,
+    SessionSummary, Settings,
 };
 use std::path::PathBuf;
 
@@ -44,6 +45,27 @@ pub trait SessionSource {
     /// 最新セッションの作業ディレクトリ(cwd)を返す。`AgentGateway` へ渡す
     /// `SendRequest` を組み立てるために使う。
     fn latest_session_cwd(&self, project: &str) -> Result<PathBuf, AppError>;
+
+    /// 指定プロジェクトの全セッションを一覧表示用に要約して返す
+    /// (新しい順)。設定画面でのセッション選択に使う。
+    fn list_sessions(&self, project: &str) -> Result<Vec<SessionSummary>, AppError>;
+}
+
+/// アプリ設定の永続化(port)。実体(ファイル形式・保存先の解決)は infra に
+/// 閉じ込める。`app` は `Settings` という抽象的な値だけを扱う。
+pub trait SettingsStore {
+    fn load(&self) -> Result<LoadedSettings, AppError>;
+    fn save(&self, settings: &Settings) -> Result<(), AppError>;
+}
+
+/// 起動時に読み込んだ設定。ファイルが存在しない場合と破損していた場合を
+/// 区別しない(どちらもデフォルト値へフォールバックする)が、破損からの
+/// 復旧があったかどうかは呼び出し側(tauri層)が `app:warning` を出すか
+/// どうかの判断に使うため保持する。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedSettings {
+    pub settings: Settings,
+    pub recovered_from_corruption: bool,
 }
 
 /// エージェントへのメッセージ送信(port)。将来 Gemini / Codex 等の別アダプタを
@@ -166,6 +188,42 @@ pub fn send_message(
     Ok(None)
 }
 
+/// 指定プロジェクトのセッション一覧(設定画面のセッション選択用)を返す。
+pub fn list_sessions(
+    source: &dyn SessionSource,
+    project: &str,
+) -> Result<Vec<SessionSummary>, AppError> {
+    source.list_sessions(project)
+}
+
+/// 起動時、保存済みの設定を読み込む。ファイルが存在しない/壊れている場合の
+/// デフォルト値へのフォールバックは `SettingsStore` 実装(infra)側の責務。
+pub fn load_settings(store: &dyn SettingsStore) -> Result<LoadedSettings, AppError> {
+    store.load()
+}
+
+/// 設定項目のうち、この時点で検証できる最小限の内容(GitHubプロジェクトの
+/// owner が空でないこと)を確認する。GitHubプロジェクトの実在確認等の高度な
+/// バリデーションはスコープ外(issue #17)。
+pub fn validate_settings(settings: &Settings) -> Result<(), AppError> {
+    if let Some(project) = &settings.github_project {
+        if !project.is_valid() {
+            return Err(AppError::InvalidInput(
+                "GitHubプロジェクトのownerを入力してください".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// 新しい設定値を検証し、永続化する。保存に成功した設定値をそのまま返す
+/// (呼び出し側がメモリ上の状態を更新する際に使う)。
+pub fn update_settings(store: &dyn SettingsStore, input: Settings) -> Result<Settings, AppError> {
+    validate_settings(&input)?;
+    store.save(&input)?;
+    Ok(input)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,6 +236,7 @@ mod tests {
         /// (送信前チェックと送信後チェックの間にセッションが変わった状況を再現する)。
         post_send_session_id: Option<String>,
         messages: Vec<Message>,
+        sessions: Vec<SessionSummary>,
         cwd: PathBuf,
         fail_list_projects: bool,
         latest_session_id_calls: std::cell::Cell<usize>,
@@ -190,6 +249,7 @@ mod tests {
                 session_id: session_id.to_string(),
                 post_send_session_id: None,
                 messages,
+                sessions: Vec::new(),
                 cwd: PathBuf::from("/tmp/some-project"),
                 fail_list_projects: false,
                 latest_session_id_calls: std::cell::Cell::new(0),
@@ -228,6 +288,10 @@ mod tests {
 
         fn latest_session_cwd(&self, _project: &str) -> Result<PathBuf, AppError> {
             Ok(self.cwd.clone())
+        }
+
+        fn list_sessions(&self, _project: &str) -> Result<Vec<SessionSummary>, AppError> {
+            Ok(self.sessions.clone())
         }
     }
 
@@ -430,5 +494,113 @@ mod tests {
             agent.sent.borrow().is_empty(),
             "must not send when session is stale"
         );
+    }
+
+    #[test]
+    fn list_sessions_delegates_to_source() {
+        let mut source = FakeSessionSource::new("s1", vec![]);
+        source.sessions = vec![SessionSummary {
+            id: "s1".to_string(),
+            updated_at_ms: 100,
+            excerpt: "hello".to_string(),
+        }];
+
+        let sessions = list_sessions(&source, "some-project").expect("should list sessions");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, "s1");
+    }
+
+    struct FakeSettingsStore {
+        loaded: LoadedSettings,
+        saved: std::cell::RefCell<Vec<Settings>>,
+        fail_save: bool,
+    }
+
+    impl FakeSettingsStore {
+        fn new(settings: Settings) -> Self {
+            Self {
+                loaded: LoadedSettings {
+                    settings,
+                    recovered_from_corruption: false,
+                },
+                saved: std::cell::RefCell::new(Vec::new()),
+                fail_save: false,
+            }
+        }
+    }
+
+    impl SettingsStore for FakeSettingsStore {
+        fn load(&self) -> Result<LoadedSettings, AppError> {
+            Ok(self.loaded.clone())
+        }
+
+        fn save(&self, settings: &Settings) -> Result<(), AppError> {
+            if self.fail_save {
+                return Err(AppError::Io("boom".to_string()));
+            }
+            self.saved.borrow_mut().push(settings.clone());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn load_settings_returns_store_result_unchanged() {
+        let mut settings = Settings::default();
+        settings.selected_session_ids.push("s1".to_string());
+        let store = FakeSettingsStore::new(settings.clone());
+
+        let loaded = load_settings(&store).expect("should load settings");
+        assert_eq!(loaded.settings, settings);
+        assert!(!loaded.recovered_from_corruption);
+    }
+
+    #[test]
+    fn validate_settings_accepts_none_github_project() {
+        let settings = Settings::default();
+        assert!(validate_settings(&settings).is_ok());
+    }
+
+    #[test]
+    fn validate_settings_rejects_blank_github_project_owner() {
+        let settings = Settings {
+            github_project: Some(domain::GithubProject {
+                owner: "".to_string(),
+                number: 1,
+            }),
+            ..Settings::default()
+        };
+
+        let error = validate_settings(&settings).expect_err("should reject blank owner");
+        assert!(matches!(error, AppError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn update_settings_saves_valid_settings_and_returns_them() {
+        let store = FakeSettingsStore::new(Settings::default());
+        let input = Settings {
+            repository_path: Some(PathBuf::from("/tmp/repo")),
+            ..Settings::default()
+        };
+
+        let saved = update_settings(&store, input.clone()).expect("should update settings");
+        assert_eq!(saved, input);
+        assert_eq!(store.saved.borrow().as_slice(), [input]);
+    }
+
+    #[test]
+    fn update_settings_rejects_invalid_settings_without_saving() {
+        let store = FakeSettingsStore::new(Settings::default());
+        let input = Settings {
+            github_project: Some(domain::GithubProject {
+                owner: "   ".to_string(),
+                number: 1,
+            }),
+            ..Settings::default()
+        };
+
+        let error =
+            update_settings(&store, input).expect_err("should reject invalid github project");
+        assert!(matches!(error, AppError::InvalidInput(_)));
+        assert!(store.saved.borrow().is_empty());
     }
 }

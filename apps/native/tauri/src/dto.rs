@@ -125,6 +125,93 @@ pub struct AppWarningDto {
     pub actual_session_id: String,
 }
 
+/// セッション一覧(設定画面のセッション選択)の1件分。
+#[derive(Serialize, Clone)]
+pub struct SessionSummaryDto {
+    pub id: String,
+    pub updated_at: u64,
+    pub excerpt: String,
+}
+
+impl From<domain::SessionSummary> for SessionSummaryDto {
+    fn from(summary: domain::SessionSummary) -> Self {
+        Self {
+            id: summary.id,
+            updated_at: summary.updated_at_ms,
+            excerpt: summary.excerpt,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct GithubProjectDto {
+    pub owner: String,
+    pub number: u32,
+}
+
+impl From<domain::GithubProject> for GithubProjectDto {
+    fn from(project: domain::GithubProject) -> Self {
+        Self {
+            owner: project.owner,
+            number: project.number,
+        }
+    }
+}
+
+impl From<GithubProjectDto> for domain::GithubProject {
+    fn from(project: GithubProjectDto) -> Self {
+        Self {
+            owner: project.owner,
+            number: project.number,
+        }
+    }
+}
+
+/// `get_settings` の戻り値。
+#[derive(Serialize, Clone)]
+pub struct SettingsDto {
+    pub repository_path: Option<String>,
+    pub github_project: Option<GithubProjectDto>,
+    pub selected_session_ids: Vec<String>,
+}
+
+impl From<domain::Settings> for SettingsDto {
+    fn from(settings: domain::Settings) -> Self {
+        Self {
+            repository_path: settings.repository_path.map(|p| p.display().to_string()),
+            github_project: settings.github_project.map(GithubProjectDto::from),
+            selected_session_ids: settings.selected_session_ids,
+        }
+    }
+}
+
+/// `update_settings` の引数。スキーマ `version` はフロントが関知しない
+/// (常に現行バージョンとして保存する)ため含めない。
+#[derive(Deserialize, Clone)]
+pub struct SettingsInputDto {
+    pub repository_path: Option<String>,
+    pub github_project: Option<GithubProjectDto>,
+    pub selected_session_ids: Vec<String>,
+}
+
+impl From<SettingsInputDto> for domain::Settings {
+    fn from(input: SettingsInputDto) -> Self {
+        Self {
+            version: domain::CURRENT_SETTINGS_VERSION,
+            repository_path: input.repository_path.map(std::path::PathBuf::from),
+            github_project: input.github_project.map(domain::GithubProject::from),
+            selected_session_ids: input.selected_session_ids,
+        }
+    }
+}
+
+/// `settings:corrupted` イベントのペイロード。起動時に設定ファイルの破損を
+/// 検知し、デフォルト値へフォールバックした場合に通知する(native.md §2)。
+#[derive(Serialize, Clone)]
+pub struct SettingsCorruptedEventDto {
+    pub message: String,
+}
+
 /// `code` の一覧はフロントの分岐先(native.md §3.4)。メッセージ文字列では
 /// なく必ずこの `code` で分岐すること。
 #[derive(Serialize, Clone)]
