@@ -1,6 +1,8 @@
 mod dto;
 
-use dto::{AgentKindDto, AppErrorDto, ProjectDto, SessionChangedEventDto, SessionDto};
+use dto::{
+    AgentKindDto, AppErrorDto, AppWarningDto, ProjectDto, SessionChangedEventDto, SessionDto,
+};
 use infra::{ClaudeCliAgent, FileSystemRepository};
 use tauri::{Emitter, Manager};
 
@@ -24,26 +26,43 @@ fn get_latest_session(
 
 #[tauri::command]
 async fn send_message(
+    app: tauri::AppHandle,
     project: String,
     session_id: String,
     text: String,
 ) -> Result<(), AppErrorDto> {
     // claude CLI の起動は数秒〜数十秒かかるため、async ランタイムを塞がないよう
     // ブロッキングスレッドで実行する。
-    let result = tauri::async_runtime::spawn_blocking(move || -> Result<(), AppErrorDto> {
-        let source = FileSystemRepository::from_home_dir()?;
-        let agent = ClaudeCliAgent::new();
-        app::send_message(&source, &agent, &project, &session_id, &text)?;
-        Ok(())
-    })
+    let project_for_warning = project.clone();
+    let result = tauri::async_runtime::spawn_blocking(
+        move || -> Result<Option<app::SessionMismatch>, app::AppError> {
+            let source = FileSystemRepository::from_home_dir()?;
+            let agent = ClaudeCliAgent::new();
+            app::send_message(&source, &agent, &project, &session_id, &text)
+        },
+    )
     .await;
 
-    result.unwrap_or_else(|_| {
-        Err(AppErrorDto {
+    match result {
+        Ok(Ok(Some(mismatch))) => {
+            // 送信は成功しているためエラーにはせず、警告イベントで通知する。
+            let _ = app.emit(
+                "app:warning",
+                AppWarningDto {
+                    project: project_for_warning,
+                    expected_session_id: mismatch.expected_session_id,
+                    actual_session_id: mismatch.actual_session_id,
+                },
+            );
+            Ok(())
+        }
+        Ok(Ok(None)) => Ok(()),
+        Ok(Err(e)) => Err(e.into()),
+        Err(_) => Err(AppErrorDto {
             code: "internal".to_string(),
             message: "バックグラウンド処理に失敗しました".to_string(),
-        })
-    })
+        }),
+    }
 }
 
 /// `~/.claude/projects/` の変更監視を開始し、`session:changed` イベントとして

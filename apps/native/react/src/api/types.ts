@@ -29,3 +29,9 @@ export type SessionChangedEvent = {
   project: string;
   agent: AgentKindDto;
 };
+
+export type AppWarningEvent = {
+  project: string;
+  expected_session_id: string;
+  actual_session_id: string;
+};

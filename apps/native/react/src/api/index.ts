@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
   AppErrorDto,
+  AppWarningEvent,
   ProjectDto,
   SessionChangedEvent,
   SessionDto,
@@ -10,6 +11,7 @@ import type {
 export type {
   AgentKindDto,
   AppErrorDto,
+  AppWarningEvent,
   MessageDto,
   ProjectDto,
   RoleDto,
@@ -41,6 +43,15 @@ export function onSessionChanged(
   callback: (event: SessionChangedEvent) => void,
 ): Promise<() => void> {
   const unlisten = listen<SessionChangedEvent>("session:changed", (event) => {
+    callback(event.payload);
+  });
+  return unlisten.then((fn) => fn);
+}
+
+export function onAppWarning(
+  callback: (event: AppWarningEvent) => void,
+): Promise<() => void> {
+  const unlisten = listen<AppWarningEvent>("app:warning", (event) => {
     callback(event.payload);
   });
   return unlisten.then((fn) => fn);

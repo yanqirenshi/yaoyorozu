@@ -96,6 +96,17 @@ pub struct SessionChangedEventDto {
     pub agent: AgentKindDto,
 }
 
+/// `app:warning` イベントのペイロード。送信自体は成功しているが、送信前チェックと
+/// 実際の送信実行の間に別セッションが割り込んだ可能性がある場合に通知する
+/// (native.md §3.2)。エラーではなく警告のため、`send_message` の戻り値ではなく
+/// イベントとして届ける。
+#[derive(Serialize, Clone)]
+pub struct AppWarningDto {
+    pub project: String,
+    pub expected_session_id: String,
+    pub actual_session_id: String,
+}
+
 /// `code` の一覧はフロントの分岐先(native.md §3.4)。メッセージ文字列では
 /// なく必ずこの `code` で分岐すること。
 #[derive(Serialize, Clone)]

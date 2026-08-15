@@ -73,6 +73,20 @@ pub struct SendRequest {
     pub continuation: Continuation,
 }
 
+/// 送信直後に `SessionSource` から再取得した最新セッションIDが、送信前に
+/// 検証した `expected_session_id` と食い違っていた場合の情報。
+///
+/// 送信前チェックと `AgentGateway::send` の実行の間には別セッションが
+/// 割り込む競合窓が原理的に残る(`--continue` は実行時点の最新会話を継続する
+/// ため)。この窓で割り込みが起きると、検証を通過したのに表示中とは別の
+/// 会話へ追記されてしまう。送信自体は成功しているため `AppError` にはせず、
+/// 呼び出し側(tauri層)が警告としてフロントへ伝えるための戻り値として返す。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionMismatch {
+    pub expected_session_id: String,
+    pub actual_session_id: String,
+}
+
 pub fn list_projects(source: &dyn SessionSource) -> Result<Vec<Project>, AppError> {
     let mut projects = source.list_projects()?;
     sort_projects_by_recency(&mut projects);
@@ -98,13 +112,19 @@ pub fn get_latest_session(
 /// 表示してから送信するまでの間に別のセッションが作られていた場合(例: Claude
 /// Desktop側で新しい会話を始めた)、ユーザーが見ていない会話に無言で追記される
 /// 事故を防ぐための不変条件。不一致なら送信せず `SessionStale` を返す。
+///
+/// 送信後、`SessionSource` から改めて最新セッションIDを取得し
+/// `expected_session_id` と比較する。送信前チェックと送信実行の間の競合窓
+/// (このチェックでは検出できない)で割り込みが起きていた場合、[`SessionMismatch`]
+/// を返す。送信自体は成功しているため、これはエラーではなく戻り値としての
+/// 警告情報である。
 pub fn send_message(
     source: &dyn SessionSource,
     agent: &dyn AgentGateway,
     project: &str,
     expected_session_id: &str,
     text: &str,
-) -> Result<(), AppError> {
+) -> Result<Option<SessionMismatch>, AppError> {
     if text.trim().is_empty() {
         return Err(AppError::InvalidInput(
             "メッセージを入力してください".to_string(),
@@ -124,7 +144,17 @@ pub fn send_message(
         text: text.to_string(),
         mode: AgentMode::Chat,
         continuation: Continuation::Continue,
-    })
+    })?;
+
+    let post_send_session_id = source.latest_session_id(project)?;
+    if post_send_session_id != expected_session_id {
+        return Ok(Some(SessionMismatch {
+            expected_session_id: expected_session_id.to_string(),
+            actual_session_id: post_send_session_id,
+        }));
+    }
+
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -135,9 +165,13 @@ mod tests {
     struct FakeSessionSource {
         projects: Vec<Project>,
         session_id: String,
+        /// `Some` の場合、2回目以降の `latest_session_id` 呼び出しでこの値を返す
+        /// (送信前チェックと送信後チェックの間にセッションが変わった状況を再現する)。
+        post_send_session_id: Option<String>,
         messages: Vec<Message>,
         cwd: PathBuf,
         fail_list_projects: bool,
+        latest_session_id_calls: std::cell::Cell<usize>,
     }
 
     impl FakeSessionSource {
@@ -145,9 +179,11 @@ mod tests {
             Self {
                 projects: Vec::new(),
                 session_id: session_id.to_string(),
+                post_send_session_id: None,
                 messages,
                 cwd: PathBuf::from("/tmp/some-project"),
                 fail_list_projects: false,
+                latest_session_id_calls: std::cell::Cell::new(0),
             }
         }
     }
@@ -169,7 +205,16 @@ mod tests {
         }
 
         fn latest_session_id(&self, _project: &str) -> Result<String, AppError> {
-            Ok(self.session_id.clone())
+            let call = self.latest_session_id_calls.get();
+            self.latest_session_id_calls.set(call + 1);
+            if call == 0 {
+                Ok(self.session_id.clone())
+            } else {
+                Ok(self
+                    .post_send_session_id
+                    .clone()
+                    .unwrap_or_else(|| self.session_id.clone()))
+            }
         }
 
         fn latest_session_cwd(&self, _project: &str) -> Result<PathBuf, AppError> {
@@ -272,7 +317,9 @@ mod tests {
     fn send_message_delegates_to_agent_when_session_matches() {
         let source = FakeSessionSource::new("s1", vec![]);
         let agent = FakeAgentGateway::default();
-        send_message(&source, &agent, "some-project", "s1", "hello").expect("should send message");
+        let outcome = send_message(&source, &agent, "some-project", "s1", "hello")
+            .expect("should send message");
+        assert_eq!(outcome, None, "no mismatch when session id is unchanged");
 
         let sent = agent.sent.borrow();
         assert_eq!(sent.len(), 1);
@@ -280,6 +327,26 @@ mod tests {
         assert_eq!(sent[0].cwd, source.cwd);
         assert_eq!(sent[0].mode, AgentMode::Chat);
         assert_eq!(sent[0].continuation, Continuation::Continue);
+    }
+
+    #[test]
+    fn send_message_returns_mismatch_when_session_changes_during_send() {
+        let mut source = FakeSessionSource::new("s1", vec![]);
+        source.post_send_session_id = Some("s2".to_string());
+        let agent = FakeAgentGateway::default();
+
+        let outcome = send_message(&source, &agent, "some-project", "s1", "hello")
+            .expect("send itself should still succeed");
+
+        assert_eq!(
+            outcome,
+            Some(SessionMismatch {
+                expected_session_id: "s1".to_string(),
+                actual_session_id: "s2".to_string(),
+            })
+        );
+        // 送信自体は行われている(警告であってエラーではない)。
+        assert_eq!(agent.sent.borrow().len(), 1);
     }
 
     #[test]
