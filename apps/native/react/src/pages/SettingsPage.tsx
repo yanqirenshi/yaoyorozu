@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   getGithubAuthStatus,
+  getRepositoryClaudeMd,
   getSettings,
   githubLoginStart,
   githubLogout,
@@ -13,6 +14,7 @@ import {
   onGithubAuthFailed,
   onGithubAuthenticated,
   onGithubLoggedOut,
+  saveRepositoryClaudeMd,
   updateSettings,
 } from "../api";
 import type {
@@ -21,6 +23,7 @@ import type {
   GithubProjectSummaryDto,
   ProjectDto,
 } from "../api";
+import ClaudeMdEditor from "../ClaudeMdEditor";
 
 function SettingsPage() {
   const [loading, setLoading] = useState(true);
@@ -339,6 +342,19 @@ function SettingsPage() {
         </button>
         {saved && <p className="settings-saved">保存しました。</p>}
       </form>
+
+      <section className="settings-section">
+        <h3>CLAUDE.md</h3>
+        {repositoryPath ? (
+          <ClaudeMdEditor
+            load={getRepositoryClaudeMd}
+            save={saveRepositoryClaudeMd}
+            reloadKey={repositoryPath}
+          />
+        ) : (
+          <p>先にリポジトリを選択してください。</p>
+        )}
+      </section>
     </div>
   );
 }

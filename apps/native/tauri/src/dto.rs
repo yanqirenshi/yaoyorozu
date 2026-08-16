@@ -191,6 +191,31 @@ impl From<SettingsInputDto> for domain::Settings {
     }
 }
 
+/// `get_repository_claude_md`/`get_project_claude_md` の戻り値。両方
+/// `null` はファイルが存在しないことを意味する。`modified_at_ms` は保存時に
+/// `expected_modified_at_ms` として送り返し、アプリ外での変更との競合検出
+/// (楽観ロック)に使う(issue #27)。
+#[derive(Serialize, Clone)]
+pub struct ClaudeMdDto {
+    pub content: Option<String>,
+    pub modified_at_ms: Option<u64>,
+}
+
+impl From<Option<domain::ClaudeMdFile>> for ClaudeMdDto {
+    fn from(file: Option<domain::ClaudeMdFile>) -> Self {
+        match file {
+            Some(file) => Self {
+                content: Some(file.content),
+                modified_at_ms: Some(file.modified_at_ms),
+            },
+            None => Self {
+                content: None,
+                modified_at_ms: None,
+            },
+        }
+    }
+}
+
 /// `settings:corrupted` イベントのペイロード。起動時に設定ファイルの破損を
 /// 検知し、デフォルト値へフォールバックした場合に通知する(native.md §2)。
 #[derive(Serialize, Clone)]
@@ -276,6 +301,7 @@ impl From<app::AppError> for AppErrorDto {
             app::AppError::GithubUnauthenticated(message) => ("github_unauthenticated", message),
             app::AppError::GithubAuthExpired(message) => ("github_auth_expired", message),
             app::AppError::GithubApiFailed(message) => ("github_api_failed", message),
+            app::AppError::ClaudeMdConflict(message) => ("claude_md_conflict", message),
         };
         Self {
             code: code.to_string(),

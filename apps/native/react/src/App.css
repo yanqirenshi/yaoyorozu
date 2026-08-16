@@ -87,6 +87,68 @@ body,
   flex-direction: column;
 }
 
+.pane-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 16px 0;
+  border-bottom: 1px solid #a1a1aa;
+}
+
+.pane-tab {
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: 0.9rem;
+  color: #737373;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+
+.pane-tab:hover {
+  color: #373737;
+}
+
+.pane-tab.active {
+  color: #9d5b8b;
+  border-bottom-color: #9d5b8b;
+  font-weight: 600;
+}
+
+.claude-md-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  padding: 16px;
+}
+
+.claude-md-editor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.claude-md-editor-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.claude-md-editor-textarea {
+  flex: 1;
+  min-height: 0;
+  resize: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  padding: 12px;
+  border: 1px solid #a1a1aa;
+  border-radius: 4px;
+  background: #fbfbf8;
+  color: #373737;
+}
+
 .settings-page {
   flex: 1;
   min-width: 0;
