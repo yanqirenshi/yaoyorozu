@@ -43,16 +43,19 @@ impl FileSettingsStore {
         }
     }
 
-    /// v1(`claude_projects_dir` を持たない)を v2 へ移行する。v1 のJSONは
-    /// `#[serde(default)]` により `claude_projects_dir: None` としてそのまま
-    /// パースできているため、ここでは `version` を上げて保存し直すだけでよい。
-    /// 保存し直しに失敗しても(パーミッション等)、このセッションはメモリ上の
-    /// 移行後の値で動作を続ける(次回起動時に再度移行を試みるだけで、
-    /// データが失われるわけではないため)。
-    fn migrate_v1_to_v2(&self, v1: Settings) -> Settings {
+    /// 旧バージョン(v1・v2)の設定を現行バージョンへ移行する。フィールド
+    /// レベルの差分(新フィールドの追加・削除・置換)は各フィールドの
+    /// `#[serde(default)]` によりパース時点で吸収済み(例: v1→v2で追加した
+    /// `claude_projects_dir` は `None` に、v2→v3で `selected_project_folders`
+    /// に置き換えた旧 `selected_session_ids` の値は破棄されて空配列になる)
+    /// ため、ここでは `version` を上げて保存し直すだけでよい。保存し直しに
+    /// 失敗しても(パーミッション等)、このセッションはメモリ上の移行後の
+    /// 値で動作を続ける(次回起動時に再度移行を試みるだけで、他のデータが
+    /// 失われるわけではないため)。
+    fn migrate_to_current_version(&self, outdated: Settings) -> Settings {
         let migrated = Settings {
             version: CURRENT_SETTINGS_VERSION,
-            ..v1
+            ..outdated
         };
         let _ = self.save(&migrated);
         migrated
@@ -81,8 +84,8 @@ impl SettingsStore for FileSettingsStore {
                 settings,
                 recovered_from_corruption: false,
             }),
-            1 => Ok(LoadedSettings {
-                settings: self.migrate_v1_to_v2(settings),
+            1 | 2 => Ok(LoadedSettings {
+                settings: self.migrate_to_current_version(settings),
                 recovered_from_corruption: false,
             }),
             // 未知のバージョン(将来のアプリが書いたファイルを古いアプリが
@@ -153,7 +156,7 @@ mod tests {
                 owner: "yanqirenshi".to_string(),
                 number: 51,
             }),
-            selected_session_ids: vec!["s1".to_string(), "s2".to_string()],
+            selected_project_folders: vec!["proj1".to_string(), "proj2".to_string()],
             claude_projects_dir: Some(PathBuf::from(r"D:\custom\projects")),
         };
 
@@ -209,7 +212,7 @@ mod tests {
     fn load_evacuates_file_with_unknown_version_and_falls_back_to_default() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        fs::write(&path, r#"{"version":999,"repository_path":null,"github_project":null,"selected_session_ids":[]}"#).unwrap();
+        fs::write(&path, r#"{"version":999,"repository_path":null,"github_project":null,"selected_project_folders":[]}"#).unwrap();
         let store = FileSettingsStore::new(path.clone());
 
         let loaded = store.load().expect("should recover with default");
@@ -219,10 +222,10 @@ mod tests {
     }
 
     #[test]
-    fn load_migrates_v1_settings_to_v2_without_treating_it_as_corrupt() {
+    fn load_migrates_v1_settings_to_current_version_without_treating_it_as_corrupt() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        // v1のJSON(claude_projects_dirフィールドを持たない)。
+        // v1のJSON(claude_projects_dir・selected_project_foldersのどちらも持たない)。
         fs::write(
             &path,
             r#"{"version":1,"repository_path":"C:\\Users\\yanqi\\prj\\yaoyorozu","github_project":null,"selected_session_ids":["s1"]}"#,
@@ -230,14 +233,17 @@ mod tests {
         .unwrap();
         let store = FileSettingsStore::new(path.clone());
 
-        let loaded = store.load().expect("should migrate v1 to v2");
+        let loaded = store.load().expect("should migrate v1 to current version");
 
         assert_eq!(loaded.settings.version, CURRENT_SETTINGS_VERSION);
         assert_eq!(
             loaded.settings.repository_path,
             Some(PathBuf::from(r"C:\Users\yanqi\prj\yaoyorozu"))
         );
-        assert_eq!(loaded.settings.selected_session_ids, vec!["s1".to_string()]);
+        assert!(
+            loaded.settings.selected_project_folders.is_empty(),
+            "v1の旧selected_session_idsはフィールド置換により破棄される"
+        );
         assert_eq!(loaded.settings.claude_projects_dir, None);
         assert!(
             !loaded.recovered_from_corruption,
@@ -246,7 +252,36 @@ mod tests {
     }
 
     #[test]
-    fn load_persists_the_v1_to_v2_migration_immediately() {
+    fn load_migrates_v2_settings_to_current_version_discarding_old_session_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        // v2のJSON(selected_session_ids・claude_projects_dirを持つ)。
+        fs::write(
+            &path,
+            r#"{"version":2,"repository_path":null,"github_project":null,"selected_session_ids":["s1"],"claude_projects_dir":"D:\\custom\\projects"}"#,
+        )
+        .unwrap();
+        let store = FileSettingsStore::new(path.clone());
+
+        let loaded = store.load().expect("should migrate v2 to current version");
+
+        assert_eq!(loaded.settings.version, CURRENT_SETTINGS_VERSION);
+        assert!(
+            loaded.settings.selected_project_folders.is_empty(),
+            "v2の旧selected_session_idsはフィールド置換により破棄される"
+        );
+        assert_eq!(
+            loaded.settings.claude_projects_dir,
+            Some(PathBuf::from(r"D:\custom\projects"))
+        );
+        assert!(
+            !loaded.recovered_from_corruption,
+            "migration is not corruption"
+        );
+    }
+
+    #[test]
+    fn load_persists_the_migration_immediately() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
         fs::write(
@@ -256,10 +291,10 @@ mod tests {
         .unwrap();
         let store = FileSettingsStore::new(path.clone());
 
-        store.load().expect("should migrate v1 to v2");
+        store.load().expect("should migrate to current version");
 
-        // ファイル自体もv2として保存し直されている(次回起動時に再度
-        // 移行処理を通らなくてよいことを確認する)。
+        // ファイル自体も現行バージョンとして保存し直されている(次回起動時に
+        // 再度移行処理を通らなくてよいことを確認する)。
         let content = fs::read_to_string(&path).unwrap();
         let saved: Settings = serde_json::from_str(&content).unwrap();
         assert_eq!(saved.version, CURRENT_SETTINGS_VERSION);

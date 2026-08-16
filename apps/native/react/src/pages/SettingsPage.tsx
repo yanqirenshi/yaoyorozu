@@ -4,13 +4,12 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   getGithubAuthStatus,
-  getProjectName,
   getSettings,
   githubLoginStart,
   githubLogout,
   isAppError,
   listGithubProjects,
-  listSessions,
+  listProjects,
   onGithubAuthFailed,
   onGithubAuthenticated,
   onGithubLoggedOut,
@@ -20,7 +19,7 @@ import type {
   DeviceCodeDto,
   GithubAuthStatusDto,
   GithubProjectSummaryDto,
-  SessionSummaryDto,
+  ProjectDto,
 } from "../api";
 
 function SettingsPage() {
@@ -29,8 +28,8 @@ function SettingsPage() {
   const [claudeProjectsDir, setClaudeProjectsDir] = useState<string | null>(null);
   const [githubOwner, setGithubOwner] = useState("");
   const [githubNumber, setGithubNumber] = useState("");
-  const [sessions, setSessions] = useState<SessionSummaryDto[]>([]);
-  const [selectedSessionIds, setSelectedSessionIds] = useState<string[]>([]);
+  const [folders, setFolders] = useState<ProjectDto[]>([]);
+  const [selectedProjectFolders, setSelectedProjectFolders] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -54,22 +53,17 @@ function SettingsPage() {
         setGithubNumber(
           settings.github_project ? String(settings.github_project.number) : "",
         );
-        setSelectedSessionIds(settings.selected_session_ids);
+        setSelectedProjectFolders(settings.selected_project_folders);
       })
       .catch((e) => setError(isAppError(e) ? e.message : String(e)))
       .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
-    if (!repositoryPath) {
-      setSessions([]);
-      return;
-    }
-    getProjectName(repositoryPath)
-      .then((project) => listSessions(project))
-      .then(setSessions)
+    listProjects()
+      .then(setFolders)
       .catch((e) => setError(isAppError(e) ? e.message : String(e)));
-  }, [repositoryPath]);
+  }, []);
 
   useEffect(() => {
     getGithubAuthStatus().then(setAuthStatus);
@@ -156,8 +150,6 @@ function SettingsPage() {
     const path = await open({ directory: true, multiple: false });
     if (typeof path === "string") {
       setRepositoryPath(path);
-      // フォルダを変えたら、別リポジトリのセッションIDを持ち越さない。
-      setSelectedSessionIds([]);
     }
   };
 
@@ -172,9 +164,9 @@ function SettingsPage() {
     setClaudeProjectsDir(null);
   };
 
-  const toggleSession = (id: string) => {
-    setSelectedSessionIds((prev) =>
-      prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id],
+  const toggleProjectFolder = (name: string) => {
+    setSelectedProjectFolders((prev) =>
+      prev.includes(name) ? prev.filter((f) => f !== name) : [...prev, name],
     );
   };
 
@@ -193,7 +185,7 @@ function SettingsPage() {
     updateSettings({
       repository_path: repositoryPath,
       github_project: githubProject,
-      selected_session_ids: selectedSessionIds,
+      selected_project_folders: selectedProjectFolders,
       claude_projects_dir: claudeProjectsDir,
     })
       .then(() => setSaved(true))
@@ -319,21 +311,22 @@ function SettingsPage() {
         </section>
 
         <section className="settings-section">
-          <h3>対象セッション</h3>
-          {!repositoryPath && <p>先にリポジトリを選択してください。</p>}
-          {repositoryPath && sessions.length === 0 && (
-            <p>このリポジトリのセッションが見つかりません。</p>
-          )}
-          <ul className="settings-session-list">
-            {sessions.map((s) => (
-              <li key={s.id}>
-                <label className="settings-session-item">
+          <h3>対象フォルダ</h3>
+          {folders.length === 0 && <p>フォルダが見つかりません。</p>}
+          <ul className="settings-folder-list">
+            {folders.map((f) => (
+              <li key={f.name}>
+                <label
+                  className={`settings-folder-item ${
+                    selectedProjectFolders.includes(f.name) ? "selected" : ""
+                  }`}
+                >
                   <input
                     type="checkbox"
-                    checked={selectedSessionIds.includes(s.id)}
-                    onChange={() => toggleSession(s.id)}
+                    checked={selectedProjectFolders.includes(f.name)}
+                    onChange={() => toggleProjectFolder(f.name)}
                   />
-                  {s.excerpt || "(本文なし)"}
+                  {f.name}
                 </label>
               </li>
             ))}

@@ -1,6 +1,6 @@
 use domain::{
     order_messages_newest_first, paginate_messages, sort_projects_by_recency, Project, Session,
-    SessionSummary, Settings,
+    Settings,
 };
 use std::path::PathBuf;
 
@@ -54,10 +54,6 @@ pub trait SessionSource {
     /// 最新セッションの作業ディレクトリ(cwd)を返す。`AgentGateway` へ渡す
     /// `SendRequest` を組み立てるために使う。
     fn latest_session_cwd(&self, project: &str) -> Result<PathBuf, AppError>;
-
-    /// 指定プロジェクトの全セッションを一覧表示用に要約して返す
-    /// (新しい順)。設定画面でのセッション選択に使う。
-    fn list_sessions(&self, project: &str) -> Result<Vec<SessionSummary>, AppError>;
 }
 
 /// アプリ設定の永続化(port)。実体(ファイル形式・保存先の解決)は infra に
@@ -241,14 +237,6 @@ pub fn send_message(
     Ok(None)
 }
 
-/// 指定プロジェクトのセッション一覧(設定画面のセッション選択用)を返す。
-pub fn list_sessions(
-    source: &dyn SessionSource,
-    project: &str,
-) -> Result<Vec<SessionSummary>, AppError> {
-    source.list_sessions(project)
-}
-
 /// 起動時、保存済みの設定を読み込む。ファイルが存在しない/壊れている場合の
 /// デフォルト値へのフォールバックは `SettingsStore` 実装(infra)側の責務。
 pub fn load_settings(store: &dyn SettingsStore) -> Result<LoadedSettings, AppError> {
@@ -348,7 +336,6 @@ mod tests {
         /// (送信前チェックと送信後チェックの間にセッションが変わった状況を再現する)。
         post_send_session_id: Option<String>,
         messages: Vec<Message>,
-        sessions: Vec<SessionSummary>,
         cwd: PathBuf,
         fail_list_projects: bool,
         latest_session_id_calls: std::cell::Cell<usize>,
@@ -361,7 +348,6 @@ mod tests {
                 session_id: session_id.to_string(),
                 post_send_session_id: None,
                 messages,
-                sessions: Vec::new(),
                 cwd: PathBuf::from("/tmp/some-project"),
                 fail_list_projects: false,
                 latest_session_id_calls: std::cell::Cell::new(0),
@@ -400,10 +386,6 @@ mod tests {
 
         fn latest_session_cwd(&self, _project: &str) -> Result<PathBuf, AppError> {
             Ok(self.cwd.clone())
-        }
-
-        fn list_sessions(&self, _project: &str) -> Result<Vec<SessionSummary>, AppError> {
-            Ok(self.sessions.clone())
         }
     }
 
@@ -608,20 +590,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn list_sessions_delegates_to_source() {
-        let mut source = FakeSessionSource::new("s1", vec![]);
-        source.sessions = vec![SessionSummary {
-            id: "s1".to_string(),
-            updated_at_ms: 100,
-            excerpt: "hello".to_string(),
-        }];
-
-        let sessions = list_sessions(&source, "some-project").expect("should list sessions");
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].id, "s1");
-    }
-
     struct FakeSettingsStore {
         loaded: LoadedSettings,
         saved: std::cell::RefCell<Vec<Settings>>,
@@ -658,7 +626,7 @@ mod tests {
     #[test]
     fn load_settings_returns_store_result_unchanged() {
         let mut settings = Settings::default();
-        settings.selected_session_ids.push("s1".to_string());
+        settings.selected_project_folders.push("proj1".to_string());
         let store = FakeSettingsStore::new(settings.clone());
 
         let loaded = load_settings(&store).expect("should load settings");

@@ -1,8 +1,5 @@
 use app::{AppError, SessionSource};
-use domain::{
-    excerpt, extract_cwd, extract_message, extract_session_id, AgentKind, Project, Session,
-    SessionSummary,
-};
+use domain::{extract_cwd, extract_message, extract_session_id, AgentKind, Project, Session};
 use notify::RecursiveMode;
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
 use std::collections::HashSet;
@@ -19,9 +16,6 @@ const WATCH_DEBOUNCE: Duration = Duration::from_millis(400);
 /// (`notify`/`notify-debouncer-full` の型をそのまま公開する代わりに)
 /// エイリアスとして公開する。
 pub type SessionWatcher = Debouncer<notify::RecommendedWatcher, RecommendedCache>;
-
-/// セッション一覧(設定画面)の抜粋の最大文字数。
-const SESSION_SUMMARY_EXCERPT_MAX_CHARS: usize = 60;
 
 /// `~/.claude/projects/` 配下のセッションログ(JSONL)を読み取る `SessionSource` 実装。
 pub struct FileSystemRepository {
@@ -230,49 +224,6 @@ impl SessionSource for FileSystemRepository {
     fn latest_session_cwd(&self, project: &str) -> Result<PathBuf, AppError> {
         resolve_session_cwd(&self.projects_dir.join(project))
     }
-
-    fn list_sessions(&self, project: &str) -> Result<Vec<SessionSummary>, AppError> {
-        let project_dir = self.projects_dir.join(project);
-        let summaries = session_files_by_recency(&project_dir)
-            .iter()
-            .filter_map(|path| summarize_session_file(path))
-            .collect();
-        Ok(summaries)
-    }
-}
-
-/// セッションファイル1つを一覧表示用に要約する。`sessionId` と先頭の
-/// 会話メッセージの両方が見つかった時点でそれ以上読み進めない
-/// (一覧表示のために全メッセージを読む必要はないため)。
-fn summarize_session_file(path: &Path) -> Option<SessionSummary> {
-    let updated_at_ms = to_millis(fs::metadata(path).and_then(|m| m.modified()));
-    let file = fs::File::open(path).ok()?;
-
-    let mut id: Option<String> = None;
-    let mut excerpt_text: Option<String> = None;
-    for value in BufReader::new(file)
-        .lines()
-        .map_while(Result::ok)
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
-    {
-        if id.is_none() {
-            id = extract_session_id(&value);
-        }
-        if excerpt_text.is_none() {
-            if let Some(message) = extract_message(&value) {
-                excerpt_text = Some(excerpt(&message.text, SESSION_SUMMARY_EXCERPT_MAX_CHARS));
-            }
-        }
-        if id.is_some() && excerpt_text.is_some() {
-            break;
-        }
-    }
-
-    Some(SessionSummary {
-        id: id?,
-        updated_at_ms,
-        excerpt: excerpt_text.unwrap_or_default(),
-    })
 }
 
 #[cfg(test)]
@@ -313,24 +264,6 @@ mod tests {
         assert_eq!(session.id, "s1");
         assert_eq!(session.messages.len(), 1);
         assert_eq!(session.messages[0].text, "hello");
-    }
-
-    #[test]
-    fn filesystem_repository_list_sessions_returns_id_and_excerpt() {
-        let dir = tempfile::tempdir().unwrap();
-        let project_dir = dir.path().join("proj");
-        fs::create_dir_all(&project_dir).unwrap();
-        write_session_file(&project_dir, "s1", &project_dir);
-        write_session_file(&project_dir, "s2", &project_dir);
-
-        let repo = FileSystemRepository::new(dir.path().to_path_buf());
-        let mut sessions = repo.list_sessions("proj").expect("should list sessions");
-        sessions.sort_by(|a, b| a.id.cmp(&b.id));
-
-        assert_eq!(sessions.len(), 2);
-        assert_eq!(sessions[0].id, "s1");
-        assert_eq!(sessions[0].excerpt, "hello");
-        assert_eq!(sessions[1].id, "s2");
     }
 
     #[test]

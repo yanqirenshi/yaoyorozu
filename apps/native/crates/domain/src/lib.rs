@@ -108,7 +108,9 @@ pub fn extract_session_id(value: &serde_json::Value) -> Option<String> {
 /// `Settings` の現在のスキーマバージョン。マイグレーションが必要になったら
 /// 上げ、infra 側のマイグレーション関数で旧バージョンからの変換を行う。
 /// v1 -> v2: `claude_projects_dir` を追加(issue #25)。
-pub const CURRENT_SETTINGS_VERSION: u32 = 2;
+/// v2 -> v3: `selected_session_ids`(セッションID配列)を
+/// `selected_project_folders`(フォルダ名配列)に置き換え。
+pub const CURRENT_SETTINGS_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct GithubProject {
@@ -123,7 +125,7 @@ impl GithubProject {
     }
 }
 
-/// アプリの設定。対象リポジトリ(1つ)・GitHubプロジェクト・対象セッション・
+/// アプリの設定。対象リポジトリ(1つ)・GitHubプロジェクト・対象フォルダ・
 /// セッション一覧のルートディレクトリの4項目を持つ。永続化(JSON)は infra
 /// が担う。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -131,7 +133,12 @@ pub struct Settings {
     pub version: u32,
     pub repository_path: Option<std::path::PathBuf>,
     pub github_project: Option<GithubProject>,
-    pub selected_session_ids: Vec<String>,
+    /// `~/.claude/projects/` 配下のフォルダ名のうち、対象として選んだもの
+    /// (複数可)。`#[serde(default)]` は v1/v2 のJSON(このフィールドを
+    /// 持たない、または旧フィールド名 `selected_session_ids` を持つ)を
+    /// 読めるようにするため(v2からの移行では旧値は破棄される)。
+    #[serde(default)]
+    pub selected_project_folders: Vec<String>,
     /// セッション一覧が読むルートディレクトリ。`None` の場合は既定
     /// (`~/.claude/projects/`)を使う。`#[serde(default)]` は v1 のJSON
     /// (このフィールドを持たない)を読めるようにするため。
@@ -145,7 +152,7 @@ impl Default for Settings {
             version: CURRENT_SETTINGS_VERSION,
             repository_path: None,
             github_project: None,
-            selected_session_ids: Vec::new(),
+            selected_project_folders: Vec::new(),
             claude_projects_dir: None,
         }
     }
@@ -161,36 +168,6 @@ pub fn effective_projects_dir(
     configured
         .map(std::path::Path::to_path_buf)
         .unwrap_or_else(|| default.to_path_buf())
-}
-
-/// `~/.claude/projects/` 配下のプロジェクトディレクトリ名を、リポジトリの
-/// 絶対パスから求める。実データで確認したエンコード規則: パス中の英数字
-/// (ASCII)以外の文字をすべて `-` に置き換える
-/// (例: `C:\Users\yanqi\prj\yaoyorozu` -> `C--Users-yanqi-prj-yaoyorozu`)。
-pub fn encode_project_dir_name(path: &str) -> String {
-    path.chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect()
-}
-
-/// 1つのセッションの一覧表示用サマリ。全メッセージを読まずに一覧を出すための
-/// 最小限の情報(ID・最終更新・先頭メッセージの抜粋)。
-#[derive(Debug, Clone)]
-pub struct SessionSummary {
-    pub id: String,
-    pub updated_at_ms: u64,
-    pub excerpt: String,
-}
-
-/// 表示用に文字列を切り詰める。長い本文を一覧にそのまま出さないため。
-pub fn excerpt(text: &str, max_chars: usize) -> String {
-    let trimmed = text.trim();
-    if trimmed.chars().count() <= max_chars {
-        trimmed.to_string()
-    } else {
-        let truncated: String = trimmed.chars().take(max_chars).collect();
-        format!("{truncated}…")
-    }
 }
 
 /// GitHub Projects(v2)の一覧表示用サマリ(設定画面のプロジェクト選択に使う)。
@@ -386,7 +363,7 @@ mod tests {
         assert_eq!(settings.version, CURRENT_SETTINGS_VERSION);
         assert_eq!(settings.repository_path, None);
         assert_eq!(settings.github_project, None);
-        assert!(settings.selected_session_ids.is_empty());
+        assert!(settings.selected_project_folders.is_empty());
         assert_eq!(settings.claude_projects_dir, None);
     }
 
@@ -422,34 +399,5 @@ mod tests {
             number: 51,
         };
         assert!(project.is_valid());
-    }
-
-    #[test]
-    fn encode_project_dir_name_matches_observed_claude_code_encoding() {
-        // 実データで確認した実例(このリポジトリ自身の ~/.claude/projects/ 配下)。
-        assert_eq!(
-            encode_project_dir_name(r"C:\Users\yanqi\prj\yaoyorozu"),
-            "C--Users-yanqi-prj-yaoyorozu"
-        );
-    }
-
-    #[test]
-    fn encode_project_dir_name_replaces_each_non_alphanumeric_char_individually() {
-        // "\.claude\" のように非英数字が連続する場合、まとめず1文字ずつ置き換える
-        // (実データ: ".../Spinor/.claude/worktrees/..." -> "...-Spinor--claude-worktrees-...")。
-        assert_eq!(
-            encode_project_dir_name(r"Spinor\.claude\worktrees"),
-            "Spinor--claude-worktrees"
-        );
-    }
-
-    #[test]
-    fn excerpt_returns_trimmed_text_when_within_limit() {
-        assert_eq!(excerpt("  hello  ", 10), "hello");
-    }
-
-    #[test]
-    fn excerpt_truncates_and_appends_ellipsis_when_over_limit() {
-        assert_eq!(excerpt("hello world", 5), "hello…");
     }
 }

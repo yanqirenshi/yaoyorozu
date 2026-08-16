@@ -125,24 +125,6 @@ pub struct AppWarningDto {
     pub actual_session_id: String,
 }
 
-/// セッション一覧(設定画面のセッション選択)の1件分。
-#[derive(Serialize, Clone)]
-pub struct SessionSummaryDto {
-    pub id: String,
-    pub updated_at: u64,
-    pub excerpt: String,
-}
-
-impl From<domain::SessionSummary> for SessionSummaryDto {
-    fn from(summary: domain::SessionSummary) -> Self {
-        Self {
-            id: summary.id,
-            updated_at: summary.updated_at_ms,
-            excerpt: summary.excerpt,
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize, Clone)]
 pub struct GithubProjectDto {
     pub owner: String,
@@ -172,7 +154,8 @@ impl From<GithubProjectDto> for domain::GithubProject {
 pub struct SettingsDto {
     pub repository_path: Option<String>,
     pub github_project: Option<GithubProjectDto>,
-    pub selected_session_ids: Vec<String>,
+    /// `~/.claude/projects/` 配下のフォルダ名のうち、対象として選んだもの。
+    pub selected_project_folders: Vec<String>,
     /// 明示的な上書き値。`null` は「既定を使用中」を意味する。設定画面が
     /// 「未変更なら保存時に既定→上書きへ意図せず固定してしまう」ことを
     /// 避けるため、表示用の `effective_projects_dir` とは別に生値も返す。
@@ -191,7 +174,7 @@ pub struct SettingsDto {
 pub struct SettingsInputDto {
     pub repository_path: Option<String>,
     pub github_project: Option<GithubProjectDto>,
-    pub selected_session_ids: Vec<String>,
+    pub selected_project_folders: Vec<String>,
     /// `null` は「既定に戻す」を意味する。
     pub claude_projects_dir: Option<String>,
 }
@@ -202,7 +185,7 @@ impl From<SettingsInputDto> for domain::Settings {
             version: domain::CURRENT_SETTINGS_VERSION,
             repository_path: input.repository_path.map(std::path::PathBuf::from),
             github_project: input.github_project.map(domain::GithubProject::from),
-            selected_session_ids: input.selected_session_ids,
+            selected_project_folders: input.selected_project_folders,
             claude_projects_dir: input.claude_projects_dir.map(std::path::PathBuf::from),
         }
     }

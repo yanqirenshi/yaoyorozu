@@ -5,7 +5,7 @@ use app::{SettingsStore, TokenStore};
 use dto::{
     AgentKindDto, AgentModeDto, AppErrorDto, AppWarningDto, DeviceCodeDto,
     GithubAuthFailedEventDto, GithubAuthStatusDto, GithubAuthenticatedEventDto, GithubProjectDto,
-    GithubProjectSummaryDto, ProjectDto, SessionChangedEventDto, SessionDto, SessionSummaryDto,
+    GithubProjectSummaryDto, ProjectDto, SessionChangedEventDto, SessionDto,
     SettingsCorruptedEventDto, SettingsDto, SettingsInputDto,
 };
 use infra::{
@@ -133,37 +133,6 @@ async fn send_message(
     }
 }
 
-/// リポジトリの絶対パスから `~/.claude/projects/` 配下のディレクトリ名
-/// (`list_sessions`/`get_latest_session` 等が使う "project" 識別子)を求める。
-/// フロントはエンコード規則を知らず、この Query 経由でのみ変換する
-/// (native.md 1: ビジネスロジックは Rust 側に置く)。
-#[tauri::command]
-fn get_project_name(path: String) -> String {
-    domain::encode_project_dir_name(&path)
-}
-
-#[tauri::command]
-async fn list_sessions(
-    state: tauri::State<'_, Mutex<AppState>>,
-    project: String,
-) -> Result<Vec<SessionSummaryDto>, AppErrorDto> {
-    let root = effective_projects_dir_from_state(&state).await?;
-    tauri::async_runtime::spawn_blocking(
-        move || -> Result<Vec<SessionSummaryDto>, app::AppError> {
-            let source = FileSystemRepository::new(root);
-            let sessions = app::list_sessions(&source, &project)?;
-            Ok(sessions.into_iter().map(SessionSummaryDto::from).collect())
-        },
-    )
-    .await
-    .unwrap_or_else(|_| {
-        Err(app::AppError::Io(
-            "バックグラウンド処理に失敗しました".to_string(),
-        ))
-    })
-    .map_err(Into::into)
-}
-
 #[tauri::command]
 async fn get_settings(
     state: tauri::State<'_, Mutex<AppState>>,
@@ -176,7 +145,7 @@ async fn get_settings(
     Ok(SettingsDto {
         repository_path: settings.repository_path.map(|p| p.display().to_string()),
         github_project: settings.github_project.map(GithubProjectDto::from),
-        selected_session_ids: settings.selected_session_ids,
+        selected_project_folders: settings.selected_project_folders,
         claude_projects_dir: settings
             .claude_projects_dir
             .map(|p| p.display().to_string()),
@@ -470,8 +439,6 @@ pub fn run() {
             list_projects,
             get_latest_session,
             send_message,
-            get_project_name,
-            list_sessions,
             get_settings,
             update_settings,
             get_github_auth_status,
