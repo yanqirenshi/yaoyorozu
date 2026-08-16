@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 import type { DockItem } from "command-dock";
 import {
   getLatestSession,
+  getSettings,
   isAppError,
   listProjects,
   onAppWarning,
@@ -18,6 +19,7 @@ const PAGE_SIZE = 50;
 
 function SessionsPage() {
   const [projects, setProjects] = useState<ProjectDto[]>([]);
+  const [projectsRoot, setProjectsRoot] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<MessageDto[]>([]);
@@ -31,6 +33,12 @@ function SessionsPage() {
   const loadProjects = useCallback((): Promise<void> => {
     return listProjects()
       .then(setProjects)
+      .catch((e) => setError(isAppError(e) ? e.message : String(e)));
+  }, []);
+
+  const loadProjectsRoot = useCallback((): Promise<void> => {
+    return getSettings()
+      .then((settings) => setProjectsRoot(settings.effective_projects_dir))
       .catch((e) => setError(isAppError(e) ? e.message : String(e)));
   }, []);
 
@@ -61,14 +69,15 @@ function SessionsPage() {
   }, [selected, loadingMore, messages.length]);
 
   const reload = useCallback((): Promise<void> => {
-    const tasks = [loadProjects()];
+    const tasks = [loadProjects(), loadProjectsRoot()];
     if (selected) tasks.push(loadFirstPage(selected));
     return Promise.all(tasks).then(() => undefined);
-  }, [selected, loadProjects, loadFirstPage]);
+  }, [selected, loadProjects, loadProjectsRoot, loadFirstPage]);
 
   useEffect(() => {
     loadProjects();
-  }, [loadProjects]);
+    loadProjectsRoot();
+  }, [loadProjects, loadProjectsRoot]);
 
   useEffect(() => {
     if (!selected) return;
@@ -156,7 +165,7 @@ function SessionsPage() {
     <>
       <div className="project-list">
         <h2>
-          c:/Users/yanqi/.claude/projects/
+          {projectsRoot}
           <br />
           配下のフォルダ一覧
         </h2>

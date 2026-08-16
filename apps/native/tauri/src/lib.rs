@@ -4,14 +4,15 @@ mod state;
 use app::{SettingsStore, TokenStore};
 use dto::{
     AgentKindDto, AgentModeDto, AppErrorDto, AppWarningDto, DeviceCodeDto,
-    GithubAuthFailedEventDto, GithubAuthStatusDto, GithubAuthenticatedEventDto,
-    GithubProjectSummaryDto, ProjectDto, SessionChangedEventDto, SessionDto, SessionSummaryDto,
+    GithubAuthFailedEventDto, GithubAuthStatusDto, GithubAuthenticatedEventDto, GithubProjectDto,
+    GithubProjectSummaryDto, ProjectDto, SessionChangedEventDto, SessionDto,
     SettingsCorruptedEventDto, SettingsDto, SettingsInputDto,
 };
 use infra::{
     ClaudeCliAgent, FileSettingsStore, FileSystemRepository, GithubApiClient, KeyringTokenStore,
 };
 use state::AppState;
+use std::path::PathBuf;
 use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
 
@@ -19,38 +20,91 @@ use tokio::sync::Mutex;
 /// ため秘密情報ではなく、定数として埋め込んでよい(issue #24)。
 const GITHUB_CLIENT_ID: &str = "Ov23liqOl7JIbaGeJev4";
 
-#[tauri::command]
-fn list_projects() -> Result<Vec<ProjectDto>, AppErrorDto> {
-    let source = FileSystemRepository::from_home_dir()?;
-    let projects = app::list_projects(&source)?;
-    Ok(projects.into_iter().map(ProjectDto::from).collect())
+/// 現在保持しているファイル監視。`Option` を差し替えることで張り替えを表現する
+/// (`Debouncer` は drop されると監視を止めるため、新しい値で上書きするだけで
+/// 旧い監視は自動的に止まる)。`tauri::State` は同じ型を複数回 `manage()`
+/// できないため、`AppState`(設定のSSoT)とは別にこの型で1つだけ管理する。
+type WatcherSlot = std::sync::Mutex<Option<infra::SessionWatcher>>;
+
+/// 設定の `claude_projects_dir` と既定値(`~/.claude/projects/`)から、
+/// 実際に使うルートディレクトリを求める。
+fn resolve_effective_projects_dir(settings: &domain::Settings) -> Result<PathBuf, app::AppError> {
+    let default = FileSystemRepository::default_projects_dir()?;
+    Ok(domain::effective_projects_dir(
+        settings.claude_projects_dir.as_deref(),
+        &default,
+    ))
+}
+
+/// `AppState` をロックして現在の設定から有効なルートディレクトリを求める。
+/// 各コマンドで重複しないよう共通化する。
+async fn effective_projects_dir_from_state(
+    state: &tauri::State<'_, Mutex<AppState>>,
+) -> Result<PathBuf, app::AppError> {
+    let settings = {
+        let guard = state.lock().await;
+        guard.settings.clone()
+    };
+    resolve_effective_projects_dir(&settings)
 }
 
 #[tauri::command]
-fn get_latest_session(
+async fn list_projects(
+    state: tauri::State<'_, Mutex<AppState>>,
+) -> Result<Vec<ProjectDto>, AppErrorDto> {
+    let root = effective_projects_dir_from_state(&state).await?;
+    tauri::async_runtime::spawn_blocking(move || -> Result<Vec<ProjectDto>, app::AppError> {
+        let source = FileSystemRepository::new(root);
+        let projects = app::list_projects(&source)?;
+        Ok(projects.into_iter().map(ProjectDto::from).collect())
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
+}
+
+#[tauri::command]
+async fn get_latest_session(
+    state: tauri::State<'_, Mutex<AppState>>,
     project: String,
     offset: usize,
     limit: usize,
 ) -> Result<SessionDto, AppErrorDto> {
-    let source = FileSystemRepository::from_home_dir()?;
-    let session = app::get_latest_session(&source, &project, offset, limit)?;
-    Ok(session.into())
+    let root = effective_projects_dir_from_state(&state).await?;
+    tauri::async_runtime::spawn_blocking(move || -> Result<SessionDto, app::AppError> {
+        let source = FileSystemRepository::new(root);
+        let session = app::get_latest_session(&source, &project, offset, limit)?;
+        Ok(session.into())
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
 }
 
 #[tauri::command]
 async fn send_message(
     app: tauri::AppHandle,
+    state: tauri::State<'_, Mutex<AppState>>,
     project: String,
     session_id: String,
     text: String,
     mode: AgentModeDto,
 ) -> Result<(), AppErrorDto> {
+    let root = effective_projects_dir_from_state(&state).await?;
     // claude CLI の起動は数秒〜数十秒かかるため、async ランタイムを塞がないよう
     // ブロッキングスレッドで実行する。
     let project_for_warning = project.clone();
     let result = tauri::async_runtime::spawn_blocking(
         move || -> Result<Option<app::SessionMismatch>, app::AppError> {
-            let source = FileSystemRepository::from_home_dir()?;
+            let source = FileSystemRepository::new(root);
             let agent = ClaudeCliAgent::new();
             app::send_message(&source, &agent, &project, &session_id, &text, mode.into())
         },
@@ -79,28 +133,24 @@ async fn send_message(
     }
 }
 
-/// リポジトリの絶対パスから `~/.claude/projects/` 配下のディレクトリ名
-/// (`list_sessions`/`get_latest_session` 等が使う "project" 識別子)を求める。
-/// フロントはエンコード規則を知らず、この Query 経由でのみ変換する
-/// (native.md 1: ビジネスロジックは Rust 側に置く)。
-#[tauri::command]
-fn get_project_name(path: String) -> String {
-    domain::encode_project_dir_name(&path)
-}
-
-#[tauri::command]
-fn list_sessions(project: String) -> Result<Vec<SessionSummaryDto>, AppErrorDto> {
-    let source = FileSystemRepository::from_home_dir()?;
-    let sessions = app::list_sessions(&source, &project)?;
-    Ok(sessions.into_iter().map(SessionSummaryDto::from).collect())
-}
-
 #[tauri::command]
 async fn get_settings(
     state: tauri::State<'_, Mutex<AppState>>,
 ) -> Result<SettingsDto, AppErrorDto> {
-    let guard = state.lock().await;
-    Ok(SettingsDto::from(guard.settings.clone()))
+    let settings = {
+        let guard = state.lock().await;
+        guard.settings.clone()
+    };
+    let effective_projects_dir = resolve_effective_projects_dir(&settings)?;
+    Ok(SettingsDto {
+        repository_path: settings.repository_path.map(|p| p.display().to_string()),
+        github_project: settings.github_project.map(GithubProjectDto::from),
+        selected_project_folders: settings.selected_project_folders,
+        claude_projects_dir: settings
+            .claude_projects_dir
+            .map(|p| p.display().to_string()),
+        effective_projects_dir: effective_projects_dir.display().to_string(),
+    })
 }
 
 #[tauri::command]
@@ -114,10 +164,16 @@ async fn update_settings(
 
     // ロックは最小スコープに留める(native.md §2)。永続化(ファイルI/O)は
     // ガードを解放してから、clone した値を使って行う。
-    let (settings_to_persist, save_path) = {
+    let (settings_to_persist, save_path, projects_dir_changed) = {
         let mut guard = state.lock().await;
+        let projects_dir_changed =
+            guard.settings.claude_projects_dir != settings.claude_projects_dir;
         guard.settings = settings.clone();
-        (guard.settings.clone(), guard.save_path.clone())
+        (
+            guard.settings.clone(),
+            guard.save_path.clone(),
+            projects_dir_changed,
+        )
     };
 
     let save_result: Result<(), app::AppError> = tauri::async_runtime::spawn_blocking(move || {
@@ -131,6 +187,13 @@ async fn update_settings(
         ))
     });
     save_result?;
+
+    if projects_dir_changed {
+        match resolve_effective_projects_dir(&settings) {
+            Ok(root) => start_session_watcher(&app, root),
+            Err(e) => eprintln!("セッション監視の張り替えに失敗しました: {e}"),
+        }
+    }
 
     let _ = app.emit("settings:updated", ());
     Ok(())
@@ -283,19 +346,14 @@ async fn list_github_projects() -> Result<Vec<GithubProjectSummaryDto>, AppError
     .map_err(Into::into)
 }
 
-/// `~/.claude/projects/` の変更監視を開始し、`session:changed` イベントとして
-/// フロントへ通知する。監視の失敗はアプリ起動を止めるほどの問題ではないため、
-/// 失敗してもログを出すのみでアプリ自体は起動を続ける。
-fn start_session_watcher(app: &tauri::App) {
-    let repo = match FileSystemRepository::from_home_dir() {
-        Ok(repo) => repo,
-        Err(e) => {
-            eprintln!("セッションディレクトリを解決できませんでした: {e}");
-            return;
-        }
-    };
-
-    let handle = app.handle().clone();
+/// `root` の変更監視を(再)開始し、`session:changed` イベントとしてフロントへ
+/// 通知する。既存の監視があれば `WatcherSlot` の中身を新しいものに差し替える
+/// ことで自動的に停止する(`Debouncer` は drop されると監視を止める)。
+/// 監視の失敗はアプリを止めるほどの問題ではないため、失敗してもログを
+/// 出すのみでアプリ自体は動作を続ける(直前の監視があればそのまま残る)。
+fn start_session_watcher(app_handle: &tauri::AppHandle, root: PathBuf) {
+    let repo = FileSystemRepository::new(root);
+    let handle = app_handle.clone();
     match repo.watch_projects(move |project| {
         let _ = handle.emit(
             "session:changed",
@@ -305,8 +363,12 @@ fn start_session_watcher(app: &tauri::App) {
             },
         );
     }) {
-        Ok(debouncer) => {
-            app.manage(debouncer);
+        Ok(new_watcher) => {
+            let slot = app_handle.state::<WatcherSlot>();
+            match slot.lock() {
+                Ok(mut guard) => *guard = Some(new_watcher),
+                Err(poisoned) => *poisoned.into_inner() = Some(new_watcher),
+            };
         }
         Err(e) => eprintln!("セッションの監視を開始できませんでした: {e}"),
     }
@@ -314,12 +376,14 @@ fn start_session_watcher(app: &tauri::App) {
 
 /// 設定ファイルを読み込み `AppState` として管理下に置く。破損から復旧した
 /// 場合はフロントへ `settings:corrupted` を通知する(native.md §2)。
-fn setup_app_state(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+/// 戻り値は起動時点での有効なセッションルート(ファイル監視の初期対象)。
+fn setup_app_state(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let save_path = app.path().app_data_dir()?.join("settings.json");
     let state::LoadResult {
         state,
         recovered_from_corruption,
     } = AppState::load(save_path)?;
+    let root = resolve_effective_projects_dir(&state.settings)?;
     app.manage(Mutex::new(state));
 
     if recovered_from_corruption {
@@ -330,7 +394,7 @@ fn setup_app_state(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             },
         );
     }
-    Ok(())
+    Ok(root)
 }
 
 /// 起動時、既にGitHubトークンがキーチェーンにあれば有効性を確認し、
@@ -375,8 +439,6 @@ pub fn run() {
             list_projects,
             get_latest_session,
             send_message,
-            get_project_name,
-            list_sessions,
             get_settings,
             update_settings,
             get_github_auth_status,
@@ -385,8 +447,9 @@ pub fn run() {
             list_github_projects,
         ])
         .setup(|app| {
-            start_session_watcher(app);
-            setup_app_state(app)?;
+            let root = setup_app_state(app)?;
+            app.manage(WatcherSlot::new(None));
+            start_session_watcher(app.handle(), root);
             start_github_session_check(app);
             Ok(())
         })

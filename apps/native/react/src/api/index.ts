@@ -12,7 +12,6 @@ import type {
   ProjectDto,
   SessionChangedEvent,
   SessionDto,
-  SessionSummaryDto,
   SettingsCorruptedEvent,
   SettingsDto,
   SettingsInputDto,
@@ -34,7 +33,6 @@ export type {
   RoleDto,
   SessionChangedEvent,
   SessionDto,
-  SessionSummaryDto,
   SettingsCorruptedEvent,
   SettingsDto,
   SettingsInputDto,
@@ -77,14 +75,6 @@ export function onAppWarning(
     callback(event.payload);
   });
   return unlisten.then((fn) => fn);
-}
-
-export function getProjectName(path: string): Promise<string> {
-  return invoke<string>("get_project_name", { path });
-}
-
-export function listSessions(project: string): Promise<SessionSummaryDto[]> {
-  return invoke<SessionSummaryDto[]>("list_sessions", { project });
 }
 
 export function getSettings(): Promise<SettingsDto> {
