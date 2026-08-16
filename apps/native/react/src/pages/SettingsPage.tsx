@@ -26,6 +26,7 @@ import type {
 function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [repositoryPath, setRepositoryPath] = useState<string | null>(null);
+  const [claudeProjectsDir, setClaudeProjectsDir] = useState<string | null>(null);
   const [githubOwner, setGithubOwner] = useState("");
   const [githubNumber, setGithubNumber] = useState("");
   const [sessions, setSessions] = useState<SessionSummaryDto[]>([]);
@@ -48,6 +49,7 @@ function SettingsPage() {
     getSettings()
       .then((settings) => {
         setRepositoryPath(settings.repository_path);
+        setClaudeProjectsDir(settings.claude_projects_dir);
         setGithubOwner(settings.github_project?.owner ?? "");
         setGithubNumber(
           settings.github_project ? String(settings.github_project.number) : "",
@@ -159,6 +161,17 @@ function SettingsPage() {
     }
   };
 
+  const handleChooseProjectsDir = async () => {
+    const path = await open({ directory: true, multiple: false });
+    if (typeof path === "string") {
+      setClaudeProjectsDir(path);
+    }
+  };
+
+  const handleResetProjectsDir = () => {
+    setClaudeProjectsDir(null);
+  };
+
   const toggleSession = (id: string) => {
     setSelectedSessionIds((prev) =>
       prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id],
@@ -181,6 +194,7 @@ function SettingsPage() {
       repository_path: repositoryPath,
       github_project: githubProject,
       selected_session_ids: selectedSessionIds,
+      claude_projects_dir: claudeProjectsDir,
     })
       .then(() => setSaved(true))
       .catch((e) => setError(isAppError(e) ? e.message : String(e)))
@@ -206,6 +220,25 @@ function SettingsPage() {
             <span className="settings-folder-path">{repositoryPath ?? "未選択"}</span>
             <button type="button" onClick={handleChooseFolder}>
               フォルダを選択
+            </button>
+          </div>
+        </section>
+
+        <section className="settings-section">
+          <h3>セッションのルートディレクトリ</h3>
+          <div className="settings-folder-picker">
+            <span className="settings-folder-path">
+              {claudeProjectsDir ?? "既定を使用"}
+            </span>
+            <button type="button" onClick={handleChooseProjectsDir}>
+              フォルダを選択
+            </button>
+            <button
+              type="button"
+              onClick={handleResetProjectsDir}
+              disabled={claudeProjectsDir === null}
+            >
+              既定に戻す
             </button>
           </div>
         </section>

@@ -173,16 +173,16 @@ pub struct SettingsDto {
     pub repository_path: Option<String>,
     pub github_project: Option<GithubProjectDto>,
     pub selected_session_ids: Vec<String>,
-}
-
-impl From<domain::Settings> for SettingsDto {
-    fn from(settings: domain::Settings) -> Self {
-        Self {
-            repository_path: settings.repository_path.map(|p| p.display().to_string()),
-            github_project: settings.github_project.map(GithubProjectDto::from),
-            selected_session_ids: settings.selected_session_ids,
-        }
-    }
+    /// 明示的な上書き値。`null` は「既定を使用中」を意味する。設定画面が
+    /// 「未変更なら保存時に既定→上書きへ意図せず固定してしまう」ことを
+    /// 避けるため、表示用の `effective_projects_dir` とは別に生値も返す。
+    pub claude_projects_dir: Option<String>,
+    /// セッション一覧が実際に読んでいるルートディレクトリ(上書きがあれば
+    /// それ、なければ既定値を解決した結果)。有効パスの解決には既定値
+    /// (`~/.claude/projects/`)の解決が要るため、`domain::Settings` からの
+    /// 単純な変換では組み立てられず、呼び出し側(`get_settings`)で組み立てる
+    /// (`From` 実装は用意しない)。
+    pub effective_projects_dir: String,
 }
 
 /// `update_settings` の引数。スキーマ `version` はフロントが関知しない
@@ -192,6 +192,8 @@ pub struct SettingsInputDto {
     pub repository_path: Option<String>,
     pub github_project: Option<GithubProjectDto>,
     pub selected_session_ids: Vec<String>,
+    /// `null` は「既定に戻す」を意味する。
+    pub claude_projects_dir: Option<String>,
 }
 
 impl From<SettingsInputDto> for domain::Settings {
@@ -201,6 +203,7 @@ impl From<SettingsInputDto> for domain::Settings {
             repository_path: input.repository_path.map(std::path::PathBuf::from),
             github_project: input.github_project.map(domain::GithubProject::from),
             selected_session_ids: input.selected_session_ids,
+            claude_projects_dir: input.claude_projects_dir.map(std::path::PathBuf::from),
         }
     }
 }

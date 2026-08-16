@@ -48,12 +48,15 @@ export type SettingsDto = {
   repository_path: string | null;
   github_project: GithubProjectDto | null;
   selected_session_ids: string[];
+  claude_projects_dir: string | null;
+  effective_projects_dir: string;
 };
 
 export type SettingsInputDto = {
   repository_path: string | null;
   github_project: GithubProjectDto | null;
   selected_session_ids: string[];
+  claude_projects_dir: string | null;
 };
 
 export type SessionSummaryDto = {

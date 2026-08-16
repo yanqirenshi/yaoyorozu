@@ -107,7 +107,8 @@ pub fn extract_session_id(value: &serde_json::Value) -> Option<String> {
 
 /// `Settings` の現在のスキーマバージョン。マイグレーションが必要になったら
 /// 上げ、infra 側のマイグレーション関数で旧バージョンからの変換を行う。
-pub const CURRENT_SETTINGS_VERSION: u32 = 1;
+/// v1 -> v2: `claude_projects_dir` を追加(issue #25)。
+pub const CURRENT_SETTINGS_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct GithubProject {
@@ -122,14 +123,20 @@ impl GithubProject {
     }
 }
 
-/// アプリの設定。対象リポジトリ(1つ)・GitHubプロジェクト・対象セッションの
-/// 3項目を持つ。永続化(JSON)は infra が担う。
+/// アプリの設定。対象リポジトリ(1つ)・GitHubプロジェクト・対象セッション・
+/// セッション一覧のルートディレクトリの4項目を持つ。永続化(JSON)は infra
+/// が担う。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Settings {
     pub version: u32,
     pub repository_path: Option<std::path::PathBuf>,
     pub github_project: Option<GithubProject>,
     pub selected_session_ids: Vec<String>,
+    /// セッション一覧が読むルートディレクトリ。`None` の場合は既定
+    /// (`~/.claude/projects/`)を使う。`#[serde(default)]` は v1 のJSON
+    /// (このフィールドを持たない)を読めるようにするため。
+    #[serde(default)]
+    pub claude_projects_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for Settings {
@@ -139,8 +146,21 @@ impl Default for Settings {
             repository_path: None,
             github_project: None,
             selected_session_ids: Vec::new(),
+            claude_projects_dir: None,
         }
     }
+}
+
+/// セッション一覧の有効なルートディレクトリを決める。設定で明示的に
+/// 指定されていればそれを、なければ `default`(呼び出し側が解決した
+/// `~/.claude/projects/` 等)を使う。
+pub fn effective_projects_dir(
+    configured: Option<&std::path::Path>,
+    default: &std::path::Path,
+) -> std::path::PathBuf {
+    configured
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| default.to_path_buf())
 }
 
 /// `~/.claude/projects/` 配下のプロジェクトディレクトリ名を、リポジトリの
@@ -367,6 +387,23 @@ mod tests {
         assert_eq!(settings.repository_path, None);
         assert_eq!(settings.github_project, None);
         assert!(settings.selected_session_ids.is_empty());
+        assert_eq!(settings.claude_projects_dir, None);
+    }
+
+    #[test]
+    fn effective_projects_dir_uses_configured_value_when_present() {
+        let configured = std::path::Path::new(r"D:\custom\projects");
+        let default = std::path::Path::new(r"C:\Users\yanqi\.claude\projects");
+        assert_eq!(
+            effective_projects_dir(Some(configured), default),
+            configured.to_path_buf()
+        );
+    }
+
+    #[test]
+    fn effective_projects_dir_falls_back_to_default_when_unset() {
+        let default = std::path::Path::new(r"C:\Users\yanqi\.claude\projects");
+        assert_eq!(effective_projects_dir(None, default), default.to_path_buf());
     }
 
     #[test]

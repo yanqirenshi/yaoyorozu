@@ -15,6 +15,11 @@ use std::time::{Duration, UNIX_EPOCH};
 /// 短時間の連続書き込み(1メッセージ分の追記等)をまとめて1回の通知にする。
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(400);
 
+/// `watch_projects` の戻り値。tauri層がこの型を名指しで保持できるよう
+/// (`notify`/`notify-debouncer-full` の型をそのまま公開する代わりに)
+/// エイリアスとして公開する。
+pub type SessionWatcher = Debouncer<notify::RecommendedWatcher, RecommendedCache>;
+
 /// セッション一覧(設定画面)の抜粋の最大文字数。
 const SESSION_SUMMARY_EXCERPT_MAX_CHARS: usize = 60;
 
@@ -28,12 +33,13 @@ impl FileSystemRepository {
         Self { projects_dir }
     }
 
-    pub fn from_home_dir() -> Result<Self, AppError> {
+    /// 設定で明示的な指定がない場合に使う既定のルート(`~/.claude/projects/`)。
+    pub fn default_projects_dir() -> Result<PathBuf, AppError> {
         let home = std::env::var("USERPROFILE")
             .or_else(|_| std::env::var("HOME"))
             .map(PathBuf::from)
             .map_err(|_| AppError::Io("ホームディレクトリが見つかりません".to_string()))?;
-        Ok(Self::new(home.join(".claude").join("projects")))
+        Ok(home.join(".claude").join("projects"))
     }
 
     /// プロジェクトディレクトリ配下の変更を監視し、変更のあったプロジェクト
@@ -42,10 +48,7 @@ impl FileSystemRepository {
     /// 戻り値の `Debouncer` を drop すると監視が止まるため、呼び出し側は
     /// 監視を続けたい間、値を保持し続ける必要がある(呼び出し元の tauri 層で
     /// アプリの状態として保持する想定)。
-    pub fn watch_projects<F>(
-        &self,
-        on_change: F,
-    ) -> Result<Debouncer<notify::RecommendedWatcher, RecommendedCache>, AppError>
+    pub fn watch_projects<F>(&self, on_change: F) -> Result<SessionWatcher, AppError>
     where
         F: Fn(String) + Send + 'static,
     {
