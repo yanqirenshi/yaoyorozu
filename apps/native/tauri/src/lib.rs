@@ -1,15 +1,16 @@
 mod dto;
 mod state;
 
-use app::{SettingsStore, TokenStore};
+use app::{SessionSource, SettingsStore, TokenStore};
 use dto::{
-    AgentKindDto, AgentModeDto, AppErrorDto, AppWarningDto, DeviceCodeDto,
+    AgentKindDto, AgentModeDto, AppErrorDto, AppWarningDto, ClaudeMdDto, DeviceCodeDto,
     GithubAuthFailedEventDto, GithubAuthStatusDto, GithubAuthenticatedEventDto, GithubProjectDto,
     GithubProjectSummaryDto, ProjectDto, SessionChangedEventDto, SessionDto,
     SettingsCorruptedEventDto, SettingsDto, SettingsInputDto,
 };
 use infra::{
-    ClaudeCliAgent, FileSettingsStore, FileSystemRepository, GithubApiClient, KeyringTokenStore,
+    ClaudeCliAgent, FileClaudeMdStore, FileSettingsStore, FileSystemRepository, GithubApiClient,
+    KeyringTokenStore,
 };
 use state::AppState;
 use std::path::PathBuf;
@@ -197,6 +198,105 @@ async fn update_settings(
 
     let _ = app.emit("settings:updated", ());
     Ok(())
+}
+
+/// `AppState` から対象リポジトリのパスを取り出す。未設定なら
+/// `InvalidInput` を返す(設定画面のCLAUDE.md編集はリポジトリ設定が前提)。
+async fn repository_path_from_state(
+    state: &tauri::State<'_, Mutex<AppState>>,
+) -> Result<PathBuf, app::AppError> {
+    let guard = state.lock().await;
+    guard.settings.repository_path.clone().ok_or_else(|| {
+        app::AppError::InvalidInput("対象リポジトリが設定されていません".to_string())
+    })
+}
+
+#[tauri::command]
+async fn get_repository_claude_md(
+    state: tauri::State<'_, Mutex<AppState>>,
+) -> Result<ClaudeMdDto, AppErrorDto> {
+    let repo_dir = repository_path_from_state(&state).await?;
+    tauri::async_runtime::spawn_blocking(move || -> Result<ClaudeMdDto, app::AppError> {
+        let store = FileClaudeMdStore::new();
+        let file = app::read_claude_md(&store, &repo_dir)?;
+        Ok(file.into())
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
+}
+
+#[tauri::command]
+async fn save_repository_claude_md(
+    state: tauri::State<'_, Mutex<AppState>>,
+    content: String,
+    expected_modified_at_ms: Option<u64>,
+) -> Result<(), AppErrorDto> {
+    let repo_dir = repository_path_from_state(&state).await?;
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), app::AppError> {
+        let store = FileClaudeMdStore::new();
+        app::save_claude_md(&store, &repo_dir, &content, expected_modified_at_ms)
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
+}
+
+/// `project`(`~/.claude/projects/` 配下のフォルダ名)の最新セッションが
+/// 記録している作業ディレクトリ(cwd)を、CLAUDE.md の対象ディレクトリとして
+/// 使う(issue #27: ビューア側のCLAUDE.md編集はプロジェクトの作業ディレクトリ
+/// 直下を対象とする)。
+#[tauri::command]
+async fn get_project_claude_md(
+    state: tauri::State<'_, Mutex<AppState>>,
+    project: String,
+) -> Result<ClaudeMdDto, AppErrorDto> {
+    let root = effective_projects_dir_from_state(&state).await?;
+    tauri::async_runtime::spawn_blocking(move || -> Result<ClaudeMdDto, app::AppError> {
+        let source = FileSystemRepository::new(root);
+        let repo_dir = source.latest_session_cwd(&project)?;
+        let store = FileClaudeMdStore::new();
+        let file = app::read_claude_md(&store, &repo_dir)?;
+        Ok(file.into())
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
+}
+
+#[tauri::command]
+async fn save_project_claude_md(
+    state: tauri::State<'_, Mutex<AppState>>,
+    project: String,
+    content: String,
+    expected_modified_at_ms: Option<u64>,
+) -> Result<(), AppErrorDto> {
+    let root = effective_projects_dir_from_state(&state).await?;
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), app::AppError> {
+        let source = FileSystemRepository::new(root);
+        let repo_dir = source.latest_session_cwd(&project)?;
+        let store = FileClaudeMdStore::new();
+        app::save_claude_md(&store, &repo_dir, &content, expected_modified_at_ms)
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
 }
 
 #[tauri::command]
@@ -441,6 +541,10 @@ pub fn run() {
             send_message,
             get_settings,
             update_settings,
+            get_repository_claude_md,
+            save_repository_claude_md,
+            get_project_claude_md,
+            save_project_claude_md,
             get_github_auth_status,
             github_login_start,
             github_logout,

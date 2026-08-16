@@ -1,8 +1,8 @@
 use domain::{
-    order_messages_newest_first, paginate_messages, sort_projects_by_recency, Project, Session,
-    Settings,
+    order_messages_newest_first, paginate_messages, sort_projects_by_recency, ClaudeMdFile,
+    Project, Session, Settings,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
@@ -36,6 +36,10 @@ pub enum AppError {
     /// GitHub API(GraphQL含む)呼び出しが失敗した。
     #[error("{0}")]
     GithubApiFailed(String),
+    /// CLAUDE.md の保存時、`expected_modified_at_ms` が実際のファイルの
+    /// 状態と一致しなかった(アプリ外での変更と競合)。
+    #[error("{0}")]
+    ClaudeMdConflict(String),
 }
 
 /// プロジェクト・セッションの読み取り(ports)。Claude Code のログ形式
@@ -61,6 +65,18 @@ pub trait SessionSource {
 pub trait SettingsStore {
     fn load(&self) -> Result<LoadedSettings, AppError>;
     fn save(&self, settings: &Settings) -> Result<(), AppError>;
+}
+
+/// `CLAUDE.md` の読み書き(port)。`repo_dir` の解決(設定リポジトリ/
+/// プロジェクトの作業ディレクトリのどちらから求めるか)は呼び出し側
+/// (tauri層)の責務で、`app`/`infra` はディレクトリを受け取るだけ
+/// (native.md §4: パス解決はフロントに渡さずRust側で行うが、この境界は
+/// tauri層とapp/infra層の間にも適用し、ports は解決済みパスのみを扱う)。
+pub trait ClaudeMdStore {
+    /// `repo_dir/CLAUDE.md` を読む。ファイルが無ければ `Ok(None)`。
+    fn read(&self, repo_dir: &Path) -> Result<Option<ClaudeMdFile>, AppError>;
+    /// `repo_dir/CLAUDE.md` へ書く(無ければ新規作成)。
+    fn write(&self, repo_dir: &Path, content: &str) -> Result<(), AppError>;
 }
 
 /// 起動時に読み込んだ設定。ファイルが存在しない場合と破損していた場合を
@@ -263,6 +279,33 @@ pub fn update_settings(store: &dyn SettingsStore, input: Settings) -> Result<Set
     validate_settings(&input)?;
     store.save(&input)?;
     Ok(input)
+}
+
+/// `CLAUDE.md` を読む(存在しなければ `None`)。
+pub fn read_claude_md(
+    store: &dyn ClaudeMdStore,
+    repo_dir: &Path,
+) -> Result<Option<ClaudeMdFile>, AppError> {
+    store.read(repo_dir)
+}
+
+/// `CLAUDE.md` を保存する。`expected_modified_at_ms` が実際の状態
+/// (ファイル無し = `None`、有り = その `modified_at_ms`)と一致する場合
+/// のみ書き込む。不一致はアプリ外での変更との競合とみなし、書き込まずに
+/// `ClaudeMdConflict` を返す(楽観ロック。issue #27)。
+pub fn save_claude_md(
+    store: &dyn ClaudeMdStore,
+    repo_dir: &Path,
+    content: &str,
+    expected_modified_at_ms: Option<u64>,
+) -> Result<(), AppError> {
+    let current_modified_at_ms = store.read(repo_dir)?.map(|f| f.modified_at_ms);
+    if current_modified_at_ms != expected_modified_at_ms {
+        return Err(AppError::ClaudeMdConflict(
+            "CLAUDE.mdがアプリ外で変更されています。再読み込みしてください".to_string(),
+        ));
+    }
+    store.write(repo_dir, content)
 }
 
 pub fn start_github_login(gateway: &dyn GithubGateway) -> Result<DeviceAuthorization, AppError> {
@@ -682,6 +725,96 @@ mod tests {
             update_settings(&store, input).expect_err("should reject invalid github project");
         assert!(matches!(error, AppError::InvalidInput(_)));
         assert!(store.saved.borrow().is_empty());
+    }
+
+    #[derive(Default)]
+    struct FakeClaudeMdStore {
+        file: std::cell::RefCell<Option<ClaudeMdFile>>,
+        written: std::cell::RefCell<Vec<(PathBuf, String)>>,
+    }
+
+    impl FakeClaudeMdStore {
+        fn with_file(content: &str, modified_at_ms: u64) -> Self {
+            Self {
+                file: std::cell::RefCell::new(Some(ClaudeMdFile {
+                    content: content.to_string(),
+                    modified_at_ms,
+                })),
+                written: std::cell::RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl ClaudeMdStore for FakeClaudeMdStore {
+        fn read(&self, _repo_dir: &Path) -> Result<Option<ClaudeMdFile>, AppError> {
+            Ok(self.file.borrow().clone())
+        }
+
+        fn write(&self, repo_dir: &Path, content: &str) -> Result<(), AppError> {
+            self.written
+                .borrow_mut()
+                .push((repo_dir.to_path_buf(), content.to_string()));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn read_claude_md_returns_none_when_absent() {
+        let store = FakeClaudeMdStore::default();
+        let result = read_claude_md(&store, Path::new("/tmp/repo")).expect("should read");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn read_claude_md_returns_file_when_present() {
+        let store = FakeClaudeMdStore::with_file("hello", 100);
+        let result = read_claude_md(&store, Path::new("/tmp/repo")).expect("should read");
+        assert_eq!(
+            result,
+            Some(ClaudeMdFile {
+                content: "hello".to_string(),
+                modified_at_ms: 100,
+            })
+        );
+    }
+
+    #[test]
+    fn save_claude_md_creates_new_file_when_none_expected_and_none_exists() {
+        let store = FakeClaudeMdStore::default();
+        save_claude_md(&store, Path::new("/tmp/repo"), "new content", None)
+            .expect("should save new file");
+        assert_eq!(
+            store.written.borrow().as_slice(),
+            [(PathBuf::from("/tmp/repo"), "new content".to_string())]
+        );
+    }
+
+    #[test]
+    fn save_claude_md_writes_when_expected_matches_current() {
+        let store = FakeClaudeMdStore::with_file("old", 100);
+        save_claude_md(&store, Path::new("/tmp/repo"), "new", Some(100)).expect("should save");
+        assert_eq!(
+            store.written.borrow().as_slice(),
+            [(PathBuf::from("/tmp/repo"), "new".to_string())]
+        );
+    }
+
+    #[test]
+    fn save_claude_md_rejects_when_expected_none_but_file_exists() {
+        let store = FakeClaudeMdStore::with_file("existing", 100);
+        let error = save_claude_md(&store, Path::new("/tmp/repo"), "new", None)
+            .expect_err("should reject as conflict");
+        assert!(matches!(error, AppError::ClaudeMdConflict(_)));
+        assert!(store.written.borrow().is_empty());
+    }
+
+    #[test]
+    fn save_claude_md_rejects_when_expected_mtime_is_stale() {
+        let store = FakeClaudeMdStore::with_file("current", 200);
+        let error = save_claude_md(&store, Path::new("/tmp/repo"), "new", Some(100))
+            .expect_err("should reject as conflict");
+        assert!(matches!(error, AppError::ClaudeMdConflict(_)));
+        assert!(store.written.borrow().is_empty());
     }
 
     struct FakeGithubGateway {
