@@ -223,7 +223,6 @@ function SettingsPage() {
   if (loading) {
     return (
       <div className="settings-page">
-        <h2>設定</h2>
         <p>読み込み中…</p>
       </div>
     );
@@ -231,8 +230,6 @@ function SettingsPage() {
 
   return (
     <div className="settings-page">
-      <h2>設定</h2>
-
       <section className="settings-section">
         <h3>対象リポジトリ</h3>
         <div className="settings-folder-picker">
