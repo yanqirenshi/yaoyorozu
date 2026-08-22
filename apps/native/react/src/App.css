@@ -156,6 +156,23 @@ body,
   overflow-y: auto;
 }
 
+.settings-page .pane-tabs {
+  padding: 0;
+  margin-bottom: 20px;
+}
+
+.settings-claude-md-section {
+  display: flex;
+  flex-direction: column;
+  max-width: 720px;
+  height: calc(100vh - 220px);
+}
+
+.settings-claude-md-section .claude-md-editor {
+  flex: 1;
+  min-height: 0;
+}
+
 .corruption-warning {
   position: absolute;
   top: 0;

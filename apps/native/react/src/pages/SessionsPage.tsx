@@ -18,6 +18,7 @@ import ClaudeMdEditor from "../ClaudeMdEditor";
 import { usePageDockItems } from "../DockItemsContext";
 import { MODE_ICON, RELOAD_ICON } from "../icons";
 import MessageText from "../MessageText";
+import PaneTabs from "../PaneTabs";
 
 const PAGE_SIZE = 50;
 
@@ -218,22 +219,14 @@ function SessionsPage() {
         ))}
       </div>
       <div className="session-conversation">
-        <div className="pane-tabs">
-          <button
-            type="button"
-            className={`pane-tab ${view === "chat" ? "active" : ""}`}
-            onClick={() => handleSwitchView("chat")}
-          >
-            会話
-          </button>
-          <button
-            type="button"
-            className={`pane-tab ${view === "claude-md" ? "active" : ""}`}
-            onClick={() => handleSwitchView("claude-md")}
-          >
-            CLAUDE.md
-          </button>
-        </div>
+        <PaneTabs
+          tabs={[
+            { id: "chat", label: "会話" },
+            { id: "claude-md", label: "CLAUDE.md" },
+          ]}
+          active={view}
+          onChange={(id) => handleSwitchView(id as PaneView)}
+        />
         {view === "chat" ? (
           <>
             <form className="message-form" onSubmit={handleSubmit}>
