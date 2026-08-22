@@ -31,6 +31,14 @@ type SettingsTab = "repository" | "github" | "claude" | "claude-md";
 
 const SETTINGS_TABS: SettingsTab[] = ["repository", "github", "claude", "claude-md"];
 
+// 対象リポジトリタブのラベルには、フォルダのフルパスではなくフォルダ名
+// (例: "C:\Users\yanqi\prj\yaoyorozu" -> "yaoyorozu")だけを出す。
+function repositoryFolderName(path: string | null): string {
+  if (!path) return "対象リポジトリ";
+  const segments = path.split(/[\\/]/).filter((s) => s.length > 0);
+  return segments.at(-1) ?? "対象リポジトリ";
+}
+
 function SettingsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get("tab");
@@ -232,7 +240,7 @@ function SettingsPage() {
     <div className="settings-page">
       <PaneTabs
         tabs={[
-          { id: "repository", label: "対象リポジトリ" },
+          { id: "repository", label: repositoryFolderName(repositoryPath) },
           { id: "github", label: "GitHub" },
           { id: "claude", label: "Claude" },
           { id: "claude-md", label: "CLAUDE.md" },
