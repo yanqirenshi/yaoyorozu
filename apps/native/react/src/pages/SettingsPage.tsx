@@ -27,9 +27,9 @@ import type {
 import ClaudeMdEditor from "../ClaudeMdEditor";
 import PaneTabs from "../PaneTabs";
 
-type SettingsTab = "github" | "claude" | "claude-md";
+type SettingsTab = "repository" | "github" | "claude" | "claude-md";
 
-const SETTINGS_TABS: SettingsTab[] = ["github", "claude", "claude-md"];
+const SETTINGS_TABS: SettingsTab[] = ["repository", "github", "claude", "claude-md"];
 
 function SettingsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -230,18 +230,9 @@ function SettingsPage() {
 
   return (
     <div className="settings-page">
-      <section className="settings-section">
-        <h3>対象リポジトリ</h3>
-        <div className="settings-folder-picker">
-          <span className="settings-folder-path">{repositoryPath ?? "未選択"}</span>
-          <button type="button" onClick={handleChooseFolder}>
-            フォルダを選択
-          </button>
-        </div>
-      </section>
-
       <PaneTabs
         tabs={[
+          { id: "repository", label: "対象リポジトリ" },
           { id: "github", label: "GitHub" },
           { id: "claude", label: "Claude" },
           { id: "claude-md", label: "CLAUDE.md" },
@@ -265,6 +256,20 @@ function SettingsPage() {
         </section>
       ) : (
         <form className="settings-form" onSubmit={handleSave}>
+          {tab === "repository" && (
+            <section className="settings-section">
+              <h3>対象リポジトリ</h3>
+              <div className="settings-folder-picker">
+                <span className="settings-folder-path">
+                  {repositoryPath ?? "未選択"}
+                </span>
+                <button type="button" onClick={handleChooseFolder}>
+                  フォルダを選択
+                </button>
+              </div>
+            </section>
+          )}
+
           {tab === "github" && (
             <>
               <section className="settings-section">
