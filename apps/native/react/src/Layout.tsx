@@ -1,11 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { DockItem } from "command-dock";
 import AppDock from "./AppDock";
 import { onSettingsCorrupted } from "./api";
 import { DockItemsProvider } from "./DockItemsContext";
 import { SETTINGS_ICON, VIEWER_ICON } from "./icons";
 import "./App.css";
+
+// OSウィンドウのタイトルバーに画面名を出す(ページ内の見出しは重複するため
+// 置かない)。tauri.conf.json の既定値("native")へは設定画面以外で戻す。
+const WINDOW_TITLE_BY_PATH: Record<string, string> = {
+  "/settings": "設定",
+};
+const DEFAULT_WINDOW_TITLE = "native";
 
 // AppDock(グローバルメニュー)は全画面共通のためレイアウト側に置く
 // (native.md §6)。画面遷移用の項目は常設、ページ固有の項目(再読み込み等)は
@@ -26,6 +34,11 @@ function Layout() {
       unlistenPromise.then((unlisten) => unlisten());
     };
   }, []);
+
+  useEffect(() => {
+    const title = WINDOW_TITLE_BY_PATH[location.pathname] ?? DEFAULT_WINDOW_TITLE;
+    void getCurrentWindow().setTitle(title);
+  }, [location.pathname]);
 
   // ナビトリガーは即アクション型の丸アイコン。表示中のページ自身へのトリガーは
   // 出す意味がないため表示しない(遷移先が1つだけなら1個だけ出る)。

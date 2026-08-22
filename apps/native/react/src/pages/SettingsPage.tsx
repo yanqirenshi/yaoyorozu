@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import { useSearchParams } from "react-router";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -24,8 +25,39 @@ import type {
   ProjectDto,
 } from "../api";
 import ClaudeMdEditor from "../ClaudeMdEditor";
+import PaneTabs from "../PaneTabs";
+
+type SettingsTab = "repository" | "github" | "claude" | "claude-md";
+
+const SETTINGS_TABS: SettingsTab[] = ["repository", "github", "claude", "claude-md"];
+
+// 対象リポジトリタブのラベルには、フォルダのフルパスではなくフォルダ名
+// (例: "C:\Users\yanqi\prj\yaoyorozu" -> "yaoyorozu")だけを出す。
+function repositoryFolderName(path: string | null): string {
+  if (!path) return "対象リポジトリ";
+  const segments = path.split(/[\\/]/).filter((s) => s.length > 0);
+  return segments.at(-1) ?? "対象リポジトリ";
+}
 
 function SettingsPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabParam = searchParams.get("tab");
+  const tab: SettingsTab = SETTINGS_TABS.includes(tabParam as SettingsTab)
+    ? (tabParam as SettingsTab)
+    : "github";
+
+  const handleChangeTab = (next: string) => {
+    setSearchParams((prev) => {
+      const params = new URLSearchParams(prev);
+      if (next === "github") {
+        params.delete("tab");
+      } else {
+        params.set("tab", next);
+      }
+      return params;
+    });
+  };
+
   const [loading, setLoading] = useState(true);
   const [repositoryPath, setRepositoryPath] = useState<string | null>(null);
   const [claudeProjectsDir, setClaudeProjectsDir] = useState<string | null>(null);
@@ -199,7 +231,6 @@ function SettingsPage() {
   if (loading) {
     return (
       <div className="settings-page">
-        <h2>設定</h2>
         <p>読み込み中…</p>
       </div>
     );
@@ -207,154 +238,184 @@ function SettingsPage() {
 
   return (
     <div className="settings-page">
-      <h2>設定</h2>
-      <form className="settings-form" onSubmit={handleSave}>
-        <section className="settings-section">
-          <h3>対象リポジトリ</h3>
-          <div className="settings-folder-picker">
-            <span className="settings-folder-path">{repositoryPath ?? "未選択"}</span>
-            <button type="button" onClick={handleChooseFolder}>
-              フォルダを選択
-            </button>
-          </div>
-        </section>
+      <PaneTabs
+        tabs={[
+          { id: "repository", label: repositoryFolderName(repositoryPath) },
+          { id: "github", label: "GitHub" },
+          { id: "claude", label: "Claude" },
+          { id: "claude-md", label: "CLAUDE.md" },
+        ]}
+        active={tab}
+        onChange={handleChangeTab}
+      />
 
-        <section className="settings-section">
-          <h3>セッションのルートディレクトリ</h3>
-          <div className="settings-folder-picker">
-            <span className="settings-folder-path">
-              {claudeProjectsDir ?? "既定を使用"}
-            </span>
-            <button type="button" onClick={handleChooseProjectsDir}>
-              フォルダを選択
-            </button>
-            <button
-              type="button"
-              onClick={handleResetProjectsDir}
-              disabled={claudeProjectsDir === null}
-            >
-              既定に戻す
-            </button>
-          </div>
-        </section>
-
-        <section className="settings-section">
-          <h3>GitHub認証</h3>
-          {authStatus.authenticated ? (
-            <div className="settings-github-auth">
-              <span>{authStatus.login} としてログイン中</span>
-              <button type="button" onClick={handleGithubLogout}>
-                ログアウト
-              </button>
-            </div>
-          ) : deviceCode ? (
-            <div className="settings-github-auth">
-              <p>
-                以下のコードをブラウザで入力してください:
-                <br />
-                <strong className="settings-user-code">{deviceCode.user_code}</strong>
-              </p>
-              <button type="button" onClick={handleCopyUserCode}>
-                {codeCopied ? "コピーしました" : "コードをコピー"}
-              </button>
-              <button type="button" onClick={handleOpenVerificationUri}>
-                ブラウザで開く
-              </button>
-            </div>
+      {tab === "claude-md" ? (
+        <section className="settings-section settings-claude-md-section">
+          <h3>CLAUDE.md</h3>
+          {repositoryPath ? (
+            <ClaudeMdEditor
+              load={getRepositoryClaudeMd}
+              save={saveRepositoryClaudeMd}
+              reloadKey={repositoryPath}
+            />
           ) : (
-            <div className="settings-github-auth">
-              <button type="button" onClick={handleGithubLogin} disabled={authenticating}>
-                {authenticating ? "開始中…" : "GitHubでログイン"}
-              </button>
-            </div>
+            <p>先にリポジトリを選択してください。</p>
           )}
-          {authError && <p className="error">{authError}</p>}
         </section>
+      ) : (
+        <form className="settings-form" onSubmit={handleSave}>
+          {tab === "repository" && (
+            <section className="settings-section">
+              <h3>対象リポジトリ</h3>
+              <div className="settings-folder-picker">
+                <span className="settings-folder-path">
+                  {repositoryPath ?? "未選択"}
+                </span>
+                <button type="button" onClick={handleChooseFolder}>
+                  フォルダを選択
+                </button>
+              </div>
+            </section>
+          )}
 
-        <section className="settings-section">
-          <h3>GitHubプロジェクト</h3>
-          {authStatus.authenticated ? (
-            <label className="settings-field">
-              プロジェクト
-              <select
-                value={githubNumber}
-                onChange={(e) => handleSelectGithubProject(e.target.value)}
-              >
-                <option value="">未選択</option>
-                {githubProjects.map((p) => (
-                  <option key={p.number} value={String(p.number)}>
-                    {p.title}
-                    {p.closed ? "(closed)" : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : (
+          {tab === "github" && (
             <>
-              <label className="settings-field">
-                owner
-                <input
-                  type="text"
-                  value={githubOwner}
-                  onChange={(e) => setGithubOwner(e.target.value)}
-                  placeholder="例: yanqirenshi"
-                />
-              </label>
-              <label className="settings-field">
-                プロジェクト番号
-                <input
-                  type="number"
-                  value={githubNumber}
-                  onChange={(e) => setGithubNumber(e.target.value)}
-                  placeholder="例: 51"
-                />
-              </label>
+              <section className="settings-section">
+                <h3>GitHub認証</h3>
+                {authStatus.authenticated ? (
+                  <div className="settings-github-auth">
+                    <span>{authStatus.login} としてログイン中</span>
+                    <button type="button" onClick={handleGithubLogout}>
+                      ログアウト
+                    </button>
+                  </div>
+                ) : deviceCode ? (
+                  <div className="settings-github-auth">
+                    <p>
+                      以下のコードをブラウザで入力してください:
+                      <br />
+                      <strong className="settings-user-code">
+                        {deviceCode.user_code}
+                      </strong>
+                    </p>
+                    <button type="button" onClick={handleCopyUserCode}>
+                      {codeCopied ? "コピーしました" : "コードをコピー"}
+                    </button>
+                    <button type="button" onClick={handleOpenVerificationUri}>
+                      ブラウザで開く
+                    </button>
+                  </div>
+                ) : (
+                  <div className="settings-github-auth">
+                    <button
+                      type="button"
+                      onClick={handleGithubLogin}
+                      disabled={authenticating}
+                    >
+                      {authenticating ? "開始中…" : "GitHubでログイン"}
+                    </button>
+                  </div>
+                )}
+                {authError && <p className="error">{authError}</p>}
+              </section>
+
+              <section className="settings-section">
+                <h3>GitHubプロジェクト</h3>
+                {authStatus.authenticated ? (
+                  <label className="settings-field">
+                    プロジェクト
+                    <select
+                      value={githubNumber}
+                      onChange={(e) => handleSelectGithubProject(e.target.value)}
+                    >
+                      <option value="">未選択</option>
+                      {githubProjects.map((p) => (
+                        <option key={p.number} value={String(p.number)}>
+                          {p.title}
+                          {p.closed ? "(closed)" : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : (
+                  <>
+                    <label className="settings-field">
+                      owner
+                      <input
+                        type="text"
+                        value={githubOwner}
+                        onChange={(e) => setGithubOwner(e.target.value)}
+                        placeholder="例: yanqirenshi"
+                      />
+                    </label>
+                    <label className="settings-field">
+                      プロジェクト番号
+                      <input
+                        type="number"
+                        value={githubNumber}
+                        onChange={(e) => setGithubNumber(e.target.value)}
+                        placeholder="例: 51"
+                      />
+                    </label>
+                  </>
+                )}
+              </section>
             </>
           )}
-        </section>
 
-        <section className="settings-section">
-          <h3>対象フォルダ</h3>
-          {folders.length === 0 && <p>フォルダが見つかりません。</p>}
-          <ul className="settings-folder-list">
-            {folders.map((f) => (
-              <li key={f.name}>
-                <label
-                  className={`settings-folder-item ${
-                    selectedProjectFolders.includes(f.name) ? "selected" : ""
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedProjectFolders.includes(f.name)}
-                    onChange={() => toggleProjectFolder(f.name)}
-                  />
-                  {f.name}
-                </label>
-              </li>
-            ))}
-          </ul>
-        </section>
+          {tab === "claude" && (
+            <>
+              <section className="settings-section">
+                <h3>セッションのルートディレクトリ</h3>
+                <div className="settings-folder-picker">
+                  <span className="settings-folder-path">
+                    {claudeProjectsDir ?? "既定を使用"}
+                  </span>
+                  <button type="button" onClick={handleChooseProjectsDir}>
+                    フォルダを選択
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleResetProjectsDir}
+                    disabled={claudeProjectsDir === null}
+                  >
+                    既定に戻す
+                  </button>
+                </div>
+              </section>
 
-        {error && <p className="error">{error}</p>}
-        <button type="submit" className="settings-save" disabled={saving}>
-          {saving ? "保存中…" : "保存"}
-        </button>
-        {saved && <p className="settings-saved">保存しました。</p>}
-      </form>
+              <section className="settings-section">
+                <h3>対象フォルダ</h3>
+                {folders.length === 0 && <p>フォルダが見つかりません。</p>}
+                <ul className="settings-folder-list">
+                  {folders.map((f) => (
+                    <li key={f.name}>
+                      <label
+                        className={`settings-folder-item ${
+                          selectedProjectFolders.includes(f.name) ? "selected" : ""
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedProjectFolders.includes(f.name)}
+                          onChange={() => toggleProjectFolder(f.name)}
+                        />
+                        {f.name}
+                      </label>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            </>
+          )}
 
-      <section className="settings-section">
-        <h3>CLAUDE.md</h3>
-        {repositoryPath ? (
-          <ClaudeMdEditor
-            load={getRepositoryClaudeMd}
-            save={saveRepositoryClaudeMd}
-            reloadKey={repositoryPath}
-          />
-        ) : (
-          <p>先にリポジトリを選択してください。</p>
-        )}
-      </section>
+          {error && <p className="error">{error}</p>}
+          <button type="submit" className="settings-save" disabled={saving}>
+            {saving ? "保存中…" : "保存"}
+          </button>
+          {saved && <p className="settings-saved">保存しました。</p>}
+        </form>
+      )}
     </div>
   );
 }
