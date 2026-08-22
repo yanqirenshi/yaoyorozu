@@ -4,6 +4,7 @@ import type {
   AgentModeDto,
   AppErrorDto,
   AppWarningEvent,
+  ClaudeMdDto,
   DeviceCodeDto,
   GithubAuthFailedEvent,
   GithubAuthStatusDto,
@@ -22,6 +23,7 @@ export type {
   AgentModeDto,
   AppErrorDto,
   AppWarningEvent,
+  ClaudeMdDto,
   DeviceCodeDto,
   GithubAuthFailedEvent,
   GithubAuthStatusDto,
@@ -92,6 +94,33 @@ export function onSettingsCorrupted(
     callback(event.payload);
   });
   return unlisten.then((fn) => fn);
+}
+
+export function getRepositoryClaudeMd(): Promise<ClaudeMdDto> {
+  return invoke<ClaudeMdDto>("get_repository_claude_md");
+}
+
+export function saveRepositoryClaudeMd(
+  content: string,
+  expectedModifiedAtMs: number | null,
+): Promise<void> {
+  return invoke<void>("save_repository_claude_md", { content, expectedModifiedAtMs });
+}
+
+export function getProjectClaudeMd(project: string): Promise<ClaudeMdDto> {
+  return invoke<ClaudeMdDto>("get_project_claude_md", { project });
+}
+
+export function saveProjectClaudeMd(
+  project: string,
+  content: string,
+  expectedModifiedAtMs: number | null,
+): Promise<void> {
+  return invoke<void>("save_project_claude_md", {
+    project,
+    content,
+    expectedModifiedAtMs,
+  });
 }
 
 export function getGithubAuthStatus(): Promise<GithubAuthStatusDto> {

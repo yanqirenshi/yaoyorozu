@@ -63,6 +63,11 @@ export type SettingsCorruptedEvent = {
   message: string;
 };
 
+export type ClaudeMdDto = {
+  content: string | null;
+  modified_at_ms: number | null;
+};
+
 export type DeviceCodeDto = {
   user_code: string;
   verification_uri: string;

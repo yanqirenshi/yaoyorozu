@@ -1,21 +1,30 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
+import { useSearchParams } from "react-router";
 import type { DockItem } from "command-dock";
 import {
   getLatestSession,
+  getProjectClaudeMd,
   getSettings,
   isAppError,
   listProjects,
   onAppWarning,
   onSessionChanged,
+  saveProjectClaudeMd,
   sendMessage,
 } from "../api";
 import type { AgentModeDto, MessageDto, ProjectDto } from "../api";
+import ClaudeMdEditor from "../ClaudeMdEditor";
 import { usePageDockItems } from "../DockItemsContext";
 import { MODE_ICON, RELOAD_ICON } from "../icons";
 import MessageText from "../MessageText";
 
 const PAGE_SIZE = 50;
+
+type PaneView = "chat" | "claude-md";
+
+const DISCARD_CONFIRM_MESSAGE =
+  "CLAUDE.mdの編集内容を破棄しますか?保存していない変更は失われます。";
 
 function SessionsPage() {
   const [projects, setProjects] = useState<ProjectDto[]>([]);
@@ -29,6 +38,9 @@ function SessionsPage() {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [mode, setMode] = useState<AgentModeDto>("chat");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const view: PaneView = searchParams.get("view") === "claude-md" ? "claude-md" : "chat";
+  const [claudeMdDirty, setClaudeMdDirty] = useState(false);
 
   const loadProjects = useCallback((): Promise<void> => {
     return listProjects()
@@ -109,6 +121,32 @@ function SessionsPage() {
     };
   }, [selected, loadFirstPage]);
 
+  const confirmDiscardClaudeMdIfDirty = (): boolean => {
+    if (view === "claude-md" && claudeMdDirty) {
+      return window.confirm(DISCARD_CONFIRM_MESSAGE);
+    }
+    return true;
+  };
+
+  const handleSelectProject = (name: string) => {
+    if (!confirmDiscardClaudeMdIfDirty()) return;
+    setSelected(name);
+  };
+
+  const handleSwitchView = (next: PaneView) => {
+    if (next === view) return;
+    if (!confirmDiscardClaudeMdIfDirty()) return;
+    setSearchParams((prev) => {
+      const params = new URLSearchParams(prev);
+      if (next === "chat") {
+        params.delete("view");
+      } else {
+        params.set("view", next);
+      }
+      return params;
+    });
+  };
+
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
     if (!selected || !sessionId || sending || !draft.trim()) return;
@@ -173,50 +211,83 @@ function SessionsPage() {
           <button
             key={p.name}
             className={`project-item ${p.name === selected ? "selected" : ""}`}
-            onClick={() => setSelected(p.name)}
+            onClick={() => handleSelectProject(p.name)}
           >
             {p.name}
           </button>
         ))}
       </div>
       <div className="session-conversation">
-        <form className="message-form" onSubmit={handleSubmit}>
-          <input
-            type="text"
-            className="message-input"
-            placeholder="AIにメッセージを送る"
-            value={draft}
-            disabled={!selected || !sessionId || sending}
-            onChange={(e) => setDraft(e.target.value)}
-          />
+        <div className="pane-tabs">
           <button
-            type="submit"
-            className="message-send"
-            disabled={!selected || !sessionId || sending || !draft.trim()}
+            type="button"
+            className={`pane-tab ${view === "chat" ? "active" : ""}`}
+            onClick={() => handleSwitchView("chat")}
           >
-            {sending ? "送信中…" : "送信"}
+            会話
           </button>
-        </form>
-        <div className="conversation-scroll">
-          {error && <p className="error">{error}</p>}
-          <div className="messages">
-            {messages.map((m, i) => (
-              <div key={i} className={`message message-${m.role}`}>
-                <MessageText text={m.text} />
-              </div>
-            ))}
-          </div>
-          {hasMore && (
-            <button
-              type="button"
-              className="load-more"
-              disabled={loadingMore}
-              onClick={loadMore}
-            >
-              {loadingMore ? "読み込み中…" : "もっと読み込む(過去の会話)"}
-            </button>
-          )}
+          <button
+            type="button"
+            className={`pane-tab ${view === "claude-md" ? "active" : ""}`}
+            onClick={() => handleSwitchView("claude-md")}
+          >
+            CLAUDE.md
+          </button>
         </div>
+        {view === "chat" ? (
+          <>
+            <form className="message-form" onSubmit={handleSubmit}>
+              <input
+                type="text"
+                className="message-input"
+                placeholder="AIにメッセージを送る"
+                value={draft}
+                disabled={!selected || !sessionId || sending}
+                onChange={(e) => setDraft(e.target.value)}
+              />
+              <button
+                type="submit"
+                className="message-send"
+                disabled={!selected || !sessionId || sending || !draft.trim()}
+              >
+                {sending ? "送信中…" : "送信"}
+              </button>
+            </form>
+            <div className="conversation-scroll">
+              {error && <p className="error">{error}</p>}
+              <div className="messages">
+                {messages.map((m, i) => (
+                  <div key={i} className={`message message-${m.role}`}>
+                    <MessageText text={m.text} />
+                  </div>
+                ))}
+              </div>
+              {hasMore && (
+                <button
+                  type="button"
+                  className="load-more"
+                  disabled={loadingMore}
+                  onClick={loadMore}
+                >
+                  {loadingMore ? "読み込み中…" : "もっと読み込む(過去の会話)"}
+                </button>
+              )}
+            </div>
+          </>
+        ) : selected ? (
+          <div className="claude-md-pane">
+            <ClaudeMdEditor
+              load={() => getProjectClaudeMd(selected)}
+              save={(content, expectedModifiedAtMs) =>
+                saveProjectClaudeMd(selected, content, expectedModifiedAtMs)
+              }
+              reloadKey={selected}
+              onDirtyChange={setClaudeMdDirty}
+            />
+          </div>
+        ) : (
+          <p>先にフォルダを選択してください。</p>
+        )}
       </div>
     </>
   );
