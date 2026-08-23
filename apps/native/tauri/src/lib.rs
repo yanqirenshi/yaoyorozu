@@ -5,7 +5,7 @@ use app::{SessionSource, SettingsStore, TokenStore};
 use dto::{
     AgentKindDto, AgentModeDto, AppErrorDto, AppWarningDto, ClaudeMdDto, DeviceCodeDto,
     GithubAuthFailedEventDto, GithubAuthStatusDto, GithubAuthenticatedEventDto, GithubProjectDto,
-    GithubProjectSummaryDto, ProjectDto, SessionChangedEventDto, SessionDto,
+    GithubProjectSummaryDto, ProjectDto, SessionChangedEventDto, SessionDto, SessionSummaryDto,
     SettingsCorruptedEventDto, SettingsDto, SettingsInputDto,
 };
 use infra::{
@@ -69,18 +69,41 @@ async fn list_projects(
 }
 
 #[tauri::command]
-async fn get_latest_session(
+async fn get_session(
     state: tauri::State<'_, Mutex<AppState>>,
     project: String,
+    session_id: String,
     offset: usize,
     limit: usize,
 ) -> Result<SessionDto, AppErrorDto> {
     let root = effective_projects_dir_from_state(&state).await?;
     tauri::async_runtime::spawn_blocking(move || -> Result<SessionDto, app::AppError> {
         let source = FileSystemRepository::new(root);
-        let session = app::get_latest_session(&source, &project, offset, limit)?;
+        let session = app::get_session(&source, &project, &session_id, offset, limit)?;
         Ok(session.into())
     })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
+}
+
+#[tauri::command]
+async fn list_sessions(
+    state: tauri::State<'_, Mutex<AppState>>,
+    project: String,
+) -> Result<Vec<SessionSummaryDto>, AppErrorDto> {
+    let root = effective_projects_dir_from_state(&state).await?;
+    tauri::async_runtime::spawn_blocking(
+        move || -> Result<Vec<SessionSummaryDto>, app::AppError> {
+            let source = FileSystemRepository::new(root);
+            let sessions = app::list_sessions(&source, &project)?;
+            Ok(sessions.into_iter().map(SessionSummaryDto::from).collect())
+        },
+    )
     .await
     .unwrap_or_else(|_| {
         Err(app::AppError::Io(
@@ -537,7 +560,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             list_projects,
-            get_latest_session,
+            get_session,
+            list_sessions,
             send_message,
             get_settings,
             update_settings,

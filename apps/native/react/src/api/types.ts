@@ -23,6 +23,13 @@ export type SessionDto = {
   agent: AgentKindDto;
 };
 
+export type SessionSummaryDto = {
+  id: string;
+  title: string;
+  modified_at: number;
+  is_latest: boolean;
+};
+
 export type AppErrorDto = {
   code: string;
   message: string;

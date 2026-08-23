@@ -13,6 +13,7 @@ import type {
   ProjectDto,
   SessionChangedEvent,
   SessionDto,
+  SessionSummaryDto,
   SettingsCorruptedEvent,
   SettingsDto,
   SettingsInputDto,
@@ -35,6 +36,7 @@ export type {
   RoleDto,
   SessionChangedEvent,
   SessionDto,
+  SessionSummaryDto,
   SettingsCorruptedEvent,
   SettingsDto,
   SettingsInputDto,
@@ -44,12 +46,17 @@ export function listProjects(): Promise<ProjectDto[]> {
   return invoke<ProjectDto[]>("list_projects");
 }
 
-export function getLatestSession(
+export function getSession(
   project: string,
+  sessionId: string,
   offset: number,
   limit: number,
 ): Promise<SessionDto> {
-  return invoke<SessionDto>("get_latest_session", { project, offset, limit });
+  return invoke<SessionDto>("get_session", { project, sessionId, offset, limit });
+}
+
+export function listSessions(project: string): Promise<SessionSummaryDto[]> {
+  return invoke<SessionSummaryDto[]>("list_sessions", { project });
 }
 
 export function sendMessage(

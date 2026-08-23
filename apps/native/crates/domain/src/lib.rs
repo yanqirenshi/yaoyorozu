@@ -34,8 +34,29 @@ pub struct Session {
     pub agent: AgentKind,
 }
 
+/// セッション一覧(ビューア左ペイン)表示用の1件分。全メッセージを読まずに
+/// 一覧を出すための最小限の情報。`is_latest` はそのフォルダ内で最終更新が
+/// 最も新しいセッションかどうか(`--continue` で送信できるのはこれだけ。
+/// issue #33)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionSummary {
+    pub id: String,
+    pub title: String,
+    pub modified_at_ms: u64,
+    pub is_latest: bool,
+}
+
 pub fn sort_projects_by_recency(projects: &mut [Project]) {
     projects.sort_by_key(|p| std::cmp::Reverse(p.updated_at_ms));
+}
+
+/// セッション一覧を最終更新の新しい順に並べ、最初の要素(そのフォルダの
+/// 最新セッション)にだけ `is_latest` を立てる(他は `false` にする)。
+pub fn sort_sessions_by_recency(sessions: &mut [SessionSummary]) {
+    sessions.sort_by_key(|s| std::cmp::Reverse(s.modified_at_ms));
+    for (i, s) in sessions.iter_mut().enumerate() {
+        s.is_latest = i == 0;
+    }
 }
 
 /// 会話ログは記録順(古い順)で保持されるため、表示直前に反転して新しい順にする。
@@ -103,6 +124,61 @@ pub fn extract_session_id(value: &serde_json::Value) -> Option<String> {
         .get("sessionId")
         .and_then(|s| s.as_str())
         .map(String::from)
+}
+
+/// 1行分のJSONLエントリから `type=custom-title` の `customTitle` を取り出す。
+/// 実データでは同一セッション内に複数回出現しうる(タイトル変更のたびに
+/// 追記される。1セッションに12行観測された例がある)ため、呼び出し側で
+/// 最後に見つかったものを採用すること(issue #33)。
+pub fn extract_custom_title(value: &serde_json::Value) -> Option<String> {
+    if value.get("type").and_then(|t| t.as_str()) != Some("custom-title") {
+        return None;
+    }
+    value
+        .get("customTitle")
+        .and_then(|t| t.as_str())
+        .map(String::from)
+}
+
+/// 表示用に文字列を切り詰める。長い本文を一覧にそのまま出さないため。
+pub fn excerpt(text: &str, max_chars: usize) -> String {
+    let trimmed = text.trim();
+    if trimmed.chars().count() <= max_chars {
+        trimmed.to_string()
+    } else {
+        let truncated: String = trimmed.chars().take(max_chars).collect();
+        format!("{truncated}…")
+    }
+}
+
+/// セッションのタイトルを決める。優先順位: 最後の `custom-title`(空文字は
+/// 無視)→ 先頭のユーザーメッセージの冒頭(40文字程度に省略)→
+/// セッションIDの先頭8桁(issue #33)。
+pub fn resolve_session_title(
+    last_custom_title: Option<&str>,
+    first_user_message: Option<&str>,
+    session_id: &str,
+) -> String {
+    if let Some(title) = last_custom_title {
+        let trimmed = title.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    if let Some(text) = first_user_message {
+        let trimmed = excerpt(text, 40);
+        if !trimmed.is_empty() {
+            return trimmed;
+        }
+    }
+    session_id.chars().take(8).collect()
+}
+
+/// `session_id` がファイルパスの構築に使って安全な形式(英数字とハイフンのみ)
+/// かを検証する。フロントから受け取った値をそのままパスに使わないための
+/// 入力検証(native.md §4。`<フォルダ>/<id>.jsonl` 以外を指せないようにする)。
+pub fn is_valid_session_id(id: &str) -> bool {
+    !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
 /// `Settings` の現在のスキーマバージョン。マイグレーションが必要になったら
@@ -408,5 +484,103 @@ mod tests {
             number: 51,
         };
         assert!(project.is_valid());
+    }
+
+    fn session_summary(id: &str, modified_at_ms: u64) -> SessionSummary {
+        SessionSummary {
+            id: id.to_string(),
+            title: "title".to_string(),
+            modified_at_ms,
+            is_latest: false,
+        }
+    }
+
+    #[test]
+    fn sort_sessions_by_recency_orders_newest_first_and_marks_latest() {
+        let mut sessions = vec![
+            session_summary("old", 1),
+            session_summary("new", 3),
+            session_summary("mid", 2),
+        ];
+
+        sort_sessions_by_recency(&mut sessions);
+
+        let ids: Vec<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["new", "mid", "old"]);
+        assert!(sessions[0].is_latest);
+        assert!(!sessions[1].is_latest);
+        assert!(!sessions[2].is_latest);
+    }
+
+    #[test]
+    fn extract_custom_title_reads_field_when_type_matches() {
+        // 実データで確認した形式(claude-session-jsonl-format.md §4.5)。
+        let value = json!({
+            "type": "custom-title",
+            "customTitle": "yaoyorozu (デザイン)",
+            "sessionId": "396a54d0-0000-0000-0000-000000000000"
+        });
+        assert_eq!(
+            extract_custom_title(&value).as_deref(),
+            Some("yaoyorozu (デザイン)")
+        );
+    }
+
+    #[test]
+    fn extract_custom_title_returns_none_for_other_types() {
+        let value = json!({ "type": "ai-title", "aiTitle": "ignored" });
+        assert!(extract_custom_title(&value).is_none());
+    }
+
+    #[test]
+    fn excerpt_returns_trimmed_text_when_within_limit() {
+        assert_eq!(excerpt("  hello  ", 10), "hello");
+    }
+
+    #[test]
+    fn excerpt_truncates_and_appends_ellipsis_when_over_limit() {
+        assert_eq!(excerpt("hello world", 5), "hello…");
+    }
+
+    #[test]
+    fn resolve_session_title_prefers_custom_title() {
+        let title = resolve_session_title(Some("会話タイトル"), Some("hello"), "abcdef01-…");
+        assert_eq!(title, "会話タイトル");
+    }
+
+    #[test]
+    fn resolve_session_title_ignores_blank_custom_title() {
+        let title = resolve_session_title(Some("   "), Some("hello"), "abcdef01-…");
+        assert_eq!(title, "hello");
+    }
+
+    #[test]
+    fn resolve_session_title_falls_back_to_first_user_message_excerpt() {
+        let long_text = "a".repeat(60);
+        let title = resolve_session_title(None, Some(&long_text), "abcdef01-…");
+        assert_eq!(title, format!("{}…", "a".repeat(40)));
+    }
+
+    #[test]
+    fn resolve_session_title_falls_back_to_session_id_prefix_when_nothing_else() {
+        let title = resolve_session_title(None, None, "abcdef0123456789");
+        assert_eq!(title, "abcdef01");
+    }
+
+    #[test]
+    fn is_valid_session_id_accepts_uuid_shaped_strings() {
+        assert!(is_valid_session_id("a36bcf64-6d83-4043-a1e5-e9eecd3bba80"));
+    }
+
+    #[test]
+    fn is_valid_session_id_rejects_empty_string() {
+        assert!(!is_valid_session_id(""));
+    }
+
+    #[test]
+    fn is_valid_session_id_rejects_path_traversal_attempts() {
+        for bad in ["../../etc/passwd", "a/b", "a\\b", "a.jsonl", "a b"] {
+            assert!(!is_valid_session_id(bad), "should reject {bad:?}");
+        }
     }
 }

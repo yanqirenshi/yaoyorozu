@@ -3,17 +3,17 @@ import type { FormEvent } from "react";
 import { useSearchParams } from "react-router";
 import type { DockItem } from "command-dock";
 import {
-  getLatestSession,
   getProjectClaudeMd,
+  getSession,
   getSettings,
   isAppError,
-  listProjects,
+  listSessions,
   onAppWarning,
   onSessionChanged,
   saveProjectClaudeMd,
   sendMessage,
 } from "../api";
-import type { AgentModeDto, MessageDto, ProjectDto } from "../api";
+import type { AgentModeDto, MessageDto, SessionSummaryDto } from "../api";
 import ClaudeMdEditor from "../ClaudeMdEditor";
 import { usePageDockItems } from "../DockItemsContext";
 import { MODE_ICON, RELOAD_ICON } from "../icons";
@@ -24,14 +24,25 @@ const PAGE_SIZE = 50;
 
 type PaneView = "chat" | "claude-md";
 
+type SessionGroup = {
+  folder: string;
+  sessions: SessionSummaryDto[];
+};
+
 const DISCARD_CONFIRM_MESSAGE =
   "CLAUDE.mdの編集内容を破棄しますか?保存していない変更は失われます。";
 
+// フォルダ名(例: "C--Users-yanqi-prj-yaoyorozu")は末尾の要素が実際の
+// リポジトリ名に対応することが多いため、末尾要素を目立たせて表示する。
+function splitFolderNameForDisplay(name: string): { prefix: string; tail: string } {
+  const idx = name.lastIndexOf("-");
+  if (idx === -1) return { prefix: "", tail: name };
+  return { prefix: name.slice(0, idx + 1), tail: name.slice(idx + 1) };
+}
+
 function SessionsPage() {
-  const [projects, setProjects] = useState<ProjectDto[]>([]);
-  const [projectsRoot, setProjectsRoot] = useState("");
-  const [selected, setSelected] = useState<string | null>(null);
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [targetFolders, setTargetFolders] = useState<string[]>([]);
+  const [sessionGroups, setSessionGroups] = useState<SessionGroup[]>([]);
   const [messages, setMessages] = useState<MessageDto[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -41,27 +52,37 @@ function SessionsPage() {
   const [mode, setMode] = useState<AgentModeDto>("chat");
   const [searchParams, setSearchParams] = useSearchParams();
   const view: PaneView = searchParams.get("view") === "claude-md" ? "claude-md" : "chat";
+  const projectParam = searchParams.get("project");
+  const sessionParam = searchParams.get("session");
   const [claudeMdDirty, setClaudeMdDirty] = useState(false);
 
-  const loadProjects = useCallback((): Promise<void> => {
-    return listProjects()
-      .then(setProjects)
-      .catch((e) => setError(isAppError(e) ? e.message : String(e)));
+  const loadSessionGroups = useCallback((folders: string[]): Promise<void> => {
+    return Promise.all(
+      folders.map((folder) =>
+        listSessions(folder)
+          .then((sessions) => ({ folder, sessions }))
+          .catch((e) => {
+            setError(isAppError(e) ? e.message : String(e));
+            return { folder, sessions: [] as SessionSummaryDto[] };
+          }),
+      ),
+    ).then(setSessionGroups);
   }, []);
 
-  const loadProjectsRoot = useCallback((): Promise<void> => {
+  const loadTargetFoldersAndSessions = useCallback((): Promise<void> => {
     return getSettings()
-      .then((settings) => setProjectsRoot(settings.effective_projects_dir))
+      .then((settings) => {
+        setTargetFolders(settings.selected_project_folders);
+        return loadSessionGroups(settings.selected_project_folders);
+      })
       .catch((e) => setError(isAppError(e) ? e.message : String(e)));
-  }, []);
+  }, [loadSessionGroups]);
 
-  const loadFirstPage = useCallback((project: string): Promise<void> => {
+  const loadSession = useCallback((project: string, id: string): Promise<void> => {
     setMessages([]);
-    setSessionId(null);
     setHasMore(false);
-    return getLatestSession(project, 0, PAGE_SIZE)
+    return getSession(project, id, 0, PAGE_SIZE)
       .then((session) => {
-        setSessionId(session.session_id);
         setMessages(session.messages);
         setHasMore(session.messages.length === PAGE_SIZE);
       })
@@ -69,58 +90,69 @@ function SessionsPage() {
   }, []);
 
   const loadMore = useCallback(() => {
-    if (!selected || loadingMore) return;
+    if (!projectParam || !sessionParam || loadingMore) return;
     setLoadingMore(true);
-    getLatestSession(selected, messages.length, PAGE_SIZE)
+    getSession(projectParam, sessionParam, messages.length, PAGE_SIZE)
       .then((session) => {
-        setSessionId(session.session_id);
         setMessages((prev) => [...prev, ...session.messages]);
         setHasMore(session.messages.length === PAGE_SIZE);
       })
       .catch((e) => setError(isAppError(e) ? e.message : String(e)))
       .finally(() => setLoadingMore(false));
-  }, [selected, loadingMore, messages.length]);
+  }, [projectParam, sessionParam, loadingMore, messages.length]);
 
   const reload = useCallback((): Promise<void> => {
-    const tasks = [loadProjects(), loadProjectsRoot()];
-    if (selected) tasks.push(loadFirstPage(selected));
+    const tasks = [loadTargetFoldersAndSessions()];
+    if (projectParam && sessionParam) {
+      tasks.push(loadSession(projectParam, sessionParam));
+    }
     return Promise.all(tasks).then(() => undefined);
-  }, [selected, loadProjects, loadProjectsRoot, loadFirstPage]);
+  }, [projectParam, sessionParam, loadTargetFoldersAndSessions, loadSession]);
 
   useEffect(() => {
-    loadProjects();
-    loadProjectsRoot();
-  }, [loadProjects, loadProjectsRoot]);
+    loadTargetFoldersAndSessions();
+  }, [loadTargetFoldersAndSessions]);
 
   useEffect(() => {
-    if (!selected) return;
-    loadFirstPage(selected);
-  }, [selected, loadFirstPage]);
+    if (!projectParam || !sessionParam) {
+      setMessages([]);
+      setHasMore(false);
+      return;
+    }
+    loadSession(projectParam, sessionParam);
+  }, [projectParam, sessionParam, loadSession]);
 
   useEffect(() => {
     const unlistenPromise = onSessionChanged(({ project }) => {
-      loadProjects();
-      if (project === selected) {
-        loadFirstPage(project);
+      if (targetFolders.includes(project)) {
+        loadSessionGroups(targetFolders);
+      }
+      if (project === projectParam && sessionParam) {
+        loadSession(project, sessionParam);
       }
     });
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
     };
-  }, [selected, loadProjects, loadFirstPage]);
+  }, [targetFolders, projectParam, sessionParam, loadSessionGroups, loadSession]);
 
   useEffect(() => {
     const unlistenPromise = onAppWarning(({ project }) => {
-      if (project !== selected) return;
+      if (project !== projectParam || !sessionParam) return;
       setError(
         "メッセージが表示中とは別の会話に追記された可能性があります。再読み込みします。",
       );
-      loadFirstPage(project);
+      loadSession(project, sessionParam);
     });
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
     };
-  }, [selected, loadFirstPage]);
+  }, [projectParam, sessionParam, loadSession]);
+
+  const selectedSummary = sessionGroups
+    .find((g) => g.folder === projectParam)
+    ?.sessions.find((s) => s.id === sessionParam);
+  const canSend = selectedSummary?.is_latest ?? false;
 
   const confirmDiscardClaudeMdIfDirty = (): boolean => {
     if (view === "claude-md" && claudeMdDirty) {
@@ -129,9 +161,14 @@ function SessionsPage() {
     return true;
   };
 
-  const handleSelectProject = (name: string) => {
+  const handleSelectSession = (project: string, id: string) => {
     if (!confirmDiscardClaudeMdIfDirty()) return;
-    setSelected(name);
+    setSearchParams((prev) => {
+      const params = new URLSearchParams(prev);
+      params.set("project", project);
+      params.set("session", id);
+      return params;
+    });
   };
 
   const handleSwitchView = (next: PaneView) => {
@@ -150,19 +187,19 @@ function SessionsPage() {
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
-    if (!selected || !sessionId || sending || !draft.trim()) return;
+    if (!projectParam || !sessionParam || !canSend || sending || !draft.trim()) return;
 
     setSending(true);
     setError(null);
-    sendMessage(selected, sessionId, draft, mode)
+    sendMessage(projectParam, sessionParam, draft, mode)
       .then(() => {
         setDraft("");
-        loadFirstPage(selected);
+        loadSession(projectParam, sessionParam);
       })
       .catch((e) => {
         if (isAppError(e) && e.code === "session_stale") {
           setError("表示中の会話が最新ではありません。再読み込みします。");
-          loadFirstPage(selected);
+          loadSession(projectParam, sessionParam);
           return;
         }
         setError(isAppError(e) ? e.message : String(e));
@@ -203,20 +240,40 @@ function SessionsPage() {
   return (
     <>
       <div className="project-list">
-        <h2>
-          {projectsRoot}
-          <br />
-          配下のフォルダ一覧
-        </h2>
-        {projects.map((p) => (
-          <button
-            key={p.name}
-            className={`project-item ${p.name === selected ? "selected" : ""}`}
-            onClick={() => handleSelectProject(p.name)}
-          >
-            {p.name}
-          </button>
-        ))}
+        {targetFolders.length === 0 ? (
+          <p>設定のClaudeタブで対象フォルダを選択してください。</p>
+        ) : (
+          sessionGroups.map((group) => {
+            const { prefix, tail } = splitFolderNameForDisplay(group.folder);
+            return (
+              <div key={group.folder} className="session-group">
+                <h3 className="session-group-heading" title={group.folder}>
+                  <span className="session-group-heading-prefix">{prefix}</span>
+                  <strong>{tail}</strong>
+                </h3>
+                {group.sessions.length === 0 && (
+                  <p className="session-group-empty">セッションがありません。</p>
+                )}
+                {group.sessions.map((s) => (
+                  <button
+                    key={s.id}
+                    className={`project-item ${
+                      group.folder === projectParam && s.id === sessionParam
+                        ? "selected"
+                        : ""
+                    }`}
+                    onClick={() => handleSelectSession(group.folder, s.id)}
+                  >
+                    <span className="session-item-title">{s.title}</span>
+                    <span className="session-item-updated">
+                      {new Date(s.modified_at).toLocaleString()}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            );
+          })
+        )}
       </div>
       <div className="session-conversation">
         <PaneTabs
@@ -235,51 +292,64 @@ function SessionsPage() {
                 className="message-input"
                 placeholder="AIにメッセージを送る"
                 value={draft}
-                disabled={!selected || !sessionId || sending}
+                disabled={!projectParam || !sessionParam || !canSend || sending}
                 onChange={(e) => setDraft(e.target.value)}
               />
               <button
                 type="submit"
                 className="message-send"
-                disabled={!selected || !sessionId || sending || !draft.trim()}
+                disabled={
+                  !projectParam || !sessionParam || !canSend || sending || !draft.trim()
+                }
               >
                 {sending ? "送信中…" : "送信"}
               </button>
             </form>
+            {projectParam && sessionParam && !canSend && (
+              <p className="message-form-notice">
+                送信できるのは最新のセッションのみです。
+              </p>
+            )}
             <div className="conversation-scroll">
               {error && <p className="error">{error}</p>}
-              <div className="messages">
-                {messages.map((m, i) => (
-                  <div key={i} className={`message message-${m.role}`}>
-                    <MessageText text={m.text} />
+              {!projectParam || !sessionParam ? (
+                <p>左の一覧からセッションを選択してください。</p>
+              ) : (
+                <>
+                  <div className="messages">
+                    {messages.map((m, i) => (
+                      <div key={i} className={`message message-${m.role}`}>
+                        <MessageText text={m.text} />
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-              {hasMore && (
-                <button
-                  type="button"
-                  className="load-more"
-                  disabled={loadingMore}
-                  onClick={loadMore}
-                >
-                  {loadingMore ? "読み込み中…" : "もっと読み込む(過去の会話)"}
-                </button>
+                  {hasMore && (
+                    <button
+                      type="button"
+                      className="load-more"
+                      disabled={loadingMore}
+                      onClick={loadMore}
+                    >
+                      {loadingMore ? "読み込み中…" : "もっと読み込む(過去の会話)"}
+                    </button>
+                  )}
+                </>
               )}
             </div>
           </>
-        ) : selected ? (
+        ) : projectParam ? (
           <div className="claude-md-pane">
             <ClaudeMdEditor
-              load={() => getProjectClaudeMd(selected)}
+              load={() => getProjectClaudeMd(projectParam)}
               save={(content, expectedModifiedAtMs) =>
-                saveProjectClaudeMd(selected, content, expectedModifiedAtMs)
+                saveProjectClaudeMd(projectParam, content, expectedModifiedAtMs)
               }
-              reloadKey={selected}
+              reloadKey={projectParam}
               onDirtyChange={setClaudeMdDirty}
             />
           </div>
         ) : (
-          <p>先にフォルダを選択してください。</p>
+          <p>先にセッションを選択してください。</p>
         )}
       </div>
     </>
