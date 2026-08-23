@@ -1,5 +1,5 @@
 use app::{AppError, DeviceAuthorization, GithubGateway, GithubViewer, PollResult};
-use domain::GithubProjectSummary;
+use domain::{GithubProjectSummary, ProjectItem, ProjectItemKind, ProjectItemsPage};
 use reqwest::blocking::{Client, Request};
 use serde::Deserialize;
 
@@ -56,6 +56,23 @@ impl GithubApiClient {
             .header("Authorization", format!("Bearer {token}"))
             .header("User-Agent", USER_AGENT)
             .json(&serde_json::json!({ "query": query }))
+            .build()
+    }
+
+    /// GraphQL変数付きのリクエストを組み立てる。`owner`/`cursor` 等の値を
+    /// クエリ文字列へ直接埋め込まない(インジェクション防止)ため、
+    /// `list_projects`/`fetch_viewer` の固定クエリとは別に用意する。
+    fn build_graphql_request_with_variables(
+        &self,
+        token: &str,
+        query: &str,
+        variables: serde_json::Value,
+    ) -> reqwest::Result<Request> {
+        self.http
+            .post(GRAPHQL_URL)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("User-Agent", USER_AGENT)
+            .json(&serde_json::json!({ "query": query, "variables": variables }))
             .build()
     }
 
@@ -134,6 +151,146 @@ fn parse_project_nodes(nodes: &[serde_json::Value]) -> Vec<GithubProjectSummary>
         .collect()
 }
 
+/// `list_project_items` のGraphQLクエリ。Status は
+/// `ProjectV2ItemFieldSingleSelectValue` から、選択肢順は
+/// `ProjectV2SingleSelectField.options` から取得する。Organization所有の
+/// プロジェクトはスコープ外のため `user(login:)` で固定する(issue #34)。
+const PROJECT_ITEMS_QUERY: &str = r#"
+query($owner: String!, $number: Int!, $cursor: String) {
+  user(login: $owner) {
+    projectV2(number: $number) {
+      field(name: "Status") {
+        ... on ProjectV2SingleSelectField {
+          options { name }
+        }
+      }
+      items(first: 50, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          fieldValueByName(name: "Status") {
+            ... on ProjectV2ItemFieldSingleSelectValue { name }
+          }
+          content {
+            __typename
+            ... on Issue {
+              title
+              number
+              url
+              repository { name }
+              assignees(first: 10) { nodes { login } }
+            }
+            ... on PullRequest {
+              title
+              number
+              url
+              repository { name }
+              assignees(first: 10) { nodes { login } }
+            }
+            ... on DraftIssue {
+              title
+              assignees(first: 10) { nodes { login } }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"#;
+
+/// `field.options` からStatusの選択肢順を取り出す純粋関数(テスト用に分離)。
+fn parse_status_options(value: &serde_json::Value) -> Vec<String> {
+    value
+        .pointer("/data/user/projectV2/field/options")
+        .and_then(|v| v.as_array())
+        .map(|options| {
+            options
+                .iter()
+                .filter_map(|o| o.get("name").and_then(|n| n.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_project_item_kind(content: &serde_json::Value) -> Option<ProjectItemKind> {
+    match content.get("__typename").and_then(|t| t.as_str())? {
+        "Issue" => Some(ProjectItemKind::Issue),
+        "PullRequest" => Some(ProjectItemKind::PullRequest),
+        "DraftIssue" => Some(ProjectItemKind::DraftIssue),
+        // 将来APIに種別が増えても、未知の型は読み飛ばして一覧全体を壊さない。
+        _ => None,
+    }
+}
+
+fn parse_assignee_logins(content: &serde_json::Value) -> Vec<String> {
+    content
+        .pointer("/assignees/nodes")
+        .and_then(|v| v.as_array())
+        .map(|nodes| {
+            nodes
+                .iter()
+                .filter_map(|n| n.get("login").and_then(|l| l.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `items.nodes` の1件を変換する。`content` の形式が壊れている(`title` が
+/// 無い等)場合は `None`(呼び出し側でその1件だけ読み飛ばす)。
+fn parse_project_item_node(node: &serde_json::Value) -> Option<ProjectItem> {
+    let content = node.get("content")?;
+    let kind = parse_project_item_kind(content)?;
+    let title = content.get("title")?.as_str()?.to_string();
+    let repository = content
+        .pointer("/repository/name")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let number = content
+        .get("number")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as u32);
+    let url = content
+        .get("url")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let status = node
+        .pointer("/fieldValueByName/name")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let assignees = parse_assignee_logins(content);
+
+    Some(ProjectItem {
+        title,
+        kind,
+        repository,
+        number,
+        assignees,
+        status,
+        url,
+    })
+}
+
+/// `items.nodes` のJSON配列をドメイン型へ変換する純粋関数(テスト用に分離)。
+/// 形式が壊れているノードは読み飛ばす(1件の異常で一覧全体を失敗させない)。
+fn parse_project_item_nodes(nodes: &[serde_json::Value]) -> Vec<ProjectItem> {
+    nodes.iter().filter_map(parse_project_item_node).collect()
+}
+
+/// `items.pageInfo` から次ページのカーソルを求める。`hasNextPage` が
+/// `false` の場合は `endCursor` があっても `None` にする(フロントが
+/// 「もっと読み込む」の表示可否をこの値だけで判断できるようにするため)。
+fn parse_next_cursor(value: &serde_json::Value) -> Option<String> {
+    let page_info = value.pointer("/data/user/projectV2/items/pageInfo")?;
+    let has_next_page = page_info.get("hasNextPage")?.as_bool()?;
+    if !has_next_page {
+        return None;
+    }
+    page_info
+        .get("endCursor")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+}
+
 impl GithubGateway for GithubApiClient {
     fn start_device_flow(&self) -> Result<DeviceAuthorization, AppError> {
         let request = self.build_device_code_request().map_err(|e| {
@@ -210,6 +367,39 @@ impl GithubGateway for GithubApiClient {
             })?;
 
         Ok(parse_project_nodes(nodes))
+    }
+
+    fn list_project_items(
+        &self,
+        token: &str,
+        owner: &str,
+        number: u32,
+        cursor: Option<&str>,
+    ) -> Result<ProjectItemsPage, AppError> {
+        let request = self
+            .build_graphql_request_with_variables(
+                token,
+                PROJECT_ITEMS_QUERY,
+                serde_json::json!({ "owner": owner, "number": number, "cursor": cursor }),
+            )
+            .map_err(|e| {
+                AppError::GithubApiFailed(format!("リクエストの組み立てに失敗しました: {e}"))
+            })?;
+        let value = self.execute_json(request)?;
+        check_graphql_errors(&value)?;
+
+        let nodes = value
+            .pointer("/data/user/projectV2/items/nodes")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| {
+                AppError::GithubApiFailed("プロジェクトアイテムを取得できませんでした".to_string())
+            })?;
+
+        Ok(ProjectItemsPage {
+            items: parse_project_item_nodes(nodes),
+            next_cursor: parse_next_cursor(&value),
+            status_order: parse_status_options(&value),
+        })
     }
 }
 
@@ -347,5 +537,156 @@ mod tests {
 
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].number, 51);
+    }
+
+    #[test]
+    fn build_graphql_request_with_variables_includes_variables_in_body() {
+        let client = GithubApiClient::new("client-id-123");
+        let request = client
+            .build_graphql_request_with_variables(
+                "secret-token",
+                "query($owner: String!) { user(login: $owner) { login } }",
+                json!({ "owner": "yanqirenshi", "number": 51, "cursor": null }),
+            )
+            .unwrap();
+
+        assert_eq!(request.url().as_str(), GRAPHQL_URL);
+        let body_bytes = request.body().unwrap().as_bytes().unwrap();
+        let body: serde_json::Value = serde_json::from_slice(body_bytes).unwrap();
+        assert_eq!(body["variables"]["owner"], "yanqirenshi");
+        assert_eq!(body["variables"]["number"], 51);
+        assert!(body["variables"]["cursor"].is_null());
+    }
+
+    #[test]
+    fn parse_status_options_reads_option_names_in_order() {
+        let value = json!({
+            "data": {
+                "user": {
+                    "projectV2": {
+                        "field": {
+                            "options": [
+                                { "name": "Backlog" },
+                                { "name": "In progress" },
+                                { "name": "Done" }
+                            ]
+                        }
+                    }
+                }
+            }
+        });
+
+        assert_eq!(
+            parse_status_options(&value),
+            vec!["Backlog", "In progress", "Done"]
+        );
+    }
+
+    #[test]
+    fn parse_status_options_returns_empty_when_field_missing() {
+        let value = json!({ "data": { "user": { "projectV2": { "field": null } } } });
+        assert!(parse_status_options(&value).is_empty());
+    }
+
+    #[test]
+    fn parse_project_item_nodes_converts_issue_pull_request_and_draft() {
+        let nodes = vec![
+            json!({
+                "fieldValueByName": { "name": "In progress" },
+                "content": {
+                    "__typename": "Issue",
+                    "title": "テスト課題",
+                    "number": 33,
+                    "url": "https://github.com/yanqirenshi/yaoyorozu/issues/33",
+                    "repository": { "name": "yaoyorozu" },
+                    "assignees": { "nodes": [{ "login": "yanqirenshi" }] }
+                }
+            }),
+            json!({
+                "fieldValueByName": { "name": "Done" },
+                "content": {
+                    "__typename": "PullRequest",
+                    "title": "PRタイトル",
+                    "number": 36,
+                    "url": "https://github.com/yanqirenshi/yaoyorozu/pull/36",
+                    "repository": { "name": "yaoyorozu" },
+                    "assignees": { "nodes": [] }
+                }
+            }),
+            json!({
+                "fieldValueByName": null,
+                "content": {
+                    "__typename": "DraftIssue",
+                    "title": "下書き課題",
+                    "assignees": { "nodes": [] }
+                }
+            }),
+        ];
+
+        let items = parse_project_item_nodes(&nodes);
+
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].kind, ProjectItemKind::Issue);
+        assert_eq!(items[0].number, Some(33));
+        assert_eq!(items[0].repository.as_deref(), Some("yaoyorozu"));
+        assert_eq!(items[0].status.as_deref(), Some("In progress"));
+        assert_eq!(items[0].assignees, vec!["yanqirenshi".to_string()]);
+
+        assert_eq!(items[1].kind, ProjectItemKind::PullRequest);
+        assert_eq!(items[1].status.as_deref(), Some("Done"));
+
+        assert_eq!(items[2].kind, ProjectItemKind::DraftIssue);
+        assert_eq!(items[2].number, None);
+        assert_eq!(items[2].repository, None);
+        assert_eq!(items[2].url, None);
+        // Statusフィールドが未設定のアイテムは None になる。
+        assert_eq!(items[2].status, None);
+    }
+
+    #[test]
+    fn parse_project_item_nodes_skips_malformed_nodes() {
+        let nodes = vec![
+            json!({ "content": { "__typename": "Issue", "title": "ok" } }),
+            json!({ "content": { "__typename": "Issue" } }), // title欠落
+            json!({ "content": { "__typename": "UnknownType", "title": "ignored" } }),
+            json!({ "fieldValueByName": null }), // content自体が無い
+        ];
+
+        let items = parse_project_item_nodes(&nodes);
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, "ok");
+    }
+
+    #[test]
+    fn parse_next_cursor_returns_end_cursor_when_has_next_page() {
+        let value = json!({
+            "data": {
+                "user": {
+                    "projectV2": {
+                        "items": {
+                            "pageInfo": { "hasNextPage": true, "endCursor": "cursor-1" }
+                        }
+                    }
+                }
+            }
+        });
+        assert_eq!(parse_next_cursor(&value).as_deref(), Some("cursor-1"));
+    }
+
+    #[test]
+    fn parse_next_cursor_returns_none_when_no_next_page() {
+        let value = json!({
+            "data": {
+                "user": {
+                    "projectV2": {
+                        "items": {
+                            "pageInfo": { "hasNextPage": false, "endCursor": "cursor-1" }
+                        }
+                    }
+                }
+            }
+        });
+        assert_eq!(parse_next_cursor(&value), None);
     }
 }

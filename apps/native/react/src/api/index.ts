@@ -11,6 +11,7 @@ import type {
   GithubAuthenticatedEvent,
   GithubProjectSummaryDto,
   ProjectDto,
+  ProjectItemsPageDto,
   SessionChangedEvent,
   SessionDto,
   SessionSummaryDto,
@@ -33,6 +34,9 @@ export type {
   GithubProjectSummaryDto,
   MessageDto,
   ProjectDto,
+  ProjectItemDto,
+  ProjectItemKindDto,
+  ProjectItemsPageDto,
   RoleDto,
   SessionChangedEvent,
   SessionDto,
@@ -144,6 +148,10 @@ export function githubLogout(): Promise<void> {
 
 export function listGithubProjects(): Promise<GithubProjectSummaryDto[]> {
   return invoke<GithubProjectSummaryDto[]>("list_github_projects");
+}
+
+export function listGithubProjectItems(cursor: string | null): Promise<ProjectItemsPageDto> {
+  return invoke<ProjectItemsPageDto>("list_github_project_items", { cursor });
 }
 
 export function onGithubAuthenticated(
