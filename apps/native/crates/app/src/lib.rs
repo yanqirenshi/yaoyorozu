@@ -1,6 +1,6 @@
 use domain::{
-    order_messages_newest_first, paginate_messages, sort_projects_by_recency, ClaudeMdFile,
-    Project, Session, Settings,
+    is_valid_session_id, order_messages_newest_first, paginate_messages, sort_projects_by_recency,
+    sort_sessions_by_recency, ClaudeMdFile, Project, Session, SessionSummary, Settings,
 };
 use std::path::{Path, PathBuf};
 
@@ -49,8 +49,8 @@ pub enum AppError {
 pub trait SessionSource {
     fn list_projects(&self) -> Result<Vec<Project>, AppError>;
 
-    /// 最新セッション(ID + 全メッセージ)を返す。
-    fn latest_session(&self, project: &str) -> Result<Session, AppError>;
+    /// 指定セッション(ID + 全メッセージ)を返す。
+    fn session(&self, project: &str, session_id: &str) -> Result<Session, AppError>;
 
     /// 最新セッションのIDだけを返す(送信前後の一致検証用の軽量な問い合わせ)。
     fn latest_session_id(&self, project: &str) -> Result<String, AppError>;
@@ -58,6 +58,10 @@ pub trait SessionSource {
     /// 最新セッションの作業ディレクトリ(cwd)を返す。`AgentGateway` へ渡す
     /// `SendRequest` を組み立てるために使う。
     fn latest_session_cwd(&self, project: &str) -> Result<PathBuf, AppError>;
+
+    /// 指定プロジェクトの全セッションを一覧表示用に要約して返す(ビューア
+    /// 左ペイン用。issue #33)。
+    fn list_sessions(&self, project: &str) -> Result<Vec<SessionSummary>, AppError>;
 }
 
 /// アプリ設定の永続化(port)。実体(ファイル形式・保存先の解決)は infra に
@@ -188,18 +192,36 @@ pub fn list_projects(source: &dyn SessionSource) -> Result<Vec<Project>, AppErro
     Ok(projects)
 }
 
-/// 最新セッションのメッセージを新しい順に並べ、`offset`/`limit` で指定された
-/// 範囲だけを返す(1回のIPCで会話全件を返さないため)。
-pub fn get_latest_session(
+/// 指定セッションのメッセージを新しい順に並べ、`offset`/`limit` で指定された
+/// 範囲だけを返す(1回のIPCで会話全件を返さないため)。`session_id` は
+/// フロント入力をそのままファイルパスの構築に使うことになるため、UUID形式
+/// (英数字とハイフンのみ)であることを検証してから使う(native.md §4。
+/// issue #33)。
+pub fn get_session(
     source: &dyn SessionSource,
     project: &str,
+    session_id: &str,
     offset: usize,
     limit: usize,
 ) -> Result<Session, AppError> {
-    let mut session = source.latest_session(project)?;
+    if !is_valid_session_id(session_id) {
+        return Err(AppError::InvalidInput("不正なセッションIDです".to_string()));
+    }
+    let mut session = source.session(project, session_id)?;
     order_messages_newest_first(&mut session.messages);
     session.messages = paginate_messages(&session.messages, offset, limit);
     Ok(session)
+}
+
+/// 指定プロジェクトのセッション一覧を、最終更新の新しい順に並べて返す
+/// (ビューア左ペイン用。issue #33)。
+pub fn list_sessions(
+    source: &dyn SessionSource,
+    project: &str,
+) -> Result<Vec<SessionSummary>, AppError> {
+    let mut sessions = source.list_sessions(project)?;
+    sort_sessions_by_recency(&mut sessions);
+    Ok(sessions)
 }
 
 /// `expected_session_id` が実行直前の最新セッションと一致する場合のみ送信する。
@@ -382,6 +404,7 @@ mod tests {
         cwd: PathBuf,
         fail_list_projects: bool,
         latest_session_id_calls: std::cell::Cell<usize>,
+        sessions: Vec<SessionSummary>,
     }
 
     impl FakeSessionSource {
@@ -394,6 +417,7 @@ mod tests {
                 cwd: PathBuf::from("/tmp/some-project"),
                 fail_list_projects: false,
                 latest_session_id_calls: std::cell::Cell::new(0),
+                sessions: Vec::new(),
             }
         }
     }
@@ -406,9 +430,9 @@ mod tests {
             Ok(self.projects.clone())
         }
 
-        fn latest_session(&self, _project: &str) -> Result<Session, AppError> {
+        fn session(&self, _project: &str, session_id: &str) -> Result<Session, AppError> {
             Ok(Session {
-                id: self.session_id.clone(),
+                id: session_id.to_string(),
                 messages: self.messages.clone(),
                 agent: AgentKind::ClaudeCode,
             })
@@ -429,6 +453,10 @@ mod tests {
 
         fn latest_session_cwd(&self, _project: &str) -> Result<PathBuf, AppError> {
             Ok(self.cwd.clone())
+        }
+
+        fn list_sessions(&self, _project: &str) -> Result<Vec<SessionSummary>, AppError> {
+            Ok(self.sessions.clone())
         }
     }
 
@@ -478,7 +506,7 @@ mod tests {
     }
 
     #[test]
-    fn get_latest_session_orders_newest_first() {
+    fn get_session_orders_newest_first() {
         let source = FakeSessionSource::new(
             "s1",
             vec![
@@ -496,14 +524,14 @@ mod tests {
         );
 
         let session =
-            get_latest_session(&source, "some-project", 0, 10).expect("should get session");
+            get_session(&source, "some-project", "s1", 0, 10).expect("should get session");
         assert_eq!(session.id, "s1");
         let texts: Vec<&str> = session.messages.iter().map(|m| m.text.as_str()).collect();
         assert_eq!(texts, vec!["second", "first"]);
     }
 
     #[test]
-    fn get_latest_session_applies_offset_and_limit() {
+    fn get_session_applies_offset_and_limit() {
         let source = FakeSessionSource::new(
             "s1",
             ["a", "b", "c", "d"]
@@ -517,10 +545,44 @@ mod tests {
         );
 
         // 記録順は a,b,c,d -> 新しい順は d,c,b,a -> offset 1, limit 2 で c,b
-        let session =
-            get_latest_session(&source, "some-project", 1, 2).expect("should get session");
+        let session = get_session(&source, "some-project", "s1", 1, 2).expect("should get session");
         let texts: Vec<&str> = session.messages.iter().map(|m| m.text.as_str()).collect();
         assert_eq!(texts, vec!["c", "b"]);
+    }
+
+    #[test]
+    fn get_session_rejects_invalid_session_id_without_calling_source() {
+        let source = FakeSessionSource::new("s1", vec![]);
+
+        let error = get_session(&source, "some-project", "../../etc/passwd", 0, 10)
+            .expect_err("should reject invalid session id");
+
+        assert!(matches!(error, AppError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn list_sessions_sorts_by_recency_and_marks_latest() {
+        let mut source = FakeSessionSource::new("s1", vec![]);
+        source.sessions = vec![
+            SessionSummary {
+                id: "old".to_string(),
+                title: "old".to_string(),
+                modified_at_ms: 1,
+                is_latest: false,
+            },
+            SessionSummary {
+                id: "new".to_string(),
+                title: "new".to_string(),
+                modified_at_ms: 2,
+                is_latest: false,
+            },
+        ];
+
+        let sessions = list_sessions(&source, "some-project").expect("should list sessions");
+        let ids: Vec<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["new", "old"]);
+        assert!(sessions[0].is_latest);
+        assert!(!sessions[1].is_latest);
     }
 
     #[test]

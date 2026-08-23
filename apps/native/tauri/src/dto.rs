@@ -68,7 +68,7 @@ impl From<domain::Message> for MessageDto {
     }
 }
 
-/// 最新セッション。`session_id` はフロントが保持し、送信時に渡すことで
+/// 表示中のセッション。`session_id` はフロントが保持し、送信時に渡すことで
 /// 「表示中の会話 = 追記される会話」の一致検証(送信直前チェック)に使う。
 #[derive(Serialize, Clone)]
 pub struct SessionDto {
@@ -87,8 +87,31 @@ impl From<domain::Session> for SessionDto {
     }
 }
 
+/// セッション一覧(ビューア左ペイン)の1件分。
+#[derive(Serialize, Clone)]
+pub struct SessionSummaryDto {
+    pub id: String,
+    pub title: String,
+    pub modified_at: u64,
+    /// そのフォルダで最も新しいセッションかどうか。`true` のときだけ
+    /// 送信フォームを有効にする(`--continue` の性質上、最新以外へは
+    /// 送信できないため。issue #33)。
+    pub is_latest: bool,
+}
+
+impl From<domain::SessionSummary> for SessionSummaryDto {
+    fn from(summary: domain::SessionSummary) -> Self {
+        Self {
+            id: summary.id,
+            title: summary.title,
+            modified_at: summary.modified_at_ms,
+            is_latest: summary.is_latest,
+        }
+    }
+}
+
 /// `session:changed` イベントのペイロード。変更のあったプロジェクト(フォルダ名)
-/// のみを通知し、データ本体はフロントが Query(get_latest_session 等)で
+/// のみを通知し、データ本体はフロントが Query(get_session 等)で
 /// 取り直す(native.md §3.2)。
 #[derive(Serialize, Clone)]
 pub struct SessionChangedEventDto {

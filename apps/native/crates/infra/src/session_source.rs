@@ -1,11 +1,15 @@
 use app::{AppError, SessionSource};
-use domain::{extract_cwd, extract_message, extract_session_id, AgentKind, Project, Session};
+use domain::{
+    extract_custom_title, extract_cwd, extract_message, extract_session_id, resolve_session_title,
+    AgentKind, Project, Role, Session, SessionSummary,
+};
 use notify::RecursiveMode;
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, UNIX_EPOCH};
 
 /// ファイル変更をイベントとして通知するまでのデバウンス時間。
@@ -186,32 +190,26 @@ impl SessionSource for FileSystemRepository {
         Ok(projects)
     }
 
-    fn latest_session(&self, project: &str) -> Result<Session, AppError> {
-        let project_dir = self.projects_dir.join(project);
-        let path = latest_session_file(&project_dir)
-            .ok_or_else(|| AppError::NotFound(format!("{project} にセッションが見つかりません")))?;
+    fn session(&self, project: &str, session_id: &str) -> Result<Session, AppError> {
+        // `session_id` は app 層の `is_valid_session_id` で英数字とハイフンのみに
+        // 検証済みの前提(native.md §4)。ここでは検証済みの値としてそのまま
+        // ファイル名の構築に使う。
+        let path = self
+            .projects_dir
+            .join(project)
+            .join(format!("{session_id}.jsonl"));
         let file = fs::File::open(&path)
-            .map_err(|e| AppError::Io(format!("{} を開けませんでした: {}", path.display(), e)))?;
+            .map_err(|e| AppError::NotFound(format!("{} が見つかりません: {e}", path.display())))?;
 
-        let mut id: Option<String> = None;
-        let mut messages = Vec::new();
-        for value in BufReader::new(file)
+        let messages = BufReader::new(file)
             .lines()
             .map_while(Result::ok)
             .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
-        {
-            if id.is_none() {
-                id = extract_session_id(&value);
-            }
-            if let Some(message) = extract_message(&value) {
-                messages.push(message);
-            }
-        }
+            .filter_map(|value| extract_message(&value))
+            .collect();
 
-        let id =
-            id.ok_or_else(|| AppError::Io("セッションIDを取得できませんでした".to_string()))?;
         Ok(Session {
-            id,
+            id: session_id.to_string(),
             messages,
             agent: AgentKind::ClaudeCode,
         })
@@ -224,6 +222,119 @@ impl SessionSource for FileSystemRepository {
     fn latest_session_cwd(&self, project: &str) -> Result<PathBuf, AppError> {
         resolve_session_cwd(&self.projects_dir.join(project))
     }
+
+    fn list_sessions(&self, project: &str) -> Result<Vec<SessionSummary>, AppError> {
+        let project_dir = self.projects_dir.join(project);
+        session_files_by_recency(&project_dir)
+            .iter()
+            .map(|path| {
+                let modified_at_ms = to_millis(fs::metadata(path).and_then(|m| m.modified()));
+                let (id, title) = cached_or_scanned_summary(path, modified_at_ms)?;
+                Ok(SessionSummary {
+                    id,
+                    title,
+                    modified_at_ms,
+                    // `is_latest` はフォルダ内での相対比較が必要なため、
+                    // ここでは決められない(app::list_sessions が
+                    // `sort_sessions_by_recency` で確定させる)。
+                    is_latest: false,
+                })
+            })
+            .collect()
+    }
+}
+
+/// `(ファイルパス, mtime)` をキーにしたタイトル抽出結果のキャッシュ。
+/// セッションファイルは数MBになりうり、`custom-title` はファイル末尾付近と
+/// は限らないため全行走査が必要になる。未変更のファイルを毎回再走査しない
+/// ため、プロセス内メモリでキャッシュする(永続化不要。issue #33)。
+/// `FileSystemRepository` はコマンド呼び出しごとに使い捨てで生成される
+/// (tauri層)ため、インスタンスのフィールドではなくモジュール静的な領域に
+/// 置く。
+struct CachedSessionSummary {
+    modified_at_ms: u64,
+    id: String,
+    title: String,
+}
+
+static SESSION_SUMMARY_CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedSessionSummary>>> =
+    OnceLock::new();
+
+fn session_summary_cache() -> &'static Mutex<HashMap<PathBuf, CachedSessionSummary>> {
+    SESSION_SUMMARY_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// キャッシュに `path` の `modified_at_ms` と一致するエントリがあればそれを
+/// 返し、無ければファイルを走査してキャッシュに書き込む。
+fn cached_or_scanned_summary(
+    path: &Path,
+    modified_at_ms: u64,
+) -> Result<(String, String), AppError> {
+    {
+        let cache = session_summary_cache()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(cached) = cache.get(path) {
+            if cached.modified_at_ms == modified_at_ms {
+                return Ok((cached.id.clone(), cached.title.clone()));
+            }
+        }
+    }
+
+    let (id, title) = scan_session_summary(path)?;
+
+    let mut cache = session_summary_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache.insert(
+        path.to_path_buf(),
+        CachedSessionSummary {
+            modified_at_ms,
+            id: id.clone(),
+            title: title.clone(),
+        },
+    );
+    Ok((id, title))
+}
+
+/// セッションファイルを1行ずつ走査し、ID と表示用タイトルを求める。
+/// `custom-title` はファイルのどこにでも出現しうる(リネームのたびに追記)
+/// ため、早期終了せず全行を読む。
+fn scan_session_summary(path: &Path) -> Result<(String, String), AppError> {
+    let file = fs::File::open(path)
+        .map_err(|e| AppError::Io(format!("{} を開けませんでした: {}", path.display(), e)))?;
+
+    let mut id: Option<String> = None;
+    let mut last_custom_title: Option<String> = None;
+    let mut first_user_message: Option<String> = None;
+
+    for value in BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
+    {
+        if id.is_none() {
+            id = extract_session_id(&value);
+        }
+        if let Some(title) = extract_custom_title(&value) {
+            last_custom_title = Some(title);
+        }
+        if first_user_message.is_none() {
+            if let Some(message) = extract_message(&value) {
+                if message.role == Role::User {
+                    first_user_message = Some(message.text);
+                }
+            }
+        }
+    }
+
+    let id = id.ok_or_else(|| AppError::Io("セッションIDを取得できませんでした".to_string()))?;
+    let title = resolve_session_title(
+        last_custom_title.as_deref(),
+        first_user_message.as_deref(),
+        &id,
+    );
+    Ok((id, title))
 }
 
 #[cfg(test)]
@@ -252,18 +363,33 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_repository_latest_session_returns_id_and_messages() {
+    fn filesystem_repository_session_reads_messages_from_specified_id() {
         let dir = tempfile::tempdir().unwrap();
         let project_dir = dir.path().join("proj");
         fs::create_dir_all(&project_dir).unwrap();
         write_session_file(&project_dir, "s1", &project_dir);
+        write_session_file(&project_dir, "s2", &project_dir);
 
         let repo = FileSystemRepository::new(dir.path().to_path_buf());
-        let session = repo.latest_session("proj").expect("should read session");
+        let session = repo.session("proj", "s1").expect("should read session");
 
         assert_eq!(session.id, "s1");
         assert_eq!(session.messages.len(), 1);
         assert_eq!(session.messages[0].text, "hello");
+    }
+
+    #[test]
+    fn filesystem_repository_session_returns_not_found_for_missing_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let error = repo
+            .session("proj", "does-not-exist")
+            .expect_err("should fail for missing session file");
+
+        assert!(matches!(error, AppError::NotFound(_)));
     }
 
     #[test]
@@ -312,5 +438,95 @@ mod tests {
             .recv_timeout(Duration::from_secs(5))
             .expect("should be notified of the change");
         assert_eq!(notified, "some-project");
+    }
+
+    #[test]
+    fn list_sessions_prefers_the_last_custom_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        fs::write(
+            project_dir.join("s1.jsonl"),
+            [
+                r#"{"type":"user","sessionId":"s1","message":{"content":"hello"}}"#,
+                r#"{"type":"custom-title","customTitle":"最初のタイトル","sessionId":"s1"}"#,
+                r#"{"type":"custom-title","customTitle":"最後のタイトル","sessionId":"s1"}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let sessions = repo.list_sessions("proj").expect("should list sessions");
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, "s1");
+        assert_eq!(sessions[0].title, "最後のタイトル");
+    }
+
+    #[test]
+    fn list_sessions_falls_back_to_first_user_message_when_no_custom_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        write_session_file(&project_dir, "s1", &project_dir);
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let sessions = repo.list_sessions("proj").expect("should list sessions");
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].title, "hello");
+    }
+
+    #[test]
+    fn list_sessions_falls_back_to_session_id_prefix_when_nothing_else_available() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        fs::write(
+            project_dir.join("abcdef0123456789.jsonl"),
+            r#"{"type":"queue-operation","sessionId":"abcdef0123456789"}"#,
+        )
+        .unwrap();
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let sessions = repo.list_sessions("proj").expect("should list sessions");
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].title, "abcdef01");
+    }
+
+    #[test]
+    fn list_sessions_does_not_rescan_a_file_whose_mtime_is_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        let file_path = project_dir.join("s1.jsonl");
+        fs::write(
+            &file_path,
+            r#"{"type":"user","sessionId":"s1","message":{"content":"hello"}}"#,
+        )
+        .unwrap();
+        let original_mtime = fs::metadata(&file_path).unwrap().modified().unwrap();
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let first = repo.list_sessions("proj").expect("should list sessions");
+        assert_eq!(first[0].id, "s1");
+        assert_eq!(first[0].title, "hello");
+
+        // ファイルを壊す(再走査されればID抽出に失敗するはず)が、mtimeは
+        // 書き込み前の値に戻し「未変更」として扱われる状況を再現する。
+        fs::write(&file_path, "not valid jsonl at all").unwrap();
+        let file = fs::File::options().write(true).open(&file_path).unwrap();
+        file.set_modified(original_mtime).unwrap();
+
+        let second = repo
+            .list_sessions("proj")
+            .expect("should reuse cached summary without rescanning the corrupted file");
+        assert_eq!(
+            second[0].id, "s1",
+            "should return the cached id instead of failing to parse the corrupted file"
+        );
+        assert_eq!(second[0].title, "hello");
     }
 }
