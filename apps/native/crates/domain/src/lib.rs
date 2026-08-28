@@ -1,3 +1,14 @@
+mod session_line;
+
+/// セッションログ(`.jsonl`)1行分の型付きデシリアライズ(issue #39)。
+/// `extract_message`/`extract_cwd`/`extract_session_id`/`extract_custom_title`
+/// は挙動を変えないリファクタリングとして既存の呼び出し元(infra)から
+/// そのまま使えるよう、モジュール名を介さずクレート直下に再エクスポートする。
+pub use session_line::{
+    extract_custom_title, extract_cwd, extract_message, extract_session_id, AssistantLine,
+    AttachmentLine, ChainLineBase, SessionLine, SystemLevel, UserLine,
+};
+
 /// 会話を生成しているエージェントの種類。現時点では Claude Code のみ。
 /// 将来 Gemini / Codex 等を追加する際、一覧・会話に「どのエージェントか」を
 /// 表示できるよう先んじて用意する(値は当面 `ClaudeCode` のみ)。
@@ -68,76 +79,6 @@ pub fn order_messages_newest_first(messages: &mut [Message]) {
 /// IPC 1回で会話全件を返さないための範囲指定に使う。
 pub fn paginate_messages(messages: &[Message], offset: usize, limit: usize) -> Vec<Message> {
     messages.iter().skip(offset).take(limit).cloned().collect()
-}
-
-fn message_text(content: &serde_json::Value) -> String {
-    match content {
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Array(blocks) => blocks
-            .iter()
-            .filter(|b| b.get("type").and_then(|t| t.as_str()) == Some("text"))
-            .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
-            .collect::<Vec<_>>()
-            .join("\n\n"),
-        _ => String::new(),
-    }
-}
-
-/// 1行分のJSONLエントリから、会話として表示すべきメッセージを取り出す。
-/// thinking / tool_use / tool_result などの内部情報は読み飛ばす。
-pub fn extract_message(value: &serde_json::Value) -> Option<Message> {
-    let entry_type = value.get("type").and_then(|t| t.as_str())?;
-    let role = match entry_type {
-        "user" => Role::User,
-        "assistant" => Role::Assistant,
-        _ => return None,
-    };
-
-    let content = value.get("message")?.get("content")?;
-    let text = message_text(content);
-    if text.trim().is_empty() {
-        return None;
-    }
-
-    let timestamp = value
-        .get("timestamp")
-        .and_then(|t| t.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    Some(Message {
-        role,
-        text,
-        timestamp,
-    })
-}
-
-/// 1行分のJSONLエントリから、そのセッションの作業ディレクトリ(cwd)を取り出す。
-pub fn extract_cwd(value: &serde_json::Value) -> Option<String> {
-    value.get("cwd").and_then(|c| c.as_str()).map(String::from)
-}
-
-/// 1行分のJSONLエントリから、そのセッションのID(`sessionId`)を取り出す。
-/// 送信前後の一致検証に使う(表示中のセッション ≠ 追記先セッション、を防ぐため)。
-pub fn extract_session_id(value: &serde_json::Value) -> Option<String> {
-    value
-        .get("sessionId")
-        .and_then(|s| s.as_str())
-        .map(String::from)
-}
-
-/// 1行分のJSONLエントリから `type=custom-title` の `customTitle` を取り出す。
-/// 実データでは同一セッション内に複数回出現しうる(タイトル変更のたびに
-/// 追記される。1セッションに12行観測された例がある)ため、呼び出し側で
-/// 最後に見つかったものを採用すること(issue #33)。
-pub fn extract_custom_title(value: &serde_json::Value) -> Option<String> {
-    if value.get("type").and_then(|t| t.as_str()) != Some("custom-title") {
-        return None;
-    }
-    value
-        .get("customTitle")
-        .and_then(|t| t.as_str())
-        .map(String::from)
 }
 
 /// 表示用に文字列を切り詰める。長い本文を一覧にそのまま出さないため。
@@ -268,7 +209,6 @@ pub struct ClaudeMdFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn sort_projects_by_recency_orders_newest_first() {
@@ -315,100 +255,6 @@ mod tests {
 
         let texts: Vec<&str> = messages.iter().map(|m| m.text.as_str()).collect();
         assert_eq!(texts, vec!["second", "first"]);
-    }
-
-    #[test]
-    fn extract_message_reads_string_content() {
-        let value = json!({
-            "type": "user",
-            "timestamp": "2026-01-01T00:00:00Z",
-            "message": { "content": "hello" }
-        });
-
-        let message = extract_message(&value).expect("should extract message");
-        assert_eq!(message.role, Role::User);
-        assert_eq!(message.text, "hello");
-        assert_eq!(message.timestamp, "2026-01-01T00:00:00Z");
-    }
-
-    #[test]
-    fn extract_message_joins_text_blocks_and_skips_others() {
-        let value = json!({
-            "type": "assistant",
-            "message": {
-                "content": [
-                    { "type": "thinking", "thinking": "internal reasoning" },
-                    { "type": "text", "text": "first" },
-                    { "type": "tool_use", "name": "some_tool" },
-                    { "type": "text", "text": "second" }
-                ]
-            }
-        });
-
-        let message = extract_message(&value).expect("should extract message");
-        assert_eq!(message.role, Role::Assistant);
-        assert_eq!(message.text, "first\n\nsecond");
-    }
-
-    #[test]
-    fn extract_message_skips_non_conversation_entry_types() {
-        for entry_type in ["queue-operation", "custom-title", "summary"] {
-            let value = json!({
-                "type": entry_type,
-                "message": { "content": "hello" }
-            });
-            assert!(extract_message(&value).is_none());
-        }
-    }
-
-    #[test]
-    fn extract_message_skips_when_text_is_empty() {
-        let value = json!({
-            "type": "assistant",
-            "message": {
-                "content": [
-                    { "type": "tool_use", "name": "some_tool" }
-                ]
-            }
-        });
-
-        assert!(extract_message(&value).is_none());
-    }
-
-    #[test]
-    fn extract_message_skips_when_message_field_missing() {
-        let value = json!({ "type": "user" });
-        assert!(extract_message(&value).is_none());
-    }
-
-    #[test]
-    fn extract_cwd_reads_field_when_present() {
-        let value = json!({ "cwd": "C:\\Users\\yanqi\\prj\\yaoyorozu" });
-        assert_eq!(
-            extract_cwd(&value).as_deref(),
-            Some("C:\\Users\\yanqi\\prj\\yaoyorozu")
-        );
-    }
-
-    #[test]
-    fn extract_cwd_returns_none_when_missing() {
-        let value = json!({ "type": "user" });
-        assert!(extract_cwd(&value).is_none());
-    }
-
-    #[test]
-    fn extract_session_id_reads_field_when_present() {
-        let value = json!({ "sessionId": "a36bcf64-6d83-4043-a1e5-e9eecd3bba80" });
-        assert_eq!(
-            extract_session_id(&value).as_deref(),
-            Some("a36bcf64-6d83-4043-a1e5-e9eecd3bba80")
-        );
-    }
-
-    #[test]
-    fn extract_session_id_returns_none_when_missing() {
-        let value = json!({ "type": "user" });
-        assert!(extract_session_id(&value).is_none());
     }
 
     fn message(text: &str) -> Message {
@@ -510,26 +356,6 @@ mod tests {
         assert!(sessions[0].is_latest);
         assert!(!sessions[1].is_latest);
         assert!(!sessions[2].is_latest);
-    }
-
-    #[test]
-    fn extract_custom_title_reads_field_when_type_matches() {
-        // 実データで確認した形式(claude-session-jsonl-format.md §4.5)。
-        let value = json!({
-            "type": "custom-title",
-            "customTitle": "yaoyorozu (デザイン)",
-            "sessionId": "396a54d0-0000-0000-0000-000000000000"
-        });
-        assert_eq!(
-            extract_custom_title(&value).as_deref(),
-            Some("yaoyorozu (デザイン)")
-        );
-    }
-
-    #[test]
-    fn extract_custom_title_returns_none_for_other_types() {
-        let value = json!({ "type": "ai-title", "aiTitle": "ignored" });
-        assert!(extract_custom_title(&value).is_none());
     }
 
     #[test]
