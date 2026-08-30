@@ -12,3 +12,17 @@ Viewing the source code does not constitute permission to use it. Any
 use beyond viewing (including but not limited to running, copying,
 modifying, or redistributing this software or any derivative work)
 requires the prior written permission of the copyright holder.
+
+Official Binary Releases
+------------------------
+
+Notwithstanding the above, permission is hereby granted, free of charge,
+to download, install, and run unmodified official binary releases of
+this software as distributed by the copyright holder (e.g. via GitHub
+Releases of this repository or the winget package
+"yanqirenshi.yaoyorozu"), for personal use.
+
+This grant does not include the right to modify, reverse engineer,
+redistribute, rehost, sublicense, or sell the software or any part of
+it. This grant may be withdrawn for future releases at any time;
+already-installed copies may continue to be used.
