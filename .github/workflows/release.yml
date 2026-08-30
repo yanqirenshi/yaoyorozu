@@ -1,0 +1,81 @@
+name: Release
+
+# `vX.Y.Z` タグの push を起点に、apps/native の MSI をビルドして
+# draft の GitHub Release を作成する(手順は docs/release.md 参照)。
+# 署名は行わない(決定済み)。
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # タグ(vX.Y.Z)と tauri.conf.json の version が食い違ったまま
+      # リリースしてしまう事故を防ぐ(バージョン上げ忘れの検出)。
+      - name: Check tag matches tauri.conf.json version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          conf_version=$(jq -r '.version' apps/native/tauri/tauri.conf.json)
+          if [ "$tag_version" != "$conf_version" ]; then
+            echo "::error::タグ $GITHUB_REF_NAME (version=$tag_version) が tauri.conf.json の version ($conf_version) と一致しません"
+            exit 1
+          fi
+          echo "version=$conf_version" >> "$GITHUB_OUTPUT"
+        id: version
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/native -> target
+
+      - name: Install dependencies
+        run: npm install
+
+      # bundle.targets を ["msi"] に固定しているため、成果物は MSI のみ
+      # (NSIS 等はビルドしない。issue #43)。
+      - name: Build MSI
+        run: npm run native:build
+
+      - name: Compute SHA256 checksum
+        id: checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd apps/native/target/release/bundle/msi
+          # CI ランナーは毎回クリーンな環境のため通常は1件だけだが、念のため
+          # 最も新しいものを選ぶ(複数マッチしても壊れないようにする)。
+          msi_file=$(ls -t *.msi | head -n1)
+          sha256sum "$msi_file" > "$msi_file.sha256"
+          echo "msi_path=apps/native/target/release/bundle/msi/$msi_file" >> "$GITHUB_OUTPUT"
+          echo "checksum_path=apps/native/target/release/bundle/msi/$msi_file.sha256" >> "$GITHUB_OUTPUT"
+
+      # 誤タグ push の保険として draft で作成し、内容確認後に手動で
+      # publish する運用とする(docs/release.md 参照)。
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: v${{ steps.version.outputs.version }}
+          draft: true
+          files: |
+            ${{ steps.checksum.outputs.msi_path }}
+            ${{ steps.checksum.outputs.checksum_path }}
