@@ -41,4 +41,4 @@ npm run native:build
 
 ## ライセンス
 
-[LICENSE](LICENSE) を参照。
+[LICENSE](LICENSE) を参照。公式バイナリ(GitHub Releases / winget)は個人利用に限り無償で利用できる。
