@@ -5,7 +5,7 @@ const kyoMurasaki = COLOR_PALETTE.find((c) => c.name === "京紫")!.hex;
 const kincha = COLOR_PALETTE.find((c) => c.name === "金茶")!.hex;
 const kusaIro = COLOR_PALETTE.find((c) => c.name === "草色")!.hex;
 const shinju = COLOR_PALETTE.find((c) => c.name === "真珠")!.hex;
-const sumi = "#373737";
+const sumi = COLOR_PALETTE.find((c) => c.name === "墨")!.hex;
 
 export const theme = createTheme({
   palette: {

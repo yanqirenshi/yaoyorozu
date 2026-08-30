@@ -1,9 +1,11 @@
 import { NAV_MENU_ITEMS } from "./navigation";
+import { COLOR_PALETTE } from "./uiDesign";
 
 const NODE_WIDTH = 220;
 const NODE_HEIGHT = 100;
 const GAP_X = 100;
 const ROOT_ID = 1;
+const sumi = COLOR_PALETTE.find((c) => c.name === "墨")!.hex;
 
 export const SITEMAP_DATA = {
   nodes: [
@@ -31,6 +33,6 @@ export const SITEMAP_DATA = {
     id: 100 + index,
     from: { id: ROOT_ID, position: 0 },
     to: { id: ROOT_ID + index + 1, position: 180 },
-    stroke: { color: "#333333", width: 1.5 },
+    stroke: { color: sumi, width: 1.5 },
   })),
 };
