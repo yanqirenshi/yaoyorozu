@@ -78,3 +78,15 @@ declare module "@yanqirenshi/table.wbs" {
   }>;
   export default WBSTable;
 }
+
+declare module "tion" {
+  import type { ComponentType, ReactNode } from "react";
+
+  export const Section: ComponentType<{
+    title?: ReactNode;
+    lev?: number;
+    num?: ReactNode;
+    sx?: Record<string, unknown>;
+    children?: ReactNode;
+  }>;
+}
