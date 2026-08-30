@@ -8,7 +8,7 @@ import type { ClassInput, DiagramInput, RelationshipInput } from "@yanqirenshi/d
 const CLASSES: ClassInput[] = [
   // ============ 合併型(行の入口) ============
   {
-    name: { physical: "SessionLine", logical: "セッションログ行", description: "jsonl 1行。serde(tag=type)" },
+    name: { physical: "SessionLine", logical: "SessionLine", description: "jsonl 1行。serde(tag=type)" }, // 論理名: セッションログ行
     stereotype: "enumeration",
     attributes: [
       "user", "assistant", "system", "attachment",
@@ -19,7 +19,7 @@ const CLASSES: ClassInput[] = [
   },
   // ============ 会話チェーン共通 ============
   {
-    name: { physical: "ChainLineBase", logical: "チェーン行共通", description: "flattenで各行に埋め込み" },
+    name: { physical: "ChainLineBase", logical: "ChainLineBase", description: "flattenで各行に埋め込み" }, // 論理名: チェーン行共通
     attributes: [
       "+ uuid: Option<String>",
       "+ parent_uuid: Option<String>",
@@ -37,7 +37,7 @@ const CLASSES: ClassInput[] = [
   },
   // ============ 会話本体: user ============
   {
-    name: { physical: "UserLine", logical: "ユーザー行", description: "人間の入力/ツール実行結果" },
+    name: { physical: "UserLine", logical: "UserLine", description: "人間の入力/ツール実行結果" }, // 論理名: ユーザー行
     attributes: [
       "+ message: UserMessage",
       "+ prompt_id: Option<String>",
@@ -48,30 +48,30 @@ const CLASSES: ClassInput[] = [
     position: { x: 40, y: 300 },
   },
   {
-    name: { physical: "UserMessage", logical: "ユーザーメッセージ", description: "" },
+    name: { physical: "UserMessage", logical: "UserMessage", description: "" }, // 論理名: ユーザーメッセージ
     attributes: ["+ role: Option<String>", "+ content: Option<UserContent>"],
     position: { x: 40, y: 560 },
   },
   {
-    name: { physical: "UserContent", logical: "ユーザー本文", description: "serde(untagged)" },
+    name: { physical: "UserContent", logical: "UserContent", description: "serde(untagged)" }, // 論理名: ユーザー本文
     stereotype: "enumeration",
     attributes: ["Text(String)", "Blocks(Vec<UserContentBlock>)"],
     position: { x: 40, y: 800 },
   },
   {
-    name: { physical: "UserContentBlock", logical: "userブロック", description: "serde(tag=type)" },
+    name: { physical: "UserContentBlock", logical: "UserContentBlock", description: "serde(tag=type)" }, // 論理名: userブロック
     stereotype: "enumeration",
     attributes: ["tool_result", "text", "image", "Unknown"],
     position: { x: 40, y: 1040 },
   },
   // ============ 会話本体: assistant ============
   {
-    name: { physical: "AssistantLine", logical: "AI応答行", description: "" },
+    name: { physical: "AssistantLine", logical: "AssistantLine", description: "" }, // 論理名: AI応答行
     attributes: ["+ request_id: Option<String>", "+ message: AssistantMessage"],
     position: { x: 380, y: 300 },
   },
   {
-    name: { physical: "AssistantMessage", logical: "AI応答メッセージ", description: "Anthropic API形式" },
+    name: { physical: "AssistantMessage", logical: "AssistantMessage", description: "Anthropic API形式" }, // 論理名: AI応答メッセージ
     attributes: [
       "+ id: Option<String>",
       "+ model: Option<String>",
@@ -82,13 +82,13 @@ const CLASSES: ClassInput[] = [
     position: { x: 380, y: 560 },
   },
   {
-    name: { physical: "AssistantContentBlock", logical: "assistantブロック", description: "serde(tag=type)" },
+    name: { physical: "AssistantContentBlock", logical: "AssistantContentBlock", description: "serde(tag=type)" }, // 論理名: assistantブロック
     stereotype: "enumeration",
     attributes: ["text", "thinking", "tool_use", "Unknown"],
     position: { x: 380, y: 830 },
   },
   {
-    name: { physical: "Usage", logical: "トークン使用量", description: "" },
+    name: { physical: "Usage", logical: "Usage", description: "" }, // 論理名: トークン使用量
     attributes: [
       "+ input_tokens: u64",
       "+ output_tokens: u64",
@@ -99,45 +99,45 @@ const CLASSES: ClassInput[] = [
     position: { x: 380, y: 1040 },
   },
   {
-    name: { physical: "CacheCreation", logical: "キャッシュ作成量", description: "" },
+    name: { physical: "CacheCreation", logical: "CacheCreation", description: "" }, // 論理名: キャッシュ作成量
     attributes: ["+ ephemeral_1h_input_tokens: u64", "+ ephemeral_5m_input_tokens: u64"],
     position: { x: 380, y: 1300 },
   },
   // ============ content ブロック実体 ============
   {
-    name: { physical: "TextBlock", logical: "本文", description: "表示対象はこれのみ" },
+    name: { physical: "TextBlock", logical: "TextBlock", description: "表示対象はこれのみ" }, // 論理名: 本文
     attributes: ["+ text: String"],
     position: { x: 40, y: 1610 },
   },
   {
-    name: { physical: "ThinkingBlock", logical: "思考", description: "非表示" },
+    name: { physical: "ThinkingBlock", logical: "ThinkingBlock", description: "非表示" }, // 論理名: 思考
     attributes: ["+ thinking: String", "+ signature: String"],
     position: { x: 330, y: 1610 },
   },
   {
-    name: { physical: "ToolUseBlock", logical: "ツール呼び出し", description: "非表示" },
+    name: { physical: "ToolUseBlock", logical: "ToolUseBlock", description: "非表示" }, // 論理名: ツール呼び出し
     attributes: ["+ id: String", "+ name: String", "+ input: Value"],
     position: { x: 620, y: 1610 },
   },
   {
-    name: { physical: "ToolResultBlock", logical: "ツール結果", description: "非表示" },
+    name: { physical: "ToolResultBlock", logical: "ToolResultBlock", description: "非表示" }, // 論理名: ツール結果
     attributes: ["+ tool_use_id: String", "+ content: Value", "+ is_error: Option<bool>"],
     position: { x: 910, y: 1610 },
   },
   {
-    name: { physical: "ImageBlock", logical: "画像", description: "非表示" },
+    name: { physical: "ImageBlock", logical: "ImageBlock", description: "非表示" }, // 論理名: 画像
     attributes: ["+ source: Value"],
     position: { x: 1200, y: 1610 },
   },
   // ============ 内部イベント: system ============
   {
-    name: { physical: "SystemLine", logical: "システム行", description: "serde(tag=subtype)" },
+    name: { physical: "SystemLine", logical: "SystemLine", description: "serde(tag=subtype)" }, // 論理名: システム行
     stereotype: "enumeration",
     attributes: ["stop_hook_summary", "api_error", "compact_boundary", "informational", "Unknown"],
     position: { x: 720, y: 380 },
   },
   {
-    name: { physical: "StopHookSummaryLine", logical: "フック実行結果", description: "" },
+    name: { physical: "StopHookSummaryLine", logical: "StopHookSummaryLine", description: "" }, // 論理名: フック実行結果
     attributes: [
       "+ level: Option<SystemLevel>",
       "+ hook_count: Option<u64>",
@@ -149,18 +149,18 @@ const CLASSES: ClassInput[] = [
     position: { x: 720, y: 640 },
   },
   {
-    name: { physical: "HookInfo", logical: "フック情報", description: "" },
+    name: { physical: "HookInfo", logical: "HookInfo", description: "" }, // 論理名: フック情報
     attributes: ["+ command: Option<String>", "+ duration_ms: Option<u64>"],
     position: { x: 1060, y: 1080 },
   },
   {
-    name: { physical: "SystemLevel", logical: "重要度", description: "" },
+    name: { physical: "SystemLevel", logical: "SystemLevel", description: "" }, // 論理名: 重要度
     stereotype: "enumeration",
     attributes: ["Info", "Warning", "Error", "Suggestion", "Unknown"],
     position: { x: 1060, y: 900 },
   },
   {
-    name: { physical: "ApiErrorLine", logical: "APIエラー行", description: "" },
+    name: { physical: "ApiErrorLine", logical: "ApiErrorLine", description: "" }, // 論理名: APIエラー行
     attributes: [
       "+ error: ApiErrorDetail",
       "+ retry_in_ms: Option<u64>",
@@ -171,12 +171,12 @@ const CLASSES: ClassInput[] = [
     position: { x: 720, y: 960 },
   },
   {
-    name: { physical: "ApiErrorDetail", logical: "APIエラー詳細", description: "" },
+    name: { physical: "ApiErrorDetail", logical: "ApiErrorDetail", description: "" }, // 論理名: APIエラー詳細
     attributes: ["+ message: Option<String>", "+ formatted: Option<String>", "+ is_network_down: Option<bool>"],
     position: { x: 1060, y: 1240 },
   },
   {
-    name: { physical: "CompactBoundaryLine", logical: "履歴圧縮境界", description: "parentUuid=null起点" },
+    name: { physical: "CompactBoundaryLine", logical: "CompactBoundaryLine", description: "parentUuid=null起点" }, // 論理名: 履歴圧縮境界
     attributes: [
       "+ logical_parent_uuid: Option<String>",
       "+ content: Option<String>",
@@ -186,54 +186,54 @@ const CLASSES: ClassInput[] = [
     position: { x: 720, y: 1220 },
   },
   {
-    name: { physical: "CompactMetadata", logical: "圧縮メタ", description: "" },
+    name: { physical: "CompactMetadata", logical: "CompactMetadata", description: "" }, // 論理名: 圧縮メタ
     attributes: ["+ trigger: Option<String>", "+ pre_tokens: Option<u64>", "+ post_tokens: Option<u64>"],
     position: { x: 1060, y: 1400 },
   },
   {
-    name: { physical: "InformationalLine", logical: "情報通知行", description: "" },
+    name: { physical: "InformationalLine", logical: "InformationalLine", description: "" }, // 論理名: 情報通知行
     attributes: ["+ content: Option<String>", "+ is_meta: Option<bool>"],
     position: { x: 720, y: 1460 },
   },
   // ============ 内部イベント: attachment ============
   {
-    name: { physical: "AttachmentLine", logical: "付帯情報行", description: "attachment.typeで23種(未使用のためValueのまま)" },
+    name: { physical: "AttachmentLine", logical: "AttachmentLine", description: "attachment.typeで23種(未使用のためValueのまま)" }, // 論理名: 付帯情報行
     attributes: ["+ attachment: Value"],
     position: { x: 1060, y: 300 },
   },
   // ============ セッションメタ ============
   {
-    name: { physical: "QueueOperationLine", logical: "入力キュー投入", description: "" },
+    name: { physical: "QueueOperationLine", logical: "QueueOperationLine", description: "" }, // 論理名: 入力キュー投入
     attributes: ["+ operation: Option<String>", "+ content: Option<String>", "+ session_id: Option<String>"],
     position: { x: 1400, y: 40 },
   },
   {
-    name: { physical: "LastPromptLine", logical: "直近プロンプト", description: "" },
+    name: { physical: "LastPromptLine", logical: "LastPromptLine", description: "" }, // 論理名: 直近プロンプト
     attributes: ["+ last_prompt: Option<String>", "+ leaf_uuid: Option<String>", "+ session_id: Option<String>"],
     position: { x: 1400, y: 210 },
   },
   {
-    name: { physical: "CustomTitleLine", logical: "会話タイトル", description: "最後の行が有効" },
+    name: { physical: "CustomTitleLine", logical: "CustomTitleLine", description: "最後の行が有効" }, // 論理名: 会話タイトル
     attributes: ["+ custom_title: Option<String>", "+ session_id: Option<String>"],
     position: { x: 1400, y: 380 },
   },
   {
-    name: { physical: "AiTitleLine", logical: "AI生成タイトル", description: "" },
+    name: { physical: "AiTitleLine", logical: "AiTitleLine", description: "" }, // 論理名: AI生成タイトル
     attributes: ["+ ai_title: Option<String>", "+ session_id: Option<String>"],
     position: { x: 1400, y: 530 },
   },
   {
-    name: { physical: "ModeLine", logical: "モード", description: "実測はnormalのみ" },
+    name: { physical: "ModeLine", logical: "ModeLine", description: "実測はnormalのみ" }, // 論理名: モード
     attributes: ["+ mode: Option<String>", "+ session_id: Option<String>"],
     position: { x: 1400, y: 680 },
   },
   {
-    name: { physical: "PrLinkLine", logical: "GitHub PRリンク", description: "" },
+    name: { physical: "PrLinkLine", logical: "PrLinkLine", description: "" }, // 論理名: GitHub PRリンク
     attributes: ["+ pr_number: Option<u64>", "+ pr_url: Option<String>", "+ pr_repository: Option<String>"],
     position: { x: 1400, y: 830 },
   },
   {
-    name: { physical: "AtisLatchLine", logical: "用途不明", description: "atisは全件空文字列" },
+    name: { physical: "AtisLatchLine", logical: "AtisLatchLine", description: "atisは全件空文字列" }, // 論理名: 用途不明
     attributes: ["+ atis: Option<String>", "+ session_id: Option<String>"],
     position: { x: 1400, y: 1000 },
   },
