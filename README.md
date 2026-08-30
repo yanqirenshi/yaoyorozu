@@ -5,7 +5,7 @@ npm workspaces によるモノレポ構成です。
 ## 構成
 
 - [apps/web](apps/web) — Next.js製のWebアプリ(WBS/構成図/UIデザイン/サイトマップ/Classes/TM)
-- [apps/native](apps/native) — Tauri製のネイティブアプリ(現状は空のスキャフォールドのみ)
+- [apps/native](apps/native) — Tauri製のネイティブアプリ。デスクトップアプリ(YAOYOROZU)として winget での配布を予定している。リリース手順は別途ドキュメント化する
 
 ## セットアップ
 
@@ -31,3 +31,14 @@ npm run native:dev
 npm run web:build
 npm run native:build
 ```
+
+## バージョン管理(apps/native)
+
+`apps/native` のバージョンのソースオブトゥルースは
+[`apps/native/tauri/tauri.conf.json`](apps/native/tauri/tauri.conf.json) の
+`version` とする。リリースはこの値と一致する `vX.Y.Z` 形式の git タグを
+打つ運用とする(タグとの一致チェックの自動化は別途対応)。
+
+## ライセンス
+
+[LICENSE](LICENSE) を参照。
