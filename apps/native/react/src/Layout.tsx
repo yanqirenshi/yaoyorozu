@@ -9,11 +9,11 @@ import { SETTINGS_ICON, VIEWER_ICON } from "./icons";
 import "./App.css";
 
 // OSウィンドウのタイトルバーに画面名を出す(ページ内の見出しは重複するため
-// 置かない)。tauri.conf.json の既定値("native")へは設定画面以外で戻す。
+// 置かない)。tauri.conf.json の既定値("YAOYOROZU")へは設定画面以外で戻す。
 const WINDOW_TITLE_BY_PATH: Record<string, string> = {
   "/settings": "設定",
 };
-const DEFAULT_WINDOW_TITLE = "native";
+const DEFAULT_WINDOW_TITLE = "YAOYOROZU";
 
 // AppDock(グローバルメニュー)は全画面共通のためレイアウト側に置く
 // (native.md §6)。画面遷移用の項目は常設、ページ固有の項目(再読み込み等)は
