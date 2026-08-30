@@ -220,24 +220,41 @@ pub enum ProjectItemKind {
 /// 存在しないため `None` になる。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectItem {
+    /// `ProjectV2Item` のノードID。Status変更mutationの `itemId` に使う
+    /// (issue #50)。
+    pub id: String,
     pub title: String,
     pub kind: ProjectItemKind,
     pub repository: Option<String>,
     pub number: Option<u32>,
     pub assignees: Vec<String>,
-    /// Status フィールドの値。未設定のアイテムは `None`。
+    /// Status フィールドの値(表示名)。未設定のアイテムは `None`。
     pub status: Option<String>,
     /// ブラウザで開くURL(`DraftIssue` には無い)。
     pub url: Option<String>,
 }
 
+/// GitHub Projects(v2)のStatusフィールドの選択肢。かんばんのカラム定義に
+/// 使うほか、`id` はStatus変更mutationの `optionId` に使う(issue #50)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectStatusOption {
+    pub id: String,
+    pub name: String,
+}
+
 /// `list_project_items` の1ページ分。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectItemsPage {
+    /// `ProjectV2` のノードID。Status変更mutationの `projectId` に使う。
+    pub project_id: String,
+    /// Statusフィールドのノード ID。Status変更mutationの `fieldId` に使う。
+    /// プロジェクトにStatusフィールドが無い場合は `None`(かんばんの
+    /// カラム操作はできない)。
+    pub status_field_id: Option<String>,
     pub items: Vec<ProjectItem>,
     pub next_cursor: Option<String>,
-    /// Status フィールドの選択肢順(グループ表示の並び順に使う)。
-    pub status_order: Vec<String>,
+    /// Status フィールドの選択肢(id + 表示名)。かんばんのカラム順に使う。
+    pub status_options: Vec<ProjectStatusOption>,
 }
 
 #[cfg(test)]

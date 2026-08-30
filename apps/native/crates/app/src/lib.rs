@@ -40,6 +40,12 @@ pub enum AppError {
     /// 状態と一致しなかった(アプリ外での変更と競合)。
     #[error("{0}")]
     ClaudeMdConflict(String),
+    /// GitHubの認証スコープが不足しており、書き込み操作(Status変更等)が
+    /// 拒否された。`read:project`(読み取りのみ)スコープの古いトークンで
+    /// 書き込みmutationを呼んだ場合に発生する。再ログインでスコープを
+    /// 拡張する必要がある(issue #50)。
+    #[error("{0}")]
+    GithubScopeInsufficient(String),
 }
 
 /// プロジェクト・セッションの読み取り(ports)。Claude Code のログ形式
@@ -112,6 +118,20 @@ pub trait GithubGateway {
         number: u32,
         cursor: Option<&str>,
     ) -> Result<domain::ProjectItemsPage, AppError>;
+
+    /// Projects(v2)アイテムのStatusフィールド値を更新する(かんばんの
+    /// ドラッグ&ドロップ用。issue #50)。`option_id` が `None` の場合は
+    /// Status を未設定に戻す(`clearProjectV2ItemFieldValue`)。
+    /// `project` スコープ(書き込み)が必要で、旧 `read:project` スコープの
+    /// トークンでは `AppError::GithubScopeInsufficient` を返す。
+    fn update_item_status(
+        &self,
+        token: &str,
+        project_id: &str,
+        item_id: &str,
+        field_id: &str,
+        option_id: Option<&str>,
+    ) -> Result<(), AppError>;
 }
 
 /// GitHubのアクセストークンの保管(port)。実体(OSキーチェーン)は infra に
@@ -368,6 +388,18 @@ pub fn list_github_project_items(
     cursor: Option<&str>,
 ) -> Result<domain::ProjectItemsPage, AppError> {
     gateway.list_project_items(token, owner, number, cursor)
+}
+
+/// かんばんのドラッグ&ドロップでアイテムのStatusを変更する(issue #50)。
+pub fn update_github_project_item_status(
+    gateway: &dyn GithubGateway,
+    token: &str,
+    project_id: &str,
+    item_id: &str,
+    field_id: &str,
+    option_id: Option<&str>,
+) -> Result<(), AppError> {
+    gateway.update_item_status(token, project_id, item_id, field_id, option_id)
 }
 
 /// デバイスフローのトークンをポーリングで取得し、`TokenStore` へ保存する。
@@ -908,6 +940,8 @@ mod tests {
         viewer: GithubViewer,
         projects: Vec<domain::GithubProjectSummary>,
         project_items: domain::ProjectItemsPage,
+        fail_update_item_status_with_scope_insufficient: bool,
+        update_item_status_calls: std::cell::RefCell<Vec<(String, String, String, Option<String>)>>,
     }
 
     impl FakeGithubGateway {
@@ -920,10 +954,14 @@ mod tests {
                 },
                 projects: Vec::new(),
                 project_items: domain::ProjectItemsPage {
+                    project_id: "PVT_1".to_string(),
+                    status_field_id: Some("PVTSSF_1".to_string()),
                     items: Vec::new(),
                     next_cursor: None,
-                    status_order: Vec::new(),
+                    status_options: Vec::new(),
                 },
+                fail_update_item_status_with_scope_insufficient: false,
+                update_item_status_calls: std::cell::RefCell::new(Vec::new()),
             }
         }
     }
@@ -959,6 +997,28 @@ mod tests {
             _cursor: Option<&str>,
         ) -> Result<domain::ProjectItemsPage, AppError> {
             Ok(self.project_items.clone())
+        }
+
+        fn update_item_status(
+            &self,
+            _token: &str,
+            project_id: &str,
+            item_id: &str,
+            field_id: &str,
+            option_id: Option<&str>,
+        ) -> Result<(), AppError> {
+            self.update_item_status_calls.borrow_mut().push((
+                project_id.to_string(),
+                item_id.to_string(),
+                field_id.to_string(),
+                option_id.map(String::from),
+            ));
+            if self.fail_update_item_status_with_scope_insufficient {
+                return Err(AppError::GithubScopeInsufficient(
+                    "権限が不足しています".to_string(),
+                ));
+            }
+            Ok(())
         }
     }
 
@@ -1100,7 +1160,10 @@ mod tests {
     fn list_github_project_items_delegates_to_gateway() {
         let mut gateway = FakeGithubGateway::new(test_authorization(5, 900));
         gateway.project_items = domain::ProjectItemsPage {
+            project_id: "PVT_1".to_string(),
+            status_field_id: Some("PVTSSF_1".to_string()),
             items: vec![domain::ProjectItem {
+                id: "PVTI_1".to_string(),
                 title: "テスト課題".to_string(),
                 kind: domain::ProjectItemKind::Issue,
                 repository: Some("yaoyorozu".to_string()),
@@ -1110,14 +1173,88 @@ mod tests {
                 url: Some("https://github.com/yanqirenshi/yaoyorozu/issues/33".to_string()),
             }],
             next_cursor: Some("cursor-1".to_string()),
-            status_order: vec!["Backlog".to_string(), "In progress".to_string()],
+            status_options: vec![
+                domain::ProjectStatusOption {
+                    id: "opt-backlog".to_string(),
+                    name: "Backlog".to_string(),
+                },
+                domain::ProjectStatusOption {
+                    id: "opt-in-progress".to_string(),
+                    name: "In progress".to_string(),
+                },
+            ],
         };
 
         let page = list_github_project_items(&gateway, "token", "yanqirenshi", 51, None)
             .expect("should list project items");
+        assert_eq!(page.project_id, "PVT_1");
+        assert_eq!(page.status_field_id.as_deref(), Some("PVTSSF_1"));
         assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].id, "PVTI_1");
         assert_eq!(page.items[0].number, Some(33));
         assert_eq!(page.next_cursor.as_deref(), Some("cursor-1"));
-        assert_eq!(page.status_order, vec!["Backlog", "In progress"]);
+        assert_eq!(
+            page.status_options
+                .iter()
+                .map(|o| o.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Backlog", "In progress"]
+        );
+    }
+
+    #[test]
+    fn update_github_project_item_status_delegates_to_gateway() {
+        let gateway = FakeGithubGateway::new(test_authorization(5, 900));
+
+        update_github_project_item_status(
+            &gateway,
+            "token",
+            "PVT_1",
+            "PVTI_1",
+            "PVTSSF_1",
+            Some("opt-in-progress"),
+        )
+        .expect("should update item status");
+
+        let calls = gateway.update_item_status_calls.borrow();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0],
+            (
+                "PVT_1".to_string(),
+                "PVTI_1".to_string(),
+                "PVTSSF_1".to_string(),
+                Some("opt-in-progress".to_string()),
+            )
+        );
+    }
+
+    #[test]
+    fn update_github_project_item_status_passes_none_option_id_to_clear_status() {
+        let gateway = FakeGithubGateway::new(test_authorization(5, 900));
+
+        update_github_project_item_status(&gateway, "token", "PVT_1", "PVTI_1", "PVTSSF_1", None)
+            .expect("should update item status");
+
+        let calls = gateway.update_item_status_calls.borrow();
+        assert_eq!(calls[0].3, None);
+    }
+
+    #[test]
+    fn update_github_project_item_status_propagates_scope_insufficient_error() {
+        let mut gateway = FakeGithubGateway::new(test_authorization(5, 900));
+        gateway.fail_update_item_status_with_scope_insufficient = true;
+
+        let error = update_github_project_item_status(
+            &gateway,
+            "token",
+            "PVT_1",
+            "PVTI_1",
+            "PVTSSF_1",
+            Some("opt-in-progress"),
+        )
+        .expect_err("should propagate scope insufficient error");
+
+        assert!(matches!(error, AppError::GithubScopeInsufficient(_)));
     }
 }

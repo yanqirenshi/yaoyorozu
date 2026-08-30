@@ -188,24 +188,68 @@ body,
 .github-project-pane {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
   padding: 16px 24px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 12px;
 }
 
-.project-item-group {
+/* かんばんの列を横並びにし、この行だけを横スクロールさせる
+   (ページ全体は横スクロールさせない。issue #50)。 */
+.kanban-board {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 16px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 8px;
+}
+
+.kanban-column {
+  flex: 0 0 260px;
+  width: 260px;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-height: 0;
+  border: 1px solid #d4d4d4;
+  border-radius: 6px;
+  background: #efefe9;
+  padding: 10px;
 }
 
-.project-item-group-heading {
+.kanban-column.is-drop-target {
+  border-color: #9d5b8b;
+  background: rgba(157, 91, 139, 0.1);
+}
+
+.kanban-column-heading {
   font-size: 0.9rem;
   font-weight: 600;
   margin: 0;
   color: #373737;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.kanban-column-count {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: #737373;
+}
+
+.kanban-column-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .project-item-card {
@@ -222,16 +266,17 @@ body,
   padding: 10px 14px;
   font-size: 0.95rem;
   font-family: inherit;
-  cursor: pointer;
+  cursor: grab;
 }
 
 .project-item-card:hover {
   background-color: rgba(157, 91, 139, 0.08);
 }
 
-.project-item-card:disabled {
+.project-item-card.is-busy {
   cursor: default;
-  opacity: 0.7;
+  opacity: 0.6;
+  pointer-events: none;
 }
 
 .project-item-title {
