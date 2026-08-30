@@ -1,19 +1,22 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { useSearchParams } from "react-router";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import type { DockItem } from "command-dock";
 import {
+  getGithubAuthStatus,
   getProjectClaudeMd,
   getSession,
   getSettings,
   isAppError,
+  listGithubProjectItems,
   listSessions,
   onAppWarning,
   onSessionChanged,
   saveProjectClaudeMd,
   sendMessage,
 } from "../api";
-import type { AgentModeDto, MessageDto, SessionSummaryDto } from "../api";
+import type { AgentModeDto, MessageDto, ProjectItemDto, SessionSummaryDto } from "../api";
 import ClaudeMdEditor from "../ClaudeMdEditor";
 import { usePageDockItems } from "../DockItemsContext";
 import { MODE_ICON, RELOAD_ICON } from "../icons";
@@ -22,12 +25,25 @@ import PaneTabs from "../PaneTabs";
 
 const PAGE_SIZE = 50;
 
-type PaneView = "chat" | "claude-md";
+type PaneView = "chat" | "claude-md" | "github-project";
 
 type SessionGroup = {
   folder: string;
   sessions: SessionSummaryDto[];
 };
+
+type ProjectItemGroup = {
+  status: string;
+  items: ProjectItemDto[];
+};
+
+const PROJECT_ITEM_KIND_LABEL: Record<ProjectItemDto["kind"], string> = {
+  issue: "Issue",
+  "pull-request": "PR",
+  "draft-issue": "Draft",
+};
+
+const UNSET_STATUS_LABEL = "(未設定)";
 
 const DISCARD_CONFIRM_MESSAGE =
   "CLAUDE.mdの編集内容を破棄しますか?保存していない変更は失われます。";
@@ -51,10 +67,22 @@ function SessionsPage() {
   const [sending, setSending] = useState(false);
   const [mode, setMode] = useState<AgentModeDto>("chat");
   const [searchParams, setSearchParams] = useSearchParams();
-  const view: PaneView = searchParams.get("view") === "claude-md" ? "claude-md" : "chat";
+  const viewParam = searchParams.get("view");
+  const view: PaneView =
+    viewParam === "claude-md" || viewParam === "github-project" ? viewParam : "chat";
   const projectParam = searchParams.get("project");
   const sessionParam = searchParams.get("session");
   const [claudeMdDirty, setClaudeMdDirty] = useState(false);
+  const [githubAuthenticated, setGithubAuthenticated] = useState(false);
+  const [githubProject, setGithubProject] = useState<{ owner: string; number: number } | null>(
+    null,
+  );
+  const [projectItems, setProjectItems] = useState<ProjectItemDto[]>([]);
+  const [projectItemsNextCursor, setProjectItemsNextCursor] = useState<string | null>(null);
+  const [projectStatusOrder, setProjectStatusOrder] = useState<string[]>([]);
+  const [projectItemsLoaded, setProjectItemsLoaded] = useState(false);
+  const [projectItemsLoadingMore, setProjectItemsLoadingMore] = useState(false);
+  const [projectItemsError, setProjectItemsError] = useState<string | null>(null);
 
   const loadSessionGroups = useCallback((folders: string[]): Promise<void> => {
     return Promise.all(
@@ -73,10 +101,29 @@ function SessionsPage() {
     return getSettings()
       .then((settings) => {
         setTargetFolders(settings.selected_project_folders);
+        setGithubProject(settings.github_project);
         return loadSessionGroups(settings.selected_project_folders);
       })
       .catch((e) => setError(isAppError(e) ? e.message : String(e)));
   }, [loadSessionGroups]);
+
+  const loadGithubAuthStatus = useCallback((): Promise<void> => {
+    return getGithubAuthStatus()
+      .then((status) => setGithubAuthenticated(status.authenticated))
+      .catch((e) => setError(isAppError(e) ? e.message : String(e)));
+  }, []);
+
+  const loadProjectItems = useCallback((cursor: string | null): Promise<void> => {
+    setProjectItemsError(null);
+    return listGithubProjectItems(cursor)
+      .then((page) => {
+        setProjectItems((prev) => (cursor ? [...prev, ...page.items] : page.items));
+        setProjectItemsNextCursor(page.next_cursor);
+        setProjectStatusOrder(page.status_order);
+        setProjectItemsLoaded(true);
+      })
+      .catch((e) => setProjectItemsError(isAppError(e) ? e.message : String(e)));
+  }, []);
 
   const loadSession = useCallback((project: string, id: string): Promise<void> => {
     setMessages([]);
@@ -102,16 +149,36 @@ function SessionsPage() {
   }, [projectParam, sessionParam, loadingMore, messages.length]);
 
   const reload = useCallback((): Promise<void> => {
-    const tasks = [loadTargetFoldersAndSessions()];
+    const tasks = [loadTargetFoldersAndSessions(), loadGithubAuthStatus()];
     if (projectParam && sessionParam) {
       tasks.push(loadSession(projectParam, sessionParam));
     }
+    if (view === "github-project" && githubAuthenticated && githubProject) {
+      tasks.push(loadProjectItems(null));
+    }
     return Promise.all(tasks).then(() => undefined);
-  }, [projectParam, sessionParam, loadTargetFoldersAndSessions, loadSession]);
+  }, [
+    projectParam,
+    sessionParam,
+    view,
+    githubAuthenticated,
+    githubProject,
+    loadTargetFoldersAndSessions,
+    loadGithubAuthStatus,
+    loadSession,
+    loadProjectItems,
+  ]);
 
   useEffect(() => {
     loadTargetFoldersAndSessions();
-  }, [loadTargetFoldersAndSessions]);
+    loadGithubAuthStatus();
+  }, [loadTargetFoldersAndSessions, loadGithubAuthStatus]);
+
+  useEffect(() => {
+    if (view !== "github-project" || projectItemsLoaded) return;
+    if (!githubAuthenticated || !githubProject) return;
+    loadProjectItems(null);
+  }, [view, githubAuthenticated, githubProject, projectItemsLoaded, loadProjectItems]);
 
   useEffect(() => {
     if (!projectParam || !sessionParam) {
@@ -148,6 +215,29 @@ function SessionsPage() {
       unlistenPromise.then((unlisten) => unlisten());
     };
   }, [projectParam, sessionParam, loadSession]);
+
+  const handleLoadMoreProjectItems = () => {
+    if (!projectItemsNextCursor || projectItemsLoadingMore) return;
+    setProjectItemsLoadingMore(true);
+    loadProjectItems(projectItemsNextCursor).finally(() => setProjectItemsLoadingMore(false));
+  };
+
+  const groupedProjectItems: ProjectItemGroup[] = useMemo(() => {
+    const byStatus = new Map<string, ProjectItemDto[]>();
+    for (const item of projectItems) {
+      const key = item.status ?? "";
+      const group = byStatus.get(key);
+      if (group) {
+        group.push(item);
+      } else {
+        byStatus.set(key, [item]);
+      }
+    }
+    const orderedKeys = [...projectStatusOrder, ""];
+    return orderedKeys
+      .filter((key) => byStatus.has(key))
+      .map((key) => ({ status: key || UNSET_STATUS_LABEL, items: byStatus.get(key) ?? [] }));
+  }, [projectItems, projectStatusOrder]);
 
   const selectedSummary = sessionGroups
     .find((g) => g.folder === projectParam)
@@ -280,6 +370,7 @@ function SessionsPage() {
           tabs={[
             { id: "chat", label: "会話" },
             { id: "claude-md", label: "CLAUDE.md" },
+            { id: "github-project", label: "GitHub Project" },
           ]}
           active={view}
           onChange={(id) => handleSwitchView(id as PaneView)}
@@ -337,19 +428,66 @@ function SessionsPage() {
               )}
             </div>
           </>
-        ) : projectParam ? (
-          <div className="claude-md-pane">
-            <ClaudeMdEditor
-              load={() => getProjectClaudeMd(projectParam)}
-              save={(content, expectedModifiedAtMs) =>
-                saveProjectClaudeMd(projectParam, content, expectedModifiedAtMs)
-              }
-              reloadKey={projectParam}
-              onDirtyChange={setClaudeMdDirty}
-            />
-          </div>
+        ) : view === "claude-md" ? (
+          projectParam ? (
+            <div className="claude-md-pane">
+              <ClaudeMdEditor
+                load={() => getProjectClaudeMd(projectParam)}
+                save={(content, expectedModifiedAtMs) =>
+                  saveProjectClaudeMd(projectParam, content, expectedModifiedAtMs)
+                }
+                reloadKey={projectParam}
+                onDirtyChange={setClaudeMdDirty}
+              />
+            </div>
+          ) : (
+            <p>先にセッションを選択してください。</p>
+          )
         ) : (
-          <p>先にセッションを選択してください。</p>
+          <div className="github-project-pane">
+            {!githubAuthenticated ? (
+              <p>設定のGitHubタブでログインしてください。</p>
+            ) : !githubProject ? (
+              <p>設定のGitHubタブでプロジェクトを選択してください。</p>
+            ) : (
+              <>
+                {projectItemsError && <p className="error">{projectItemsError}</p>}
+                {groupedProjectItems.map((group) => (
+                  <div key={group.status} className="project-item-group">
+                    <h3 className="project-item-group-heading">{group.status}</h3>
+                    {group.items.map((item, i) => (
+                      <button
+                        key={`${item.kind}-${item.repository ?? ""}-${item.number ?? item.title}-${i}`}
+                        type="button"
+                        className="project-item-card"
+                        disabled={!item.url}
+                        onClick={() => item.url && openUrl(item.url)}
+                      >
+                        <span className="project-item-title">{item.title}</span>
+                        <span className="project-item-meta">
+                          {PROJECT_ITEM_KIND_LABEL[item.kind]}
+                          {item.repository && item.number
+                            ? ` ${item.repository}#${item.number}`
+                            : ""}
+                          {item.assignees.length > 0 ? ` · ${item.assignees.join(", ")}` : ""}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ))}
+                {projectItemsNextCursor && (
+                  <button
+                    type="button"
+                    className="load-more"
+                    disabled={projectItemsLoadingMore}
+                    onClick={handleLoadMoreProjectItems}
+                  >
+                    {projectItemsLoadingMore ? "読み込み中…" : "もっと読み込む"}
+                  </button>
+                )}
+              </>
+            )}
+          </div>
         )}
       </div>
     </>

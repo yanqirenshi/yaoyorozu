@@ -5,8 +5,8 @@ use app::{SessionSource, SettingsStore, TokenStore};
 use dto::{
     AgentKindDto, AgentModeDto, AppErrorDto, AppWarningDto, ClaudeMdDto, DeviceCodeDto,
     GithubAuthFailedEventDto, GithubAuthStatusDto, GithubAuthenticatedEventDto, GithubProjectDto,
-    GithubProjectSummaryDto, ProjectDto, SessionChangedEventDto, SessionDto, SessionSummaryDto,
-    SettingsCorruptedEventDto, SettingsDto, SettingsInputDto,
+    GithubProjectSummaryDto, ProjectDto, ProjectItemsPageDto, SessionChangedEventDto, SessionDto,
+    SessionSummaryDto, SettingsCorruptedEventDto, SettingsDto, SettingsInputDto,
 };
 use infra::{
     ClaudeCliAgent, FileClaudeMdStore, FileSettingsStore, FileSystemRepository, GithubApiClient,
@@ -469,6 +469,49 @@ async fn list_github_projects() -> Result<Vec<GithubProjectSummaryDto>, AppError
     .map_err(Into::into)
 }
 
+/// 設定済みのGitHubプロジェクトのアイテムを1ページ分取得する(ビューアの
+/// 「GitHub Project」タブ用。issue #34)。未認証・プロジェクト未設定時の
+/// 案内表示はフロント側で(既に持っている認証状態・設定値から)行うため、
+/// ここでは通常のエラーとして返すのみでよい。
+#[tauri::command]
+async fn list_github_project_items(
+    state: tauri::State<'_, Mutex<AppState>>,
+    cursor: Option<String>,
+) -> Result<ProjectItemsPageDto, AppErrorDto> {
+    let github_project = {
+        let guard = state.lock().await;
+        guard.settings.github_project.clone()
+    };
+    let project = github_project.ok_or_else(|| {
+        AppErrorDto::from(app::AppError::InvalidInput(
+            "GitHubプロジェクトが設定されていません".to_string(),
+        ))
+    })?;
+
+    tauri::async_runtime::spawn_blocking(move || -> Result<ProjectItemsPageDto, app::AppError> {
+        let store = KeyringTokenStore::new();
+        let token = store.load()?.ok_or_else(|| {
+            app::AppError::GithubUnauthenticated("GitHubにログインしてください".to_string())
+        })?;
+        let gateway = GithubApiClient::new(GITHUB_CLIENT_ID);
+        let page = app::list_github_project_items(
+            &gateway,
+            &token,
+            &project.owner,
+            project.number,
+            cursor.as_deref(),
+        )?;
+        Ok(page.into())
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
+}
+
 /// `root` の変更監視を(再)開始し、`session:changed` イベントとしてフロントへ
 /// 通知する。既存の監視があれば `WatcherSlot` の中身を新しいものに差し替える
 /// ことで自動的に停止する(`Debouncer` は drop されると監視を止める)。
@@ -573,6 +616,7 @@ pub fn run() {
             github_login_start,
             github_logout,
             list_github_projects,
+            list_github_project_items,
         ])
         .setup(|app| {
             let root = setup_app_state(app)?;

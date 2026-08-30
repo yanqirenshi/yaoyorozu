@@ -185,6 +185,66 @@ body,
   color: #373737;
 }
 
+.github-project-pane {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.project-item-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.project-item-group-heading {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin: 0;
+  color: #373737;
+}
+
+.project-item-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  border: 1px solid #a1a1aa;
+  border-radius: 4px;
+  background: #fbfbf8;
+  color: #373737;
+  padding: 10px 14px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.project-item-card:hover {
+  background-color: rgba(157, 91, 139, 0.08);
+}
+
+.project-item-card:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.project-item-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-item-meta {
+  font-size: 0.75rem;
+  color: #737373;
+}
+
 .settings-page {
   flex: 1;
   min-width: 0;

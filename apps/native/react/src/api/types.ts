@@ -98,3 +98,21 @@ export type GithubAuthenticatedEvent = {
 export type GithubAuthFailedEvent = {
   message: string;
 };
+
+export type ProjectItemKindDto = "issue" | "pull-request" | "draft-issue";
+
+export type ProjectItemDto = {
+  title: string;
+  kind: ProjectItemKindDto;
+  repository: string | null;
+  number: number | null;
+  assignees: string[];
+  status: string | null;
+  url: string | null;
+};
+
+export type ProjectItemsPageDto = {
+  items: ProjectItemDto[];
+  next_cursor: string | null;
+  status_order: string[];
+};

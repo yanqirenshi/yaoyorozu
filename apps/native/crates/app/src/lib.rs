@@ -101,6 +101,17 @@ pub trait GithubGateway {
     fn poll_for_token(&self, device_code: &str) -> Result<PollResult, AppError>;
     fn fetch_viewer(&self, token: &str) -> Result<GithubViewer, AppError>;
     fn list_projects(&self, token: &str) -> Result<Vec<domain::GithubProjectSummary>, AppError>;
+
+    /// 指定プロジェクトのアイテムを1ページ分取得する(ビューアの「GitHub
+    /// Project」タブ用。issue #34)。`cursor` は前ページの
+    /// `ProjectItemsPage::next_cursor`。`None` は先頭ページ。
+    fn list_project_items(
+        &self,
+        token: &str,
+        owner: &str,
+        number: u32,
+        cursor: Option<&str>,
+    ) -> Result<domain::ProjectItemsPage, AppError>;
 }
 
 /// GitHubのアクセストークンの保管(port)。実体(OSキーチェーン)は infra に
@@ -346,6 +357,17 @@ pub fn list_github_projects(
     token: &str,
 ) -> Result<Vec<domain::GithubProjectSummary>, AppError> {
     gateway.list_projects(token)
+}
+
+/// 設定済みプロジェクトのアイテムを1ページ分取得する(issue #34)。
+pub fn list_github_project_items(
+    gateway: &dyn GithubGateway,
+    token: &str,
+    owner: &str,
+    number: u32,
+    cursor: Option<&str>,
+) -> Result<domain::ProjectItemsPage, AppError> {
+    gateway.list_project_items(token, owner, number, cursor)
 }
 
 /// デバイスフローのトークンをポーリングで取得し、`TokenStore` へ保存する。
@@ -885,6 +907,7 @@ mod tests {
             std::cell::RefCell<std::collections::VecDeque<Result<PollResult, AppError>>>,
         viewer: GithubViewer,
         projects: Vec<domain::GithubProjectSummary>,
+        project_items: domain::ProjectItemsPage,
     }
 
     impl FakeGithubGateway {
@@ -896,6 +919,11 @@ mod tests {
                     login: "yanqirenshi".to_string(),
                 },
                 projects: Vec::new(),
+                project_items: domain::ProjectItemsPage {
+                    items: Vec::new(),
+                    next_cursor: None,
+                    status_order: Vec::new(),
+                },
             }
         }
     }
@@ -921,6 +949,16 @@ mod tests {
             _token: &str,
         ) -> Result<Vec<domain::GithubProjectSummary>, AppError> {
             Ok(self.projects.clone())
+        }
+
+        fn list_project_items(
+            &self,
+            _token: &str,
+            _owner: &str,
+            _number: u32,
+            _cursor: Option<&str>,
+        ) -> Result<domain::ProjectItemsPage, AppError> {
+            Ok(self.project_items.clone())
         }
     }
 
@@ -1056,5 +1094,30 @@ mod tests {
         let projects = list_github_projects(&gateway, "token").expect("should list projects");
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].number, 51);
+    }
+
+    #[test]
+    fn list_github_project_items_delegates_to_gateway() {
+        let mut gateway = FakeGithubGateway::new(test_authorization(5, 900));
+        gateway.project_items = domain::ProjectItemsPage {
+            items: vec![domain::ProjectItem {
+                title: "テスト課題".to_string(),
+                kind: domain::ProjectItemKind::Issue,
+                repository: Some("yaoyorozu".to_string()),
+                number: Some(33),
+                assignees: vec!["yanqirenshi".to_string()],
+                status: Some("In progress".to_string()),
+                url: Some("https://github.com/yanqirenshi/yaoyorozu/issues/33".to_string()),
+            }],
+            next_cursor: Some("cursor-1".to_string()),
+            status_order: vec!["Backlog".to_string(), "In progress".to_string()],
+        };
+
+        let page = list_github_project_items(&gateway, "token", "yanqirenshi", 51, None)
+            .expect("should list project items");
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].number, Some(33));
+        assert_eq!(page.next_cursor.as_deref(), Some("cursor-1"));
+        assert_eq!(page.status_order, vec!["Backlog", "In progress"]);
     }
 }

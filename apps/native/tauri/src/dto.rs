@@ -288,6 +288,70 @@ impl From<domain::GithubProjectSummary> for GithubProjectSummaryDto {
     }
 }
 
+/// GitHub Projects(v2) アイテムの種別(ビューアの「GitHub Project」タブ)。
+#[derive(Serialize, Clone, Copy)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProjectItemKindDto {
+    Issue,
+    PullRequest,
+    DraftIssue,
+}
+
+impl From<domain::ProjectItemKind> for ProjectItemKindDto {
+    fn from(kind: domain::ProjectItemKind) -> Self {
+        match kind {
+            domain::ProjectItemKind::Issue => ProjectItemKindDto::Issue,
+            domain::ProjectItemKind::PullRequest => ProjectItemKindDto::PullRequest,
+            domain::ProjectItemKind::DraftIssue => ProjectItemKindDto::DraftIssue,
+        }
+    }
+}
+
+/// GitHub Projects(v2)の1アイテム。`repository`/`number`/`url` は
+/// `DraftIssue` には無いため `null`(issue #34)。
+#[derive(Serialize, Clone)]
+pub struct ProjectItemDto {
+    pub title: String,
+    pub kind: ProjectItemKindDto,
+    pub repository: Option<String>,
+    pub number: Option<u32>,
+    pub assignees: Vec<String>,
+    pub status: Option<String>,
+    pub url: Option<String>,
+}
+
+impl From<domain::ProjectItem> for ProjectItemDto {
+    fn from(item: domain::ProjectItem) -> Self {
+        Self {
+            title: item.title,
+            kind: item.kind.into(),
+            repository: item.repository,
+            number: item.number,
+            assignees: item.assignees,
+            status: item.status,
+            url: item.url,
+        }
+    }
+}
+
+/// `list_github_project_items` の戻り値。
+#[derive(Serialize, Clone)]
+pub struct ProjectItemsPageDto {
+    pub items: Vec<ProjectItemDto>,
+    pub next_cursor: Option<String>,
+    pub status_order: Vec<String>,
+}
+
+impl From<domain::ProjectItemsPage> for ProjectItemsPageDto {
+    fn from(page: domain::ProjectItemsPage) -> Self {
+        Self {
+            items: page.items.into_iter().map(ProjectItemDto::from).collect(),
+            next_cursor: page.next_cursor,
+            status_order: page.status_order,
+        }
+    }
+}
+
 /// `github:authenticated` イベントのペイロード。ログイン名のみ(トークンは
 /// 含めない。native.md §4 NEVER)。
 #[derive(Serialize, Clone)]
