@@ -45,6 +45,7 @@ body,
 #root {
   height: 100%;
   margin: 0;
+  overflow-x: hidden;
 }
 
 .app-shell {
@@ -53,6 +54,7 @@ body,
   height: 100vh;
   border: 1px solid #a1a1aa;
   box-sizing: border-box;
+  overflow-x: hidden;
 }
 
 .project-list {
