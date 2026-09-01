@@ -30,11 +30,13 @@
   --md-code-bg: rgba(157, 91, 139, 0.08);
   --md-quote-bg: rgba(157, 91, 139, 0.06);
   --md-mono-font: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --md-padding: 0;
+  /* 下端はdock(画面下部に浮くフローティングツールバー)と重なるため、
+     余白を残す(issue #59)。 */
+  --md-padding: 0 0 222px 0;
   --md-max-width: none;
   --md-editor-bg: #fbfbf8;
   --md-editor-fg: #373737;
-  --md-editor-padding: 0;
+  --md-editor-padding: 0 0 222px 0;
   --md-editor-font-size: 0.9rem;
   --md-resizer-bg: #a1a1aa;
   --md-resizer-active-bg: #9d5b8b;
