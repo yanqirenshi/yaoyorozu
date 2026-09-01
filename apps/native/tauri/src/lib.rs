@@ -361,14 +361,50 @@ async fn save_claude_settings_file(
     .map_err(Into::into)
 }
 
+/// 認証状態は「キーチェーンにトークンがあるか」を基準にする(issue #54)。
+/// ログイン名(`AppState.github_login`)が未確定でもトークンさえあれば
+/// `authenticated: true` とし(`login` は `null`)、オフライン起動時などに
+/// 誤って「ログインしてください」と表示しないようにする。トークンの
+/// 有効性はAPIを実際に呼んだとき(401)に初めて判定する。
 #[tauri::command]
 async fn get_github_auth_status(
+    app: tauri::AppHandle,
     state: tauri::State<'_, Mutex<AppState>>,
 ) -> Result<GithubAuthStatusDto, AppErrorDto> {
-    let guard = state.lock().await;
+    let login = {
+        let guard = state.lock().await;
+        guard.github_login.clone()
+    };
+
+    let token =
+        tauri::async_runtime::spawn_blocking(|| -> Result<Option<String>, app::AppError> {
+            let store = KeyringTokenStore::new();
+            store.load()
+        })
+        .await
+        .unwrap_or_else(|_| {
+            Err(app::AppError::Io(
+                "バックグラウンド処理に失敗しました".to_string(),
+            ))
+        })
+        .map_err(AppErrorDto::from)?;
+
+    let authenticated = token.is_some();
+
+    // トークンはあるがログイン名が未確定なら、この画面を開いたタイミングで
+    // 1回だけ受動的に再取得を試みる(issue #54: タブ表示時の自己回復)。
+    // 結果は `github:authenticated`/`github:logged_out` イベント経由で
+    // 反映するため、このコマンド自体はブロックしない。
+    if let (Some(token), None) = (token, &login) {
+        let app_for_retry = app.clone();
+        tauri::async_runtime::spawn(async move {
+            resolve_and_apply_github_login(&app_for_retry, token, &[]).await;
+        });
+    }
+
     Ok(GithubAuthStatusDto {
-        authenticated: guard.github_login.is_some(),
-        login: guard.github_login.clone(),
+        authenticated,
+        login,
     })
 }
 
@@ -484,8 +520,10 @@ async fn github_logout(
 }
 
 #[tauri::command]
-async fn list_github_projects() -> Result<Vec<GithubProjectSummaryDto>, AppErrorDto> {
-    tauri::async_runtime::spawn_blocking(
+async fn list_github_projects(
+    app: tauri::AppHandle,
+) -> Result<Vec<GithubProjectSummaryDto>, AppErrorDto> {
+    let result = tauri::async_runtime::spawn_blocking(
         || -> Result<Vec<GithubProjectSummaryDto>, app::AppError> {
             let store = KeyringTokenStore::new();
             let token = store.load()?.ok_or_else(|| {
@@ -504,8 +542,8 @@ async fn list_github_projects() -> Result<Vec<GithubProjectSummaryDto>, AppError
         Err(app::AppError::Io(
             "バックグラウンド処理に失敗しました".to_string(),
         ))
-    })
-    .map_err(Into::into)
+    });
+    finish_github_command(&app, result).await
 }
 
 /// 設定済みのGitHubプロジェクトのアイテムを1ページ分取得する(ビューアの
@@ -514,6 +552,7 @@ async fn list_github_projects() -> Result<Vec<GithubProjectSummaryDto>, AppError
 /// ここでは通常のエラーとして返すのみでよい。
 #[tauri::command]
 async fn list_github_project_items(
+    app: tauri::AppHandle,
     state: tauri::State<'_, Mutex<AppState>>,
     cursor: Option<String>,
 ) -> Result<ProjectItemsPageDto, AppErrorDto> {
@@ -527,28 +566,30 @@ async fn list_github_project_items(
         ))
     })?;
 
-    tauri::async_runtime::spawn_blocking(move || -> Result<ProjectItemsPageDto, app::AppError> {
-        let store = KeyringTokenStore::new();
-        let token = store.load()?.ok_or_else(|| {
-            app::AppError::GithubUnauthenticated("GitHubにログインしてください".to_string())
-        })?;
-        let gateway = GithubApiClient::new(GITHUB_CLIENT_ID);
-        let page = app::list_github_project_items(
-            &gateway,
-            &token,
-            &project.owner,
-            project.number,
-            cursor.as_deref(),
-        )?;
-        Ok(page.into())
-    })
+    let result = tauri::async_runtime::spawn_blocking(
+        move || -> Result<ProjectItemsPageDto, app::AppError> {
+            let store = KeyringTokenStore::new();
+            let token = store.load()?.ok_or_else(|| {
+                app::AppError::GithubUnauthenticated("GitHubにログインしてください".to_string())
+            })?;
+            let gateway = GithubApiClient::new(GITHUB_CLIENT_ID);
+            let page = app::list_github_project_items(
+                &gateway,
+                &token,
+                &project.owner,
+                project.number,
+                cursor.as_deref(),
+            )?;
+            Ok(page.into())
+        },
+    )
     .await
     .unwrap_or_else(|_| {
         Err(app::AppError::Io(
             "バックグラウンド処理に失敗しました".to_string(),
         ))
-    })
-    .map_err(Into::into)
+    });
+    finish_github_command(&app, result).await
 }
 
 /// GitHub Projectアイテムのステータス(かんばんのカラム)を変更する
@@ -559,12 +600,13 @@ async fn list_github_project_items(
 /// `list_github_project_items` を呼び直して一覧を更新する。
 #[tauri::command]
 async fn update_github_project_item_status(
+    app: tauri::AppHandle,
     project_id: String,
     item_id: String,
     field_id: String,
     option_id: Option<String>,
 ) -> Result<(), AppErrorDto> {
-    tauri::async_runtime::spawn_blocking(move || -> Result<(), app::AppError> {
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<(), app::AppError> {
         let store = KeyringTokenStore::new();
         let token = store.load()?.ok_or_else(|| {
             app::AppError::GithubUnauthenticated("GitHubにログインしてください".to_string())
@@ -584,8 +626,8 @@ async fn update_github_project_item_status(
         Err(app::AppError::Io(
             "バックグラウンド処理に失敗しました".to_string(),
         ))
-    })
-    .map_err(Into::into)
+    });
+    finish_github_command(&app, result).await
 }
 
 /// `root` の変更監視を(再)開始し、`session:changed` イベントとしてフロントへ
@@ -639,24 +681,55 @@ fn setup_app_state(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Erro
     Ok(root)
 }
 
+/// 起動時のログイン名解決の再試行間隔(秒)。一時的な通信失敗(ネットワーク
+/// 不通・タイムアウト・5xx)の場合だけこの間隔で再試行し、以後は打ち切る
+/// (issue #54)。確定的な失効(401)は即座に打ち切り再試行しない。
+const STARTUP_VIEWER_RETRY_BACKOFF_SECS: [u64; 3] = [10, 60, 300];
+
 /// 起動時、既にGitHubトークンがキーチェーンにあれば有効性を確認し、
 /// `AppState.github_login` を埋めて `github:authenticated` を通知する。
-/// ネットワークI/Oを伴うため `.setup()` 自体をブロックしないよう
-/// バックグラウンドタスクにする(起動を待たせない)。
+/// 一時的な失敗は `STARTUP_VIEWER_RETRY_BACKOFF_SECS` に沿って再試行する
+/// (issue #54)。ネットワークI/Oを伴うため `.setup()` 自体をブロックしない
+/// よう バックグラウンドタスクにする(起動を待たせない)。
 fn start_github_session_check(app: &tauri::App) {
     let app_handle = app.handle().clone();
     tauri::async_runtime::spawn(async move {
-        let viewer = tauri::async_runtime::spawn_blocking(|| -> Option<app::GithubViewer> {
+        let token = tauri::async_runtime::spawn_blocking(|| -> Option<String> {
             let store = KeyringTokenStore::new();
-            let token = store.load().ok().flatten()?;
-            let gateway = GithubApiClient::new(GITHUB_CLIENT_ID);
-            app::fetch_github_viewer(&gateway, &token).ok()
+            store.load().ok().flatten()
         })
         .await
         .ok()
         .flatten();
 
-        if let Some(viewer) = viewer {
+        if let Some(token) = token {
+            resolve_and_apply_github_login(&app_handle, token, &STARTUP_VIEWER_RETRY_BACKOFF_SECS)
+                .await;
+        }
+    });
+}
+
+/// トークンが存在する前提でログイン名解決(`fetch_viewer`)を試み、結果を
+/// `AppState`/イベントへ反映する(issue #54)。`backoff_secs` が空なら1回
+/// だけ試す(タブ表示時の受動的な再取得など、長時間ブロックしたくない
+/// 呼び出し用)。一時的な失敗が続き打ち切った場合は何もしない
+/// (ログイン名は未確定のまま。次の機会に再試行される)。
+async fn resolve_and_apply_github_login(
+    app_handle: &tauri::AppHandle,
+    token: String,
+    backoff_secs: &'static [u64],
+) {
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let gateway = GithubApiClient::new(GITHUB_CLIENT_ID);
+        app::resolve_github_login_with_retry(&gateway, &token, backoff_secs, |secs| {
+            std::thread::sleep(std::time::Duration::from_secs(secs));
+        })
+    })
+    .await
+    .unwrap_or(app::ViewerCheckOutcome::GaveUp);
+
+    match outcome {
+        app::ViewerCheckOutcome::Resolved(viewer) => {
             let state = app_handle.state::<Mutex<AppState>>();
             {
                 let mut guard = state.lock().await;
@@ -669,7 +742,43 @@ fn start_github_session_check(app: &tauri::App) {
                 },
             );
         }
-    });
+        app::ViewerCheckOutcome::TokenExpired => {
+            handle_confirmed_github_auth_expiry(app_handle).await;
+        }
+        app::ViewerCheckOutcome::GaveUp => {}
+    }
+}
+
+/// 確定的なGitHub認証失効(401)の後始末。キーチェーンのトークンを削除し
+/// (既に無ければ何もしない)、`AppState.github_login` をクリアして
+/// `github:logged_out` を通知する。一時的な通信失敗はこの経路に来ない
+/// (`AppError::GithubAuthExpired` は確定的な失効のみを表す。issue #54)。
+async fn handle_confirmed_github_auth_expiry(app_handle: &tauri::AppHandle) {
+    let _ = tauri::async_runtime::spawn_blocking(|| {
+        let store = KeyringTokenStore::new();
+        store.delete()
+    })
+    .await;
+
+    let state = app_handle.state::<Mutex<AppState>>();
+    {
+        let mut guard = state.lock().await;
+        guard.github_login = None;
+    }
+    let _ = app_handle.emit("github:logged_out", ());
+}
+
+/// GitHub API呼び出しを伴うコマンドの結果を仕上げる共通処理。確定的な失効
+/// (`AppError::GithubAuthExpired`)ならトークン削除+`github:logged_out`を
+/// 通知してから、通常どおりDTOへ変換する(issue #54)。
+async fn finish_github_command<T>(
+    app: &tauri::AppHandle,
+    result: Result<T, app::AppError>,
+) -> Result<T, AppErrorDto> {
+    if let Err(app::AppError::GithubAuthExpired(_)) = &result {
+        handle_confirmed_github_auth_expiry(app).await;
+    }
+    result.map_err(Into::into)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
