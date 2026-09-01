@@ -5,13 +5,14 @@ import type { DockItem } from "command-dock";
 import AppDock from "./AppDock";
 import { onSettingsCorrupted } from "./api";
 import { DockItemsProvider } from "./DockItemsContext";
-import { SETTINGS_ICON, VIEWER_ICON } from "./icons";
+import { CLAUDE_SETTINGS_ICON, SETTINGS_ICON, VIEWER_ICON } from "./icons";
 import "./App.css";
 
 // OSウィンドウのタイトルバーに画面名を出す(ページ内の見出しは重複するため
 // 置かない)。tauri.conf.json の既定値("YAOYOROZU")へは設定画面以外で戻す。
 const WINDOW_TITLE_BY_PATH: Record<string, string> = {
   "/settings": "設定",
+  "/claude": "Claude",
 };
 const DEFAULT_WINDOW_TITLE = "YAOYOROZU";
 
@@ -59,6 +60,14 @@ function Layout() {
         label: SETTINGS_ICON,
         title: "設定",
         onClick: () => navigate("/settings"),
+      });
+    }
+    if (location.pathname !== "/claude") {
+      items.push({
+        id: "nav-claude",
+        label: CLAUDE_SETTINGS_ICON,
+        title: "Claude",
+        onClick: () => navigate("/claude"),
       });
     }
     return items;

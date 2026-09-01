@@ -239,6 +239,31 @@ impl From<Option<domain::ClaudeMdFile>> for ClaudeMdDto {
     }
 }
 
+/// `get_claude_settings_file` の戻り値。両方 `null` はファイルが存在しない
+/// ことを意味する。`modified_at_ms` は保存時に `expected_modified_at_ms`
+/// として送り返し、アプリ外での変更との競合検出(楽観ロック)に使う
+/// (issue #53)。
+#[derive(Serialize, Clone)]
+pub struct ClaudeSettingsDto {
+    pub content: Option<String>,
+    pub modified_at_ms: Option<u64>,
+}
+
+impl From<Option<domain::ClaudeSettingsFile>> for ClaudeSettingsDto {
+    fn from(file: Option<domain::ClaudeSettingsFile>) -> Self {
+        match file {
+            Some(file) => Self {
+                content: Some(file.content),
+                modified_at_ms: Some(file.modified_at_ms),
+            },
+            None => Self {
+                content: None,
+                modified_at_ms: None,
+            },
+        }
+    }
+}
+
 /// `settings:corrupted` イベントのペイロード。起動時に設定ファイルの破損を
 /// 検知し、デフォルト値へフォールバックした場合に通知する(native.md §2)。
 #[derive(Serialize, Clone)]
@@ -421,6 +446,7 @@ impl From<app::AppError> for AppErrorDto {
                 ("github_scope_insufficient", message)
             }
             app::AppError::ClaudeMdConflict(message) => ("claude_md_conflict", message),
+            app::AppError::FileConflict(message) => ("file_conflict", message),
         };
         Self {
             code: code.to_string(),

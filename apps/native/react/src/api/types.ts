@@ -75,6 +75,11 @@ export type ClaudeMdDto = {
   modified_at_ms: number | null;
 };
 
+export type ClaudeSettingsDto = {
+  content: string | null;
+  modified_at_ms: number | null;
+};
+
 export type DeviceCodeDto = {
   user_code: string;
   verification_uri: string;

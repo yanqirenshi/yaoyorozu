@@ -1,15 +1,36 @@
 import { useEffect, useState } from "react";
 import { isAppError } from "./api";
-import type { ClaudeMdDto } from "./api";
+
+// CLAUDE.md(issue #27)・settings.json(issue #53)のどちらも
+// `{ content, modified_at_ms }` の同形DTOなので、この部品はRust側の
+// 個別DTO型に依存せず構造的な形だけを見る。
+type FileContentDto = {
+  content: string | null;
+  modified_at_ms: number | null;
+};
 
 type ClaudeMdEditorProps = {
-  load: () => Promise<ClaudeMdDto>;
+  load: () => Promise<FileContentDto>;
   save: (content: string, expectedModifiedAtMs: number | null) => Promise<void>;
   reloadKey: string;
   onDirtyChange?: (dirty: boolean) => void;
+  // ファイルが無いときの案内文と作成ボタンのラベル。既定はCLAUDE.md用。
+  emptyMessage?: string;
+  createLabel?: string;
+  // 「作成」を押した際の初期内容。既定は空文字列(CLAUDE.md用)。
+  // settings.jsonでは空オブジェクト `{}` から編集開始する(issue #53)。
+  initialContent?: string;
 };
 
-function ClaudeMdEditor({ load, save, reloadKey, onDirtyChange }: ClaudeMdEditorProps) {
+function ClaudeMdEditor({
+  load,
+  save,
+  reloadKey,
+  onDirtyChange,
+  emptyMessage = "CLAUDE.mdがありません。",
+  createLabel = "作成",
+  initialContent = "",
+}: ClaudeMdEditorProps) {
   const [loading, setLoading] = useState(true);
   const [hasFile, setHasFile] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -26,8 +47,8 @@ function ClaudeMdEditor({ load, save, reloadKey, onDirtyChange }: ClaudeMdEditor
     load()
       .then((dto) => {
         setHasFile(dto.content !== null);
-        setSavedContent(dto.content ?? "");
-        setContent(dto.content ?? "");
+        setSavedContent(dto.content ?? initialContent);
+        setContent(dto.content ?? initialContent);
         setModifiedAtMs(dto.modified_at_ms);
       })
       .catch((e) => setError(isAppError(e) ? e.message : String(e)))
@@ -58,9 +79,9 @@ function ClaudeMdEditor({ load, save, reloadKey, onDirtyChange }: ClaudeMdEditor
   if (!hasFile && !creating) {
     return (
       <div className="claude-md-editor">
-        <p>CLAUDE.mdがありません。</p>
+        <p>{emptyMessage}</p>
         <button type="button" onClick={() => setCreating(true)}>
-          作成
+          {createLabel}
         </button>
         {error && <p className="error">{error}</p>}
       </div>
