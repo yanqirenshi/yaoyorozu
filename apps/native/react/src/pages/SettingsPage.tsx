@@ -1,8 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { useSearchParams } from "react-router";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import type { DockItem } from "command-dock";
+import type { ViewMode } from "@yanqirenshi/markdown.sitter";
 import {
   getGithubAuthStatus,
   getRepositoryClaudeMd,
@@ -25,11 +27,17 @@ import type {
   ProjectDto,
 } from "../api";
 import ClaudeMdEditor from "../ClaudeMdEditor";
+import type { ClaudeMdEditorHandle } from "../ClaudeMdEditor";
+import { createClaudeMdDockItems } from "../claudeMdDockItems";
+import { usePageDockItems } from "../DockItemsContext";
 import PaneTabs from "../PaneTabs";
 
 type SettingsTab = "repository" | "github" | "claude" | "claude-md";
 
 const SETTINGS_TABS: SettingsTab[] = ["repository", "github", "claude", "claude-md"];
+
+const DISCARD_CONFIRM_MESSAGE =
+  "CLAUDE.mdの編集内容を破棄しますか?保存していない変更は失われます。";
 
 // 対象リポジトリタブのラベルには、フォルダのフルパスではなくフォルダ名
 // (例: "C:\Users\yanqi\prj\yaoyorozu" -> "yaoyorozu")だけを出す。
@@ -46,7 +54,19 @@ function SettingsPage() {
     ? (tabParam as SettingsTab)
     : "github";
 
+  const [claudeMdDirty, setClaudeMdDirty] = useState(false);
+  const [claudeMdMode, setClaudeMdMode] = useState<ViewMode>("split");
+  const claudeMdEditorRef = useRef<ClaudeMdEditorHandle>(null);
+
+  const confirmDiscardClaudeMdIfDirty = (): boolean => {
+    if (tab === "claude-md" && claudeMdDirty) {
+      return window.confirm(DISCARD_CONFIRM_MESSAGE);
+    }
+    return true;
+  };
+
   const handleChangeTab = (next: string) => {
+    if (!confirmDiscardClaudeMdIfDirty()) return;
     setSearchParams((prev) => {
       const params = new URLSearchParams(prev);
       if (next === "github") {
@@ -230,6 +250,21 @@ function SettingsPage() {
       .finally(() => setSaving(false));
   };
 
+  const dockItems = useMemo<DockItem[]>(() => {
+    if (tab !== "claude-md") return [];
+    return createClaudeMdDockItems({
+      mode: claudeMdMode,
+      onModeChange: setClaudeMdMode,
+      dirty: claudeMdDirty,
+      onSave: () => claudeMdEditorRef.current?.save(),
+      onReload: () => {
+        if (claudeMdDirty && !window.confirm(DISCARD_CONFIRM_MESSAGE)) return;
+        return claudeMdEditorRef.current?.reload();
+      },
+    });
+  }, [tab, claudeMdMode, claudeMdDirty]);
+  usePageDockItems(dockItems);
+
   if (loading) {
     return (
       <div className="settings-page">
@@ -256,9 +291,12 @@ function SettingsPage() {
           <h3>CLAUDE.md</h3>
           {repositoryPath ? (
             <ClaudeMdEditor
+              ref={claudeMdEditorRef}
               load={getRepositoryClaudeMd}
               save={saveRepositoryClaudeMd}
               reloadKey={repositoryPath}
+              mode={claudeMdMode}
+              onDirtyChange={setClaudeMdDirty}
             />
           ) : (
             <p>先にリポジトリを選択してください。</p>

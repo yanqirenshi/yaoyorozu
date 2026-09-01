@@ -184,11 +184,6 @@ body,
   gap: 10px;
 }
 
-.claude-md-editor-actions {
-  display: flex;
-  gap: 8px;
-}
-
 .claude-md-editor-workspace {
   flex: 1;
   min-height: 0;
