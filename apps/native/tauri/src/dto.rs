@@ -308,9 +308,11 @@ impl From<domain::ProjectItemKind> for ProjectItemKindDto {
 }
 
 /// GitHub Projects(v2)の1アイテム。`repository`/`number`/`url` は
-/// `DraftIssue` には無いため `null`(issue #34)。
+/// `DraftIssue` には無いため `null`(issue #34)。`id` はStatus変更コマンド
+/// (`update_github_project_item_status`)の `itemId` に使う(issue #50)。
 #[derive(Serialize, Clone)]
 pub struct ProjectItemDto {
+    pub id: String,
     pub title: String,
     pub kind: ProjectItemKindDto,
     pub repository: Option<String>,
@@ -323,6 +325,7 @@ pub struct ProjectItemDto {
 impl From<domain::ProjectItem> for ProjectItemDto {
     fn from(item: domain::ProjectItem) -> Self {
         Self {
+            id: item.id,
             title: item.title,
             kind: item.kind.into(),
             repository: item.repository,
@@ -334,20 +337,46 @@ impl From<domain::ProjectItem> for ProjectItemDto {
     }
 }
 
-/// `list_github_project_items` の戻り値。
+/// Statusフィールドの選択肢(かんばんのカラム定義。issue #50)。
+#[derive(Serialize, Clone)]
+pub struct ProjectStatusOptionDto {
+    pub id: String,
+    pub name: String,
+}
+
+impl From<domain::ProjectStatusOption> for ProjectStatusOptionDto {
+    fn from(option: domain::ProjectStatusOption) -> Self {
+        Self {
+            id: option.id,
+            name: option.name,
+        }
+    }
+}
+
+/// `list_github_project_items` の戻り値。`project_id`/`status_field_id` は
+/// `update_github_project_item_status` の引数組み立てにフロントが使う
+/// (issue #50)。
 #[derive(Serialize, Clone)]
 pub struct ProjectItemsPageDto {
+    pub project_id: String,
+    pub status_field_id: Option<String>,
     pub items: Vec<ProjectItemDto>,
     pub next_cursor: Option<String>,
-    pub status_order: Vec<String>,
+    pub status_options: Vec<ProjectStatusOptionDto>,
 }
 
 impl From<domain::ProjectItemsPage> for ProjectItemsPageDto {
     fn from(page: domain::ProjectItemsPage) -> Self {
         Self {
+            project_id: page.project_id,
+            status_field_id: page.status_field_id,
             items: page.items.into_iter().map(ProjectItemDto::from).collect(),
             next_cursor: page.next_cursor,
-            status_order: page.status_order,
+            status_options: page
+                .status_options
+                .into_iter()
+                .map(ProjectStatusOptionDto::from)
+                .collect(),
         }
     }
 }
@@ -388,6 +417,9 @@ impl From<app::AppError> for AppErrorDto {
             app::AppError::GithubUnauthenticated(message) => ("github_unauthenticated", message),
             app::AppError::GithubAuthExpired(message) => ("github_auth_expired", message),
             app::AppError::GithubApiFailed(message) => ("github_api_failed", message),
+            app::AppError::GithubScopeInsufficient(message) => {
+                ("github_scope_insufficient", message)
+            }
             app::AppError::ClaudeMdConflict(message) => ("claude_md_conflict", message),
         };
         Self {

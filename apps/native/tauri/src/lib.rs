@@ -512,6 +512,43 @@ async fn list_github_project_items(
     .map_err(Into::into)
 }
 
+/// GitHub Projectアイテムのステータス(かんばんのカラム)を変更する
+/// (issue #50)。`project_id`/`field_id` は `list_github_project_items` の
+/// 戻り値をフロントがそのまま渡す。`option_id` が `None` のときは
+/// 「No status」カラムへの移動としてStatusを未設定に戻す。
+/// 楽観的更新はしない(native.md §3.1)。フロントは成功後に
+/// `list_github_project_items` を呼び直して一覧を更新する。
+#[tauri::command]
+async fn update_github_project_item_status(
+    project_id: String,
+    item_id: String,
+    field_id: String,
+    option_id: Option<String>,
+) -> Result<(), AppErrorDto> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), app::AppError> {
+        let store = KeyringTokenStore::new();
+        let token = store.load()?.ok_or_else(|| {
+            app::AppError::GithubUnauthenticated("GitHubにログインしてください".to_string())
+        })?;
+        let gateway = GithubApiClient::new(GITHUB_CLIENT_ID);
+        app::update_github_project_item_status(
+            &gateway,
+            &token,
+            &project_id,
+            &item_id,
+            &field_id,
+            option_id.as_deref(),
+        )
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
+}
+
 /// `root` の変更監視を(再)開始し、`session:changed` イベントとしてフロントへ
 /// 通知する。既存の監視があれば `WatcherSlot` の中身を新しいものに差し替える
 /// ことで自動的に停止する(`Debouncer` は drop されると監視を止める)。
@@ -617,6 +654,7 @@ pub fn run() {
             github_logout,
             list_github_projects,
             list_github_project_items,
+            update_github_project_item_status,
         ])
         .setup(|app| {
             let root = setup_app_state(app)?;

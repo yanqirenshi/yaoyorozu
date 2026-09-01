@@ -102,6 +102,7 @@ export type GithubAuthFailedEvent = {
 export type ProjectItemKindDto = "issue" | "pull-request" | "draft-issue";
 
 export type ProjectItemDto = {
+  id: string;
   title: string;
   kind: ProjectItemKindDto;
   repository: string | null;
@@ -111,8 +112,15 @@ export type ProjectItemDto = {
   url: string | null;
 };
 
+export type ProjectStatusOptionDto = {
+  id: string;
+  name: string;
+};
+
 export type ProjectItemsPageDto = {
+  project_id: string;
+  status_field_id: string | null;
   items: ProjectItemDto[];
   next_cursor: string | null;
-  status_order: string[];
+  status_options: ProjectStatusOptionDto[];
 };

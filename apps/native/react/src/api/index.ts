@@ -37,6 +37,7 @@ export type {
   ProjectItemDto,
   ProjectItemKindDto,
   ProjectItemsPageDto,
+  ProjectStatusOptionDto,
   RoleDto,
   SessionChangedEvent,
   SessionDto,
@@ -152,6 +153,20 @@ export function listGithubProjects(): Promise<GithubProjectSummaryDto[]> {
 
 export function listGithubProjectItems(cursor: string | null): Promise<ProjectItemsPageDto> {
   return invoke<ProjectItemsPageDto>("list_github_project_items", { cursor });
+}
+
+export function updateGithubProjectItemStatus(
+  projectId: string,
+  itemId: string,
+  fieldId: string,
+  optionId: string | null,
+): Promise<void> {
+  return invoke<void>("update_github_project_item_status", {
+    projectId,
+    itemId,
+    fieldId,
+    optionId,
+  });
 }
 
 export function onGithubAuthenticated(

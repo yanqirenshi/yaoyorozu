@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { FormEvent } from "react";
+import type { DragEvent, FormEvent } from "react";
 import { useSearchParams } from "react-router";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { DockItem } from "command-dock";
@@ -15,8 +15,15 @@ import {
   onSessionChanged,
   saveProjectClaudeMd,
   sendMessage,
+  updateGithubProjectItemStatus,
 } from "../api";
-import type { AgentModeDto, MessageDto, ProjectItemDto, SessionSummaryDto } from "../api";
+import type {
+  AgentModeDto,
+  MessageDto,
+  ProjectItemDto,
+  ProjectStatusOptionDto,
+  SessionSummaryDto,
+} from "../api";
 import ClaudeMdEditor from "../ClaudeMdEditor";
 import { usePageDockItems } from "../DockItemsContext";
 import { MODE_ICON, RELOAD_ICON } from "../icons";
@@ -32,9 +39,10 @@ type SessionGroup = {
   sessions: SessionSummaryDto[];
 };
 
-type ProjectItemGroup = {
-  status: string;
-  items: ProjectItemDto[];
+type KanbanColumn = {
+  // Statusの `optionId`。「No status」カラムのみ `null`(issue #50)。
+  optionId: string | null;
+  name: string;
 };
 
 const PROJECT_ITEM_KIND_LABEL: Record<ProjectItemDto["kind"], string> = {
@@ -43,7 +51,10 @@ const PROJECT_ITEM_KIND_LABEL: Record<ProjectItemDto["kind"], string> = {
   "draft-issue": "Draft",
 };
 
-const UNSET_STATUS_LABEL = "(未設定)";
+const NO_STATUS_COLUMN_NAME = "No status";
+
+const SCOPE_INSUFFICIENT_MESSAGE =
+  "設定のGitHubタブで再ログインしてください(権限の追加が必要です)";
 
 const DISCARD_CONFIRM_MESSAGE =
   "CLAUDE.mdの編集内容を破棄しますか?保存していない変更は失われます。";
@@ -79,10 +90,17 @@ function SessionsPage() {
   );
   const [projectItems, setProjectItems] = useState<ProjectItemDto[]>([]);
   const [projectItemsNextCursor, setProjectItemsNextCursor] = useState<string | null>(null);
-  const [projectStatusOrder, setProjectStatusOrder] = useState<string[]>([]);
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [projectStatusFieldId, setProjectStatusFieldId] = useState<string | null>(null);
+  const [projectStatusOptions, setProjectStatusOptions] = useState<ProjectStatusOptionDto[]>([]);
   const [projectItemsLoaded, setProjectItemsLoaded] = useState(false);
   const [projectItemsLoadingMore, setProjectItemsLoadingMore] = useState(false);
   const [projectItemsError, setProjectItemsError] = useState<string | null>(null);
+  // ドラッグ中のカードのアイテムID。移動処理中はカードを busy 表示にし、
+  // 他のカードのドラッグも受け付けない(楽観的更新をしないための直列化。
+  // native.md §3.1。issue #50)。
+  const [movingItemId, setMovingItemId] = useState<string | null>(null);
+  const [dragOverColumnKey, setDragOverColumnKey] = useState<string | null>(null);
 
   const loadSessionGroups = useCallback((folders: string[]): Promise<void> => {
     return Promise.all(
@@ -119,7 +137,9 @@ function SessionsPage() {
       .then((page) => {
         setProjectItems((prev) => (cursor ? [...prev, ...page.items] : page.items));
         setProjectItemsNextCursor(page.next_cursor);
-        setProjectStatusOrder(page.status_order);
+        setProjectId(page.project_id);
+        setProjectStatusFieldId(page.status_field_id);
+        setProjectStatusOptions(page.status_options);
         setProjectItemsLoaded(true);
       })
       .catch((e) => setProjectItemsError(isAppError(e) ? e.message : String(e)));
@@ -222,22 +242,59 @@ function SessionsPage() {
     loadProjectItems(projectItemsNextCursor).finally(() => setProjectItemsLoadingMore(false));
   };
 
-  const groupedProjectItems: ProjectItemGroup[] = useMemo(() => {
-    const byStatus = new Map<string, ProjectItemDto[]>();
-    for (const item of projectItems) {
-      const key = item.status ?? "";
-      const group = byStatus.get(key);
-      if (group) {
-        group.push(item);
-      } else {
-        byStatus.set(key, [item]);
-      }
+  // 「No status」カラムを先頭に、以降は `ProjectV2SingleSelectField.options`
+  // のカラム順(issue #50)。
+  const kanbanColumns: KanbanColumn[] = useMemo(
+    () => [
+      { optionId: null, name: NO_STATUS_COLUMN_NAME },
+      ...projectStatusOptions.map((option) => ({ optionId: option.id, name: option.name })),
+    ],
+    [projectStatusOptions],
+  );
+
+  const columnKeyForItem = useCallback(
+    (item: ProjectItemDto): string => {
+      const option = projectStatusOptions.find((o) => o.name === item.status);
+      return option?.id ?? "";
+    },
+    [projectStatusOptions],
+  );
+
+  const itemsByColumnKey: Map<string, ProjectItemDto[]> = useMemo(() => {
+    const map = new Map<string, ProjectItemDto[]>();
+    for (const column of kanbanColumns) {
+      map.set(column.optionId ?? "", []);
     }
-    const orderedKeys = [...projectStatusOrder, ""];
-    return orderedKeys
-      .filter((key) => byStatus.has(key))
-      .map((key) => ({ status: key || UNSET_STATUS_LABEL, items: byStatus.get(key) ?? [] }));
-  }, [projectItems, projectStatusOrder]);
+    for (const item of projectItems) {
+      const key = columnKeyForItem(item);
+      (map.get(key) ?? map.get("")!).push(item);
+    }
+    return map;
+  }, [projectItems, kanbanColumns, columnKeyForItem]);
+
+  const handleDropOnColumn = (column: KanbanColumn) => (event: DragEvent) => {
+    event.preventDefault();
+    setDragOverColumnKey(null);
+    if (movingItemId) return;
+
+    const itemId = event.dataTransfer.getData("text/plain");
+    const item = projectItems.find((i) => i.id === itemId);
+    if (!item || !projectId || !projectStatusFieldId) return;
+    if (columnKeyForItem(item) === (column.optionId ?? "")) return;
+
+    setMovingItemId(itemId);
+    setProjectItemsError(null);
+    updateGithubProjectItemStatus(projectId, itemId, projectStatusFieldId, column.optionId)
+      .then(() => loadProjectItems(null))
+      .catch((e) => {
+        if (isAppError(e) && e.code === "github_scope_insufficient") {
+          setProjectItemsError(SCOPE_INSUFFICIENT_MESSAGE);
+          return;
+        }
+        setProjectItemsError(isAppError(e) ? e.message : String(e));
+      })
+      .finally(() => setMovingItemId(null));
+  };
 
   const selectedSummary = sessionGroups
     .find((g) => g.folder === projectParam)
@@ -452,29 +509,63 @@ function SessionsPage() {
             ) : (
               <>
                 {projectItemsError && <p className="error">{projectItemsError}</p>}
-                {groupedProjectItems.map((group) => (
-                  <div key={group.status} className="project-item-group">
-                    <h3 className="project-item-group-heading">{group.status}</h3>
-                    {group.items.map((item, i) => (
-                      <button
-                        key={`${item.kind}-${item.repository ?? ""}-${item.number ?? item.title}-${i}`}
-                        type="button"
-                        className="project-item-card"
-                        disabled={!item.url}
-                        onClick={() => item.url && openUrl(item.url)}
+                <div className="kanban-board">
+                  {kanbanColumns.map((column) => {
+                    const key = column.optionId ?? "";
+                    const items = itemsByColumnKey.get(key) ?? [];
+                    return (
+                      <div
+                        key={key}
+                        className={
+                          "kanban-column" + (dragOverColumnKey === key ? " is-drop-target" : "")
+                        }
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = "move";
+                          setDragOverColumnKey(key);
+                        }}
+                        onDragLeave={() =>
+                          setDragOverColumnKey((prev) => (prev === key ? null : prev))
+                        }
+                        onDrop={handleDropOnColumn(column)}
                       >
-                        <span className="project-item-title">{item.title}</span>
-                        <span className="project-item-meta">
-                          {PROJECT_ITEM_KIND_LABEL[item.kind]}
-                          {item.repository && item.number
-                            ? ` ${item.repository}#${item.number}`
-                            : ""}
-                          {item.assignees.length > 0 ? ` · ${item.assignees.join(", ")}` : ""}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                ))}
+                        <h3 className="kanban-column-heading">
+                          {column.name}
+                          <span className="kanban-column-count">{items.length}</span>
+                        </h3>
+                        <div className="kanban-column-body">
+                          {items.map((item) => (
+                            <button
+                              key={item.id}
+                              type="button"
+                              className={
+                                "project-item-card" +
+                                (movingItemId === item.id ? " is-busy" : "")
+                              }
+                              draggable={!movingItemId}
+                              onDragStart={(e) => {
+                                e.dataTransfer.setData("text/plain", item.id);
+                                e.dataTransfer.effectAllowed = "move";
+                              }}
+                              onClick={() => item.url && openUrl(item.url)}
+                            >
+                              <span className="project-item-title">{item.title}</span>
+                              <span className="project-item-meta">
+                                {PROJECT_ITEM_KIND_LABEL[item.kind]}
+                                {item.repository && item.number
+                                  ? ` ${item.repository}#${item.number}`
+                                  : ""}
+                                {item.assignees.length > 0
+                                  ? ` · ${item.assignees.join(", ")}`
+                                  : ""}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
                 {projectItemsNextCursor && (
                   <button
                     type="button"
