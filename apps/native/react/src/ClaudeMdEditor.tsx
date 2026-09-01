@@ -62,7 +62,6 @@ const ClaudeMdEditor = forwardRef<ClaudeMdEditorHandle, ClaudeMdEditorProps>(
     const workspaceRef = useRef<MarkdownWorkspace | null>(null);
 
     const reload = (): Promise<void> => {
-      if (loading) return Promise.resolve();
       setLoading(true);
       setError(null);
       setCreating(false);
