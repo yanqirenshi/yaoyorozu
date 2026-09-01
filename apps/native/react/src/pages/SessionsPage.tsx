@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent, FormEvent } from "react";
 import { useSearchParams } from "react-router";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { DockItem } from "command-dock";
+import type { ViewMode } from "@yanqirenshi/markdown.sitter";
 import {
   getGithubAuthStatus,
   getProjectClaudeMd,
@@ -25,6 +26,8 @@ import type {
   SessionSummaryDto,
 } from "../api";
 import ClaudeMdEditor from "../ClaudeMdEditor";
+import type { ClaudeMdEditorHandle } from "../ClaudeMdEditor";
+import { createClaudeMdDockItems } from "../claudeMdDockItems";
 import { usePageDockItems } from "../DockItemsContext";
 import { MODE_ICON, RELOAD_ICON } from "../icons";
 import MessageText from "../MessageText";
@@ -84,6 +87,8 @@ function SessionsPage() {
   const projectParam = searchParams.get("project");
   const sessionParam = searchParams.get("session");
   const [claudeMdDirty, setClaudeMdDirty] = useState(false);
+  const [claudeMdMode, setClaudeMdMode] = useState<ViewMode>("preview");
+  const claudeMdEditorRef = useRef<ClaudeMdEditorHandle>(null);
   const [githubAuthenticated, setGithubAuthenticated] = useState(false);
   const [githubProject, setGithubProject] = useState<{ owner: string; number: number } | null>(
     null,
@@ -354,8 +359,8 @@ function SessionsPage() {
       .finally(() => setSending(false));
   };
 
-  const dockItems = useMemo<DockItem[]>(
-    () => [
+  const dockItems = useMemo<DockItem[]>(() => {
+    const items: DockItem[] = [
       {
         id: "reload",
         label: RELOAD_ICON,
@@ -379,9 +384,23 @@ function SessionsPage() {
           },
         ],
       },
-    ],
-    [reload, mode],
-  );
+    ];
+    if (view === "claude-md") {
+      items.push(
+        ...createClaudeMdDockItems({
+          mode: claudeMdMode,
+          onModeChange: setClaudeMdMode,
+          dirty: claudeMdDirty,
+          onSave: () => claudeMdEditorRef.current?.save(),
+          onReload: () => {
+            if (claudeMdDirty && !window.confirm(DISCARD_CONFIRM_MESSAGE)) return;
+            return claudeMdEditorRef.current?.reload();
+          },
+        }),
+      );
+    }
+    return items;
+  }, [reload, mode, view, claudeMdMode, claudeMdDirty]);
   usePageDockItems(dockItems);
 
   return (
@@ -489,11 +508,13 @@ function SessionsPage() {
           projectParam ? (
             <div className="claude-md-pane">
               <ClaudeMdEditor
+                ref={claudeMdEditorRef}
                 load={() => getProjectClaudeMd(projectParam)}
                 save={(content, expectedModifiedAtMs) =>
                   saveProjectClaudeMd(projectParam, content, expectedModifiedAtMs)
                 }
                 reloadKey={projectParam}
+                mode={claudeMdMode}
                 onDirtyChange={setClaudeMdDirty}
               />
             </div>

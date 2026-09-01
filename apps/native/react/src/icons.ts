@@ -49,3 +49,22 @@ export const CLAUDE_SETTINGS_ICON = `
   <path d="M11 3v4h4" />
   <path d="M8.3 11.3c-.9 0-1.3.4-1.3 1.2s.4 1.2 1.3 1.2M11.7 11.3c.9 0 1.3.4 1.3 1.2s-.4 1.2-1.3 1.2" />
 </svg>`;
+
+export const SAVE_ICON = `
+<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor"
+     stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
+     xmlns="http://www.w3.org/2000/svg">
+  <path d="M4 3h10l3 3v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" />
+  <path d="M6 3v5h7V3" />
+  <rect x="6" y="12" width="8" height="5" />
+</svg>`;
+
+// CLAUDE.mdタブの表示モード(editor/split/preview)切替アイコン。送信モード
+// (MODE_ICON)とは別の見た目にして混同を避ける(issue #59)。
+export const VIEW_MODE_ICON = `
+<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor"
+     stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
+     xmlns="http://www.w3.org/2000/svg">
+  <rect x="3" y="4" width="14" height="12" rx="1.5" />
+  <line x1="10" y1="4" x2="10" y2="16" />
+</svg>`;
