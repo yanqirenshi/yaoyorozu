@@ -521,6 +521,7 @@ function SessionsPage() {
                         }
                         onDragOver={(e) => {
                           e.preventDefault();
+                          e.dataTransfer.dropEffect = "move";
                           setDragOverColumnKey(key);
                         }}
                         onDragLeave={() =>
