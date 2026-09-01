@@ -1,6 +1,7 @@
 use domain::{
-    is_valid_session_id, order_messages_newest_first, paginate_messages, sort_projects_by_recency,
-    sort_sessions_by_recency, ClaudeMdFile, Project, Session, SessionSummary, Settings,
+    is_valid_json, is_valid_session_id, order_messages_newest_first, paginate_messages,
+    sort_projects_by_recency, sort_sessions_by_recency, ClaudeMdFile, ClaudeSettingsFile, Project,
+    Session, SessionSummary, Settings,
 };
 use std::path::{Path, PathBuf};
 
@@ -46,6 +47,12 @@ pub enum AppError {
     /// 拡張する必要がある(issue #50)。
     #[error("{0}")]
     GithubScopeInsufficient(String),
+    /// 汎用のファイル保存競合(楽観ロック)。`expected_modified_at_ms` が
+    /// 実際のファイルの状態と一致しなかった。`ClaudeMdConflict` とは別に
+    /// 用意し、CLAUDE.md以外の単一ファイル編集機能(settings.json等)で
+    /// 使う(issue #53。既存の `ClaudeMdConflict` との統合は将来の課題)。
+    #[error("{0}")]
+    FileConflict(String),
 }
 
 /// プロジェクト・セッションの読み取り(ports)。Claude Code のログ形式
@@ -87,6 +94,16 @@ pub trait ClaudeMdStore {
     fn read(&self, repo_dir: &Path) -> Result<Option<ClaudeMdFile>, AppError>;
     /// `repo_dir/CLAUDE.md` へ書く(無ければ新規作成)。
     fn write(&self, repo_dir: &Path, content: &str) -> Result<(), AppError>;
+}
+
+/// `~/.claude/settings.json` の読み書き(port)。対象は常に1ファイルに固定
+/// されているため、`ClaudeMdStore` と異なりパスを引数に取らない。ホーム
+/// ディレクトリの解決は `infra` の責務(issue #53)。
+pub trait ClaudeSettingsStore {
+    /// ファイルが無ければ `Ok(None)`。
+    fn read(&self) -> Result<Option<ClaudeSettingsFile>, AppError>;
+    /// 無ければ新規作成する。
+    fn write(&self, content: &str) -> Result<(), AppError>;
 }
 
 /// 起動時に読み込んだ設定。ファイルが存在しない場合と破損していた場合を
@@ -359,6 +376,37 @@ pub fn save_claude_md(
         ));
     }
     store.write(repo_dir, content)
+}
+
+/// `~/.claude/settings.json` を読む(存在しなければ `None`)。
+pub fn read_claude_settings(
+    store: &dyn ClaudeSettingsStore,
+) -> Result<Option<ClaudeSettingsFile>, AppError> {
+    store.read()
+}
+
+/// `~/.claude/settings.json` を保存する。壊れたJSONは書き込まず
+/// `InvalidInput` を返す(Claude Code本体が起動不能になる事故の防止。
+/// 整形はしない)。`expected_modified_at_ms` が実際の状態と一致しない場合は
+/// `save_claude_md` と同様に楽観ロックで弾き、`FileConflict` を返す
+/// (issue #53)。
+pub fn save_claude_settings(
+    store: &dyn ClaudeSettingsStore,
+    content: &str,
+    expected_modified_at_ms: Option<u64>,
+) -> Result<(), AppError> {
+    if !is_valid_json(content) {
+        return Err(AppError::InvalidInput(
+            "JSONの形式が正しくありません".to_string(),
+        ));
+    }
+    let current_modified_at_ms = store.read()?.map(|f| f.modified_at_ms);
+    if current_modified_at_ms != expected_modified_at_ms {
+        return Err(AppError::FileConflict(
+            "settings.jsonがアプリ外で変更されています。再読み込みしてください".to_string(),
+        ));
+    }
+    store.write(content)
 }
 
 pub fn start_github_login(gateway: &dyn GithubGateway) -> Result<DeviceAuthorization, AppError> {
@@ -930,6 +978,99 @@ mod tests {
         let error = save_claude_md(&store, Path::new("/tmp/repo"), "new", Some(100))
             .expect_err("should reject as conflict");
         assert!(matches!(error, AppError::ClaudeMdConflict(_)));
+        assert!(store.written.borrow().is_empty());
+    }
+
+    #[derive(Default)]
+    struct FakeClaudeSettingsStore {
+        file: std::cell::RefCell<Option<ClaudeSettingsFile>>,
+        written: std::cell::RefCell<Vec<String>>,
+    }
+
+    impl FakeClaudeSettingsStore {
+        fn with_file(content: &str, modified_at_ms: u64) -> Self {
+            Self {
+                file: std::cell::RefCell::new(Some(ClaudeSettingsFile {
+                    content: content.to_string(),
+                    modified_at_ms,
+                })),
+                written: std::cell::RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl ClaudeSettingsStore for FakeClaudeSettingsStore {
+        fn read(&self) -> Result<Option<ClaudeSettingsFile>, AppError> {
+            Ok(self.file.borrow().clone())
+        }
+
+        fn write(&self, content: &str) -> Result<(), AppError> {
+            self.written.borrow_mut().push(content.to_string());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn read_claude_settings_returns_none_when_absent() {
+        let store = FakeClaudeSettingsStore::default();
+        let result = read_claude_settings(&store).expect("should read");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn read_claude_settings_returns_file_when_present() {
+        let store = FakeClaudeSettingsStore::with_file(r#"{"a":1}"#, 100);
+        let result = read_claude_settings(&store).expect("should read");
+        assert_eq!(
+            result,
+            Some(ClaudeSettingsFile {
+                content: r#"{"a":1}"#.to_string(),
+                modified_at_ms: 100,
+            })
+        );
+    }
+
+    #[test]
+    fn save_claude_settings_creates_new_file_when_none_expected_and_none_exists() {
+        let store = FakeClaudeSettingsStore::default();
+        save_claude_settings(&store, "{}", None).expect("should save new file");
+        assert_eq!(store.written.borrow().as_slice(), ["{}".to_string()]);
+    }
+
+    #[test]
+    fn save_claude_settings_writes_when_expected_matches_current() {
+        let store = FakeClaudeSettingsStore::with_file("{}", 100);
+        save_claude_settings(&store, r#"{"a":1}"#, Some(100)).expect("should save");
+        assert_eq!(
+            store.written.borrow().as_slice(),
+            [r#"{"a":1}"#.to_string()]
+        );
+    }
+
+    #[test]
+    fn save_claude_settings_rejects_when_expected_none_but_file_exists() {
+        let store = FakeClaudeSettingsStore::with_file("{}", 100);
+        let error = save_claude_settings(&store, r#"{"a":1}"#, None)
+            .expect_err("should reject as conflict");
+        assert!(matches!(error, AppError::FileConflict(_)));
+        assert!(store.written.borrow().is_empty());
+    }
+
+    #[test]
+    fn save_claude_settings_rejects_when_expected_mtime_is_stale() {
+        let store = FakeClaudeSettingsStore::with_file("{}", 200);
+        let error = save_claude_settings(&store, r#"{"a":1}"#, Some(100))
+            .expect_err("should reject as conflict");
+        assert!(matches!(error, AppError::FileConflict(_)));
+        assert!(store.written.borrow().is_empty());
+    }
+
+    #[test]
+    fn save_claude_settings_rejects_invalid_json_without_reading_current_state() {
+        let store = FakeClaudeSettingsStore::default();
+        let error =
+            save_claude_settings(&store, "{invalid", None).expect_err("should reject bad json");
+        assert!(matches!(error, AppError::InvalidInput(_)));
         assert!(store.written.borrow().is_empty());
     }
 

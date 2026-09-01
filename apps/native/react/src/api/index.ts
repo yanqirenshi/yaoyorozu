@@ -5,6 +5,7 @@ import type {
   AppErrorDto,
   AppWarningEvent,
   ClaudeMdDto,
+  ClaudeSettingsDto,
   DeviceCodeDto,
   GithubAuthFailedEvent,
   GithubAuthStatusDto,
@@ -26,6 +27,7 @@ export type {
   AppErrorDto,
   AppWarningEvent,
   ClaudeMdDto,
+  ClaudeSettingsDto,
   DeviceCodeDto,
   GithubAuthFailedEvent,
   GithubAuthStatusDto,
@@ -130,6 +132,20 @@ export function saveProjectClaudeMd(
 ): Promise<void> {
   return invoke<void>("save_project_claude_md", {
     project,
+    content,
+    expectedModifiedAtMs,
+  });
+}
+
+export function getClaudeSettingsFile(): Promise<ClaudeSettingsDto> {
+  return invoke<ClaudeSettingsDto>("get_claude_settings_file");
+}
+
+export function saveClaudeSettingsFile(
+  content: string,
+  expectedModifiedAtMs: number | null,
+): Promise<void> {
+  return invoke<void>("save_claude_settings_file", {
     content,
     expectedModifiedAtMs,
   });

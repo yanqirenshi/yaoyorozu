@@ -3,14 +3,15 @@ mod state;
 
 use app::{SessionSource, SettingsStore, TokenStore};
 use dto::{
-    AgentKindDto, AgentModeDto, AppErrorDto, AppWarningDto, ClaudeMdDto, DeviceCodeDto,
-    GithubAuthFailedEventDto, GithubAuthStatusDto, GithubAuthenticatedEventDto, GithubProjectDto,
-    GithubProjectSummaryDto, ProjectDto, ProjectItemsPageDto, SessionChangedEventDto, SessionDto,
-    SessionSummaryDto, SettingsCorruptedEventDto, SettingsDto, SettingsInputDto,
+    AgentKindDto, AgentModeDto, AppErrorDto, AppWarningDto, ClaudeMdDto, ClaudeSettingsDto,
+    DeviceCodeDto, GithubAuthFailedEventDto, GithubAuthStatusDto, GithubAuthenticatedEventDto,
+    GithubProjectDto, GithubProjectSummaryDto, ProjectDto, ProjectItemsPageDto,
+    SessionChangedEventDto, SessionDto, SessionSummaryDto, SettingsCorruptedEventDto, SettingsDto,
+    SettingsInputDto,
 };
 use infra::{
-    ClaudeCliAgent, FileClaudeMdStore, FileSettingsStore, FileSystemRepository, GithubApiClient,
-    KeyringTokenStore,
+    ClaudeCliAgent, FileClaudeMdStore, FileClaudeSettingsStore, FileSettingsStore,
+    FileSystemRepository, GithubApiClient, KeyringTokenStore,
 };
 use state::AppState;
 use std::path::PathBuf;
@@ -312,6 +313,44 @@ async fn save_project_claude_md(
         let repo_dir = source.latest_session_cwd(&project)?;
         let store = FileClaudeMdStore::new();
         app::save_claude_md(&store, &repo_dir, &content, expected_modified_at_ms)
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
+}
+
+/// `~/.claude/settings.json` を読む(issue #53)。対象パスはRust側
+/// (`FileClaudeSettingsStore`)で固定解決し、フロントからパスやファイル名は
+/// 一切受け取らない(native.md §4)。対象はこのファイルのみで、`.claude`
+/// 配下の他ファイル(特に `.credentials.json`)への経路は作らない。
+#[tauri::command]
+async fn get_claude_settings_file() -> Result<ClaudeSettingsDto, AppErrorDto> {
+    tauri::async_runtime::spawn_blocking(|| -> Result<ClaudeSettingsDto, app::AppError> {
+        let store = FileClaudeSettingsStore::new();
+        let file = app::read_claude_settings(&store)?;
+        Ok(file.into())
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
+}
+
+#[tauri::command]
+async fn save_claude_settings_file(
+    content: String,
+    expected_modified_at_ms: Option<u64>,
+) -> Result<(), AppErrorDto> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), app::AppError> {
+        let store = FileClaudeSettingsStore::new();
+        app::save_claude_settings(&store, &content, expected_modified_at_ms)
     })
     .await
     .unwrap_or_else(|_| {
@@ -649,6 +688,8 @@ pub fn run() {
             save_repository_claude_md,
             get_project_claude_md,
             save_project_claude_md,
+            get_claude_settings_file,
+            save_claude_settings_file,
             get_github_auth_status,
             github_login_start,
             github_logout,

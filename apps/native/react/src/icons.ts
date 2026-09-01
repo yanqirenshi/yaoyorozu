@@ -40,3 +40,12 @@ export const SETTINGS_ICON = `
   <circle cx="10" cy="10" r="2.5" />
   <path d="M10 3v2M10 15v2M3 10h2M15 10h2M5.05 5.05l1.41 1.41M13.54 13.54l1.41 1.41M5.05 14.95l1.41-1.41M13.54 6.46l1.41-1.41" />
 </svg>`;
+
+export const CLAUDE_SETTINGS_ICON = `
+<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor"
+     stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
+     xmlns="http://www.w3.org/2000/svg">
+  <path d="M6 3h5l4 4v10a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" />
+  <path d="M11 3v4h4" />
+  <path d="M8.3 11.3c-.9 0-1.3.4-1.3 1.2s.4 1.2 1.3 1.2M11.7 11.3c.9 0 1.3.4 1.3 1.2s-.4 1.2-1.3 1.2" />
+</svg>`;

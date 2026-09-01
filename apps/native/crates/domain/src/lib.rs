@@ -206,6 +206,22 @@ pub struct ClaudeMdFile {
     pub modified_at_ms: u64,
 }
 
+/// `~/.claude/settings.json` の内容。`modified_at_ms` はアプリ外での変更を
+/// 検知する楽観ロックに使う(issue #53)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaudeSettingsFile {
+    pub content: String,
+    pub modified_at_ms: u64,
+}
+
+/// `content` が構文的に妥当なJSONかを判定する純粋関数。保存前のチェックに
+/// 使う(Claude Code本体が読めない壊れたJSONを書き込んでしまう事故の防止。
+/// issue #53)。整形は行わない(ユーザーの書式をそのまま保存するため、この
+/// 関数はパース可否のみを見る)。
+pub fn is_valid_json(content: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(content).is_ok()
+}
+
 /// GitHub Projects(v2) アイテムの種別(ビューアの「GitHub Project」タブ表示に
 /// 使う。issue #34)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -260,6 +276,21 @@ pub struct ProjectItemsPage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_valid_json_accepts_valid_json() {
+        assert!(is_valid_json(r#"{"key": "value"}"#));
+    }
+
+    #[test]
+    fn is_valid_json_rejects_malformed_json() {
+        assert!(!is_valid_json(r#"{"key": "value""#));
+    }
+
+    #[test]
+    fn is_valid_json_rejects_empty_string() {
+        assert!(!is_valid_json(""));
+    }
 
     #[test]
     fn sort_projects_by_recency_orders_newest_first() {
