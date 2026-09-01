@@ -32,6 +32,10 @@ pub enum AppError {
     #[error("{0}")]
     GithubUnauthenticated(String),
     /// GitHubの認証(デバイスフロー)がタイムアウトしたか、ユーザーが拒否した。
+    /// もしくは、既にログイン済みのトークンがGitHub API呼び出し時に
+    /// 確定的に拒否された(HTTP 401)。後者は一時的な通信失敗(ネットワーク
+    /// 不通・タイムアウト・5xx)とは区別され、`GithubApiFailed` にはならない
+    /// (issue #54)。
     #[error("{0}")]
     GithubAuthExpired(String),
     /// GitHub API(GraphQL含む)呼び出しが失敗した。
@@ -418,6 +422,49 @@ pub fn fetch_github_viewer(
     token: &str,
 ) -> Result<GithubViewer, AppError> {
     gateway.fetch_viewer(token)
+}
+
+/// `resolve_github_login_with_retry` の結果(issue #54)。
+#[derive(Debug, PartialEq, Eq)]
+pub enum ViewerCheckOutcome {
+    /// ログイン名を解決できた。
+    Resolved(GithubViewer),
+    /// 確定的な認証失効(401)。呼び出し側でトークン削除等の後始末をする。
+    TokenExpired,
+    /// `backoff_secs` を使い切っても一時的な失敗が続いた。トークン自体は
+    /// 無効と確定していないため、呼び出し側は何もせずログイン名未確定の
+    /// ままにしてよい(次の機会に再試行される)。
+    GaveUp,
+}
+
+/// ログイン名の解決(`fetch_viewer`)を試み、一時的な失敗(ネットワーク不通・
+/// タイムアウト・5xxなど。`GithubAuthExpired` 以外の全エラー)の場合は
+/// `backoff_secs` の各要素だけ `sleep` してから再試行する。確定的な失効
+/// (`GithubAuthExpired`)を受けたら再試行せず即座に打ち切る(issue #54)。
+/// `backoff_secs` が空なら1回だけ試す(タブを開いた際の受動的な再取得等、
+/// 長時間ブロックしたくない呼び出しに使う)。
+pub fn resolve_github_login_with_retry(
+    gateway: &dyn GithubGateway,
+    token: &str,
+    backoff_secs: &[u64],
+    sleep: impl Fn(u64),
+) -> ViewerCheckOutcome {
+    match gateway.fetch_viewer(token) {
+        Ok(viewer) => return ViewerCheckOutcome::Resolved(viewer),
+        Err(AppError::GithubAuthExpired(_)) => return ViewerCheckOutcome::TokenExpired,
+        Err(_) => {}
+    }
+
+    for &secs in backoff_secs {
+        sleep(secs);
+        match gateway.fetch_viewer(token) {
+            Ok(viewer) => return ViewerCheckOutcome::Resolved(viewer),
+            Err(AppError::GithubAuthExpired(_)) => return ViewerCheckOutcome::TokenExpired,
+            Err(_) => {}
+        }
+    }
+
+    ViewerCheckOutcome::GaveUp
 }
 
 pub fn list_github_projects(
@@ -1079,6 +1126,10 @@ mod tests {
         poll_responses:
             std::cell::RefCell<std::collections::VecDeque<Result<PollResult, AppError>>>,
         viewer: GithubViewer,
+        // 空なら常に `viewer` を返す(`fetch_viewer` の既定の成功挙動)。
+        // 積んであれば先頭から1つずつ消費する(issue #54: 再試行のテスト用)。
+        viewer_responses:
+            std::cell::RefCell<std::collections::VecDeque<Result<GithubViewer, AppError>>>,
         projects: Vec<domain::GithubProjectSummary>,
         project_items: domain::ProjectItemsPage,
         fail_update_item_status_with_scope_insufficient: bool,
@@ -1093,6 +1144,7 @@ mod tests {
                 viewer: GithubViewer {
                     login: "yanqirenshi".to_string(),
                 },
+                viewer_responses: std::cell::RefCell::new(std::collections::VecDeque::new()),
                 projects: Vec::new(),
                 project_items: domain::ProjectItemsPage {
                     project_id: "PVT_1".to_string(),
@@ -1120,6 +1172,9 @@ mod tests {
         }
 
         fn fetch_viewer(&self, _token: &str) -> Result<GithubViewer, AppError> {
+            if let Some(result) = self.viewer_responses.borrow_mut().pop_front() {
+                return result;
+            }
             Ok(self.viewer.clone())
         }
 
@@ -1281,6 +1336,98 @@ mod tests {
         let gateway = FakeGithubGateway::new(test_authorization(5, 900));
         let viewer = fetch_github_viewer(&gateway, "token").expect("should fetch viewer");
         assert_eq!(viewer.login, "yanqirenshi");
+    }
+
+    #[test]
+    fn resolve_github_login_with_retry_returns_resolved_immediately_on_success() {
+        let gateway = FakeGithubGateway::new(test_authorization(5, 900));
+        let sleeps = std::cell::RefCell::new(Vec::new());
+
+        let outcome = resolve_github_login_with_retry(&gateway, "token", &[10, 60], |secs| {
+            sleeps.borrow_mut().push(secs);
+        });
+
+        assert_eq!(
+            outcome,
+            ViewerCheckOutcome::Resolved(GithubViewer {
+                login: "yanqirenshi".to_string(),
+            })
+        );
+        assert!(sleeps.borrow().is_empty());
+    }
+
+    #[test]
+    fn resolve_github_login_with_retry_stops_immediately_on_token_expired_without_retry() {
+        let gateway = FakeGithubGateway::new(test_authorization(5, 900));
+        gateway
+            .viewer_responses
+            .borrow_mut()
+            .push_back(Err(AppError::GithubAuthExpired("失効".to_string())));
+        let sleeps = std::cell::RefCell::new(Vec::new());
+
+        let outcome = resolve_github_login_with_retry(&gateway, "token", &[10, 60], |secs| {
+            sleeps.borrow_mut().push(secs);
+        });
+
+        assert_eq!(outcome, ViewerCheckOutcome::TokenExpired);
+        assert!(sleeps.borrow().is_empty());
+    }
+
+    #[test]
+    fn resolve_github_login_with_retry_retries_transient_errors_and_eventually_resolves() {
+        let gateway = FakeGithubGateway::new(test_authorization(5, 900));
+        gateway.viewer_responses.borrow_mut().extend([
+            Err(AppError::GithubApiFailed("一時的な失敗".to_string())),
+            Err(AppError::GithubApiFailed("一時的な失敗".to_string())),
+        ]);
+        let sleeps = std::cell::RefCell::new(Vec::new());
+
+        let outcome = resolve_github_login_with_retry(&gateway, "token", &[10, 60, 300], |secs| {
+            sleeps.borrow_mut().push(secs);
+        });
+
+        assert_eq!(
+            outcome,
+            ViewerCheckOutcome::Resolved(GithubViewer {
+                login: "yanqirenshi".to_string(),
+            })
+        );
+        assert_eq!(sleeps.borrow().as_slice(), [10, 60]);
+    }
+
+    #[test]
+    fn resolve_github_login_with_retry_gives_up_after_exhausting_backoff() {
+        let gateway = FakeGithubGateway::new(test_authorization(5, 900));
+        gateway.viewer_responses.borrow_mut().extend([
+            Err(AppError::GithubApiFailed("一時的な失敗".to_string())),
+            Err(AppError::GithubApiFailed("一時的な失敗".to_string())),
+            Err(AppError::GithubApiFailed("一時的な失敗".to_string())),
+        ]);
+        let sleeps = std::cell::RefCell::new(Vec::new());
+
+        let outcome = resolve_github_login_with_retry(&gateway, "token", &[10, 60], |secs| {
+            sleeps.borrow_mut().push(secs);
+        });
+
+        assert_eq!(outcome, ViewerCheckOutcome::GaveUp);
+        assert_eq!(sleeps.borrow().as_slice(), [10, 60]);
+    }
+
+    #[test]
+    fn resolve_github_login_with_retry_tries_once_when_backoff_is_empty() {
+        let gateway = FakeGithubGateway::new(test_authorization(5, 900));
+        gateway
+            .viewer_responses
+            .borrow_mut()
+            .push_back(Err(AppError::GithubApiFailed("一時的な失敗".to_string())));
+        let sleeps = std::cell::RefCell::new(Vec::new());
+
+        let outcome = resolve_github_login_with_retry(&gateway, "token", &[], |secs| {
+            sleeps.borrow_mut().push(secs);
+        });
+
+        assert_eq!(outcome, ViewerCheckOutcome::GaveUp);
+        assert!(sleeps.borrow().is_empty());
     }
 
     #[test]

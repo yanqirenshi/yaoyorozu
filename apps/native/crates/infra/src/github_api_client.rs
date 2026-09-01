@@ -85,10 +85,19 @@ impl GithubApiClient {
     /// リクエストを実行しJSONとして返す。HTTPレベルのエラー(非2xx等)はここで
     /// 弾く。GraphQLの `errors` フィールド(200で返る)はここでは見ない
     /// (呼び出し側で `check_graphql_errors` を使う)。
+    ///
+    /// 401(トークン失効)は他のHTTPエラー(ネットワーク不通・タイムアウト・
+    /// 5xx等の一時的な失敗)と区別し `AppError::GithubAuthExpired` にする
+    /// (issue #54: 一時的な通信失敗を認証切れと誤認しないため)。
     fn execute_json(&self, request: Request) -> Result<serde_json::Value, AppError> {
         let response = self.http.execute(request).map_err(|e| {
             AppError::GithubApiFailed(format!("GitHub APIへのリクエストに失敗しました: {e}"))
         })?;
+        if is_token_expired_status(response.status()) {
+            return Err(AppError::GithubAuthExpired(
+                "GitHubの認証が無効です。再度ログインしてください".to_string(),
+            ));
+        }
         response
             .error_for_status()
             .map_err(|e| AppError::GithubApiFailed(format!("GitHub APIがエラーを返しました: {e}")))?
@@ -97,6 +106,12 @@ impl GithubApiClient {
                 AppError::GithubApiFailed(format!("GitHub APIの応答を解釈できませんでした: {e}"))
             })
     }
+}
+
+/// HTTPステータスがGitHub側でのトークン失効(401 Unauthorized)を示すかを
+/// 判定する純粋関数(テスト用に分離。issue #54)。
+fn is_token_expired_status(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::UNAUTHORIZED
 }
 
 #[derive(Deserialize)]
@@ -770,6 +785,26 @@ mod tests {
     fn is_insufficient_scope_error_detects_forbidden_type() {
         let value = json!({ "errors": [{ "type": "FORBIDDEN", "message": "x" }] });
         assert!(is_insufficient_scope_error(&value));
+    }
+
+    #[test]
+    fn is_token_expired_status_detects_401() {
+        assert!(is_token_expired_status(reqwest::StatusCode::UNAUTHORIZED));
+    }
+
+    #[test]
+    fn is_token_expired_status_returns_false_for_transient_and_other_statuses() {
+        assert!(!is_token_expired_status(reqwest::StatusCode::OK));
+        assert!(!is_token_expired_status(reqwest::StatusCode::FORBIDDEN));
+        assert!(!is_token_expired_status(
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR
+        ));
+        assert!(!is_token_expired_status(
+            reqwest::StatusCode::SERVICE_UNAVAILABLE
+        ));
+        assert!(!is_token_expired_status(
+            reqwest::StatusCode::TOO_MANY_REQUESTS
+        ));
     }
 
     #[test]

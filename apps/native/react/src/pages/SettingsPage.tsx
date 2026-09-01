@@ -101,7 +101,9 @@ function SettingsPage() {
   }, []);
 
   useEffect(() => {
-    getGithubAuthStatus().then(setAuthStatus);
+    getGithubAuthStatus()
+      .then(setAuthStatus)
+      .catch((e) => setAuthError(isAppError(e) ? e.message : String(e)));
   }, []);
 
   useEffect(() => {
@@ -284,7 +286,11 @@ function SettingsPage() {
                 <h3>GitHub認証</h3>
                 {authStatus.authenticated ? (
                   <div className="settings-github-auth">
-                    <span>{authStatus.login} としてログイン中</span>
+                    <span>
+                      {authStatus.login
+                        ? `${authStatus.login} としてログイン中`
+                        : "ログイン確認中…"}
+                    </span>
                     <button type="button" onClick={handleGithubLogout}>
                       ログアウト
                     </button>
