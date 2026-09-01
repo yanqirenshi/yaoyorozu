@@ -174,12 +174,14 @@ body,
 .claude-md-pane {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   display: flex;
 }
 
 .claude-md-editor {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -188,6 +190,7 @@ body,
 .claude-md-editor-workspace {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   border: 1px solid #a1a1aa;
   border-radius: 4px;
   overflow: hidden;
