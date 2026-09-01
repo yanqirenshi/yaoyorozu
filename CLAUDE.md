@@ -27,6 +27,10 @@ Claude Code で以下の4つのセッションに役割を分けて対応する�
 - `apps/web` — Next.js製のWebアプリ。WBS/構成図/UIデザイン/サイトマップ/Classes/TM図を表示するドキュメンテーションツール
 - `apps/native` — Tauri v2製のネイティブアプリ。Claude Codeのセッション履歴ビューア(開発中)
 
+## 配布(apps/native)
+
+他PCでの実行は GitHub Releases での MSI ファイル公開を基本とする。winget(microsoft/winget-pkgs)への公開は、アプリが公開配布に見合う完成度になるまで見送る(2026-09-01、申請PR [microsoft/winget-pkgs#426285](https://github.com/microsoft/winget-pkgs/pull/426285) をクローズ済み)。再申請は明示的に指示があった場合のみ検討する。
+
 ## 開発コマンド
 
 ```bash
