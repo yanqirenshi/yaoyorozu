@@ -132,6 +132,8 @@ pub struct AppState {
 - MUST: 画面をまたいで保持したい UI 状態(選択中プロジェクト等)は URL(パス・クエリ)に置き、
   リロードで復元できるようにする。
 - NEVER: ルーターの location state・メモリ上の Context に業務状態を載せる(業務状態は Rust 側。§2)。
+- MUST: `tauri.conf.json` の `dragDropEnabled: false` を維持する。Tauri のファイルD&D機構(既定 true)は
+  WebView 内のネイティブ HTML5 ドラッグ&ドロップを阻害する(issue #50 で実確認。かんばんの D&D が依存)。
 
 ## 7. コマンド
 
