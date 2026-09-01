@@ -175,7 +175,6 @@ body,
   flex: 1;
   min-height: 0;
   display: flex;
-  padding: 16px;
 }
 
 .claude-md-editor {
