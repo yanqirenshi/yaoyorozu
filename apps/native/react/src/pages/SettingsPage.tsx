@@ -55,7 +55,7 @@ function SettingsPage() {
     : "github";
 
   const [claudeMdDirty, setClaudeMdDirty] = useState(false);
-  const [claudeMdMode, setClaudeMdMode] = useState<ViewMode>("split");
+  const [claudeMdMode, setClaudeMdMode] = useState<ViewMode>("preview");
   const claudeMdEditorRef = useRef<ClaudeMdEditorHandle>(null);
 
   const confirmDiscardClaudeMdIfDirty = (): boolean => {

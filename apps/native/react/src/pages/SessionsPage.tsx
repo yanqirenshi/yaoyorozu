@@ -87,7 +87,7 @@ function SessionsPage() {
   const projectParam = searchParams.get("project");
   const sessionParam = searchParams.get("session");
   const [claudeMdDirty, setClaudeMdDirty] = useState(false);
-  const [claudeMdMode, setClaudeMdMode] = useState<ViewMode>("split");
+  const [claudeMdMode, setClaudeMdMode] = useState<ViewMode>("preview");
   const claudeMdEditorRef = useRef<ClaudeMdEditorHandle>(null);
   const [githubAuthenticated, setGithubAuthenticated] = useState(false);
   const [githubProject, setGithubProject] = useState<{ owner: string; number: number } | null>(

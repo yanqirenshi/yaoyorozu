@@ -24,7 +24,7 @@ type ClaudeMdEditorProps = {
   // settings.jsonでは空オブジェクト `{}` から編集開始する(issue #53)。
   initialContent?: string;
   // workspaceの表示モード。呼び出し元(dockの表示モード切替)が制御する
-  // (issue #59)。未指定時は "split"(/claude のようにdockから制御しない
+  // (issue #59)。未指定時は "preview"(/claude のようにdockから制御しない
   // 呼び出し元向けの既定値)。
   mode?: ViewMode;
 };
@@ -46,7 +46,7 @@ const ClaudeMdEditor = forwardRef<ClaudeMdEditorHandle, ClaudeMdEditorProps>(
       emptyMessage = "CLAUDE.mdがありません。",
       createLabel = "作成",
       initialContent = "",
-      mode = "split",
+      mode = "preview",
     },
     ref,
   ) {
