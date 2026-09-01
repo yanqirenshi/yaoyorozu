@@ -1,4 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import DOMPurify from "dompurify";
+import "@yanqirenshi/markdown.sitter";
+import type { MarkdownWorkspace } from "@yanqirenshi/markdown.sitter";
 import { isAppError } from "./api";
 
 // CLAUDE.md(issue #27)・settings.json(issue #53)のどちらも
@@ -40,6 +43,8 @@ function ClaudeMdEditor({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const workspaceRef = useRef<MarkdownWorkspace | null>(null);
+
   const reload = () => {
     setLoading(true);
     setError(null);
@@ -56,6 +61,36 @@ function ClaudeMdEditor({
   };
 
   useEffect(reload, [reloadKey]);
+
+  // React state(ロード/再読み込みで得た内容)をworkspaceへ一方向に反映する。
+  // ユーザー入力はworkspaceの `input` イベント経由でReact側へ戻すため
+  // (下のuseEffect)、既に同じ値ならDOMへ書き戻さない(往復を防ぐ)。
+  useEffect(() => {
+    const workspace = workspaceRef.current;
+    if (!workspace) return;
+    if (workspace.value !== content) {
+      workspace.value = content;
+    }
+  }, [content, hasFile, creating]);
+
+  // workspaceが(再)マウントされるたびに、sanitizeフックの設定と
+  // inputイベントの購読をやり直す。sanitizeは既定が素通しのため必須で
+  // 設定する: CLAUDE.mdはAIやアプリ外からも書き換わるファイルであり、
+  // 素通しだとMarkdown内の生HTML/scriptがTauri WebView(= invoke で
+  // backendを呼べる環境)で実行されうる(issue #57)。
+  useEffect(() => {
+    const workspace = workspaceRef.current;
+    if (!workspace) return;
+
+    const viewer = workspace.viewer;
+    if (viewer) {
+      viewer.sanitize = (html) => DOMPurify.sanitize(html);
+    }
+
+    const handleInput = () => setContent(workspace.value);
+    workspace.addEventListener("input", handleInput);
+    return () => workspace.removeEventListener("input", handleInput);
+  }, [hasFile, creating]);
 
   const dirty = (hasFile || creating) && content !== savedContent;
 
@@ -98,12 +133,15 @@ function ClaudeMdEditor({
           {saving ? "保存中…" : "保存"}
         </button>
       </div>
-      <textarea
-        className="claude-md-editor-textarea"
-        value={content}
-        onChange={(e) => setContent(e.target.value)}
-        spellCheck={false}
-      />
+      <markdown-workspace
+        ref={workspaceRef}
+        mode="split"
+        live
+        className="claude-md-editor-workspace"
+      >
+        <markdown-editor slot="editor" placeholder="Markdownを入力" />
+        <markdown-viewer slot="preview" foldable />
+      </markdown-workspace>
       {error && <p className="error">{error}</p>}
     </div>
   );
