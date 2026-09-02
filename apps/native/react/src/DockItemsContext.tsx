@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect } from "react";
+import { createContext, useCallback, useContext, useEffect } from "react";
 import type { Dispatch, MutableRefObject, ReactNode, SetStateAction } from "react";
 import type { DockItem } from "command-dock";
 
@@ -68,4 +68,16 @@ export function usePageDirtyGuard(guard: DirtyGuard | null) {
       }
     };
   }, [guard, ctx]);
+}
+
+/**
+ * 現在マウントされているページが登録した「未保存の編集を破棄してよいか」の
+ * 確認関数を呼び出す関数を返す。ページ自身ではなく、その親(タブ管理など)が
+ * ページをまたぐ操作の前に呼ぶために使う(issue #77。`TabbedSessionsPage` の
+ * タブ切り替え・タブを閉じる操作)。未登録(ページが何も登録していない)なら
+ * 常に `true`(続行してよい)を返す。
+ */
+export function useDirtyGuardCheck(): () => boolean {
+  const ctx = useContext(DockItemsContext);
+  return useCallback(() => ctx?.dirtyGuardRef.current?.() ?? true, [ctx]);
 }

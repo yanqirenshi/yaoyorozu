@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent, FormEvent } from "react";
-import { useSearchParams } from "react-router";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { DockItem } from "command-dock";
@@ -41,28 +40,10 @@ import PaneTabs from "../PaneTabs";
 import { createProjectSettingsDockItems } from "../projectSettingsDockItems";
 import RulesPane from "../RulesPane";
 import SkillsPane from "../SkillsPane";
-import { useWindowProfileId } from "../useWindowProfileId";
+import { PANE_VIEWS, useUrlViewerNav } from "../viewerNav";
+import type { PaneView, ViewerNav } from "../viewerNav";
 
 const PAGE_SIZE = 50;
-
-type PaneView =
-  | "chat"
-  | "github-project"
-  | "claude-md"
-  | "rules"
-  | "skills"
-  | "settings-json"
-  | "settings-local-json";
-
-const PANE_VIEWS: PaneView[] = [
-  "chat",
-  "github-project",
-  "claude-md",
-  "rules",
-  "skills",
-  "settings-json",
-  "settings-local-json",
-];
 
 type SessionGroup = {
   folder: string;
@@ -109,8 +90,20 @@ function closeWindowIfProfileWasDeleted(windowProfileId: string | null, e: unkno
   return false;
 }
 
-function SessionsPage() {
-  const windowProfileId = useWindowProfileId();
+type SessionsPageProps = {
+  // 単一ビュー(URL駆動。省略時)/ タブ(タブ管理側state駆動。issue #77)の
+  // どちらから状態を読むかを外から注入する(native.md §6)。
+  nav?: ViewerNav;
+};
+
+function SessionsPage({ nav: navProp }: SessionsPageProps) {
+  // タブ側から nav が渡されない場合(メインウィンドウが未タブ化 or
+  // Phase 1 の別ウィンドウ)は、常に呼ぶ urlNav をそのまま使う(フックは
+  // 条件付きで呼べないため、navProp の有無に関わらず urlNav 自体は毎回計算
+  // する。navProp がある場合は単に使わないだけ)。
+  const urlNav = useUrlViewerNav();
+  const nav = navProp ?? urlNav;
+  const windowProfileId = nav.windowProfileId;
   const [targetFolders, setTargetFolders] = useState<string[]>([]);
   const [sessionGroups, setSessionGroups] = useState<SessionGroup[]>([]);
   const [messages, setMessages] = useState<MessageDto[]>([]);
@@ -120,15 +113,14 @@ function SessionsPage() {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [mode, setMode] = useState<AgentModeDto>("chat");
-  const [searchParams, setSearchParams] = useSearchParams();
-  const viewParam = searchParams.get("view");
+  const viewParam = nav.view;
   const view: PaneView = PANE_VIEWS.includes(viewParam as PaneView)
     ? (viewParam as PaneView)
     : "chat";
-  const projectParam = searchParams.get("project");
-  const sessionParam = searchParams.get("session");
-  const ruleParam = searchParams.get("rule");
-  const skillParam = searchParams.get("skill");
+  const projectParam = nav.project;
+  const sessionParam = nav.session;
+  const ruleParam = nav.rule;
+  const skillParam = nav.skill;
   const [claudeMdDirty, setClaudeMdDirty] = useState(false);
   const [claudeMdMode, setClaudeMdMode] = useState<ViewMode>("preview");
   const claudeMdEditorRef = useRef<ClaudeMdEditorHandle>(null);
@@ -304,12 +296,7 @@ function SessionsPage() {
           setTargetFolders(settings.selected_project_folders);
           setGithubProject(settings.github_project);
           if (projectParam && !settings.selected_project_folders.includes(projectParam)) {
-            setSearchParams((prev) => {
-              const params = new URLSearchParams(prev);
-              params.delete("project");
-              params.delete("session");
-              return params;
-            });
+            nav.clearProjectAndSession();
           }
           return loadSessionGroups(settings.selected_project_folders);
         })
@@ -321,7 +308,7 @@ function SessionsPage() {
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
     };
-  }, [projectParam, loadSessionGroups, setSearchParams, windowProfileId]);
+  }, [projectParam, loadSessionGroups, nav.clearProjectAndSession, windowProfileId]);
 
   const handleLoadMoreProjectItems = () => {
     if (!projectItemsNextCursor || projectItemsLoadingMore) return;
@@ -407,42 +394,21 @@ function SessionsPage() {
 
   const handleSelectSession = (project: string, id: string) => {
     if (!confirmDiscardIfDirty()) return;
-    setSearchParams((prev) => {
-      const params = new URLSearchParams(prev);
-      params.set("project", project);
-      params.set("session", id);
-      return params;
-    });
+    nav.setProjectAndSession(project, id);
   };
 
   const handleSwitchView = (next: PaneView) => {
     if (next === view) return;
     if (!confirmDiscardIfDirty()) return;
-    setSearchParams((prev) => {
-      const params = new URLSearchParams(prev);
-      if (next === "chat") {
-        params.delete("view");
-      } else {
-        params.set("view", next);
-      }
-      return params;
-    });
+    nav.setView(next);
   };
 
   const handleSelectRule = (fileName: string) => {
-    setSearchParams((prev) => {
-      const params = new URLSearchParams(prev);
-      params.set("rule", fileName);
-      return params;
-    });
+    nav.setRule(fileName);
   };
 
   const handleSelectSkill = (name: string) => {
-    setSearchParams((prev) => {
-      const params = new URLSearchParams(prev);
-      params.set("skill", name);
-      return params;
-    });
+    nav.setSkill(name);
   };
 
   const handleSubmit = (event: FormEvent) => {

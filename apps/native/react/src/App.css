@@ -59,6 +59,145 @@ body,
   overflow-x: hidden;
 }
 
+/* メインウィンドウのビューアをタブ化する外枠(issue #77)。タブバーを上に
+   固定し、その下に既存のビューア骨格(project-list + session-conversation)を
+   横並びで置く。`.app-shell` 直下の唯一のフレックス子になる。 */
+.tabbed-viewer {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tabbed-viewer-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.tab-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 16px;
+  border-bottom: 1px solid #a1a1aa;
+  overflow-x: auto;
+}
+
+.tab-bar-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.tab-bar-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #a1a1aa;
+  border-radius: 4px;
+  background: #fbfbf8;
+  color: #737373;
+  font-family: inherit;
+  font-size: 0.85rem;
+  padding: 6px 10px;
+  cursor: pointer;
+  flex-shrink: 0;
+  max-width: 200px;
+}
+
+.tab-bar-item:hover {
+  color: #373737;
+}
+
+.tab-bar-item.active {
+  color: #9d5b8b;
+  border-color: #9d5b8b;
+  font-weight: 600;
+}
+
+.tab-bar-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab-bar-close {
+  flex-shrink: 0;
+  line-height: 1;
+  color: inherit;
+  opacity: 0.6;
+}
+
+.tab-bar-close:hover {
+  opacity: 1;
+}
+
+.tab-bar-add {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.tab-bar-add-button {
+  border: 1px solid #a1a1aa;
+  border-radius: 4px;
+  background: #fbfbf8;
+  color: #737373;
+  font-family: inherit;
+  font-size: 0.9rem;
+  width: 28px;
+  height: 28px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tab-bar-add-button:hover {
+  color: #373737;
+}
+
+.tab-bar-add-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9;
+}
+
+.tab-bar-add-menu {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 4px);
+  left: 0;
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  min-width: 160px;
+  background: #fbfbf8;
+  border: 1px solid #a1a1aa;
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+
+.tab-bar-add-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: 0.85rem;
+  color: #373737;
+  padding: 6px 8px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.tab-bar-add-menu button:hover {
+  background-color: rgba(157, 91, 139, 0.08);
+}
+
 /* 画面左の一覧ペイン(固定幅+縦スクロール)。ビューアのセッション一覧と
    設定のプロファイル一覧(issue #74)で骨格を共有する。 */
 .project-list,
