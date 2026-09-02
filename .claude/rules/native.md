@@ -134,6 +134,18 @@ pub struct AppState {
 - NEVER: ルーターの location state・メモリ上の Context に業務状態を載せる(業務状態は Rust 側。§2)。
 - MUST: `tauri.conf.json` の `dragDropEnabled: false` を維持する。Tauri のファイルD&D機構(既定 true)は
   WebView 内のネイティブ HTML5 ドラッグ&ドロップを阻害する(issue #50 で実確認。かんばんの D&D が依存)。
+- MUST: 上記の「UI 状態は URL に置く」は同時に1画面だけを表示する単一ビュー前提の規約である。
+  1つのウィンドウ内に複数タブ(Chrome風。issue #77)を持つ場合、URL は1つしか持てないため、
+  **タブごとの画面状態(対象プロファイル・選択中セッション・表示viewなど)はタブ管理側の
+  React state(タブの配列 + アクティブタブID)に置く**。個々のタブの内容を表示するページ
+  コンポーネント自身は「状態をどこから読むか」を外から注入できる形(props 経由。react-router
+  の `useSearchParams` を直接内部で呼ばない)にし、単一ビュー(URL駆動)とタブ(state駆動)の
+  両方から同じ形で使えるようにする(`react/src/viewerNav.ts` の `ViewerNav` がその抽象)。
+- MUST: 復元用に「開いているタブの一覧」の**最小限のスナップショット**(タブごとの対象
+  プロファイルIDなど)だけを Rust 側の設定(`domain::Settings.open_tabs`)へ保存し、次回起動時に
+  復元する。選択中セッション等の細かい画面状態は保存対象に含めない(起動のたびに、そのタブの
+  対象プロファイルの既定表示から始める)。保存は §2 の永続化規約(atomic write・schema
+  version・マイグレーション)に従う。
 
 ## 7. コマンド
 

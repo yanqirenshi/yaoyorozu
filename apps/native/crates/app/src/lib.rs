@@ -541,6 +541,23 @@ pub fn rename_profile(
     })
 }
 
+/// メインウィンドウのタブバー(issue #77)で開いているタブの一覧を置き換える。
+/// `profile_ids` の妥当性(存在するプロファイルか)はここでは検証しない
+/// (タブはUIの一時的な状態であり、存在しないプロファイルを指していても
+/// 次回の一覧表示で単に表示できないだけで、致命的ではないため。フロント側
+/// で復元時にフィルタする)。
+pub fn save_open_tabs(settings: &Settings, profile_ids: &[String]) -> Settings {
+    Settings {
+        open_tabs: profile_ids
+            .iter()
+            .map(|id| domain::TabState {
+                profile_id: id.clone(),
+            })
+            .collect(),
+        ..settings.clone()
+    }
+}
+
 /// `CLAUDE.md` を読む(存在しなければ `None`)。
 pub fn read_claude_md(
     store: &dyn ClaudeMdStore,
@@ -1337,6 +1354,41 @@ mod tests {
         let settings = two_profile_settings();
         let error = rename_profile(&settings, "missing", "renamed").expect_err("should reject");
         assert!(matches!(error, AppError::NotFound(_)));
+    }
+
+    #[test]
+    fn save_open_tabs_replaces_the_tab_list_in_order() {
+        let settings = two_profile_settings();
+        let updated = save_open_tabs(
+            &settings,
+            &["b".to_string(), "a".to_string(), "b".to_string()],
+        );
+        assert_eq!(
+            updated.open_tabs,
+            vec![
+                domain::TabState {
+                    profile_id: "b".to_string()
+                },
+                domain::TabState {
+                    profile_id: "a".to_string()
+                },
+                domain::TabState {
+                    profile_id: "b".to_string()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn save_open_tabs_accepts_ids_that_do_not_reference_existing_profiles() {
+        let settings = two_profile_settings();
+        let updated = save_open_tabs(&settings, &["missing".to_string()]);
+        assert_eq!(
+            updated.open_tabs,
+            vec![domain::TabState {
+                profile_id: "missing".to_string()
+            }]
+        );
     }
 
     #[derive(Default)]

@@ -200,14 +200,30 @@ pub struct ProfileSummaryDto {
     pub name: String,
 }
 
+/// 開いているタブ1件分の、復元用の最小限のスナップショット(issue #77)。
+#[derive(Serialize, Deserialize, Clone)]
+pub struct TabStateDto {
+    pub profile_id: String,
+}
+
+impl From<domain::TabState> for TabStateDto {
+    fn from(tab: domain::TabState) -> Self {
+        Self {
+            profile_id: tab.profile_id,
+        }
+    }
+}
+
 /// `get_settings` の戻り値。`active_profile_id`/`profiles` はプロファイル
-/// 一覧・切り替えUI用、それ以外はアクティブプロファイルの内容(+グローバル
-/// 項目の `claude_projects_dir`)をフラットに展開したもの(issue #72。
-/// 既存フロントの読み替えを最小にするため)。
+/// 一覧・切り替えUI用、`open_tabs` はメインウィンドウのタブバー(issue #77)
+/// 復元用、それ以外はアクティブプロファイルの内容(+グローバル項目の
+/// `claude_projects_dir`)をフラットに展開したもの(issue #72。既存フロントの
+/// 読み替えを最小にするため)。
 #[derive(Serialize, Clone)]
 pub struct SettingsDto {
     pub active_profile_id: String,
     pub profiles: Vec<ProfileSummaryDto>,
+    pub open_tabs: Vec<TabStateDto>,
     pub repository_path: Option<String>,
     pub github_project: Option<GithubProjectDto>,
     /// `~/.claude/projects/` 配下のフォルダ名のうち、対象として選んだもの。
