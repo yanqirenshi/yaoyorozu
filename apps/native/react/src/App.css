@@ -275,6 +275,40 @@ body,
   min-width: 0;
 }
 
+/* settings.json/settings.local.jsonタブ(issue #70)。CLAUDE.mdタブと同じ
+   骨格だが、中身がJSONのためmarkdown.sitterではなく素のtextareaを使う。 */
+.json-settings-pane {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  padding: 16px;
+}
+
+.json-file-editor {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.json-file-editor-textarea {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  resize: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  padding: 12px;
+  border: 1px solid #a1a1aa;
+  border-radius: 4px;
+  background: #fbfbf8;
+  color: #373737;
+}
+
 .github-project-pane {
   flex: 1;
   min-height: 0;

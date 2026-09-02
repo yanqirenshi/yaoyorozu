@@ -5,13 +5,15 @@ use app::{SessionSource, SettingsStore, TokenStore};
 use dto::{
     AgentKindDto, AgentModeDto, AppErrorDto, AppWarningDto, ClaudeMdDto, ClaudeSettingsDto,
     DeviceCodeDto, GithubAuthFailedEventDto, GithubAuthStatusDto, GithubAuthenticatedEventDto,
-    GithubProjectDto, GithubProjectSummaryDto, ProjectDto, ProjectItemsPageDto, RuleDto,
-    RuleSummaryDto, SessionChangedEventDto, SessionDto, SessionSummaryDto,
-    SettingsCorruptedEventDto, SettingsDto, SettingsInputDto, SkillDto, SkillSummaryDto,
+    GithubProjectDto, GithubProjectSummaryDto, ProjectDto, ProjectItemsPageDto,
+    ProjectSettingsFileDto, RuleDto, RuleSummaryDto, SessionChangedEventDto, SessionDto,
+    SessionSummaryDto, SettingsCorruptedEventDto, SettingsDto, SettingsInputDto, SkillDto,
+    SkillSummaryDto,
 };
 use infra::{
-    ClaudeCliAgent, FileClaudeMdStore, FileClaudeSettingsStore, FileRulesStore, FileSettingsStore,
-    FileSkillsStore, FileSystemRepository, GithubApiClient, KeyringTokenStore,
+    ClaudeCliAgent, FileClaudeMdStore, FileClaudeSettingsStore, FileProjectSettingsStore,
+    FileRulesStore, FileSettingsStore, FileSkillsStore, FileSystemRepository, GithubApiClient,
+    KeyringTokenStore,
 };
 use state::AppState;
 use std::path::PathBuf;
@@ -409,6 +411,63 @@ async fn get_skill(
         let store = FileSkillsStore::new();
         let content = app::get_skill(&store, &repo_dir, &name)?;
         Ok(SkillDto { content })
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
+}
+
+/// プロジェクトの `.claude/settings.json` / `settings.local.json` を読む
+/// (issue #70)。`~/.claude/settings.json`(ユーザーレベル)対象の
+/// `get_claude_settings_file` とは別コマンド。`which` で対象ファイルを選ぶ
+/// (フロントからファイル名の自由入力は受けない。native.md §4)。
+#[tauri::command]
+async fn get_project_settings_file(
+    state: tauri::State<'_, Mutex<AppState>>,
+    project: String,
+    which: ProjectSettingsFileDto,
+) -> Result<ClaudeSettingsDto, AppErrorDto> {
+    let root = effective_projects_dir_from_state(&state).await?;
+    tauri::async_runtime::spawn_blocking(move || -> Result<ClaudeSettingsDto, app::AppError> {
+        let source = FileSystemRepository::new(root);
+        let repo_dir = source.latest_session_cwd(&project)?;
+        let store = FileProjectSettingsStore::new();
+        let file = app::read_project_settings_file(&store, &repo_dir, which.into())?;
+        Ok(file.into())
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
+}
+
+#[tauri::command]
+async fn save_project_settings_file(
+    state: tauri::State<'_, Mutex<AppState>>,
+    project: String,
+    which: ProjectSettingsFileDto,
+    content: String,
+    expected_modified_at_ms: Option<u64>,
+) -> Result<(), AppErrorDto> {
+    let root = effective_projects_dir_from_state(&state).await?;
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), app::AppError> {
+        let source = FileSystemRepository::new(root);
+        let repo_dir = source.latest_session_cwd(&project)?;
+        let store = FileProjectSettingsStore::new();
+        app::save_project_settings_file(
+            &store,
+            &repo_dir,
+            which.into(),
+            &content,
+            expected_modified_at_ms,
+        )
     })
     .await
     .unwrap_or_else(|_| {
@@ -897,6 +956,8 @@ pub fn run() {
             get_rule,
             list_skills,
             get_skill,
+            get_project_settings_file,
+            save_project_settings_file,
             get_claude_settings_file,
             save_claude_settings_file,
             get_github_auth_status,
