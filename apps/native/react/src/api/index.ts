@@ -11,6 +11,7 @@ import type {
   GithubAuthStatusDto,
   GithubAuthenticatedEvent,
   GithubProjectSummaryDto,
+  ProfileSummaryDto,
   ProjectDto,
   ProjectItemsPageDto,
   ProjectSettingsFileDto,
@@ -40,6 +41,7 @@ export type {
   GithubProjectDto,
   GithubProjectSummaryDto,
   MessageDto,
+  ProfileSummaryDto,
   ProjectDto,
   ProjectItemDto,
   ProjectItemKindDto,
@@ -117,6 +119,31 @@ export function onSettingsCorrupted(
   const unlisten = listen<SettingsCorruptedEvent>("settings:corrupted", (event) => {
     callback(event.payload);
   });
+  return unlisten.then((fn) => fn);
+}
+
+// プロファイルの切り替え・作成・削除・名前変更(issue #72)。
+export function switchProfile(profileId: string): Promise<void> {
+  return invoke<void>("switch_profile", { profileId });
+}
+
+export function createProfile(name?: string | null): Promise<ProfileSummaryDto> {
+  return invoke<ProfileSummaryDto>("create_profile", { name: name ?? null });
+}
+
+export function deleteProfile(profileId: string): Promise<void> {
+  return invoke<void>("delete_profile", { profileId });
+}
+
+export function renameProfile(profileId: string, name: string): Promise<void> {
+  return invoke<void>("rename_profile", { profileId, name });
+}
+
+// 設定(アクティブプロファイルの内容含む)が変わったことの通知。
+// `update_settings`/プロファイル操作系コマンドの成功時に発火する
+// (native.md §3.2。issue #72)。
+export function onSettingsUpdated(callback: () => void): Promise<() => void> {
+  const unlisten = listen("settings:updated", () => callback());
   return unlisten.then((fn) => fn);
 }
 

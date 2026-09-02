@@ -191,9 +191,23 @@ impl From<GithubProjectDto> for domain::GithubProject {
     }
 }
 
-/// `get_settings` の戻り値。
+/// プロファイル一覧に出す最小限の情報(issue #72)。アクティブプロファイルの
+/// 内容自体は `SettingsDto` にフラットに展開して返す(既存フロントの読み替えを
+/// 最小にするため)。
+#[derive(Serialize, Clone)]
+pub struct ProfileSummaryDto {
+    pub id: String,
+    pub name: String,
+}
+
+/// `get_settings` の戻り値。`active_profile_id`/`profiles` はプロファイル
+/// 一覧・切り替えUI用、それ以外はアクティブプロファイルの内容(+グローバル
+/// 項目の `claude_projects_dir`)をフラットに展開したもの(issue #72。
+/// 既存フロントの読み替えを最小にするため)。
 #[derive(Serialize, Clone)]
 pub struct SettingsDto {
+    pub active_profile_id: String,
+    pub profiles: Vec<ProfileSummaryDto>,
     pub repository_path: Option<String>,
     pub github_project: Option<GithubProjectDto>,
     /// `~/.claude/projects/` 配下のフォルダ名のうち、対象として選んだもの。
@@ -210,8 +224,12 @@ pub struct SettingsDto {
     pub effective_projects_dir: String,
 }
 
-/// `update_settings` の引数。スキーマ `version` はフロントが関知しない
-/// (常に現行バージョンとして保存する)ため含めない。
+/// `update_settings` の引数。対象はアクティブプロファイル(3項目)+グローバル
+/// 項目(`claude_projects_dir`)(issue #72)。スキーマ `version` はフロントが
+/// 関知しない(常に現行バージョンとして保存する)ため含めない。プロファイル自体
+/// (新規作成・削除・名前変更・切り替え)は別コマンドで扱うため、
+/// `domain::Settings` への直接変換(`From`)は用意しない(呼び出し側の
+/// `update_settings` コマンドが現在のアクティブプロファイルを書き換える)。
 #[derive(Deserialize, Clone)]
 pub struct SettingsInputDto {
     pub repository_path: Option<String>,
@@ -219,18 +237,6 @@ pub struct SettingsInputDto {
     pub selected_project_folders: Vec<String>,
     /// `null` は「既定に戻す」を意味する。
     pub claude_projects_dir: Option<String>,
-}
-
-impl From<SettingsInputDto> for domain::Settings {
-    fn from(input: SettingsInputDto) -> Self {
-        Self {
-            version: domain::CURRENT_SETTINGS_VERSION,
-            repository_path: input.repository_path.map(std::path::PathBuf::from),
-            github_project: input.github_project.map(domain::GithubProject::from),
-            selected_project_folders: input.selected_project_folders,
-            claude_projects_dir: input.claude_projects_dir.map(std::path::PathBuf::from),
-        }
-    }
 }
 
 /// `get_repository_claude_md`/`get_project_claude_md` の戻り値。両方

@@ -54,7 +54,16 @@ export type GithubProjectDto = {
   number: number;
 };
 
+// プロファイル一覧の1件分(issue #72)。内容(対象リポジトリ等)はアクティブな
+// もののみ SettingsDto にフラットに展開される。
+export type ProfileSummaryDto = {
+  id: string;
+  name: string;
+};
+
 export type SettingsDto = {
+  active_profile_id: string;
+  profiles: ProfileSummaryDto[];
   repository_path: string | null;
   github_project: GithubProjectDto | null;
   selected_project_folders: string[];

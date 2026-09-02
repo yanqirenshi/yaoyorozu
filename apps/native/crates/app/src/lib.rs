@@ -383,15 +383,17 @@ pub fn load_settings(store: &dyn SettingsStore) -> Result<LoadedSettings, AppErr
     store.load()
 }
 
-/// 設定項目のうち、この時点で検証できる最小限の内容(GitHubプロジェクトの
-/// owner が空でないこと)を確認する。GitHubプロジェクトの実在確認等の高度な
-/// バリデーションはスコープ外(issue #17)。
+/// 設定項目のうち、この時点で検証できる最小限の内容(各プロファイルの
+/// GitHubプロジェクトの owner が空でないこと)を確認する。GitHubプロジェクトの
+/// 実在確認等の高度なバリデーションはスコープ外(issue #17)。
 pub fn validate_settings(settings: &Settings) -> Result<(), AppError> {
-    if let Some(project) = &settings.github_project {
-        if !project.is_valid() {
-            return Err(AppError::InvalidInput(
-                "GitHubプロジェクトのownerを入力してください".to_string(),
-            ));
+    for profile in &settings.profiles {
+        if let Some(project) = &profile.github_project {
+            if !project.is_valid() {
+                return Err(AppError::InvalidInput(
+                    "GitHubプロジェクトのownerを入力してください".to_string(),
+                ));
+            }
         }
     }
     Ok(())
@@ -403,6 +405,118 @@ pub fn update_settings(store: &dyn SettingsStore, input: Settings) -> Result<Set
     validate_settings(&input)?;
     store.save(&input)?;
     Ok(input)
+}
+
+/// アクティブプロファイルを切り替える。`profile_id` が存在しなければ
+/// `NotFound`(issue #72)。永続化・イベント通知は呼び出し側(tauri層)の
+/// 責務(native.md §3.1)。
+pub fn switch_profile(settings: &Settings, profile_id: &str) -> Result<Settings, AppError> {
+    if !settings.profiles.iter().any(|p| p.id == profile_id) {
+        return Err(AppError::NotFound(
+            "指定されたプロファイルが見つかりません".to_string(),
+        ));
+    }
+    Ok(Settings {
+        active_profile_id: profile_id.to_string(),
+        ..settings.clone()
+    })
+}
+
+/// 空のプロファイルを作成してアクティブにする。`name` が省略・空文字の場合は
+/// 「新しいプロファイル」を既定名にする。`id` はここ(app層)でUUIDを払い出す
+/// (`Date.now` 系に依存しない安定ID。domainを純粋に保つため生成はdomain側に
+/// 置かない。issue #72)。新設定と、作成したプロファイル自体の両方を返す
+/// (呼び出し側がDTOの組み立てに使う)。
+pub fn create_profile(settings: &Settings, name: Option<String>) -> (Settings, domain::Profile) {
+    let name = name
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| "新しいプロファイル".to_string());
+    let id = uuid::Uuid::new_v4().to_string();
+    let profile = domain::Profile::new(id.clone(), name);
+
+    let mut profiles = settings.profiles.clone();
+    profiles.push(profile.clone());
+    let updated = Settings {
+        profiles,
+        active_profile_id: id,
+        ..settings.clone()
+    };
+    (updated, profile)
+}
+
+/// プロファイルを削除する。最後の1件は削除できない(`InvalidInput`)。
+/// 存在しない `profile_id` は `NotFound`。アクティブプロファイルを削除した
+/// 場合は残りの先頭をアクティブにする(issue #72)。
+pub fn delete_profile(settings: &Settings, profile_id: &str) -> Result<Settings, AppError> {
+    if settings.profiles.len() <= 1 {
+        return Err(AppError::InvalidInput(
+            "最後の1件のプロファイルは削除できません".to_string(),
+        ));
+    }
+    if !settings.profiles.iter().any(|p| p.id == profile_id) {
+        return Err(AppError::NotFound(
+            "指定されたプロファイルが見つかりません".to_string(),
+        ));
+    }
+
+    let profiles: Vec<_> = settings
+        .profiles
+        .iter()
+        .filter(|p| p.id != profile_id)
+        .cloned()
+        .collect();
+    let active_profile_id = if settings.active_profile_id == profile_id {
+        profiles[0].id.clone()
+    } else {
+        settings.active_profile_id.clone()
+    };
+
+    Ok(Settings {
+        profiles,
+        active_profile_id,
+        ..settings.clone()
+    })
+}
+
+/// プロファイルの表示名を変更する。空文字(トリム後)は `InvalidInput` で拒否。
+/// 存在しない `profile_id` は `NotFound`(issue #72)。
+pub fn rename_profile(
+    settings: &Settings,
+    profile_id: &str,
+    name: &str,
+) -> Result<Settings, AppError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::InvalidInput(
+            "プロファイル名を入力してください".to_string(),
+        ));
+    }
+    if !settings.profiles.iter().any(|p| p.id == profile_id) {
+        return Err(AppError::NotFound(
+            "指定されたプロファイルが見つかりません".to_string(),
+        ));
+    }
+
+    let profiles = settings
+        .profiles
+        .iter()
+        .map(|p| {
+            if p.id == profile_id {
+                domain::Profile {
+                    name: trimmed.to_string(),
+                    ..p.clone()
+                }
+            } else {
+                p.clone()
+            }
+        })
+        .collect();
+
+    Ok(Settings {
+        profiles,
+        ..settings.clone()
+    })
 }
 
 /// `CLAUDE.md` を読む(存在しなければ `None`)。
@@ -998,10 +1112,19 @@ mod tests {
         }
     }
 
+    fn settings_with_profile(profile: domain::Profile) -> Settings {
+        Settings {
+            active_profile_id: profile.id.clone(),
+            profiles: vec![profile],
+            ..Settings::default()
+        }
+    }
+
     #[test]
     fn load_settings_returns_store_result_unchanged() {
-        let mut settings = Settings::default();
-        settings.selected_project_folders.push("proj1".to_string());
+        let mut profile = domain::Profile::new("p1".to_string(), "p1".to_string());
+        profile.selected_project_folders.push("proj1".to_string());
+        let settings = settings_with_profile(profile);
         let store = FakeSettingsStore::new(settings.clone());
 
         let loaded = load_settings(&store).expect("should load settings");
@@ -1017,13 +1140,12 @@ mod tests {
 
     #[test]
     fn validate_settings_rejects_blank_github_project_owner() {
-        let settings = Settings {
-            github_project: Some(domain::GithubProject {
-                owner: "".to_string(),
-                number: 1,
-            }),
-            ..Settings::default()
-        };
+        let mut profile = domain::Profile::new("p1".to_string(), "p1".to_string());
+        profile.github_project = Some(domain::GithubProject {
+            owner: "".to_string(),
+            number: 1,
+        });
+        let settings = settings_with_profile(profile);
 
         let error = validate_settings(&settings).expect_err("should reject blank owner");
         assert!(matches!(error, AppError::InvalidInput(_)));
@@ -1032,10 +1154,9 @@ mod tests {
     #[test]
     fn update_settings_saves_valid_settings_and_returns_them() {
         let store = FakeSettingsStore::new(Settings::default());
-        let input = Settings {
-            repository_path: Some(PathBuf::from("/tmp/repo")),
-            ..Settings::default()
-        };
+        let mut profile = domain::Profile::new("p1".to_string(), "p1".to_string());
+        profile.repository_path = Some(PathBuf::from("/tmp/repo"));
+        let input = settings_with_profile(profile);
 
         let saved = update_settings(&store, input.clone()).expect("should update settings");
         assert_eq!(saved, input);
@@ -1045,18 +1166,134 @@ mod tests {
     #[test]
     fn update_settings_rejects_invalid_settings_without_saving() {
         let store = FakeSettingsStore::new(Settings::default());
-        let input = Settings {
-            github_project: Some(domain::GithubProject {
-                owner: "   ".to_string(),
-                number: 1,
-            }),
-            ..Settings::default()
-        };
+        let mut profile = domain::Profile::new("p1".to_string(), "p1".to_string());
+        profile.github_project = Some(domain::GithubProject {
+            owner: "   ".to_string(),
+            number: 1,
+        });
+        let input = settings_with_profile(profile);
 
         let error =
             update_settings(&store, input).expect_err("should reject invalid github project");
         assert!(matches!(error, AppError::InvalidInput(_)));
         assert!(store.saved.borrow().is_empty());
+    }
+
+    fn two_profile_settings() -> Settings {
+        let a = domain::Profile::new("a".to_string(), "profile-a".to_string());
+        let b = domain::Profile::new("b".to_string(), "profile-b".to_string());
+        Settings {
+            active_profile_id: a.id.clone(),
+            profiles: vec![a, b],
+            ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn switch_profile_switches_active_id_when_profile_exists() {
+        let settings = two_profile_settings();
+        let updated = switch_profile(&settings, "b").expect("should switch");
+        assert_eq!(updated.active_profile_id, "b");
+        assert_eq!(
+            updated.profiles, settings.profiles,
+            "profiles themselves are unchanged"
+        );
+    }
+
+    #[test]
+    fn switch_profile_rejects_unknown_profile_id() {
+        let settings = two_profile_settings();
+        let error = switch_profile(&settings, "missing").expect_err("should reject");
+        assert!(matches!(error, AppError::NotFound(_)));
+    }
+
+    #[test]
+    fn create_profile_appends_new_profile_and_activates_it() {
+        let settings = two_profile_settings();
+        let (updated, created) = create_profile(&settings, Some("new one".to_string()));
+        assert_eq!(updated.profiles.len(), 3);
+        assert_eq!(updated.active_profile_id, created.id);
+        assert_eq!(created.name, "new one");
+        assert!(created.repository_path.is_none());
+        assert!(created.selected_project_folders.is_empty());
+    }
+
+    #[test]
+    fn create_profile_uses_default_name_when_omitted() {
+        let settings = Settings::default();
+        let (_, created) = create_profile(&settings, None);
+        assert_eq!(created.name, "新しいプロファイル");
+    }
+
+    #[test]
+    fn create_profile_falls_back_to_default_name_when_blank() {
+        let settings = Settings::default();
+        let (_, created) = create_profile(&settings, Some("   ".to_string()));
+        assert_eq!(created.name, "新しいプロファイル");
+    }
+
+    #[test]
+    fn delete_profile_removes_profile_and_keeps_other_active_when_not_active() {
+        let settings = two_profile_settings();
+        let updated = delete_profile(&settings, "b").expect("should delete");
+        assert_eq!(updated.profiles.len(), 1);
+        assert_eq!(updated.profiles[0].id, "a");
+        assert_eq!(updated.active_profile_id, "a", "active id is unaffected");
+    }
+
+    #[test]
+    fn delete_profile_promotes_first_remaining_profile_when_deleting_active() {
+        let settings = two_profile_settings();
+        let updated = delete_profile(&settings, "a").expect("should delete");
+        assert_eq!(updated.profiles.len(), 1);
+        assert_eq!(
+            updated.active_profile_id, "b",
+            "promoted to the remaining profile"
+        );
+    }
+
+    #[test]
+    fn delete_profile_rejects_when_only_one_profile_remains() {
+        let settings = Settings::default();
+        let only_id = settings.profiles[0].id.clone();
+        let error = delete_profile(&settings, &only_id).expect_err("should reject");
+        assert!(matches!(error, AppError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn delete_profile_rejects_unknown_profile_id() {
+        let settings = two_profile_settings();
+        let error = delete_profile(&settings, "missing").expect_err("should reject");
+        assert!(matches!(error, AppError::NotFound(_)));
+    }
+
+    #[test]
+    fn rename_profile_updates_name_of_matching_profile_only() {
+        let settings = two_profile_settings();
+        let updated = rename_profile(&settings, "a", "renamed").expect("should rename");
+        assert_eq!(updated.profiles[0].name, "renamed");
+        assert_eq!(updated.profiles[1].name, "profile-b");
+    }
+
+    #[test]
+    fn rename_profile_trims_whitespace() {
+        let settings = two_profile_settings();
+        let updated = rename_profile(&settings, "a", "  renamed  ").expect("should rename");
+        assert_eq!(updated.profiles[0].name, "renamed");
+    }
+
+    #[test]
+    fn rename_profile_rejects_blank_name() {
+        let settings = two_profile_settings();
+        let error = rename_profile(&settings, "a", "   ").expect_err("should reject");
+        assert!(matches!(error, AppError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn rename_profile_rejects_unknown_profile_id() {
+        let settings = two_profile_settings();
+        let error = rename_profile(&settings, "missing", "renamed").expect_err("should reject");
+        assert!(matches!(error, AppError::NotFound(_)));
     }
 
     #[derive(Default)]

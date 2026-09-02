@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { useSearchParams } from "react-router";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -6,6 +6,8 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import type { DockItem } from "command-dock";
 import type { ViewMode } from "@yanqirenshi/markdown.sitter";
 import {
+  createProfile,
+  deleteProfile,
   getGithubAuthStatus,
   getRepositoryClaudeMd,
   getSettings,
@@ -17,35 +19,31 @@ import {
   onGithubAuthFailed,
   onGithubAuthenticated,
   onGithubLoggedOut,
+  onSettingsUpdated,
+  renameProfile,
   saveRepositoryClaudeMd,
+  switchProfile,
   updateSettings,
 } from "../api";
 import type {
   DeviceCodeDto,
   GithubAuthStatusDto,
   GithubProjectSummaryDto,
+  ProfileSummaryDto,
   ProjectDto,
 } from "../api";
 import ClaudeMdEditor from "../ClaudeMdEditor";
 import type { ClaudeMdEditorHandle } from "../ClaudeMdEditor";
 import { createClaudeMdDockItems } from "../claudeMdDockItems";
-import { usePageDockItems } from "../DockItemsContext";
+import { usePageDirtyGuard, usePageDockItems } from "../DockItemsContext";
 import PaneTabs from "../PaneTabs";
 
-type SettingsTab = "repository" | "github" | "claude" | "claude-md";
+type SettingsTab = "profiles" | "github" | "claude" | "claude-md";
 
-const SETTINGS_TABS: SettingsTab[] = ["repository", "github", "claude", "claude-md"];
+const SETTINGS_TABS: SettingsTab[] = ["profiles", "github", "claude", "claude-md"];
 
 const DISCARD_CONFIRM_MESSAGE =
   "CLAUDE.mdの編集内容を破棄しますか?保存していない変更は失われます。";
-
-// 対象リポジトリタブのラベルには、フォルダのフルパスではなくフォルダ名
-// (例: "C:\Users\yanqi\prj\yaoyorozu" -> "yaoyorozu")だけを出す。
-function repositoryFolderName(path: string | null): string {
-  if (!path) return "対象リポジトリ";
-  const segments = path.split(/[\\/]/).filter((s) => s.length > 0);
-  return segments.at(-1) ?? "対象リポジトリ";
-}
 
 function SettingsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -79,6 +77,12 @@ function SettingsPage() {
   };
 
   const [loading, setLoading] = useState(true);
+  const [profiles, setProfiles] = useState<ProfileSummaryDto[]>([]);
+  const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
+  const [newProfileName, setNewProfileName] = useState("");
+  const [renamingProfileId, setRenamingProfileId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [profileError, setProfileError] = useState<string | null>(null);
   const [repositoryPath, setRepositoryPath] = useState<string | null>(null);
   const [claudeProjectsDir, setClaudeProjectsDir] = useState<string | null>(null);
   const [githubOwner, setGithubOwner] = useState("");
@@ -99,9 +103,15 @@ function SettingsPage() {
   const [codeCopied, setCodeCopied] = useState(false);
   const [githubProjects, setGithubProjects] = useState<GithubProjectSummaryDto[]>([]);
 
-  useEffect(() => {
-    getSettings()
+  // プロファイル一覧・アクティブプロファイルの内容の両方をまとめて取り直す。
+  // 自分自身の操作(作成・削除・名前変更・切り替え・保存)の直後と、他画面
+  // (dock等)からのプロファイル切り替え(`settings:updated`)の両方で使う
+  // (issue #72)。
+  const loadSettingsData = useCallback((): Promise<void> => {
+    return getSettings()
       .then((settings) => {
+        setProfiles(settings.profiles);
+        setActiveProfileId(settings.active_profile_id);
         setRepositoryPath(settings.repository_path);
         setClaudeProjectsDir(settings.claude_projects_dir);
         setGithubOwner(settings.github_project?.owner ?? "");
@@ -110,9 +120,21 @@ function SettingsPage() {
         );
         setSelectedProjectFolders(settings.selected_project_folders);
       })
-      .catch((e) => setError(isAppError(e) ? e.message : String(e)))
-      .finally(() => setLoading(false));
+      .catch((e) => setError(isAppError(e) ? e.message : String(e)));
   }, []);
+
+  useEffect(() => {
+    loadSettingsData().finally(() => setLoading(false));
+  }, [loadSettingsData]);
+
+  useEffect(() => {
+    const unlistenPromise = onSettingsUpdated(() => {
+      loadSettingsData();
+    });
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, [loadSettingsData]);
 
   useEffect(() => {
     listProjects()
@@ -203,6 +225,52 @@ function SettingsPage() {
     }
   };
 
+  const handleCreateProfile = () => {
+    setProfileError(null);
+    createProfile(newProfileName.trim() || undefined)
+      .then(() => {
+        setNewProfileName("");
+        return loadSettingsData();
+      })
+      .catch((e) => setProfileError(isAppError(e) ? e.message : String(e)));
+  };
+
+  const handleDeleteProfile = (profileId: string) => {
+    if (!window.confirm("このプロファイルを削除しますか?")) return;
+    setProfileError(null);
+    deleteProfile(profileId)
+      .then(() => loadSettingsData())
+      .catch((e) => setProfileError(isAppError(e) ? e.message : String(e)));
+  };
+
+  const handleStartRenameProfile = (profile: ProfileSummaryDto) => {
+    setRenamingProfileId(profile.id);
+    setRenameDraft(profile.name);
+  };
+
+  const handleCommitRenameProfile = (profileId: string) => {
+    const name = renameDraft.trim();
+    setRenamingProfileId(null);
+    if (!name) return;
+    setProfileError(null);
+    renameProfile(profileId, name)
+      .then(() => loadSettingsData())
+      .catch((e) => setProfileError(isAppError(e) ? e.message : String(e)));
+  };
+
+  const handleSwitchProfileFromList = (profileId: string) => {
+    if (profileId === activeProfileId) return;
+    if (!confirmDiscardClaudeMdIfDirty()) return;
+    setProfileError(null);
+    switchProfile(profileId)
+      .then(() => loadSettingsData())
+      .catch((e) => setProfileError(isAppError(e) ? e.message : String(e)));
+  };
+
+  // プロファイル切り替え(dockの吹き出しトリガー)前に、このページの未保存の
+  // CLAUDE.md編集を確認できるようにする(issue #72)。
+  usePageDirtyGuard(confirmDiscardClaudeMdIfDirty);
+
   const handleChooseFolder = async () => {
     const path = await open({ directory: true, multiple: false });
     if (typeof path === "string") {
@@ -277,7 +345,10 @@ function SettingsPage() {
     <div className="settings-page">
       <PaneTabs
         tabs={[
-          { id: "repository", label: repositoryFolderName(repositoryPath) },
+          {
+            id: "profiles",
+            label: profiles.find((p) => p.id === activeProfileId)?.name ?? "プロファイル",
+          },
           { id: "github", label: "GitHub" },
           { id: "claude", label: "Claude" },
           { id: "claude-md", label: "CLAUDE.md" },
@@ -304,18 +375,79 @@ function SettingsPage() {
         </section>
       ) : (
         <form className="settings-form" onSubmit={handleSave}>
-          {tab === "repository" && (
-            <section className="settings-section">
-              <h3>対象リポジトリ</h3>
-              <div className="settings-folder-picker">
-                <span className="settings-folder-path">
-                  {repositoryPath ?? "未選択"}
-                </span>
-                <button type="button" onClick={handleChooseFolder}>
-                  フォルダを選択
-                </button>
-              </div>
-            </section>
+          {tab === "profiles" && (
+            <>
+              <section className="settings-section">
+                <h3>プロファイル</h3>
+                <ul className="settings-profile-list">
+                  {profiles.map((p) => (
+                    <li key={p.id} className="settings-profile-item-row">
+                      <label
+                        className={`settings-profile-item ${
+                          p.id === activeProfileId ? "active" : ""
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="active-profile"
+                          checked={p.id === activeProfileId}
+                          onChange={() => handleSwitchProfileFromList(p.id)}
+                        />
+                        {renamingProfileId === p.id ? (
+                          <input
+                            type="text"
+                            value={renameDraft}
+                            onChange={(e) => setRenameDraft(e.target.value)}
+                            onBlur={() => handleCommitRenameProfile(p.id)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") handleCommitRenameProfile(p.id);
+                              if (e.key === "Escape") setRenamingProfileId(null);
+                            }}
+                            autoFocus
+                          />
+                        ) : (
+                          <span>{p.name}</span>
+                        )}
+                      </label>
+                      <button type="button" onClick={() => handleStartRenameProfile(p)}>
+                        名前変更
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteProfile(p.id)}
+                        disabled={profiles.length <= 1}
+                      >
+                        削除
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                <div className="settings-profile-add">
+                  <input
+                    type="text"
+                    value={newProfileName}
+                    onChange={(e) => setNewProfileName(e.target.value)}
+                    placeholder="新しいプロファイル名(省略可)"
+                  />
+                  <button type="button" onClick={handleCreateProfile}>
+                    追加
+                  </button>
+                </div>
+                {profileError && <p className="error">{profileError}</p>}
+              </section>
+
+              <section className="settings-section">
+                <h3>対象リポジトリ</h3>
+                <div className="settings-folder-picker">
+                  <span className="settings-folder-path">
+                    {repositoryPath ?? "未選択"}
+                  </span>
+                  <button type="button" onClick={handleChooseFolder}>
+                    フォルダを選択
+                  </button>
+                </div>
+              </section>
+            </>
           )}
 
           {tab === "github" && (

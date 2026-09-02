@@ -5,7 +5,7 @@ use app::{SessionSource, SettingsStore, TokenStore};
 use dto::{
     AgentKindDto, AgentModeDto, AppErrorDto, AppWarningDto, ClaudeMdDto, ClaudeSettingsDto,
     DeviceCodeDto, GithubAuthFailedEventDto, GithubAuthStatusDto, GithubAuthenticatedEventDto,
-    GithubProjectDto, GithubProjectSummaryDto, ProjectDto, ProjectItemsPageDto,
+    GithubProjectDto, GithubProjectSummaryDto, ProfileSummaryDto, ProjectDto, ProjectItemsPageDto,
     ProjectSettingsFileDto, RuleDto, RuleSummaryDto, SessionChangedEventDto, SessionDto,
     SessionSummaryDto, SettingsCorruptedEventDto, SettingsDto, SettingsInputDto, SkillDto,
     SkillSummaryDto,
@@ -50,6 +50,27 @@ async fn effective_projects_dir_from_state(
         guard.settings.clone()
     };
     resolve_effective_projects_dir(&settings)
+}
+
+/// 設定をバックグラウンドスレッドで永続化する。`update_settings` と
+/// プロファイル操作系コマンド(`switch_profile`/`create_profile`/
+/// `delete_profile`/`rename_profile`)で重複する定型処理をまとめる
+/// (issue #72)。
+async fn persist_settings(
+    settings: domain::Settings,
+    save_path: PathBuf,
+) -> Result<(), AppErrorDto> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), app::AppError> {
+        let store = FileSettingsStore::new(save_path);
+        store.save(&settings)
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
 }
 
 #[tauri::command]
@@ -169,10 +190,26 @@ async fn get_settings(
         guard.settings.clone()
     };
     let effective_projects_dir = resolve_effective_projects_dir(&settings)?;
+    let active_profile = settings.active_profile().cloned().ok_or_else(|| {
+        AppErrorDto::from(app::AppError::NotFound(
+            "アクティブなプロファイルが見つかりません".to_string(),
+        ))
+    })?;
     Ok(SettingsDto {
-        repository_path: settings.repository_path.map(|p| p.display().to_string()),
-        github_project: settings.github_project.map(GithubProjectDto::from),
-        selected_project_folders: settings.selected_project_folders,
+        active_profile_id: settings.active_profile_id,
+        profiles: settings
+            .profiles
+            .into_iter()
+            .map(|p| ProfileSummaryDto {
+                id: p.id,
+                name: p.name,
+            })
+            .collect(),
+        repository_path: active_profile
+            .repository_path
+            .map(|p| p.display().to_string()),
+        github_project: active_profile.github_project.map(GithubProjectDto::from),
+        selected_project_folders: active_profile.selected_project_folders,
         claude_projects_dir: settings
             .claude_projects_dir
             .map(|p| p.display().to_string()),
@@ -186,42 +223,125 @@ async fn update_settings(
     state: tauri::State<'_, Mutex<AppState>>,
     input: SettingsInputDto,
 ) -> Result<(), AppErrorDto> {
-    let settings: domain::Settings = input.into();
-    app::validate_settings(&settings)?;
+    let repository_path = input.repository_path.map(PathBuf::from);
+    let github_project = input.github_project.map(domain::GithubProject::from);
+    let claude_projects_dir = input.claude_projects_dir.map(PathBuf::from);
 
-    // ロックは最小スコープに留める(native.md §2)。永続化(ファイルI/O)は
-    // ガードを解放してから、clone した値を使って行う。
+    // ロックは最小スコープに留める(native.md §2)。ロック保持中は候補値の
+    // 組み立てとバリデーションのみ(I/Oはしない)、永続化はガードを解放
+    // してから clone した値を使って行う。バリデーション失敗時は
+    // `guard.settings` を書き換えないまま抜ける(無効な値をメモリ上の状態に
+    // 残さないため)。
     let (settings_to_persist, save_path, projects_dir_changed) = {
         let mut guard = state.lock().await;
+
+        let mut candidate = guard.settings.clone();
+        let active_id = candidate.active_profile_id.clone();
+        let Some(profile) = candidate.profiles.iter_mut().find(|p| p.id == active_id) else {
+            return Err(AppErrorDto::from(app::AppError::NotFound(
+                "アクティブなプロファイルが見つかりません".to_string(),
+            )));
+        };
+        profile.repository_path = repository_path;
+        profile.github_project = github_project;
+        profile.selected_project_folders = input.selected_project_folders;
+        candidate.claude_projects_dir = claude_projects_dir;
+
+        app::validate_settings(&candidate)?;
+
         let projects_dir_changed =
-            guard.settings.claude_projects_dir != settings.claude_projects_dir;
-        guard.settings = settings.clone();
-        (
-            guard.settings.clone(),
-            guard.save_path.clone(),
-            projects_dir_changed,
-        )
+            guard.settings.claude_projects_dir != candidate.claude_projects_dir;
+        guard.settings = candidate.clone();
+        (candidate, guard.save_path.clone(), projects_dir_changed)
     };
 
-    let save_result: Result<(), app::AppError> = tauri::async_runtime::spawn_blocking(move || {
-        let store = FileSettingsStore::new(save_path);
-        store.save(&settings_to_persist)
-    })
-    .await
-    .unwrap_or_else(|_| {
-        Err(app::AppError::Io(
-            "バックグラウンド処理に失敗しました".to_string(),
-        ))
-    });
-    save_result?;
+    persist_settings(settings_to_persist.clone(), save_path).await?;
 
     if projects_dir_changed {
-        match resolve_effective_projects_dir(&settings) {
+        match resolve_effective_projects_dir(&settings_to_persist) {
             Ok(root) => start_session_watcher(&app, root),
             Err(e) => eprintln!("セッション監視の張り替えに失敗しました: {e}"),
         }
     }
 
+    let _ = app.emit("settings:updated", ());
+    Ok(())
+}
+
+/// アクティブプロファイルを切り替える(issue #72)。
+#[tauri::command]
+async fn switch_profile(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Mutex<AppState>>,
+    profile_id: String,
+) -> Result<(), AppErrorDto> {
+    let (settings_to_persist, save_path) = {
+        let mut guard = state.lock().await;
+        let updated = app::switch_profile(&guard.settings, &profile_id)?;
+        guard.settings = updated.clone();
+        (updated, guard.save_path.clone())
+    };
+    persist_settings(settings_to_persist, save_path).await?;
+    let _ = app.emit("settings:updated", ());
+    Ok(())
+}
+
+/// 空のプロファイルを作成してアクティブにする(issue #72)。戻り値は
+/// 作成したプロファイルの最小限の情報(native.md §3.1)。
+#[tauri::command]
+async fn create_profile(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Mutex<AppState>>,
+    name: Option<String>,
+) -> Result<ProfileSummaryDto, AppErrorDto> {
+    let (settings_to_persist, save_path, created) = {
+        let mut guard = state.lock().await;
+        let (updated, created) = app::create_profile(&guard.settings, name);
+        guard.settings = updated.clone();
+        (updated, guard.save_path.clone(), created)
+    };
+    persist_settings(settings_to_persist, save_path).await?;
+    let _ = app.emit("settings:updated", ());
+    Ok(ProfileSummaryDto {
+        id: created.id,
+        name: created.name,
+    })
+}
+
+/// プロファイルを削除する。最後の1件は削除できない。アクティブプロファイルを
+/// 削除した場合は残りの先頭がアクティブになる(issue #72)。
+#[tauri::command]
+async fn delete_profile(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Mutex<AppState>>,
+    profile_id: String,
+) -> Result<(), AppErrorDto> {
+    let (settings_to_persist, save_path) = {
+        let mut guard = state.lock().await;
+        let updated = app::delete_profile(&guard.settings, &profile_id)?;
+        guard.settings = updated.clone();
+        (updated, guard.save_path.clone())
+    };
+    persist_settings(settings_to_persist, save_path).await?;
+    let _ = app.emit("settings:updated", ());
+    Ok(())
+}
+
+/// プロファイルの表示名を変更する(issue #72)。
+#[tauri::command]
+async fn rename_profile(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Mutex<AppState>>,
+    profile_id: String,
+    name: String,
+) -> Result<(), AppErrorDto> {
+    let (settings_to_persist, save_path) = {
+        let mut guard = state.lock().await;
+        let updated = app::rename_profile(&guard.settings, &profile_id, &name)?;
+        guard.settings = updated.clone();
+        (updated, guard.save_path.clone())
+    };
+    persist_settings(settings_to_persist, save_path).await?;
     let _ = app.emit("settings:updated", ());
     Ok(())
 }
@@ -232,9 +352,13 @@ async fn repository_path_from_state(
     state: &tauri::State<'_, Mutex<AppState>>,
 ) -> Result<PathBuf, app::AppError> {
     let guard = state.lock().await;
-    guard.settings.repository_path.clone().ok_or_else(|| {
-        app::AppError::InvalidInput("対象リポジトリが設定されていません".to_string())
-    })
+    guard
+        .settings
+        .active_profile()
+        .and_then(|p| p.repository_path.clone())
+        .ok_or_else(|| {
+            app::AppError::InvalidInput("対象リポジトリが設定されていません".to_string())
+        })
 }
 
 #[tauri::command]
@@ -713,7 +837,10 @@ async fn list_github_project_items(
 ) -> Result<ProjectItemsPageDto, AppErrorDto> {
     let github_project = {
         let guard = state.lock().await;
-        guard.settings.github_project.clone()
+        guard
+            .settings
+            .active_profile()
+            .and_then(|p| p.github_project.clone())
     };
     let project = github_project.ok_or_else(|| {
         AppErrorDto::from(app::AppError::InvalidInput(
@@ -948,6 +1075,10 @@ pub fn run() {
             send_message,
             get_settings,
             update_settings,
+            switch_profile,
+            create_profile,
+            delete_profile,
+            rename_profile,
             get_repository_claude_md,
             save_repository_claude_md,
             get_project_claude_md,

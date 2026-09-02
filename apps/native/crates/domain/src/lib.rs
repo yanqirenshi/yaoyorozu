@@ -163,7 +163,10 @@ pub fn is_valid_skill_name(name: &str) -> bool {
 /// v1 -> v2: `claude_projects_dir` を追加(issue #25)。
 /// v2 -> v3: `selected_session_ids`(セッションID配列)を
 /// `selected_project_folders`(フォルダ名配列)に置き換え。
-pub const CURRENT_SETTINGS_VERSION: u32 = 3;
+/// v3 -> v4: 対象リポジトリ/GitHubプロジェクト/対象フォルダの3項目を
+/// 「プロファイル」(複数保存可)に包んだ(`profiles` + `active_profile_id`)。
+/// `claude_projects_dir` はマシン設定のためグローバルのまま(issue #72)。
+pub const CURRENT_SETTINGS_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct GithubProject {
@@ -178,36 +181,70 @@ impl GithubProject {
     }
 }
 
-/// アプリの設定。対象リポジトリ(1つ)・GitHubプロジェクト・対象フォルダ・
-/// セッション一覧のルートディレクトリの4項目を持つ。永続化(JSON)は infra
-/// が担う。
+/// 1件の「プロファイル」。対象リポジトリ・GitHubプロジェクト・対象フォルダの
+/// 組を名前付きで複数保存できるようにする(issue #72)。`id` は名前変更に
+/// 耐える安定IDで、生成は呼び出し側(`app`)の責務(`Date.now` 系に依存しない
+/// 方法を使うこと。domain を純粋に保つため、ここでは生成しない)。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Profile {
+    pub id: String,
+    pub name: String,
+    pub repository_path: Option<std::path::PathBuf>,
+    pub github_project: Option<GithubProject>,
+    #[serde(default)]
+    pub selected_project_folders: Vec<String>,
+}
+
+impl Profile {
+    /// 内容が空のプロファイルを作る(`create_profile` ユースケース用)。
+    pub fn new(id: String, name: String) -> Self {
+        Self {
+            id,
+            name,
+            repository_path: None,
+            github_project: None,
+            selected_project_folders: Vec::new(),
+        }
+    }
+}
+
+/// アプリの設定。複数の「プロファイル」(対象リポジトリ・GitHubプロジェクト・
+/// 対象フォルダの組)と、そのうちどれがアクティブかに加え、マシン設定である
+/// セッション一覧のルートディレクトリを持つ。永続化(JSON)は infra が担う
+/// (issue #72)。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Settings {
     pub version: u32,
-    pub repository_path: Option<std::path::PathBuf>,
-    pub github_project: Option<GithubProject>,
-    /// `~/.claude/projects/` 配下のフォルダ名のうち、対象として選んだもの
-    /// (複数可)。`#[serde(default)]` は v1/v2 のJSON(このフィールドを
-    /// 持たない、または旧フィールド名 `selected_session_ids` を持つ)を
-    /// 読めるようにするため(v2からの移行では旧値は破棄される)。
-    #[serde(default)]
-    pub selected_project_folders: Vec<String>,
+    pub profiles: Vec<Profile>,
+    pub active_profile_id: String,
     /// セッション一覧が読むルートディレクトリ。`None` の場合は既定
-    /// (`~/.claude/projects/`)を使う。`#[serde(default)]` は v1 のJSON
-    /// (このフィールドを持たない)を読めるようにするため。
+    /// (`~/.claude/projects/`)を使う。プロファイルには含めないグローバル項目
+    /// (issue #72)。`#[serde(default)]` は v1 のJSON(このフィールドを
+    /// 持たない)を読めるようにするため。
     #[serde(default)]
     pub claude_projects_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
+        let profile = Profile::new("default".to_string(), "default".to_string());
         Self {
             version: CURRENT_SETTINGS_VERSION,
-            repository_path: None,
-            github_project: None,
-            selected_project_folders: Vec::new(),
+            active_profile_id: profile.id.clone(),
+            profiles: vec![profile],
             claude_projects_dir: None,
         }
+    }
+}
+
+impl Settings {
+    /// `active_profile_id` に一致するプロファイルを返す。通常は必ず存在する
+    /// (最後の1件は削除できない・切り替えは存在確認済みのIDにしか許さない
+    /// ため)が、呼び出し側は破損データ等に備えて `None` も扱えるようにする。
+    pub fn active_profile(&self) -> Option<&Profile> {
+        self.profiles
+            .iter()
+            .find(|p| p.id == self.active_profile_id)
     }
 }
 
@@ -407,13 +444,43 @@ mod tests {
     }
 
     #[test]
-    fn settings_default_has_current_version_and_empty_fields() {
+    fn settings_default_has_current_version_and_a_single_empty_profile() {
         let settings = Settings::default();
         assert_eq!(settings.version, CURRENT_SETTINGS_VERSION);
-        assert_eq!(settings.repository_path, None);
-        assert_eq!(settings.github_project, None);
-        assert!(settings.selected_project_folders.is_empty());
+        assert_eq!(settings.profiles.len(), 1);
+        assert_eq!(settings.active_profile_id, settings.profiles[0].id);
+        assert_eq!(settings.profiles[0].repository_path, None);
+        assert_eq!(settings.profiles[0].github_project, None);
+        assert!(settings.profiles[0].selected_project_folders.is_empty());
         assert_eq!(settings.claude_projects_dir, None);
+    }
+
+    #[test]
+    fn settings_active_profile_returns_the_matching_profile() {
+        let settings = Settings::default();
+        let active = settings
+            .active_profile()
+            .expect("should have an active profile");
+        assert_eq!(active.id, settings.active_profile_id);
+    }
+
+    #[test]
+    fn settings_active_profile_returns_none_when_id_matches_nothing() {
+        let settings = Settings {
+            active_profile_id: "missing".to_string(),
+            ..Settings::default()
+        };
+        assert_eq!(settings.active_profile(), None);
+    }
+
+    #[test]
+    fn profile_new_has_empty_fields() {
+        let profile = Profile::new("id1".to_string(), "name1".to_string());
+        assert_eq!(profile.id, "id1");
+        assert_eq!(profile.name, "name1");
+        assert_eq!(profile.repository_path, None);
+        assert_eq!(profile.github_project, None);
+        assert!(profile.selected_project_folders.is_empty());
     }
 
     #[test]

@@ -68,3 +68,12 @@ export const VIEW_MODE_ICON = `
   <rect x="3" y="4" width="14" height="12" rx="1.5" />
   <line x1="10" y1="4" x2="10" y2="16" />
 </svg>`;
+
+// dockのプロファイル切り替えトリガー用アイコン(issue #72)。
+export const PROFILE_ICON = `
+<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor"
+     stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
+     xmlns="http://www.w3.org/2000/svg">
+  <circle cx="10" cy="7" r="3" />
+  <path d="M4 17c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5" />
+</svg>`;
