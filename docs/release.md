@@ -33,7 +33,7 @@ MSI をビルドし、draft の GitHub Release を作成する。署名は行わ
    リリースが作成され、以下が添付される。
 
    - `YAOYOROZU_X.Y.Z_x64_en-US.msi`
-   - 同名 `.sha256`(チェックサム。winget マニフェストに使う)
+   - 同名 `.sha256`(チェックサム。ダウンロードした MSI の検証に使う)
 
 4. **draft の内容を確認する**
 
@@ -43,14 +43,32 @@ MSI をビルドし、draft の GitHub Release を作成する。署名は行わ
      想定どおり)
    - 「アプリと機能」からアンインストールできる
 
-5. **publish する**
+5. **リリースノートを整えて publish する**
 
-   問題なければ GitHub の Releases 画面から draft を手動で publish
-   する(誤タグ push の保険として、自動 publish はしない)。
+   前回タグ以降の変更(`git log <前回タグ>..vX.Y.Z --oneline`)を日本語で
+   要約し、draft に設定する。複数行のノートは一時ファイルに書いて
+   `--notes-file` で渡す(`--notes` に長文を直接渡すとシェルによって
+   改行の扱いが崩れる)。
+
+   ```bash
+   gh release edit v0.2.0 --notes-file <ノートのパス>
+   ```
+
+   問題なければ publish する(誤タグ push の保険として、自動 publish は
+   しない)。GitHub の Releases 画面から手動で行ってもよい。
+
+   ```bash
+   gh release edit v0.2.0 --draft=false
+   ```
+
+   なお draft の間、`gh release view` が返す URL は
+   `.../releases/tag/untagged-<hash>` 形式で、publish 後に
+   `.../releases/tag/vX.Y.Z` に変わる。
 
 ## スコープ外
 
 - コード署名(署名なしで開始と決定済み。導入する場合は別途対応)
-- winget への提出・自動更新(別イシュー)
-- 自動アップデータ(`tauri-plugin-updater`)。当面は winget upgrade に
-  任せる方針
+- winget への提出(公開配布に見合う完成度になるまで見送り。
+  CLAUDE.md「配布(apps/native)」を参照)
+- 自動アップデータ(`tauri-plugin-updater`)。当面は GitHub Releases から
+  新しい MSI を手動で入れ直す運用とする

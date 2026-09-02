@@ -38,7 +38,9 @@ apps/native(YAOYOROZU)を GitHub Releases にリリースする。
 
 ## 4. publish
 
-9. リリースノートを整える: 前回タグ以降の変更を `git log <前回タグ>..v<version> --oneline` から要約し、`gh release edit v<version> --notes` で設定する(日本語)。
+9. リリースノートを整える: 前回タグ以降の変更を `git log <前回タグ>..v<version> --oneline --no-merges` から要約し(日本語)、一時ファイルに書いて `gh release edit v<version> --notes-file <パス>` で設定する。
+   - `--notes` に長文を直接渡すとシェルによって改行の扱いが崩れるため、必ずファイル経由にする。
+   - draft の間、`gh release view` が返す URL は `.../releases/tag/untagged-<hash>` 形式(publish 後に `.../releases/tag/v<version>` に変わる)。ユーザーに draft を案内するときはこの URL をそのまま渡す。
 10. **ユーザーの明示的な承認を得てから** publish する:
     ```bash
     gh release edit v<version> --draft=false
