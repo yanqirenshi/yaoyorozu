@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ProfileSummaryDto } from "./api";
 
 type Tab = {
@@ -25,7 +25,7 @@ function profileName(profiles: ProfileSummaryDto[], profileId: string): string {
 // state で持ち、ここではタブの一覧・アクティブ表示・追加/切り替え/close の
 // UI のみを担う。
 function TabBar({ tabs, activeTabId, profiles, onSwitch, onClose, onAdd }: TabBarProps) {
-  const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const [addModalOpen, setAddModalOpen] = useState(false);
 
   return (
     <div className="tab-bar">
@@ -56,36 +56,70 @@ function TabBar({ tabs, activeTabId, profiles, onSwitch, onClose, onAdd }: TabBa
           </li>
         ))}
       </ul>
-      <div className="tab-bar-add">
-        <button
-          type="button"
-          className="tab-bar-add-button"
-          onClick={() => setAddMenuOpen((v) => !v)}
-          aria-label="タブを追加"
-        >
-          +
+      <button
+        type="button"
+        className="tab-bar-add-button"
+        onClick={() => setAddModalOpen(true)}
+        aria-label="タブを追加"
+      >
+        +
+      </button>
+      {addModalOpen && (
+        <AddTabModal
+          profiles={profiles}
+          onSelect={(profileId) => {
+            onAdd(profileId);
+            setAddModalOpen(false);
+          }}
+          onClose={() => setAddModalOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// タブ追加用のプロファイル選択モーダル。ポップオーバー(position: absolute)
+// だと `.tab-bar` の横スクロール用 overflow に隠れて見えなくなっていたため、
+// 画面中央のモーダルに変更した。
+function AddTabModal({
+  profiles,
+  onSelect,
+  onClose,
+}: {
+  profiles: ProfileSummaryDto[];
+  onSelect: (profileId: string) => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  return (
+    <div className="tab-bar-add-modal-overlay" onClick={onClose}>
+      <div
+        className="tab-bar-add-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="タブを追加"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3>タブを追加</h3>
+        <ul className="tab-bar-add-modal-list">
+          {profiles.map((p) => (
+            <li key={p.id}>
+              <button type="button" onClick={() => onSelect(p.id)}>
+                {p.name}
+              </button>
+            </li>
+          ))}
+        </ul>
+        <button type="button" className="tab-bar-add-modal-cancel" onClick={onClose}>
+          キャンセル
         </button>
-        {addMenuOpen && (
-          <>
-            {/* メニュー外クリックで閉じるための透明オーバーレイ。 */}
-            <div className="tab-bar-add-overlay" onClick={() => setAddMenuOpen(false)} />
-            <ul className="tab-bar-add-menu">
-              {profiles.map((p) => (
-                <li key={p.id}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onAdd(p.id);
-                      setAddMenuOpen(false);
-                    }}
-                  >
-                    {p.name}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </>
-        )}
       </div>
     </div>
   );

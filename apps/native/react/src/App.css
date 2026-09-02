@@ -137,12 +137,8 @@ body,
   opacity: 1;
 }
 
-.tab-bar-add {
-  position: relative;
-  flex-shrink: 0;
-}
-
 .tab-bar-add-button {
+  flex-shrink: 0;
   border: 1px solid #a1a1aa;
   border-radius: 4px;
   background: #fbfbf8;
@@ -159,43 +155,83 @@ body,
   color: #373737;
 }
 
-.tab-bar-add-overlay {
+/* タブ追加はポップオーバー(position: absolute)だと `.tab-bar` の横
+   スクロール用 overflow-x: auto に隠れて見えなくなっていたため、画面中央の
+   モーダルにした。 */
+.tab-bar-add-modal-overlay {
   position: fixed;
   inset: 0;
-  z-index: 9;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(55, 55, 55, 0.4);
 }
 
-.tab-bar-add-menu {
-  position: absolute;
-  z-index: 10;
-  top: calc(100% + 4px);
-  left: 0;
-  list-style: none;
-  margin: 0;
-  padding: 4px;
-  min-width: 160px;
+.tab-bar-add-modal {
   background: #fbfbf8;
   border: 1px solid #a1a1aa;
-  border-radius: 4px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  padding: 20px;
+  min-width: 280px;
+  max-width: 400px;
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.tab-bar-add-menu button {
+.tab-bar-add-modal h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.tab-bar-add-modal-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tab-bar-add-modal-list button {
   display: block;
   width: 100%;
+  box-sizing: border-box;
   text-align: left;
-  border: none;
+  border: 1px solid transparent;
   background: none;
   font-family: inherit;
-  font-size: 0.85rem;
+  font-size: 0.9rem;
   color: #373737;
-  padding: 6px 8px;
+  padding: 8px 10px;
   cursor: pointer;
   border-radius: 4px;
 }
 
-.tab-bar-add-menu button:hover {
+.tab-bar-add-modal-list button:hover {
   background-color: rgba(157, 91, 139, 0.08);
+  border-color: #9d5b8b;
+}
+
+.tab-bar-add-modal-cancel {
+  align-self: flex-end;
+  border: 1px solid #a1a1aa;
+  border-radius: 4px;
+  background: none;
+  font-family: inherit;
+  font-size: 0.85rem;
+  color: #737373;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+
+.tab-bar-add-modal-cancel:hover {
+  color: #373737;
 }
 
 /* 画面左の一覧ペイン(固定幅+縦スクロール)。ビューアのセッション一覧と
