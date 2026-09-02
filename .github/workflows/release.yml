@@ -37,10 +37,13 @@ jobs:
       # 各アクションは Node 24 ランタイム版に更新済み(issue #64)。
       # Node 20 ランタイムを使うアクションは runner 側で強制的に Node 24 で
       # 実行され、deprecation 警告が出る。
+      #
+      # ビルドに使う Node のバージョンは `.nvmrc` が SSoT(issue #68)。
+      # ここに直書きすると開発機と CI がズレるため、必ずファイル参照にする。
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version-file: '.nvmrc'
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable

@@ -5,6 +5,9 @@
   "workspaces": [
     "apps/*"
   ],
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "web:dev": "npm run dev --workspace=web",
     "web:build": "npm run build --workspace=web",
