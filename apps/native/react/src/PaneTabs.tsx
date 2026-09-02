@@ -18,6 +18,7 @@ function PaneTabs({ tabs, active, onChange }: PaneTabsProps) {
           type="button"
           className={`pane-tab ${tab.id === active ? "active" : ""}`}
           onClick={() => onChange(tab.id)}
+          title={tab.label}
         >
           {tab.label}
         </button>
