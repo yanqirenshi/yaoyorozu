@@ -5,7 +5,7 @@ npm workspaces によるモノレポ構成です。
 ## 構成
 
 - [apps/web](apps/web) — Next.js製のWebアプリ(WBS/構成図/UIデザイン/サイトマップ/Classes/TM)
-- [apps/native](apps/native) — Tauri製のネイティブアプリ。デスクトップアプリ(YAOYOROZU)として winget での配布を予定している。リリース手順は [docs/release.md](docs/release.md) を参照
+- [apps/native](apps/native) — Tauri製のネイティブアプリ。デスクトップアプリ(YAOYOROZU)として GitHub Releases で MSI を公開して配布する。リリース手順は [docs/release.md](docs/release.md) を参照
 
 ## セットアップ
 
@@ -42,4 +42,4 @@ npm run native:build
 
 ## ライセンス
 
-[LICENSE](LICENSE) を参照。公式バイナリ(GitHub Releases / winget)は個人利用に限り無償で利用できる。
+[LICENSE](LICENSE) を参照。公式バイナリ(GitHub Releases)は個人利用に限り無償で利用できる。
