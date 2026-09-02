@@ -26,4 +26,6 @@ tokio = { version = "1", features = ["sync"] }
 domain = { path = "../crates/domain" }
 app = { path = "../crates/app" }
 infra = { path = "../crates/infra" }
+# open_profile_window のウィンドウラベル生成用(issue #76)。
+uuid = { version = "1", features = ["v4"] }
 

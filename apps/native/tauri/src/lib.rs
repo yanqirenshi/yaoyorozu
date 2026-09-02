@@ -184,17 +184,14 @@ async fn send_message(
 #[tauri::command]
 async fn get_settings(
     state: tauri::State<'_, Mutex<AppState>>,
+    profile_id: Option<String>,
 ) -> Result<SettingsDto, AppErrorDto> {
     let settings = {
         let guard = state.lock().await;
         guard.settings.clone()
     };
     let effective_projects_dir = resolve_effective_projects_dir(&settings)?;
-    let active_profile = settings.active_profile().cloned().ok_or_else(|| {
-        AppErrorDto::from(app::AppError::NotFound(
-            "アクティブなプロファイルが見つかりません".to_string(),
-        ))
-    })?;
+    let profile = app::resolve_profile(&settings, profile_id.as_deref())?.clone();
     Ok(SettingsDto {
         active_profile_id: settings.active_profile_id,
         profiles: settings
@@ -205,11 +202,9 @@ async fn get_settings(
                 name: p.name,
             })
             .collect(),
-        repository_path: active_profile
-            .repository_path
-            .map(|p| p.display().to_string()),
-        github_project: active_profile.github_project.map(GithubProjectDto::from),
-        selected_project_folders: active_profile.selected_project_folders,
+        repository_path: profile.repository_path.map(|p| p.display().to_string()),
+        github_project: profile.github_project.map(GithubProjectDto::from),
+        selected_project_folders: profile.selected_project_folders,
         claude_projects_dir: settings
             .claude_projects_dir
             .map(|p| p.display().to_string()),
@@ -222,6 +217,7 @@ async fn update_settings(
     app: tauri::AppHandle,
     state: tauri::State<'_, Mutex<AppState>>,
     input: SettingsInputDto,
+    profile_id: Option<String>,
 ) -> Result<(), AppErrorDto> {
     let repository_path = input.repository_path.map(PathBuf::from);
     let github_project = input.github_project.map(domain::GithubProject::from);
@@ -231,15 +227,16 @@ async fn update_settings(
     // 組み立てとバリデーションのみ(I/Oはしない)、永続化はガードを解放
     // してから clone した値を使って行う。バリデーション失敗時は
     // `guard.settings` を書き換えないまま抜ける(無効な値をメモリ上の状態に
-    // 残さないため)。
+    // 残さないため)。`profile_id` が未指定ならアクティブプロファイルを対象に
+    // する(メインウィンドウの挙動不変。issue #76)。
     let (settings_to_persist, save_path, projects_dir_changed) = {
         let mut guard = state.lock().await;
 
         let mut candidate = guard.settings.clone();
-        let active_id = candidate.active_profile_id.clone();
-        let Some(profile) = candidate.profiles.iter_mut().find(|p| p.id == active_id) else {
+        let target_id = profile_id.unwrap_or_else(|| candidate.active_profile_id.clone());
+        let Some(profile) = candidate.profiles.iter_mut().find(|p| p.id == target_id) else {
             return Err(AppErrorDto::from(app::AppError::NotFound(
-                "アクティブなプロファイルが見つかりません".to_string(),
+                "指定されたプロファイルが見つかりません".to_string(),
             )));
         };
         profile.repository_path = repository_path;
@@ -346,26 +343,57 @@ async fn rename_profile(
     Ok(())
 }
 
+/// 指定プロファイルを対象に新しいウィンドウを開く(マルチウィンドウ
+/// Phase 1。issue #76)。ウィンドウ生成はRust側で行う(JSからのウィンドウ
+/// 生成に capability を追加せずに済ませ、権限を最小に保つため。native.md
+/// §4)。同じプロファイルを複数ウィンドウで開けるよう、ラベルは毎回一意に
+/// 生成する。URLのクエリ `?profile=<id>` がそのウィンドウの対象プロファイルを
+/// 表す(フロントは `useWindowProfileId` で読む)。
+#[tauri::command]
+async fn open_profile_window(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Mutex<AppState>>,
+    profile_id: String,
+) -> Result<(), AppErrorDto> {
+    let profile_name = {
+        let guard = state.lock().await;
+        app::resolve_profile(&guard.settings, Some(profile_id.as_str()))?
+            .name
+            .clone()
+    };
+
+    let label = format!("profile-{}", uuid::Uuid::new_v4());
+    let url = tauri::WebviewUrl::App(format!("index.html#/?profile={profile_id}").into());
+    tauri::WebviewWindowBuilder::new(&app, label, url)
+        .title(format!("{profile_name} - ビューア"))
+        .inner_size(800.0, 600.0)
+        .drag_and_drop(false)
+        .build()
+        .map_err(|e| AppErrorDto::from(app::AppError::Io(e.to_string())))?;
+
+    Ok(())
+}
+
 /// `AppState` から対象リポジトリのパスを取り出す。未設定なら
 /// `InvalidInput` を返す(設定画面のCLAUDE.md編集はリポジトリ設定が前提)。
+/// `profile_id` が `None` ならアクティブプロファイルを対象にする(issue #76)。
 async fn repository_path_from_state(
     state: &tauri::State<'_, Mutex<AppState>>,
+    profile_id: Option<&str>,
 ) -> Result<PathBuf, app::AppError> {
     let guard = state.lock().await;
-    guard
-        .settings
-        .active_profile()
-        .and_then(|p| p.repository_path.clone())
-        .ok_or_else(|| {
-            app::AppError::InvalidInput("対象リポジトリが設定されていません".to_string())
-        })
+    let profile = app::resolve_profile(&guard.settings, profile_id)?;
+    profile.repository_path.clone().ok_or_else(|| {
+        app::AppError::InvalidInput("対象リポジトリが設定されていません".to_string())
+    })
 }
 
 #[tauri::command]
 async fn get_repository_claude_md(
     state: tauri::State<'_, Mutex<AppState>>,
+    profile_id: Option<String>,
 ) -> Result<ClaudeMdDto, AppErrorDto> {
-    let repo_dir = repository_path_from_state(&state).await?;
+    let repo_dir = repository_path_from_state(&state, profile_id.as_deref()).await?;
     tauri::async_runtime::spawn_blocking(move || -> Result<ClaudeMdDto, app::AppError> {
         let store = FileClaudeMdStore::new();
         let file = app::read_claude_md(&store, &repo_dir)?;
@@ -385,8 +413,9 @@ async fn save_repository_claude_md(
     state: tauri::State<'_, Mutex<AppState>>,
     content: String,
     expected_modified_at_ms: Option<u64>,
+    profile_id: Option<String>,
 ) -> Result<(), AppErrorDto> {
-    let repo_dir = repository_path_from_state(&state).await?;
+    let repo_dir = repository_path_from_state(&state, profile_id.as_deref()).await?;
     tauri::async_runtime::spawn_blocking(move || -> Result<(), app::AppError> {
         let store = FileClaudeMdStore::new();
         app::save_claude_md(&store, &repo_dir, &content, expected_modified_at_ms)
@@ -834,13 +863,13 @@ async fn list_github_project_items(
     app: tauri::AppHandle,
     state: tauri::State<'_, Mutex<AppState>>,
     cursor: Option<String>,
+    profile_id: Option<String>,
 ) -> Result<ProjectItemsPageDto, AppErrorDto> {
     let github_project = {
         let guard = state.lock().await;
-        guard
-            .settings
-            .active_profile()
-            .and_then(|p| p.github_project.clone())
+        app::resolve_profile(&guard.settings, profile_id.as_deref())?
+            .github_project
+            .clone()
     };
     let project = github_project.ok_or_else(|| {
         AppErrorDto::from(app::AppError::InvalidInput(
@@ -1079,6 +1108,7 @@ pub fn run() {
             create_profile,
             delete_profile,
             rename_profile,
+            open_profile_window,
             get_repository_claude_md,
             save_repository_claude_md,
             get_project_claude_md,

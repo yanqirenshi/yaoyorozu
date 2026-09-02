@@ -407,6 +407,28 @@ pub fn update_settings(store: &dyn SettingsStore, input: Settings) -> Result<Set
     Ok(input)
 }
 
+/// `profile_id` が指定されていればそのプロファイル、`None` ならアクティブ
+/// (既定)プロファイルを返す。存在しないIDは `NotFound`(マルチウィンドウ
+/// Phase 1。issue #76)。メインウィンドウは常に `None` を渡すため、この経路
+/// では従来どおりアクティブプロファイルが使われる(挙動不変)。
+pub fn resolve_profile<'a>(
+    settings: &'a Settings,
+    profile_id: Option<&str>,
+) -> Result<&'a domain::Profile, AppError> {
+    match profile_id {
+        Some(id) => settings
+            .profiles
+            .iter()
+            .find(|p| p.id == id)
+            .ok_or_else(|| {
+                AppError::NotFound("指定されたプロファイルが見つかりません".to_string())
+            }),
+        None => settings.active_profile().ok_or_else(|| {
+            AppError::NotFound("アクティブなプロファイルが見つかりません".to_string())
+        }),
+    }
+}
+
 /// アクティブプロファイルを切り替える。`profile_id` が存在しなければ
 /// `NotFound`(issue #72)。永続化・イベント通知は呼び出し側(tauri層)の
 /// 責務(native.md §3.1)。
@@ -1187,6 +1209,27 @@ mod tests {
             profiles: vec![a, b],
             ..Settings::default()
         }
+    }
+
+    #[test]
+    fn resolve_profile_returns_the_specified_profile_when_id_given() {
+        let settings = two_profile_settings();
+        let profile = resolve_profile(&settings, Some("b")).expect("should resolve");
+        assert_eq!(profile.id, "b");
+    }
+
+    #[test]
+    fn resolve_profile_returns_active_profile_when_id_omitted() {
+        let settings = two_profile_settings();
+        let profile = resolve_profile(&settings, None).expect("should resolve");
+        assert_eq!(profile.id, settings.active_profile_id);
+    }
+
+    #[test]
+    fn resolve_profile_rejects_unknown_profile_id() {
+        let settings = two_profile_settings();
+        let error = resolve_profile(&settings, Some("missing")).expect_err("should reject");
+        assert!(matches!(error, AppError::NotFound(_)));
     }
 
     #[test]

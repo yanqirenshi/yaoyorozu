@@ -105,12 +105,18 @@ export function onAppWarning(
   return unlisten.then((fn) => fn);
 }
 
-export function getSettings(): Promise<SettingsDto> {
-  return invoke<SettingsDto>("get_settings");
+// `profileId` は対象プロファイル。`null`(またはundefined)はアクティブ
+// (既定)プロファイルを対象にする(メインウィンドウの挙動不変。issue #76。
+// `useWindowProfileId` で解決した値をそのまま渡す)。
+export function getSettings(profileId?: string | null): Promise<SettingsDto> {
+  return invoke<SettingsDto>("get_settings", { profileId: profileId ?? null });
 }
 
-export function updateSettings(input: SettingsInputDto): Promise<void> {
-  return invoke<void>("update_settings", { input });
+export function updateSettings(
+  input: SettingsInputDto,
+  profileId?: string | null,
+): Promise<void> {
+  return invoke<void>("update_settings", { input, profileId: profileId ?? null });
 }
 
 export function onSettingsCorrupted(
@@ -139,6 +145,12 @@ export function renameProfile(profileId: string, name: string): Promise<void> {
   return invoke<void>("rename_profile", { profileId, name });
 }
 
+// 指定プロファイルを対象に新しいウィンドウを開く(マルチウィンドウ Phase 1。
+// issue #76)。ウィンドウ生成はRust側で行う(native.md §4)。
+export function openProfileWindow(profileId: string): Promise<void> {
+  return invoke<void>("open_profile_window", { profileId });
+}
+
 // 設定(アクティブプロファイルの内容含む)が変わったことの通知。
 // `update_settings`/プロファイル操作系コマンドの成功時に発火する
 // (native.md §3.2。issue #72)。
@@ -147,15 +159,20 @@ export function onSettingsUpdated(callback: () => void): Promise<() => void> {
   return unlisten.then((fn) => fn);
 }
 
-export function getRepositoryClaudeMd(): Promise<ClaudeMdDto> {
-  return invoke<ClaudeMdDto>("get_repository_claude_md");
+export function getRepositoryClaudeMd(profileId?: string | null): Promise<ClaudeMdDto> {
+  return invoke<ClaudeMdDto>("get_repository_claude_md", { profileId: profileId ?? null });
 }
 
 export function saveRepositoryClaudeMd(
   content: string,
   expectedModifiedAtMs: number | null,
+  profileId?: string | null,
 ): Promise<void> {
-  return invoke<void>("save_repository_claude_md", { content, expectedModifiedAtMs });
+  return invoke<void>("save_repository_claude_md", {
+    content,
+    expectedModifiedAtMs,
+    profileId: profileId ?? null,
+  });
 }
 
 export function getProjectClaudeMd(project: string): Promise<ClaudeMdDto> {
@@ -241,8 +258,14 @@ export function listGithubProjects(): Promise<GithubProjectSummaryDto[]> {
   return invoke<GithubProjectSummaryDto[]>("list_github_projects");
 }
 
-export function listGithubProjectItems(cursor: string | null): Promise<ProjectItemsPageDto> {
-  return invoke<ProjectItemsPageDto>("list_github_project_items", { cursor });
+export function listGithubProjectItems(
+  cursor: string | null,
+  profileId?: string | null,
+): Promise<ProjectItemsPageDto> {
+  return invoke<ProjectItemsPageDto>("list_github_project_items", {
+    cursor,
+    profileId: profileId ?? null,
+  });
 }
 
 export function updateGithubProjectItemStatus(

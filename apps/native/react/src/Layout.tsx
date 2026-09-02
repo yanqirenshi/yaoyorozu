@@ -8,15 +8,29 @@ import type { ProfileSummaryDto } from "./api";
 import { DockItemsProvider } from "./DockItemsContext";
 import type { DirtyGuard } from "./DockItemsContext";
 import { CLAUDE_SETTINGS_ICON, PROFILE_ICON, SETTINGS_ICON, VIEWER_ICON } from "./icons";
+import { useWindowProfileId } from "./useWindowProfileId";
 import "./App.css";
 
 // OSウィンドウのタイトルバーに画面名を出す(ページ内の見出しは重複するため
 // 置かない)。tauri.conf.json の既定値("YAOYOROZU")へは設定画面以外で戻す。
+// メインウィンドウ(`?profile=`なし)の挙動はこのマップのみで決まり、
+// issue #76 での変更対象ではない(挙動不変)。
 const WINDOW_TITLE_BY_PATH: Record<string, string> = {
   "/settings": "設定",
   "/claude": "Claude",
 };
 const DEFAULT_WINDOW_TITLE = "YAOYOROZU";
+
+// プロファイルを指定した別ウィンドウ(`?profile=`あり)のタイトルは
+// 「<プロファイル名> - <ページ名>」にして、どのプロファイルのウィンドウかを
+// 区別できるようにする(issue #76)。新しいウィンドウは常にビューア(`/`)を
+// 開く(open_profile_window)ため実質「/」しか使わないが、念のため他の
+// パスも用意しておく。
+const PAGE_LABEL_BY_PATH: Record<string, string> = {
+  "/": "ビューア",
+  "/settings": "設定",
+  "/claude": "Claude",
+};
 
 // AppDock(グローバルメニュー)は全画面共通のためレイアウト側に置く
 // (native.md §6)。画面遷移用の項目は常設、ページ固有の項目(再読み込み等)は
@@ -24,6 +38,7 @@ const DEFAULT_WINDOW_TITLE = "YAOYOROZU";
 function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
+  const windowProfileId = useWindowProfileId();
   const [pageItems, setPageItems] = useState<DockItem[]>([]);
   const [corruptionWarning, setCorruptionWarning] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<ProfileSummaryDto[]>([]);
@@ -44,9 +59,16 @@ function Layout() {
   }, []);
 
   useEffect(() => {
-    const title = WINDOW_TITLE_BY_PATH[location.pathname] ?? DEFAULT_WINDOW_TITLE;
+    // `windowProfileId` があれば(別ウィンドウ)「<プロファイル名> - <ページ名>」、
+    // なければ(メインウィンドウ)従来どおりの挙動(issue #76)。
+    const profileName = windowProfileId
+      ? profiles.find((p) => p.id === windowProfileId)?.name
+      : null;
+    const title = profileName
+      ? `${profileName} - ${PAGE_LABEL_BY_PATH[location.pathname] ?? DEFAULT_WINDOW_TITLE}`
+      : (WINDOW_TITLE_BY_PATH[location.pathname] ?? DEFAULT_WINDOW_TITLE);
     void getCurrentWindow().setTitle(title);
-  }, [location.pathname]);
+  }, [location.pathname, windowProfileId, profiles]);
 
   // プロファイル一覧・アクティブIDはdockのクイック切り替え(吹き出し)表示に
   // 使う。全画面共通のため Layout 自身が取得する(issue #72)。
@@ -76,7 +98,11 @@ function Layout() {
         id: "nav-sessions",
         label: VIEWER_ICON,
         title: "ビューア",
-        onClick: () => navigate("/"),
+        // このウィンドウのプロファイル文脈(`?profile=`)を保ったまま戻る
+        // (issue #76。設定・Claude画面はプロファイルに紐づかないため、
+        // それらへの遷移ではクエリを付けない)。
+        onClick: () =>
+          navigate(windowProfileId ? `/?profile=${encodeURIComponent(windowProfileId)}` : "/"),
       });
     }
     if (location.pathname !== "/settings") {
@@ -113,7 +139,7 @@ function Layout() {
       });
     }
     return items;
-  }, [location.pathname, navigate, profiles, activeProfileId]);
+  }, [location.pathname, navigate, profiles, activeProfileId, windowProfileId]);
 
   const items = useMemo<DockItem[]>(
     () => [...navItems, ...pageItems],

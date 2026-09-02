@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent, FormEvent } from "react";
 import { useSearchParams } from "react-router";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { DockItem } from "command-dock";
 import type { ViewMode } from "@yanqirenshi/markdown.sitter";
@@ -40,6 +41,7 @@ import PaneTabs from "../PaneTabs";
 import { createProjectSettingsDockItems } from "../projectSettingsDockItems";
 import RulesPane from "../RulesPane";
 import SkillsPane from "../SkillsPane";
+import { useWindowProfileId } from "../useWindowProfileId";
 
 const PAGE_SIZE = 50;
 
@@ -94,7 +96,21 @@ function splitFolderNameForDisplay(name: string): { prefix: string; tail: string
   return { prefix: name.slice(0, idx + 1), tail: name.slice(idx + 1) };
 }
 
+// このウィンドウのプロファイルが削除された場合、`getSettings(profileId)` は
+// `not_found` を返す。セカンダリウィンドウ(`windowProfileId` あり)では
+// ウィンドウを閉じるだけでよい(issue #76)。メインウィンドウ
+// (`windowProfileId` なし)はこの経路を通らない(削除時は既定プロファイルの
+// 繰り上げに追従するだけで、閉じる対象ではないため)。
+function closeWindowIfProfileWasDeleted(windowProfileId: string | null, e: unknown): boolean {
+  if (windowProfileId && isAppError(e) && e.code === "not_found") {
+    void getCurrentWindow().close();
+    return true;
+  }
+  return false;
+}
+
 function SessionsPage() {
+  const windowProfileId = useWindowProfileId();
   const [targetFolders, setTargetFolders] = useState<string[]>([]);
   const [sessionGroups, setSessionGroups] = useState<SessionGroup[]>([]);
   const [messages, setMessages] = useState<MessageDto[]>([]);
@@ -152,14 +168,17 @@ function SessionsPage() {
   }, []);
 
   const loadTargetFoldersAndSessions = useCallback((): Promise<void> => {
-    return getSettings()
+    return getSettings(windowProfileId)
       .then((settings) => {
         setTargetFolders(settings.selected_project_folders);
         setGithubProject(settings.github_project);
         return loadSessionGroups(settings.selected_project_folders);
       })
-      .catch((e) => setError(isAppError(e) ? e.message : String(e)));
-  }, [loadSessionGroups]);
+      .catch((e) => {
+        if (closeWindowIfProfileWasDeleted(windowProfileId, e)) return;
+        setError(isAppError(e) ? e.message : String(e));
+      });
+  }, [loadSessionGroups, windowProfileId]);
 
   const loadGithubAuthStatus = useCallback((): Promise<void> => {
     return getGithubAuthStatus()
@@ -167,19 +186,22 @@ function SessionsPage() {
       .catch((e) => setError(isAppError(e) ? e.message : String(e)));
   }, []);
 
-  const loadProjectItems = useCallback((cursor: string | null): Promise<void> => {
-    setProjectItemsError(null);
-    return listGithubProjectItems(cursor)
-      .then((page) => {
-        setProjectItems((prev) => (cursor ? [...prev, ...page.items] : page.items));
-        setProjectItemsNextCursor(page.next_cursor);
-        setProjectId(page.project_id);
-        setProjectStatusFieldId(page.status_field_id);
-        setProjectStatusOptions(page.status_options);
-        setProjectItemsLoaded(true);
-      })
-      .catch((e) => setProjectItemsError(isAppError(e) ? e.message : String(e)));
-  }, []);
+  const loadProjectItems = useCallback(
+    (cursor: string | null): Promise<void> => {
+      setProjectItemsError(null);
+      return listGithubProjectItems(cursor, windowProfileId)
+        .then((page) => {
+          setProjectItems((prev) => (cursor ? [...prev, ...page.items] : page.items));
+          setProjectItemsNextCursor(page.next_cursor);
+          setProjectId(page.project_id);
+          setProjectStatusFieldId(page.status_field_id);
+          setProjectStatusOptions(page.status_options);
+          setProjectItemsLoaded(true);
+        })
+        .catch((e) => setProjectItemsError(isAppError(e) ? e.message : String(e)));
+    },
+    [windowProfileId],
+  );
 
   const loadSession = useCallback((project: string, id: string): Promise<void> => {
     setMessages([]);
@@ -277,7 +299,7 @@ function SessionsPage() {
   // 選択を解除する(issue #72)。
   useEffect(() => {
     const unlistenPromise = onSettingsUpdated(() => {
-      getSettings()
+      getSettings(windowProfileId)
         .then((settings) => {
           setTargetFolders(settings.selected_project_folders);
           setGithubProject(settings.github_project);
@@ -291,12 +313,15 @@ function SessionsPage() {
           }
           return loadSessionGroups(settings.selected_project_folders);
         })
-        .catch((e) => setError(isAppError(e) ? e.message : String(e)));
+        .catch((e) => {
+          if (closeWindowIfProfileWasDeleted(windowProfileId, e)) return;
+          setError(isAppError(e) ? e.message : String(e));
+        });
     });
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
     };
-  }, [projectParam, loadSessionGroups, setSearchParams]);
+  }, [projectParam, loadSessionGroups, setSearchParams, windowProfileId]);
 
   const handleLoadMoreProjectItems = () => {
     if (!projectItemsNextCursor || projectItemsLoadingMore) return;
