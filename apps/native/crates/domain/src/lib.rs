@@ -122,6 +122,26 @@ pub fn is_valid_session_id(id: &str) -> bool {
     !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
+/// `.claude/rules/` 配下のルールファイル1件分のサマリ(一覧表示用。issue #61)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleSummary {
+    pub file_name: String,
+    pub modified_at_ms: u64,
+}
+
+/// ルールファイル名がパスの構築に使って安全な形式かを検証する。フロントから
+/// 受け取った値をそのままパスに使わないための入力検証(native.md §4)。
+/// パス区切り(`/` `\`)・`..` を含まず、`.md` で終わる単一セグメントのみ
+/// 許可する。これにより `<repo_dir>/.claude/rules/<file_name>` の解決先が
+/// 常にそのディレクトリ配下に収まることを保証する(issue #61)。
+pub fn is_valid_rule_file_name(file_name: &str) -> bool {
+    !file_name.is_empty()
+        && file_name.ends_with(".md")
+        && !file_name.contains('/')
+        && !file_name.contains('\\')
+        && !file_name.contains("..")
+}
+
 /// `Settings` の現在のスキーマバージョン。マイグレーションが必要になったら
 /// 上げ、infra 側のマイグレーション関数で旧バージョンからの変換を行う。
 /// v1 -> v2: `claude_projects_dir` を追加(issue #25)。
@@ -489,6 +509,30 @@ mod tests {
     fn is_valid_session_id_rejects_path_traversal_attempts() {
         for bad in ["../../etc/passwd", "a/b", "a\\b", "a.jsonl", "a b"] {
             assert!(!is_valid_session_id(bad), "should reject {bad:?}");
+        }
+    }
+
+    #[test]
+    fn is_valid_rule_file_name_accepts_plain_md_file_names() {
+        for good in ["native.md", "web.md", "a-b_c.md"] {
+            assert!(is_valid_rule_file_name(good), "should accept {good:?}");
+        }
+    }
+
+    #[test]
+    fn is_valid_rule_file_name_rejects_path_traversal_and_non_md() {
+        for bad in [
+            "",
+            "../native.md",
+            "../../etc/passwd.md",
+            "a/native.md",
+            "a\\native.md",
+            "/etc/passwd.md",
+            "native.txt",
+            "native.md.txt",
+            "..md",
+        ] {
+            assert!(!is_valid_rule_file_name(bad), "should reject {bad:?}");
         }
     }
 }

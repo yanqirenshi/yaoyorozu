@@ -5,12 +5,12 @@ use app::{SessionSource, SettingsStore, TokenStore};
 use dto::{
     AgentKindDto, AgentModeDto, AppErrorDto, AppWarningDto, ClaudeMdDto, ClaudeSettingsDto,
     DeviceCodeDto, GithubAuthFailedEventDto, GithubAuthStatusDto, GithubAuthenticatedEventDto,
-    GithubProjectDto, GithubProjectSummaryDto, ProjectDto, ProjectItemsPageDto,
-    SessionChangedEventDto, SessionDto, SessionSummaryDto, SettingsCorruptedEventDto, SettingsDto,
-    SettingsInputDto,
+    GithubProjectDto, GithubProjectSummaryDto, ProjectDto, ProjectItemsPageDto, RuleDto,
+    RuleSummaryDto, SessionChangedEventDto, SessionDto, SessionSummaryDto,
+    SettingsCorruptedEventDto, SettingsDto, SettingsInputDto,
 };
 use infra::{
-    ClaudeCliAgent, FileClaudeMdStore, FileClaudeSettingsStore, FileSettingsStore,
+    ClaudeCliAgent, FileClaudeMdStore, FileClaudeSettingsStore, FileRulesStore, FileSettingsStore,
     FileSystemRepository, GithubApiClient, KeyringTokenStore,
 };
 use state::AppState;
@@ -313,6 +313,54 @@ async fn save_project_claude_md(
         let repo_dir = source.latest_session_cwd(&project)?;
         let store = FileClaudeMdStore::new();
         app::save_claude_md(&store, &repo_dir, &content, expected_modified_at_ms)
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
+}
+
+/// `project` の作業ディレクトリ(CLAUDE.mdと同じcwd解決)配下の
+/// `.claude/rules/*.md` を一覧する(Rulesタブ用。issue #61)。
+#[tauri::command]
+async fn list_rules(
+    state: tauri::State<'_, Mutex<AppState>>,
+    project: String,
+) -> Result<Vec<RuleSummaryDto>, AppErrorDto> {
+    let root = effective_projects_dir_from_state(&state).await?;
+    tauri::async_runtime::spawn_blocking(move || -> Result<Vec<RuleSummaryDto>, app::AppError> {
+        let source = FileSystemRepository::new(root);
+        let repo_dir = source.latest_session_cwd(&project)?;
+        let store = FileRulesStore::new();
+        let rules = app::list_rules(&store, &repo_dir)?;
+        Ok(rules.into_iter().map(RuleSummaryDto::from).collect())
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
+}
+
+/// `.claude/rules/<file_name>` の内容を読む(表示専用。issue #61)。
+#[tauri::command]
+async fn get_rule(
+    state: tauri::State<'_, Mutex<AppState>>,
+    project: String,
+    file_name: String,
+) -> Result<RuleDto, AppErrorDto> {
+    let root = effective_projects_dir_from_state(&state).await?;
+    tauri::async_runtime::spawn_blocking(move || -> Result<RuleDto, app::AppError> {
+        let source = FileSystemRepository::new(root);
+        let repo_dir = source.latest_session_cwd(&project)?;
+        let store = FileRulesStore::new();
+        let content = app::get_rule(&store, &repo_dir, &file_name)?;
+        Ok(RuleDto { content })
     })
     .await
     .unwrap_or_else(|_| {
@@ -797,6 +845,8 @@ pub fn run() {
             save_repository_claude_md,
             get_project_claude_md,
             save_project_claude_md,
+            list_rules,
+            get_rule,
             get_claude_settings_file,
             save_claude_settings_file,
             get_github_auth_status,

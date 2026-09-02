@@ -13,6 +13,8 @@ import type {
   GithubProjectSummaryDto,
   ProjectDto,
   ProjectItemsPageDto,
+  RuleDto,
+  RuleSummaryDto,
   SessionChangedEvent,
   SessionDto,
   SessionSummaryDto,
@@ -41,6 +43,8 @@ export type {
   ProjectItemsPageDto,
   ProjectStatusOptionDto,
   RoleDto,
+  RuleDto,
+  RuleSummaryDto,
   SessionChangedEvent,
   SessionDto,
   SessionSummaryDto,
@@ -135,6 +139,14 @@ export function saveProjectClaudeMd(
     content,
     expectedModifiedAtMs,
   });
+}
+
+export function listRules(project: string): Promise<RuleSummaryDto[]> {
+  return invoke<RuleSummaryDto[]>("list_rules", { project });
+}
+
+export function getRule(project: string, fileName: string): Promise<RuleDto> {
+  return invoke<RuleDto>("get_rule", { project, fileName });
 }
 
 export function getClaudeSettingsFile(): Promise<ClaudeSettingsDto> {
