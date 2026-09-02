@@ -17,7 +17,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # タグ(vX.Y.Z)と tauri.conf.json の version が食い違ったまま
       # リリースしてしまう事故を防ぐ(バージョン上げ忘れの検出)。
@@ -34,8 +34,11 @@ jobs:
           echo "version=$conf_version" >> "$GITHUB_OUTPUT"
         id: version
 
+      # 各アクションは Node 24 ランタイム版に更新済み(issue #64)。
+      # Node 20 ランタイムを使うアクションは runner 側で強制的に Node 24 で
+      # 実行され、deprecation 警告が出る。
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 20
 
@@ -71,7 +74,7 @@ jobs:
       # 誤タグ push の保険として draft で作成し、内容確認後に手動で
       # publish する運用とする(docs/release.md 参照)。
       - name: Create draft release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           name: v${{ steps.version.outputs.version }}
