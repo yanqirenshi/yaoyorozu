@@ -200,6 +200,78 @@ body,
   overflow: hidden;
 }
 
+.rules-pane {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+}
+
+.rules-list {
+  width: 260px;
+  flex-shrink: 0;
+  min-height: 0;
+  overflow-y: auto;
+  border-right: 1px solid #a1a1aa;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rules-list-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  border: 1px solid #a1a1aa;
+  border-radius: 4px;
+  background: #fbfbf8;
+  color: #373737;
+  padding: 10px 14px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.rules-list-item:hover {
+  background-color: rgba(157, 91, 139, 0.08);
+}
+
+.rules-list-item.selected {
+  background-color: rgba(157, 91, 139, 0.16);
+  border-color: #9d5b8b;
+  font-weight: 600;
+}
+
+.rules-list-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rules-list-item-updated {
+  font-size: 0.75rem;
+  color: #737373;
+}
+
+.rules-content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+}
+
+.rules-content-viewer {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
 .github-project-pane {
   flex: 1;
   min-height: 0;

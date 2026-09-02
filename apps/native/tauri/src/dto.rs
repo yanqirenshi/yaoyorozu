@@ -264,6 +264,28 @@ impl From<Option<domain::ClaudeSettingsFile>> for ClaudeSettingsDto {
     }
 }
 
+/// `list_rules` の1件分(Ruleタブの一覧用。issue #61)。
+#[derive(Serialize, Clone)]
+pub struct RuleSummaryDto {
+    pub file_name: String,
+    pub modified_at_ms: u64,
+}
+
+impl From<domain::RuleSummary> for RuleSummaryDto {
+    fn from(summary: domain::RuleSummary) -> Self {
+        Self {
+            file_name: summary.file_name,
+            modified_at_ms: summary.modified_at_ms,
+        }
+    }
+}
+
+/// `get_rule` の戻り値(issue #61)。
+#[derive(Serialize, Clone)]
+pub struct RuleDto {
+    pub content: String,
+}
+
 /// `settings:corrupted` イベントのペイロード。起動時に設定ファイルの破損を
 /// 検知し、デフォルト値へフォールバックした場合に通知する(native.md §2)。
 #[derive(Serialize, Clone)]

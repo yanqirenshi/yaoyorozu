@@ -85,6 +85,15 @@ export type DeviceCodeDto = {
   verification_uri: string;
 };
 
+export type RuleSummaryDto = {
+  file_name: string;
+  modified_at_ms: number;
+};
+
+export type RuleDto = {
+  content: string;
+};
+
 export type GithubAuthStatusDto = {
   authenticated: boolean;
   login: string | null;

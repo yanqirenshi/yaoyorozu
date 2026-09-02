@@ -1,7 +1,7 @@
 use domain::{
-    is_valid_json, is_valid_session_id, order_messages_newest_first, paginate_messages,
-    sort_projects_by_recency, sort_sessions_by_recency, ClaudeMdFile, ClaudeSettingsFile, Project,
-    Session, SessionSummary, Settings,
+    is_valid_json, is_valid_rule_file_name, is_valid_session_id, order_messages_newest_first,
+    paginate_messages, sort_projects_by_recency, sort_sessions_by_recency, ClaudeMdFile,
+    ClaudeSettingsFile, Project, RuleSummary, Session, SessionSummary, Settings,
 };
 use std::path::{Path, PathBuf};
 
@@ -108,6 +108,16 @@ pub trait ClaudeSettingsStore {
     fn read(&self) -> Result<Option<ClaudeSettingsFile>, AppError>;
     /// 無ければ新規作成する。
     fn write(&self, content: &str) -> Result<(), AppError>;
+}
+
+/// `<repo_dir>/.claude/rules/*.md` の読み取り専用アクセス(port)。`repo_dir`
+/// の解決は呼び出し側(tauri層)の責務(`ClaudeMdStore` と同じ分担。
+/// issue #61)。編集は対象外(表示のみ)。
+pub trait RulesStore {
+    /// `.md` ファイルをファイル名昇順で返す。ディレクトリが無ければ空。
+    fn list(&self, repo_dir: &Path) -> Result<Vec<RuleSummary>, AppError>;
+    /// `repo_dir/.claude/rules/<file_name>` の内容を読む。
+    fn read(&self, repo_dir: &Path, file_name: &str) -> Result<String, AppError>;
 }
 
 /// 起動時に読み込んだ設定。ファイルが存在しない場合と破損していた場合を
@@ -411,6 +421,25 @@ pub fn save_claude_settings(
         ));
     }
     store.write(content)
+}
+
+/// `.claude/rules/*.md` の一覧を返す(issue #61)。
+pub fn list_rules(store: &dyn RulesStore, repo_dir: &Path) -> Result<Vec<RuleSummary>, AppError> {
+    store.list(repo_dir)
+}
+
+/// ルールファイルの内容を読む。`file_name` はフロントから受け取った値を
+/// そのままパスに使うため、保存先ディレクトリ配下に収まることが保証できる
+/// 形式かを先に検証する(native.md §4。issue #61)。
+pub fn get_rule(
+    store: &dyn RulesStore,
+    repo_dir: &Path,
+    file_name: &str,
+) -> Result<String, AppError> {
+    if !is_valid_rule_file_name(file_name) {
+        return Err(AppError::InvalidInput("不正なファイル名です".to_string()));
+    }
+    store.read(repo_dir, file_name)
 }
 
 pub fn start_github_login(gateway: &dyn GithubGateway) -> Result<DeviceAuthorization, AppError> {
@@ -1119,6 +1148,69 @@ mod tests {
             save_claude_settings(&store, "{invalid", None).expect_err("should reject bad json");
         assert!(matches!(error, AppError::InvalidInput(_)));
         assert!(store.written.borrow().is_empty());
+    }
+
+    #[derive(Default)]
+    struct FakeRulesStore {
+        summaries: Vec<RuleSummary>,
+        contents: std::collections::HashMap<String, String>,
+        read_calls: std::cell::RefCell<Vec<String>>,
+    }
+
+    impl RulesStore for FakeRulesStore {
+        fn list(&self, _repo_dir: &Path) -> Result<Vec<RuleSummary>, AppError> {
+            Ok(self.summaries.clone())
+        }
+
+        fn read(&self, _repo_dir: &Path, file_name: &str) -> Result<String, AppError> {
+            self.read_calls.borrow_mut().push(file_name.to_string());
+            self.contents
+                .get(file_name)
+                .cloned()
+                .ok_or_else(|| AppError::NotFound("ルールが見つかりません".to_string()))
+        }
+    }
+
+    #[test]
+    fn list_rules_delegates_to_store() {
+        let store = FakeRulesStore {
+            summaries: vec![RuleSummary {
+                file_name: "native.md".to_string(),
+                modified_at_ms: 100,
+            }],
+            ..Default::default()
+        };
+
+        let rules = list_rules(&store, Path::new("/tmp/repo")).expect("should list");
+
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].file_name, "native.md");
+    }
+
+    #[test]
+    fn get_rule_delegates_to_store_for_valid_file_name() {
+        let mut contents = std::collections::HashMap::new();
+        contents.insert("native.md".to_string(), "# ルール".to_string());
+        let store = FakeRulesStore {
+            contents,
+            ..Default::default()
+        };
+
+        let content = get_rule(&store, Path::new("/tmp/repo"), "native.md").expect("should read");
+
+        assert_eq!(content, "# ルール");
+        assert_eq!(store.read_calls.borrow().as_slice(), ["native.md"]);
+    }
+
+    #[test]
+    fn get_rule_rejects_path_traversal_without_calling_store() {
+        let store = FakeRulesStore::default();
+
+        let error = get_rule(&store, Path::new("/tmp/repo"), "../../etc/passwd.md")
+            .expect_err("should reject");
+
+        assert!(matches!(error, AppError::InvalidInput(_)));
+        assert!(store.read_calls.borrow().is_empty());
     }
 
     struct FakeGithubGateway {
