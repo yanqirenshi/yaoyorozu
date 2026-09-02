@@ -13,6 +13,7 @@ import type {
   GithubProjectSummaryDto,
   ProjectDto,
   ProjectItemsPageDto,
+  ProjectSettingsFileDto,
   RuleDto,
   RuleSummaryDto,
   SessionChangedEvent,
@@ -43,6 +44,7 @@ export type {
   ProjectItemDto,
   ProjectItemKindDto,
   ProjectItemsPageDto,
+  ProjectSettingsFileDto,
   ProjectStatusOptionDto,
   RoleDto,
   RuleDto,
@@ -170,6 +172,27 @@ export function saveClaudeSettingsFile(
   expectedModifiedAtMs: number | null,
 ): Promise<void> {
   return invoke<void>("save_claude_settings_file", {
+    content,
+    expectedModifiedAtMs,
+  });
+}
+
+export function getProjectSettingsFile(
+  project: string,
+  which: ProjectSettingsFileDto,
+): Promise<ClaudeSettingsDto> {
+  return invoke<ClaudeSettingsDto>("get_project_settings_file", { project, which });
+}
+
+export function saveProjectSettingsFile(
+  project: string,
+  which: ProjectSettingsFileDto,
+  content: string,
+  expectedModifiedAtMs: number | null,
+): Promise<void> {
+  return invoke<void>("save_project_settings_file", {
+    project,
+    which,
     content,
     expectedModifiedAtMs,
   });

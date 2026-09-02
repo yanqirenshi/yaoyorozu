@@ -132,6 +132,34 @@ pub trait SkillsStore {
     fn read(&self, repo_dir: &Path, name: &str) -> Result<String, AppError>;
 }
 
+/// プロジェクトの `.claude/` 配下にある2種類の設定ファイル(issue #70)。
+/// フロントからファイル名を自由入力させず、この enum で選ばせることで
+/// パスを固定する(native.md §4)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectSettingsFile {
+    Settings,
+    SettingsLocal,
+}
+
+/// `<repo_dir>/.claude/settings.json` / `settings.local.json` の読み書き
+/// (port)。`~/.claude/settings.json`(ユーザーレベル)を扱う
+/// `ClaudeSettingsStore` とは対象パスが異なるため別に用意する(issue #70)。
+pub trait ProjectSettingsStore {
+    /// ファイルが無ければ `Ok(None)`。
+    fn read(
+        &self,
+        repo_dir: &Path,
+        which: ProjectSettingsFile,
+    ) -> Result<Option<ClaudeSettingsFile>, AppError>;
+    /// 無ければ新規作成する。
+    fn write(
+        &self,
+        repo_dir: &Path,
+        which: ProjectSettingsFile,
+        content: &str,
+    ) -> Result<(), AppError>;
+}
+
 /// 起動時に読み込んだ設定。ファイルが存在しない場合と破損していた場合を
 /// 区別しない(どちらもデフォルト値へフォールバックする)が、破損からの
 /// 復旧があったかどうかは呼び出し側(tauri層)が `app:warning` を出すか
@@ -433,6 +461,40 @@ pub fn save_claude_settings(
         ));
     }
     store.write(content)
+}
+
+/// プロジェクトの `.claude/settings.json` / `settings.local.json` を読む
+/// (issue #70)。
+pub fn read_project_settings_file(
+    store: &dyn ProjectSettingsStore,
+    repo_dir: &Path,
+    which: ProjectSettingsFile,
+) -> Result<Option<ClaudeSettingsFile>, AppError> {
+    store.read(repo_dir, which)
+}
+
+/// プロジェクトの `.claude/settings.json` / `settings.local.json` を保存する。
+/// `save_claude_settings`(ユーザーレベル)と同じ流儀: 壊れたJSONは書き込まず
+/// `InvalidInput`、楽観ロック不一致は `FileConflict`(issue #70)。
+pub fn save_project_settings_file(
+    store: &dyn ProjectSettingsStore,
+    repo_dir: &Path,
+    which: ProjectSettingsFile,
+    content: &str,
+    expected_modified_at_ms: Option<u64>,
+) -> Result<(), AppError> {
+    if !is_valid_json(content) {
+        return Err(AppError::InvalidInput(
+            "JSONの形式が正しくありません".to_string(),
+        ));
+    }
+    let current_modified_at_ms = store.read(repo_dir, which)?.map(|f| f.modified_at_ms);
+    if current_modified_at_ms != expected_modified_at_ms {
+        return Err(AppError::FileConflict(
+            "ファイルがアプリ外で変更されています。再読み込みしてください".to_string(),
+        ));
+    }
+    store.write(repo_dir, which, content)
 }
 
 /// `.claude/rules/*.md` の一覧を返す(issue #61)。
@@ -1176,6 +1238,172 @@ mod tests {
         let store = FakeClaudeSettingsStore::default();
         let error =
             save_claude_settings(&store, "{invalid", None).expect_err("should reject bad json");
+        assert!(matches!(error, AppError::InvalidInput(_)));
+        assert!(store.written.borrow().is_empty());
+    }
+
+    #[derive(Default)]
+    struct FakeProjectSettingsStore {
+        settings: std::cell::RefCell<Option<ClaudeSettingsFile>>,
+        settings_local: std::cell::RefCell<Option<ClaudeSettingsFile>>,
+        written: std::cell::RefCell<Vec<(ProjectSettingsFile, String)>>,
+    }
+
+    impl FakeProjectSettingsStore {
+        fn with_file(which: ProjectSettingsFile, content: &str, modified_at_ms: u64) -> Self {
+            let store = Self::default();
+            let file = Some(ClaudeSettingsFile {
+                content: content.to_string(),
+                modified_at_ms,
+            });
+            match which {
+                ProjectSettingsFile::Settings => *store.settings.borrow_mut() = file,
+                ProjectSettingsFile::SettingsLocal => *store.settings_local.borrow_mut() = file,
+            }
+            store
+        }
+    }
+
+    impl ProjectSettingsStore for FakeProjectSettingsStore {
+        fn read(
+            &self,
+            _repo_dir: &Path,
+            which: ProjectSettingsFile,
+        ) -> Result<Option<ClaudeSettingsFile>, AppError> {
+            Ok(match which {
+                ProjectSettingsFile::Settings => self.settings.borrow().clone(),
+                ProjectSettingsFile::SettingsLocal => self.settings_local.borrow().clone(),
+            })
+        }
+
+        fn write(
+            &self,
+            _repo_dir: &Path,
+            which: ProjectSettingsFile,
+            content: &str,
+        ) -> Result<(), AppError> {
+            self.written.borrow_mut().push((which, content.to_string()));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn read_project_settings_file_returns_none_when_absent() {
+        let store = FakeProjectSettingsStore::default();
+        let result = read_project_settings_file(
+            &store,
+            Path::new("/tmp/repo"),
+            ProjectSettingsFile::Settings,
+        )
+        .expect("should read");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn read_project_settings_file_returns_file_when_present() {
+        let store = FakeProjectSettingsStore::with_file(ProjectSettingsFile::Settings, "{}", 100);
+        let result = read_project_settings_file(
+            &store,
+            Path::new("/tmp/repo"),
+            ProjectSettingsFile::Settings,
+        )
+        .expect("should read");
+        assert_eq!(
+            result,
+            Some(ClaudeSettingsFile {
+                content: "{}".to_string(),
+                modified_at_ms: 100,
+            })
+        );
+    }
+
+    #[test]
+    fn read_project_settings_file_keeps_settings_and_settings_local_independent() {
+        let store = FakeProjectSettingsStore::with_file(ProjectSettingsFile::Settings, "{}", 100);
+        let result = read_project_settings_file(
+            &store,
+            Path::new("/tmp/repo"),
+            ProjectSettingsFile::SettingsLocal,
+        )
+        .expect("should read");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn save_project_settings_file_creates_new_file_when_none_expected_and_none_exists() {
+        let store = FakeProjectSettingsStore::default();
+        save_project_settings_file(
+            &store,
+            Path::new("/tmp/repo"),
+            ProjectSettingsFile::SettingsLocal,
+            "{}",
+            None,
+        )
+        .expect("should save new file");
+        assert_eq!(
+            store.written.borrow().as_slice(),
+            [(ProjectSettingsFile::SettingsLocal, "{}".to_string())]
+        );
+    }
+
+    #[test]
+    fn save_project_settings_file_writes_when_expected_matches_current() {
+        let store = FakeProjectSettingsStore::with_file(ProjectSettingsFile::Settings, "{}", 100);
+        save_project_settings_file(
+            &store,
+            Path::new("/tmp/repo"),
+            ProjectSettingsFile::Settings,
+            r#"{"a":1}"#,
+            Some(100),
+        )
+        .expect("should save");
+        assert_eq!(
+            store.written.borrow().as_slice(),
+            [(ProjectSettingsFile::Settings, r#"{"a":1}"#.to_string())]
+        );
+    }
+
+    #[test]
+    fn save_project_settings_file_rejects_when_expected_none_but_file_exists() {
+        let store = FakeProjectSettingsStore::with_file(ProjectSettingsFile::Settings, "{}", 100);
+        let error = save_project_settings_file(
+            &store,
+            Path::new("/tmp/repo"),
+            ProjectSettingsFile::Settings,
+            r#"{"a":1}"#,
+            None,
+        )
+        .expect_err("should reject as conflict");
+        assert!(matches!(error, AppError::FileConflict(_)));
+        assert!(store.written.borrow().is_empty());
+    }
+
+    #[test]
+    fn save_project_settings_file_rejects_when_expected_mtime_is_stale() {
+        let store = FakeProjectSettingsStore::with_file(ProjectSettingsFile::Settings, "{}", 200);
+        let error = save_project_settings_file(
+            &store,
+            Path::new("/tmp/repo"),
+            ProjectSettingsFile::Settings,
+            r#"{"a":1}"#,
+            Some(100),
+        )
+        .expect_err("should reject as conflict");
+        assert!(matches!(error, AppError::FileConflict(_)));
+        assert!(store.written.borrow().is_empty());
+    }
+
+    #[test]
+    fn save_project_settings_file_rejects_invalid_json_without_reading_current_state() {
+        let store = FakeProjectSettingsStore::default();
+        let error = save_project_settings_file(
+            &store,
+            Path::new("/tmp/repo"),
+            ProjectSettingsFile::Settings,
+            "{invalid",
+            None,
+        )
+        .expect_err("should reject bad json");
         assert!(matches!(error, AppError::InvalidInput(_)));
         assert!(store.written.borrow().is_empty());
     }

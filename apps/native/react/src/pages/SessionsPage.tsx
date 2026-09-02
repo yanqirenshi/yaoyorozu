@@ -7,6 +7,7 @@ import type { ViewMode } from "@yanqirenshi/markdown.sitter";
 import {
   getGithubAuthStatus,
   getProjectClaudeMd,
+  getProjectSettingsFile,
   getSession,
   getSettings,
   isAppError,
@@ -15,6 +16,7 @@ import {
   onAppWarning,
   onSessionChanged,
   saveProjectClaudeMd,
+  saveProjectSettingsFile,
   sendMessage,
   updateGithubProjectItemStatus,
 } from "../api";
@@ -30,14 +32,34 @@ import type { ClaudeMdEditorHandle } from "../ClaudeMdEditor";
 import { createClaudeMdDockItems } from "../claudeMdDockItems";
 import { usePageDockItems } from "../DockItemsContext";
 import { MODE_ICON, RELOAD_ICON } from "../icons";
+import JsonFileEditor from "../JsonFileEditor";
+import type { JsonFileEditorHandle } from "../JsonFileEditor";
 import MessageText from "../MessageText";
 import PaneTabs from "../PaneTabs";
+import { createProjectSettingsDockItems } from "../projectSettingsDockItems";
 import RulesPane from "../RulesPane";
 import SkillsPane from "../SkillsPane";
 
 const PAGE_SIZE = 50;
 
-type PaneView = "chat" | "github-project" | "claude-md" | "rules" | "skills";
+type PaneView =
+  | "chat"
+  | "github-project"
+  | "claude-md"
+  | "rules"
+  | "skills"
+  | "settings-json"
+  | "settings-local-json";
+
+const PANE_VIEWS: PaneView[] = [
+  "chat",
+  "github-project",
+  "claude-md",
+  "rules",
+  "skills",
+  "settings-json",
+  "settings-local-json",
+];
 
 type SessionGroup = {
   folder: string;
@@ -61,8 +83,7 @@ const NO_STATUS_COLUMN_NAME = "No status";
 const SCOPE_INSUFFICIENT_MESSAGE =
   "設定のGitHubタブで再ログインしてください(権限の追加が必要です)";
 
-const DISCARD_CONFIRM_MESSAGE =
-  "CLAUDE.mdの編集内容を破棄しますか?保存していない変更は失われます。";
+const DISCARD_CONFIRM_MESSAGE = "編集内容を破棄しますか?保存していない変更は失われます。";
 
 // フォルダ名(例: "C--Users-yanqi-prj-yaoyorozu")は末尾の要素が実際の
 // リポジトリ名に対応することが多いため、末尾要素を目立たせて表示する。
@@ -84,13 +105,9 @@ function SessionsPage() {
   const [mode, setMode] = useState<AgentModeDto>("chat");
   const [searchParams, setSearchParams] = useSearchParams();
   const viewParam = searchParams.get("view");
-  const view: PaneView =
-    viewParam === "claude-md" ||
-    viewParam === "github-project" ||
-    viewParam === "rules" ||
-    viewParam === "skills"
-      ? viewParam
-      : "chat";
+  const view: PaneView = PANE_VIEWS.includes(viewParam as PaneView)
+    ? (viewParam as PaneView)
+    : "chat";
   const projectParam = searchParams.get("project");
   const sessionParam = searchParams.get("session");
   const ruleParam = searchParams.get("rule");
@@ -98,6 +115,10 @@ function SessionsPage() {
   const [claudeMdDirty, setClaudeMdDirty] = useState(false);
   const [claudeMdMode, setClaudeMdMode] = useState<ViewMode>("preview");
   const claudeMdEditorRef = useRef<ClaudeMdEditorHandle>(null);
+  const [settingsJsonDirty, setSettingsJsonDirty] = useState(false);
+  const settingsJsonEditorRef = useRef<JsonFileEditorHandle>(null);
+  const [settingsLocalJsonDirty, setSettingsLocalJsonDirty] = useState(false);
+  const settingsLocalJsonEditorRef = useRef<JsonFileEditorHandle>(null);
   const [githubAuthenticated, setGithubAuthenticated] = useState(false);
   const [githubProject, setGithubProject] = useState<{ owner: string; number: number } | null>(
     null,
@@ -315,15 +336,21 @@ function SessionsPage() {
     ?.sessions.find((s) => s.id === sessionParam);
   const canSend = selectedSummary?.is_latest ?? false;
 
-  const confirmDiscardClaudeMdIfDirty = (): boolean => {
+  const confirmDiscardIfDirty = (): boolean => {
     if (view === "claude-md" && claudeMdDirty) {
+      return window.confirm(DISCARD_CONFIRM_MESSAGE);
+    }
+    if (view === "settings-json" && settingsJsonDirty) {
+      return window.confirm(DISCARD_CONFIRM_MESSAGE);
+    }
+    if (view === "settings-local-json" && settingsLocalJsonDirty) {
       return window.confirm(DISCARD_CONFIRM_MESSAGE);
     }
     return true;
   };
 
   const handleSelectSession = (project: string, id: string) => {
-    if (!confirmDiscardClaudeMdIfDirty()) return;
+    if (!confirmDiscardIfDirty()) return;
     setSearchParams((prev) => {
       const params = new URLSearchParams(prev);
       params.set("project", project);
@@ -334,7 +361,7 @@ function SessionsPage() {
 
   const handleSwitchView = (next: PaneView) => {
     if (next === view) return;
-    if (!confirmDiscardClaudeMdIfDirty()) return;
+    if (!confirmDiscardIfDirty()) return;
     setSearchParams((prev) => {
       const params = new URLSearchParams(prev);
       if (next === "chat") {
@@ -424,8 +451,40 @@ function SessionsPage() {
         }),
       );
     }
+    if (view === "settings-json") {
+      items.push(
+        ...createProjectSettingsDockItems({
+          dirty: settingsJsonDirty,
+          onSave: () => settingsJsonEditorRef.current?.save(),
+          onReload: () => {
+            if (settingsJsonDirty && !window.confirm(DISCARD_CONFIRM_MESSAGE)) return;
+            return settingsJsonEditorRef.current?.reload();
+          },
+        }),
+      );
+    }
+    if (view === "settings-local-json") {
+      items.push(
+        ...createProjectSettingsDockItems({
+          dirty: settingsLocalJsonDirty,
+          onSave: () => settingsLocalJsonEditorRef.current?.save(),
+          onReload: () => {
+            if (settingsLocalJsonDirty && !window.confirm(DISCARD_CONFIRM_MESSAGE)) return;
+            return settingsLocalJsonEditorRef.current?.reload();
+          },
+        }),
+      );
+    }
     return items;
-  }, [reload, mode, view, claudeMdMode, claudeMdDirty]);
+  }, [
+    reload,
+    mode,
+    view,
+    claudeMdMode,
+    claudeMdDirty,
+    settingsJsonDirty,
+    settingsLocalJsonDirty,
+  ]);
   usePageDockItems(dockItems);
 
   return (
@@ -474,6 +533,8 @@ function SessionsPage() {
             { id: "claude-md", label: "CLAUDE.md" },
             { id: "rules", label: "Rules" },
             { id: "skills", label: "Skills" },
+            { id: "settings-json", label: "settings.json" },
+            { id: "settings-local-json", label: "settings.local.json" },
           ]}
           active={view}
           onChange={(id) => handleSwitchView(id as PaneView)}
@@ -637,12 +698,56 @@ function SessionsPage() {
           ) : (
             <p>先にセッションを選択してください。</p>
           )
+        ) : view === "skills" ? (
+          projectParam ? (
+            <SkillsPane
+              project={projectParam}
+              selectedName={skillParam}
+              onSelectSkill={handleSelectSkill}
+            />
+          ) : (
+            <p>先にセッションを選択してください。</p>
+          )
+        ) : view === "settings-json" ? (
+          projectParam ? (
+            <div className="json-settings-pane">
+              <JsonFileEditor
+                ref={settingsJsonEditorRef}
+                load={() => getProjectSettingsFile(projectParam, "settings")}
+                save={(content, expectedModifiedAtMs) =>
+                  saveProjectSettingsFile(
+                    projectParam,
+                    "settings",
+                    content,
+                    expectedModifiedAtMs,
+                  )
+                }
+                reloadKey={projectParam}
+                emptyMessage="settings.jsonがありません。"
+                onDirtyChange={setSettingsJsonDirty}
+              />
+            </div>
+          ) : (
+            <p>先にセッションを選択してください。</p>
+          )
         ) : projectParam ? (
-          <SkillsPane
-            project={projectParam}
-            selectedName={skillParam}
-            onSelectSkill={handleSelectSkill}
-          />
+          <div className="json-settings-pane">
+            <JsonFileEditor
+              ref={settingsLocalJsonEditorRef}
+              load={() => getProjectSettingsFile(projectParam, "settings_local")}
+              save={(content, expectedModifiedAtMs) =>
+                saveProjectSettingsFile(
+                  projectParam,
+                  "settings_local",
+                  content,
+                  expectedModifiedAtMs,
+                )
+              }
+              reloadKey={projectParam}
+              emptyMessage="settings.local.jsonがありません。"
+              onDirtyChange={setSettingsLocalJsonDirty}
+            />
+          </div>
         ) : (
           <p>先にセッションを選択してください。</p>
         )}

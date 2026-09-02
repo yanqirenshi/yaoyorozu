@@ -3,6 +3,9 @@ export type AgentKindDto = "claude-code";
 // 送信時のツール実行権限モード。既定は "chat"。
 export type AgentModeDto = "chat" | "read";
 
+// プロジェクトの `.claude/` 配下にある設定ファイルの選択(issue #70)。
+export type ProjectSettingsFileDto = "settings" | "settings_local";
+
 export type ProjectDto = {
   name: string;
   updated_at: number;

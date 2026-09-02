@@ -137,6 +137,25 @@ impl From<AgentModeDto> for app::AgentMode {
     }
 }
 
+/// プロジェクトの `.claude/` 配下にある設定ファイルの選択。フロントから
+/// ファイル名を自由入力させず、この enum で選ばせる(native.md §4。
+/// issue #70)。`Deserialize` が要るのは `AgentModeDto` と同じ理由。
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectSettingsFileDto {
+    Settings,
+    SettingsLocal,
+}
+
+impl From<ProjectSettingsFileDto> for app::ProjectSettingsFile {
+    fn from(which: ProjectSettingsFileDto) -> Self {
+        match which {
+            ProjectSettingsFileDto::Settings => app::ProjectSettingsFile::Settings,
+            ProjectSettingsFileDto::SettingsLocal => app::ProjectSettingsFile::SettingsLocal,
+        }
+    }
+}
+
 /// `app:warning` イベントのペイロード。送信自体は成功しているが、送信前チェックと
 /// 実際の送信実行の間に別セッションが割り込んだ可能性がある場合に通知する
 /// (native.md §3.2)。エラーではなく警告のため、`send_message` の戻り値ではなく
