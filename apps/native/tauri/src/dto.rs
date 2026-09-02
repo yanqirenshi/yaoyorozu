@@ -286,6 +286,28 @@ pub struct RuleDto {
     pub content: String,
 }
 
+/// `list_skills` の1件分(Skillsタブの一覧用。issue #65)。
+#[derive(Serialize, Clone)]
+pub struct SkillSummaryDto {
+    pub name: String,
+    pub modified_at_ms: u64,
+}
+
+impl From<domain::SkillSummary> for SkillSummaryDto {
+    fn from(summary: domain::SkillSummary) -> Self {
+        Self {
+            name: summary.name,
+            modified_at_ms: summary.modified_at_ms,
+        }
+    }
+}
+
+/// `get_skill` の戻り値(issue #65)。
+#[derive(Serialize, Clone)]
+pub struct SkillDto {
+    pub content: String,
+}
+
 /// `settings:corrupted` イベントのペイロード。起動時に設定ファイルの破損を
 /// 検知し、デフォルト値へフォールバックした場合に通知する(native.md §2)。
 #[derive(Serialize, Clone)]

@@ -33,10 +33,11 @@ import { MODE_ICON, RELOAD_ICON } from "../icons";
 import MessageText from "../MessageText";
 import PaneTabs from "../PaneTabs";
 import RulesPane from "../RulesPane";
+import SkillsPane from "../SkillsPane";
 
 const PAGE_SIZE = 50;
 
-type PaneView = "chat" | "github-project" | "claude-md" | "rules";
+type PaneView = "chat" | "github-project" | "claude-md" | "rules" | "skills";
 
 type SessionGroup = {
   folder: string;
@@ -84,12 +85,16 @@ function SessionsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const viewParam = searchParams.get("view");
   const view: PaneView =
-    viewParam === "claude-md" || viewParam === "github-project" || viewParam === "rules"
+    viewParam === "claude-md" ||
+    viewParam === "github-project" ||
+    viewParam === "rules" ||
+    viewParam === "skills"
       ? viewParam
       : "chat";
   const projectParam = searchParams.get("project");
   const sessionParam = searchParams.get("session");
   const ruleParam = searchParams.get("rule");
+  const skillParam = searchParams.get("skill");
   const [claudeMdDirty, setClaudeMdDirty] = useState(false);
   const [claudeMdMode, setClaudeMdMode] = useState<ViewMode>("preview");
   const claudeMdEditorRef = useRef<ClaudeMdEditorHandle>(null);
@@ -349,6 +354,14 @@ function SessionsPage() {
     });
   };
 
+  const handleSelectSkill = (name: string) => {
+    setSearchParams((prev) => {
+      const params = new URLSearchParams(prev);
+      params.set("skill", name);
+      return params;
+    });
+  };
+
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
     if (!projectParam || !sessionParam || !canSend || sending || !draft.trim()) return;
@@ -460,6 +473,7 @@ function SessionsPage() {
             { id: "github-project", label: "GitHub Project" },
             { id: "claude-md", label: "CLAUDE.md" },
             { id: "rules", label: "Rules" },
+            { id: "skills", label: "Skills" },
           ]}
           active={view}
           onChange={(id) => handleSwitchView(id as PaneView)}
@@ -613,11 +627,21 @@ function SessionsPage() {
               </>
             )}
           </div>
+        ) : view === "rules" ? (
+          projectParam ? (
+            <RulesPane
+              project={projectParam}
+              selectedFileName={ruleParam}
+              onSelectFile={handleSelectRule}
+            />
+          ) : (
+            <p>先にセッションを選択してください。</p>
+          )
         ) : projectParam ? (
-          <RulesPane
+          <SkillsPane
             project={projectParam}
-            selectedFileName={ruleParam}
-            onSelectFile={handleSelectRule}
+            selectedName={skillParam}
+            onSelectSkill={handleSelectSkill}
           />
         ) : (
           <p>先にセッションを選択してください。</p>

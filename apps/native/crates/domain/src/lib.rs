@@ -142,6 +142,22 @@ pub fn is_valid_rule_file_name(file_name: &str) -> bool {
         && !file_name.contains("..")
 }
 
+/// `.claude/skills/<name>/SKILL.md` 1件分のサマリ(一覧表示用。issue #65)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillSummary {
+    pub name: String,
+    pub modified_at_ms: u64,
+}
+
+/// スキル名(`.claude/skills/` 直下のディレクトリ名)がパスの構築に使って
+/// 安全な形式かを検証する。`is_valid_rule_file_name` と同じ流儀だが、
+/// 拡張子条件は無い(ディレクトリ名のため。issue #65)。これにより
+/// `<repo_dir>/.claude/skills/<name>/SKILL.md` の解決先が常にそのディレクトリ
+/// 配下に収まることを保証する。
+pub fn is_valid_skill_name(name: &str) -> bool {
+    !name.is_empty() && !name.contains('/') && !name.contains('\\') && !name.contains("..")
+}
+
 /// `Settings` の現在のスキーマバージョン。マイグレーションが必要になったら
 /// 上げ、infra 側のマイグレーション関数で旧バージョンからの変換を行う。
 /// v1 -> v2: `claude_projects_dir` を追加(issue #25)。
@@ -533,6 +549,28 @@ mod tests {
             "..md",
         ] {
             assert!(!is_valid_rule_file_name(bad), "should reject {bad:?}");
+        }
+    }
+
+    #[test]
+    fn is_valid_skill_name_accepts_plain_directory_names() {
+        for good in ["release", "code-review", "a_b"] {
+            assert!(is_valid_skill_name(good), "should accept {good:?}");
+        }
+    }
+
+    #[test]
+    fn is_valid_skill_name_rejects_path_traversal() {
+        for bad in [
+            "",
+            "..",
+            "../etc",
+            "../../etc/passwd",
+            "a/b",
+            "a\\b",
+            "/etc",
+        ] {
+            assert!(!is_valid_skill_name(bad), "should reject {bad:?}");
         }
     }
 }

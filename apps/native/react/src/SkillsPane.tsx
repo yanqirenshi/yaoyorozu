@@ -2,18 +2,19 @@ import { useEffect, useRef, useState } from "react";
 import DOMPurify from "dompurify";
 import "@yanqirenshi/markdown.sitter";
 import type { MarkdownViewer } from "@yanqirenshi/markdown.sitter";
-import { getRule, isAppError, listRules } from "./api";
-import type { RuleSummaryDto } from "./api";
+import { getSkill, isAppError, listSkills } from "./api";
+import type { SkillSummaryDto } from "./api";
 
-type RulesPaneProps = {
+type SkillsPaneProps = {
   project: string;
-  selectedFileName: string | null;
-  onSelectFile: (fileName: string) => void;
+  selectedName: string | null;
+  onSelectSkill: (name: string) => void;
 };
 
-// `.claude/rules/*.md` の一覧+表示(issue #61)。表示のみで編集は行わない。
-function RulesPane({ project, selectedFileName, onSelectFile }: RulesPaneProps) {
-  const [rules, setRules] = useState<RuleSummaryDto[]>([]);
+// `.claude/skills/<name>/SKILL.md` の一覧+表示(issue #65)。RulesPane
+// (issue #61)と同じ流儀。表示のみで編集は行わない。
+function SkillsPane({ project, selectedName, onSelectSkill }: SkillsPaneProps) {
+  const [skills, setSkills] = useState<SkillSummaryDto[]>([]);
   const [loadingList, setLoadingList] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
   const [content, setContent] = useState<string | null>(null);
@@ -25,14 +26,14 @@ function RulesPane({ project, selectedFileName, onSelectFile }: RulesPaneProps) 
   useEffect(() => {
     setLoadingList(true);
     setListError(null);
-    listRules(project)
-      .then(setRules)
+    listSkills(project)
+      .then(setSkills)
       .catch((e) => setListError(isAppError(e) ? e.message : String(e)))
       .finally(() => setLoadingList(false));
   }, [project]);
 
   useEffect(() => {
-    if (!selectedFileName) {
+    if (!selectedName) {
       setContent(null);
       setContentError(null);
       return;
@@ -40,19 +41,19 @@ function RulesPane({ project, selectedFileName, onSelectFile }: RulesPaneProps) 
     setContent(null);
     setLoadingContent(true);
     setContentError(null);
-    getRule(project, selectedFileName)
+    getSkill(project, selectedName)
       .then((dto) => setContent(dto.content))
       .catch((e) => setContentError(isAppError(e) ? e.message : String(e)))
       .finally(() => setLoadingContent(false));
-  }, [project, selectedFileName]);
+  }, [project, selectedName]);
 
-  // viewerは選択中ファイルがある間だけDOMに存在するため、その都度sanitize
+  // viewerは選択中スキルがある間だけDOMに存在するため、その都度sanitize
   // フックを設定し直す。既定は素通しのため必須設定(issue #57と同じ理由)。
   useEffect(() => {
     const viewer = viewerRef.current;
     if (!viewer) return;
     viewer.sanitize = (html) => DOMPurify.sanitize(html);
-  }, [selectedFileName]);
+  }, [selectedName]);
 
   useEffect(() => {
     const viewer = viewerRef.current;
@@ -67,29 +68,27 @@ function RulesPane({ project, selectedFileName, onSelectFile }: RulesPaneProps) 
           <p>読み込み中…</p>
         ) : listError ? (
           <p className="error">{listError}</p>
-        ) : rules.length === 0 ? (
-          <p>ルールがありません。</p>
+        ) : skills.length === 0 ? (
+          <p>スキルがありません。</p>
         ) : (
-          rules.map((rule) => (
+          skills.map((skill) => (
             <button
-              key={rule.file_name}
+              key={skill.name}
               type="button"
-              className={`file-list-item ${
-                rule.file_name === selectedFileName ? "selected" : ""
-              }`}
-              onClick={() => onSelectFile(rule.file_name)}
+              className={`file-list-item ${skill.name === selectedName ? "selected" : ""}`}
+              onClick={() => onSelectSkill(skill.name)}
             >
-              <span className="file-list-item-name">{rule.file_name}</span>
+              <span className="file-list-item-name">{skill.name}</span>
               <span className="file-list-item-updated">
-                {new Date(rule.modified_at_ms).toLocaleString()}
+                {new Date(skill.modified_at_ms).toLocaleString()}
               </span>
             </button>
           ))
         )}
       </div>
       <div className="file-content-pane">
-        {!selectedFileName ? (
-          <p>ルールを選択してください。</p>
+        {!selectedName ? (
+          <p>スキルを選択してください。</p>
         ) : (
           <>
             {loadingContent && <p>読み込み中…</p>}
@@ -102,4 +101,4 @@ function RulesPane({ project, selectedFileName, onSelectFile }: RulesPaneProps) 
   );
 }
 
-export default RulesPane;
+export default SkillsPane;

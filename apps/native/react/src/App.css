@@ -200,14 +200,17 @@ body,
   overflow: hidden;
 }
 
-.rules-pane {
+/* 「左: ファイル一覧 / 右: markdown-viewerで内容表示」という2ペイン構成の
+   共通レイアウト(表示専用)。Rules(issue #61)・Skills(issue #65)で
+   共有する。 */
+.file-list-pane {
   flex: 1;
   min-height: 0;
   min-width: 0;
   display: flex;
 }
 
-.rules-list {
+.file-list {
   width: 260px;
   flex-shrink: 0;
   min-height: 0;
@@ -219,7 +222,7 @@ body,
   gap: 8px;
 }
 
-.rules-list-item {
+.file-list-item {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -236,28 +239,28 @@ body,
   cursor: pointer;
 }
 
-.rules-list-item:hover {
+.file-list-item:hover {
   background-color: rgba(157, 91, 139, 0.08);
 }
 
-.rules-list-item.selected {
+.file-list-item.selected {
   background-color: rgba(157, 91, 139, 0.16);
   border-color: #9d5b8b;
   font-weight: 600;
 }
 
-.rules-list-item-name {
+.file-list-item-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.rules-list-item-updated {
+.file-list-item-updated {
   font-size: 0.75rem;
   color: #737373;
 }
 
-.rules-content {
+.file-content-pane {
   flex: 1;
   min-width: 0;
   min-height: 0;
@@ -266,7 +269,7 @@ body,
   padding: 16px;
 }
 
-.rules-content-viewer {
+.file-content-viewer {
   flex: 1;
   min-height: 0;
   min-width: 0;

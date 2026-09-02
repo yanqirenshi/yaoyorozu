@@ -94,6 +94,15 @@ export type RuleDto = {
   content: string;
 };
 
+export type SkillSummaryDto = {
+  name: string;
+  modified_at_ms: number;
+};
+
+export type SkillDto = {
+  content: string;
+};
+
 export type GithubAuthStatusDto = {
   authenticated: boolean;
   login: string | null;
