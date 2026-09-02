@@ -7,11 +7,11 @@ use dto::{
     DeviceCodeDto, GithubAuthFailedEventDto, GithubAuthStatusDto, GithubAuthenticatedEventDto,
     GithubProjectDto, GithubProjectSummaryDto, ProjectDto, ProjectItemsPageDto, RuleDto,
     RuleSummaryDto, SessionChangedEventDto, SessionDto, SessionSummaryDto,
-    SettingsCorruptedEventDto, SettingsDto, SettingsInputDto,
+    SettingsCorruptedEventDto, SettingsDto, SettingsInputDto, SkillDto, SkillSummaryDto,
 };
 use infra::{
     ClaudeCliAgent, FileClaudeMdStore, FileClaudeSettingsStore, FileRulesStore, FileSettingsStore,
-    FileSystemRepository, GithubApiClient, KeyringTokenStore,
+    FileSkillsStore, FileSystemRepository, GithubApiClient, KeyringTokenStore,
 };
 use state::AppState;
 use std::path::PathBuf;
@@ -361,6 +361,54 @@ async fn get_rule(
         let store = FileRulesStore::new();
         let content = app::get_rule(&store, &repo_dir, &file_name)?;
         Ok(RuleDto { content })
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
+}
+
+/// `project` の作業ディレクトリ配下の `.claude/skills/` にある(`SKILL.md`
+/// を持つ)スキルを一覧する(Skillsタブ用。issue #65)。
+#[tauri::command]
+async fn list_skills(
+    state: tauri::State<'_, Mutex<AppState>>,
+    project: String,
+) -> Result<Vec<SkillSummaryDto>, AppErrorDto> {
+    let root = effective_projects_dir_from_state(&state).await?;
+    tauri::async_runtime::spawn_blocking(move || -> Result<Vec<SkillSummaryDto>, app::AppError> {
+        let source = FileSystemRepository::new(root);
+        let repo_dir = source.latest_session_cwd(&project)?;
+        let store = FileSkillsStore::new();
+        let skills = app::list_skills(&store, &repo_dir)?;
+        Ok(skills.into_iter().map(SkillSummaryDto::from).collect())
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
+}
+
+/// `.claude/skills/<name>/SKILL.md` の内容を読む(表示専用。issue #65)。
+#[tauri::command]
+async fn get_skill(
+    state: tauri::State<'_, Mutex<AppState>>,
+    project: String,
+    name: String,
+) -> Result<SkillDto, AppErrorDto> {
+    let root = effective_projects_dir_from_state(&state).await?;
+    tauri::async_runtime::spawn_blocking(move || -> Result<SkillDto, app::AppError> {
+        let source = FileSystemRepository::new(root);
+        let repo_dir = source.latest_session_cwd(&project)?;
+        let store = FileSkillsStore::new();
+        let content = app::get_skill(&store, &repo_dir, &name)?;
+        Ok(SkillDto { content })
     })
     .await
     .unwrap_or_else(|_| {
@@ -847,6 +895,8 @@ pub fn run() {
             save_project_claude_md,
             list_rules,
             get_rule,
+            list_skills,
+            get_skill,
             get_claude_settings_file,
             save_claude_settings_file,
             get_github_auth_status,

@@ -21,6 +21,8 @@ import type {
   SettingsCorruptedEvent,
   SettingsDto,
   SettingsInputDto,
+  SkillDto,
+  SkillSummaryDto,
 } from "./types";
 
 export type {
@@ -51,6 +53,8 @@ export type {
   SettingsCorruptedEvent,
   SettingsDto,
   SettingsInputDto,
+  SkillDto,
+  SkillSummaryDto,
 } from "./types";
 
 export function listProjects(): Promise<ProjectDto[]> {
@@ -147,6 +151,14 @@ export function listRules(project: string): Promise<RuleSummaryDto[]> {
 
 export function getRule(project: string, fileName: string): Promise<RuleDto> {
   return invoke<RuleDto>("get_rule", { project, fileName });
+}
+
+export function listSkills(project: string): Promise<SkillSummaryDto[]> {
+  return invoke<SkillSummaryDto[]>("list_skills", { project });
+}
+
+export function getSkill(project: string, name: string): Promise<SkillDto> {
+  return invoke<SkillDto>("get_skill", { project, name });
 }
 
 export function getClaudeSettingsFile(): Promise<ClaudeSettingsDto> {

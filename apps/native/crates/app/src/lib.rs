@@ -1,7 +1,8 @@
 use domain::{
-    is_valid_json, is_valid_rule_file_name, is_valid_session_id, order_messages_newest_first,
-    paginate_messages, sort_projects_by_recency, sort_sessions_by_recency, ClaudeMdFile,
-    ClaudeSettingsFile, Project, RuleSummary, Session, SessionSummary, Settings,
+    is_valid_json, is_valid_rule_file_name, is_valid_session_id, is_valid_skill_name,
+    order_messages_newest_first, paginate_messages, sort_projects_by_recency,
+    sort_sessions_by_recency, ClaudeMdFile, ClaudeSettingsFile, Project, RuleSummary, Session,
+    SessionSummary, Settings, SkillSummary,
 };
 use std::path::{Path, PathBuf};
 
@@ -118,6 +119,17 @@ pub trait RulesStore {
     fn list(&self, repo_dir: &Path) -> Result<Vec<RuleSummary>, AppError>;
     /// `repo_dir/.claude/rules/<file_name>` の内容を読む。
     fn read(&self, repo_dir: &Path, file_name: &str) -> Result<String, AppError>;
+}
+
+/// `<repo_dir>/.claude/skills/<name>/SKILL.md` の読み取り専用アクセス
+/// (port)。`RulesStore` と同じ分担だが、一覧の単位はファイルではなく
+/// `SKILL.md` を持つディレクトリ名(issue #65)。
+pub trait SkillsStore {
+    /// `SKILL.md` を持つディレクトリのみ、スキル名昇順で返す。
+    /// ディレクトリが無ければ空。
+    fn list(&self, repo_dir: &Path) -> Result<Vec<SkillSummary>, AppError>;
+    /// `repo_dir/.claude/skills/<name>/SKILL.md` の内容を読む。
+    fn read(&self, repo_dir: &Path, name: &str) -> Result<String, AppError>;
 }
 
 /// 起動時に読み込んだ設定。ファイルが存在しない場合と破損していた場合を
@@ -440,6 +452,24 @@ pub fn get_rule(
         return Err(AppError::InvalidInput("不正なファイル名です".to_string()));
     }
     store.read(repo_dir, file_name)
+}
+
+/// `.claude/skills/` 配下の(`SKILL.md` を持つ)スキル一覧を返す(issue #65)。
+pub fn list_skills(
+    store: &dyn SkillsStore,
+    repo_dir: &Path,
+) -> Result<Vec<SkillSummary>, AppError> {
+    store.list(repo_dir)
+}
+
+/// スキルの `SKILL.md` の内容を読む。`name` はフロントから受け取った値を
+/// そのままパスに使うため、保存先ディレクトリ配下に収まることが保証できる
+/// 形式かを先に検証する(native.md §4。issue #65)。
+pub fn get_skill(store: &dyn SkillsStore, repo_dir: &Path, name: &str) -> Result<String, AppError> {
+    if !is_valid_skill_name(name) {
+        return Err(AppError::InvalidInput("不正なスキル名です".to_string()));
+    }
+    store.read(repo_dir, name)
 }
 
 pub fn start_github_login(gateway: &dyn GithubGateway) -> Result<DeviceAuthorization, AppError> {
@@ -1208,6 +1238,69 @@ mod tests {
 
         let error = get_rule(&store, Path::new("/tmp/repo"), "../../etc/passwd.md")
             .expect_err("should reject");
+
+        assert!(matches!(error, AppError::InvalidInput(_)));
+        assert!(store.read_calls.borrow().is_empty());
+    }
+
+    #[derive(Default)]
+    struct FakeSkillsStore {
+        summaries: Vec<SkillSummary>,
+        contents: std::collections::HashMap<String, String>,
+        read_calls: std::cell::RefCell<Vec<String>>,
+    }
+
+    impl SkillsStore for FakeSkillsStore {
+        fn list(&self, _repo_dir: &Path) -> Result<Vec<SkillSummary>, AppError> {
+            Ok(self.summaries.clone())
+        }
+
+        fn read(&self, _repo_dir: &Path, name: &str) -> Result<String, AppError> {
+            self.read_calls.borrow_mut().push(name.to_string());
+            self.contents
+                .get(name)
+                .cloned()
+                .ok_or_else(|| AppError::NotFound("スキルが見つかりません".to_string()))
+        }
+    }
+
+    #[test]
+    fn list_skills_delegates_to_store() {
+        let store = FakeSkillsStore {
+            summaries: vec![SkillSummary {
+                name: "release".to_string(),
+                modified_at_ms: 100,
+            }],
+            ..Default::default()
+        };
+
+        let skills = list_skills(&store, Path::new("/tmp/repo")).expect("should list");
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].name, "release");
+    }
+
+    #[test]
+    fn get_skill_delegates_to_store_for_valid_name() {
+        let mut contents = std::collections::HashMap::new();
+        contents.insert("release".to_string(), "# release".to_string());
+        let store = FakeSkillsStore {
+            contents,
+            ..Default::default()
+        };
+
+        let content = get_skill(&store, Path::new("/tmp/repo"), "release").expect("should read");
+
+        assert_eq!(content, "# release");
+        assert_eq!(store.read_calls.borrow().as_slice(), ["release"]);
+    }
+
+    #[test]
+    fn get_skill_rejects_path_traversal_without_calling_store() {
+        let store = FakeSkillsStore::default();
+
+        let error =
+            get_skill(&store, Path::new("/tmp/repo"), "../../etc").expect_err("should reject");
 
         assert!(matches!(error, AppError::InvalidInput(_)));
         assert!(store.read_calls.borrow().is_empty());
