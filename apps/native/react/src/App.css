@@ -163,6 +163,9 @@ body,
   gap: 4px;
   padding: 8px 16px 0;
   border-bottom: 1px solid #a1a1aa;
+  /* タブの本数が幅に収まらない場合は折り返さず横スクロールさせる
+     (issue #79。他のペイン同様、overflow-x はペイン自身が管理する)。 */
+  overflow-x: auto;
 }
 
 .pane-tab {
@@ -174,6 +177,15 @@ body,
   padding: 8px 12px;
   cursor: pointer;
   border-bottom: 2px solid transparent;
+  /* 長いラベルで折り返してタブ列の高さが変わらないよう、1行に収めて
+     省略表示する(全体は title 属性のツールチップで確認できる。issue #79)。
+     flex-shrink: 0 で、幅が足りない場合に個々のタブが潰れず横スクロールに
+     回るようにする。 */
+  flex-shrink: 0;
+  max-width: 200px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pane-tab:hover {
