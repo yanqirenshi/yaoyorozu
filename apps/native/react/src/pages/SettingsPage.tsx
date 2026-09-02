@@ -20,6 +20,7 @@ import {
   onGithubAuthenticated,
   onGithubLoggedOut,
   onSettingsUpdated,
+  openProfileWindow,
   renameProfile,
   saveRepositoryClaudeMd,
   switchProfile,
@@ -267,6 +268,15 @@ function SettingsPage() {
       .catch((e) => setProfileError(isAppError(e) ? e.message : String(e)));
   };
 
+  // 別ウィンドウでプロファイルを開く(マルチウィンドウ Phase 1。issue #76)。
+  // このウィンドウの状態には影響しないため、失敗時のエラー表示のみ行う。
+  const handleOpenProfileWindow = (profileId: string) => {
+    setProfileError(null);
+    openProfileWindow(profileId).catch((e) =>
+      setProfileError(isAppError(e) ? e.message : String(e)),
+    );
+  };
+
   // プロファイル切り替え(dockの吹き出しトリガー)前に、このページの未保存の
   // CLAUDE.md編集を確認できるようにする(issue #72)。
   usePageDirtyGuard(confirmDiscardClaudeMdIfDirty);
@@ -373,18 +383,27 @@ function SettingsPage() {
                   <span className="settings-profile-name">{p.name}</span>
                 </button>
               )}
-              {p.id === activeProfileId && renamingProfileId !== p.id && (
+              {renamingProfileId !== p.id && (
                 <div className="settings-profile-actions">
-                  <button type="button" onClick={() => handleStartRenameProfile(p)}>
-                    名前変更
+                  {/* 全行に常設(issue #76)。名前変更・削除はノイズ回避のため
+                      アクティブな行にだけ出す(issue #74 からの既存方針)。 */}
+                  <button type="button" onClick={() => handleOpenProfileWindow(p.id)}>
+                    新しいウィンドウで開く
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteProfile(p.id)}
-                    disabled={profiles.length <= 1}
-                  >
-                    削除
-                  </button>
+                  {p.id === activeProfileId && (
+                    <>
+                      <button type="button" onClick={() => handleStartRenameProfile(p)}>
+                        名前変更
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteProfile(p.id)}
+                        disabled={profiles.length <= 1}
+                      >
+                        削除
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
             </li>

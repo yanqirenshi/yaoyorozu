@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
-  "windows": ["main"],
+  "description": "Capability for the main window and profile windows opened via open_profile_window (issue #76)",
+  "windows": ["main", "profile-*"],
   "permissions": [
     "core:default",
     "core:window:allow-set-title",
