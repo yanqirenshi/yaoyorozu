@@ -59,7 +59,10 @@ body,
   overflow-x: hidden;
 }
 
-.project-list {
+/* 画面左の一覧ペイン(固定幅+縦スクロール)。ビューアのセッション一覧と
+   設定のプロファイル一覧(issue #74)で骨格を共有する。 */
+.project-list,
+.settings-profile-pane {
   width: 320px;
   flex-shrink: 0;
   border-right: 1px solid #a1a1aa;
@@ -70,7 +73,14 @@ body,
   gap: 10px;
 }
 
-.project-list h2 {
+/* 一覧の末尾(「追加」フォーム)がdock(画面下部中央に浮くツールバー)の
+   下に隠れないよう、下端に余白を残す(issue #59 と同じ理由)。 */
+.settings-profile-pane {
+  padding-bottom: 96px;
+}
+
+.project-list h2,
+.settings-profile-pane h2 {
   font-size: 1rem;
   font-weight: 400;
   margin: 0 0 8px;
@@ -119,7 +129,8 @@ body,
   cursor: pointer;
 }
 
-.session-item-title {
+.session-item-title,
+.settings-profile-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -553,6 +564,8 @@ body,
   flex-shrink: 0;
 }
 
+/* 一覧の行は .project-item(ビューアのセッション行)をそのまま使うため、
+   ここではリスト自体の並びだけを定義する(issue #74)。 */
 .settings-profile-list {
   list-style: none;
   margin: 0 0 12px;
@@ -562,17 +575,37 @@ body,
   gap: 8px;
 }
 
-.settings-profile-item-row {
+/* 名前変更中の入力欄。行の見た目が変わって一覧が飛び跳ねないよう、
+   .project-item と同じ余白・角丸に揃える。 */
+.settings-profile-rename-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #9d5b8b;
+  border-radius: 4px;
+  background: #fbfbf8;
+  color: #373737;
+  padding: 10px 14px;
+  font-size: 0.95rem;
+  font-family: inherit;
+}
+
+/* 名前変更・削除はアクティブな行の下にだけ出す(issue #74)。 */
+.settings-profile-actions {
+  display: flex;
+  gap: 8px;
+  padding: 6px 0 2px;
+  font-size: 0.85rem;
+}
+
+.settings-profile-add {
   display: flex;
   align-items: center;
   gap: 10px;
 }
 
-.settings-profile-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.settings-profile-add input {
   flex: 1;
+  min-width: 0;
   box-sizing: border-box;
   border: 1px solid #a1a1aa;
   border-radius: 4px;
@@ -580,19 +613,7 @@ body,
   color: #373737;
   padding: 8px 12px;
   font-size: 0.9rem;
-  cursor: pointer;
-}
-
-.settings-profile-item.active {
-  background-color: rgba(157, 91, 139, 0.16);
-  border-color: #9d5b8b;
-  font-weight: 600;
-}
-
-.settings-profile-add {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  font-family: inherit;
 }
 
 .settings-save {
