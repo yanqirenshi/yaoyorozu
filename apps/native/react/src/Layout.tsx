@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { DockItem } from "command-dock";
 import AppDock from "./AppDock";
-import { onSettingsCorrupted } from "./api";
+import { getSettings, onSettingsCorrupted, onSettingsUpdated, switchProfile } from "./api";
+import type { ProfileSummaryDto } from "./api";
 import { DockItemsProvider } from "./DockItemsContext";
-import { CLAUDE_SETTINGS_ICON, SETTINGS_ICON, VIEWER_ICON } from "./icons";
+import type { DirtyGuard } from "./DockItemsContext";
+import { CLAUDE_SETTINGS_ICON, PROFILE_ICON, SETTINGS_ICON, VIEWER_ICON } from "./icons";
 import "./App.css";
 
 // OSウィンドウのタイトルバーに画面名を出す(ページ内の見出しは重複するため
@@ -24,6 +26,11 @@ function Layout() {
   const navigate = useNavigate();
   const [pageItems, setPageItems] = useState<DockItem[]>([]);
   const [corruptionWarning, setCorruptionWarning] = useState<string | null>(null);
+  const [profiles, setProfiles] = useState<ProfileSummaryDto[]>([]);
+  const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
+  // プロファイル切り替え前に、表示中のページの未保存編集を確認するための
+  // フック(issue #72。usePageDirtyGuard 参照)。
+  const dirtyGuardRef = useRef<DirtyGuard | null>(null);
 
   useEffect(() => {
     // 設定ファイルの破損は起動直後(まだ /settings にいるとは限らない)に
@@ -40,6 +47,24 @@ function Layout() {
     const title = WINDOW_TITLE_BY_PATH[location.pathname] ?? DEFAULT_WINDOW_TITLE;
     void getCurrentWindow().setTitle(title);
   }, [location.pathname]);
+
+  // プロファイル一覧・アクティブIDはdockのクイック切り替え(吹き出し)表示に
+  // 使う。全画面共通のため Layout 自身が取得する(issue #72)。
+  useEffect(() => {
+    const loadProfiles = () => {
+      getSettings()
+        .then((settings) => {
+          setProfiles(settings.profiles);
+          setActiveProfileId(settings.active_profile_id);
+        })
+        .catch((e) => console.error(e));
+    };
+    loadProfiles();
+    const unlistenPromise = onSettingsUpdated(loadProfiles);
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
 
   // ナビトリガーは即アクション型の丸アイコン。表示中のページ自身へのトリガーは
   // 出す意味がないため表示しない(遷移先が1つだけなら1個だけ出る)。
@@ -70,8 +95,25 @@ function Layout() {
         onClick: () => navigate("/claude"),
       });
     }
+    // プロファイルが1件のみの場合はトリガーを出さない(ノイズ回避。issue #72)。
+    if (profiles.length > 1) {
+      items.push({
+        id: "nav-profile",
+        label: PROFILE_ICON,
+        title: "プロファイル",
+        popup: profiles.map((p) => ({
+          label: p.name,
+          active: p.id === activeProfileId,
+          onSelect: () => {
+            if (p.id === activeProfileId) return;
+            if (dirtyGuardRef.current && !dirtyGuardRef.current()) return;
+            switchProfile(p.id).catch((e) => console.error(e));
+          },
+        })),
+      });
+    }
     return items;
-  }, [location.pathname, navigate]);
+  }, [location.pathname, navigate, profiles, activeProfileId]);
 
   const items = useMemo<DockItem[]>(
     () => [...navItems, ...pageItems],
@@ -83,7 +125,7 @@ function Layout() {
       {corruptionWarning && (
         <p className="corruption-warning">{corruptionWarning}</p>
       )}
-      <DockItemsProvider setItems={setPageItems}>
+      <DockItemsProvider setItems={setPageItems} dirtyGuardRef={dirtyGuardRef}>
         <Outlet />
       </DockItemsProvider>
       <AppDock items={items} />

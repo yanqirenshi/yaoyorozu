@@ -1,9 +1,23 @@
 use app::{AppError, LoadedSettings, SettingsStore};
-use domain::{Settings, CURRENT_SETTINGS_VERSION};
+use domain::{GithubProject, Profile, Settings, CURRENT_SETTINGS_VERSION};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// v1〜v3のJSON形状(対象リポジトリ・GitHubプロジェクト・対象フォルダを
+/// プロファイルに包まず直接持つ)。v1/v2の旧フィールド `selected_session_ids`
+/// はこのstructに存在しないため、serdeが未知フィールドとして無視する
+/// (issue #17の移行と同じ吸収のさせ方)。
+#[derive(serde::Deserialize)]
+struct LegacySettingsRaw {
+    repository_path: Option<PathBuf>,
+    github_project: Option<GithubProject>,
+    #[serde(default)]
+    selected_project_folders: Vec<String>,
+    #[serde(default)]
+    claude_projects_dir: Option<PathBuf>,
+}
 
 /// アプリ設定(`Settings`)をJSONファイルとして永続化する。
 /// native.md §2 に準拠: 書き込みはアトミック(`*.tmp` へ書く → fsync →
@@ -43,19 +57,35 @@ impl FileSettingsStore {
         }
     }
 
-    /// 旧バージョン(v1・v2)の設定を現行バージョンへ移行する。フィールド
-    /// レベルの差分(新フィールドの追加・削除・置換)は各フィールドの
-    /// `#[serde(default)]` によりパース時点で吸収済み(例: v1→v2で追加した
-    /// `claude_projects_dir` は `None` に、v2→v3で `selected_project_folders`
-    /// に置き換えた旧 `selected_session_ids` の値は破棄されて空配列になる)
-    /// ため、ここでは `version` を上げて保存し直すだけでよい。保存し直しに
-    /// 失敗しても(パーミッション等)、このセッションはメモリ上の移行後の
-    /// 値で動作を続ける(次回起動時に再度移行を試みるだけで、他のデータが
-    /// 失われるわけではないため)。
-    fn migrate_to_current_version(&self, outdated: Settings) -> Settings {
+    /// v1〜v3(対象リポジトリ・GitHubプロジェクト・対象フォルダをスカラーで
+    /// 持つ形)を、その3項目を1件のプロファイルへ包んだv4へ移行する
+    /// (issue #72)。プロファイルの `name` は `repository_path` の末尾フォルダ名
+    /// (未設定・空なら "default")、`id` は移行時のみ固定値 "default" を使う
+    /// (以降 `create_profile` が払い出すIDと衝突しないよう、そちらは
+    /// UUIDを使う)。保存し直しに失敗しても(パーミッション等)、この
+    /// セッションはメモリ上の移行後の値で動作を続ける(次回起動時に再度
+    /// 移行を試みるだけで、他のデータが失われるわけではないため)。
+    fn migrate_legacy_to_current_version(&self, legacy: LegacySettingsRaw) -> Settings {
+        let name = legacy
+            .repository_path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .and_then(|f| f.to_str())
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "default".to_string());
+        let profile = Profile {
+            id: "default".to_string(),
+            name,
+            repository_path: legacy.repository_path,
+            github_project: legacy.github_project,
+            selected_project_folders: legacy.selected_project_folders,
+        };
         let migrated = Settings {
             version: CURRENT_SETTINGS_VERSION,
-            ..outdated
+            active_profile_id: profile.id.clone(),
+            profiles: vec![profile],
+            claude_projects_dir: legacy.claude_projects_dir,
         };
         let _ = self.save(&migrated);
         migrated
@@ -75,19 +105,27 @@ impl SettingsStore for FileSettingsStore {
             return Ok(self.recovered_default());
         };
 
-        let Ok(settings) = serde_json::from_str::<Settings>(&content) else {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
             return Ok(self.recovered_default());
         };
 
-        match settings.version {
-            v if v == CURRENT_SETTINGS_VERSION => Ok(LoadedSettings {
-                settings,
-                recovered_from_corruption: false,
-            }),
-            1 | 2 => Ok(LoadedSettings {
-                settings: self.migrate_to_current_version(settings),
-                recovered_from_corruption: false,
-            }),
+        match value.get("version").and_then(serde_json::Value::as_u64) {
+            Some(v) if v == CURRENT_SETTINGS_VERSION as u64 => {
+                match serde_json::from_value::<Settings>(value) {
+                    Ok(settings) => Ok(LoadedSettings {
+                        settings,
+                        recovered_from_corruption: false,
+                    }),
+                    Err(_) => Ok(self.recovered_default()),
+                }
+            }
+            Some(1..=3) => match serde_json::from_value::<LegacySettingsRaw>(value) {
+                Ok(legacy) => Ok(LoadedSettings {
+                    settings: self.migrate_legacy_to_current_version(legacy),
+                    recovered_from_corruption: false,
+                }),
+                Err(_) => Ok(self.recovered_default()),
+            },
             // 未知のバージョン(将来のアプリが書いたファイルを古いアプリが
             // 読む場合など)は解釈できないため、破損扱いとして退避する。
             _ => Ok(self.recovered_default()),
@@ -149,14 +187,20 @@ mod tests {
         let path = dir.path().join("settings.json");
         let store = FileSettingsStore::new(path.clone());
 
-        let settings = Settings {
-            version: CURRENT_SETTINGS_VERSION,
+        let profile = Profile {
+            id: "p1".to_string(),
+            name: "yaoyorozu".to_string(),
             repository_path: Some(PathBuf::from(r"C:\Users\yanqi\prj\yaoyorozu")),
             github_project: Some(GithubProject {
                 owner: "yanqirenshi".to_string(),
                 number: 51,
             }),
             selected_project_folders: vec!["proj1".to_string(), "proj2".to_string()],
+        };
+        let settings = Settings {
+            version: CURRENT_SETTINGS_VERSION,
+            active_profile_id: profile.id.clone(),
+            profiles: vec![profile],
             claude_projects_dir: Some(PathBuf::from(r"D:\custom\projects")),
         };
 
@@ -212,7 +256,7 @@ mod tests {
     fn load_evacuates_file_with_unknown_version_and_falls_back_to_default() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        fs::write(&path, r#"{"version":999,"repository_path":null,"github_project":null,"selected_project_folders":[]}"#).unwrap();
+        fs::write(&path, r#"{"version":999}"#).unwrap();
         let store = FileSettingsStore::new(path.clone());
 
         let loaded = store.load().expect("should recover with default");
@@ -222,7 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn load_migrates_v1_settings_to_current_version_without_treating_it_as_corrupt() {
+    fn load_migrates_v1_settings_wrapping_the_three_legacy_items_into_a_single_profile() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
         // v1のJSON(claude_projects_dir・selected_project_foldersのどちらも持たない)。
@@ -236,12 +280,19 @@ mod tests {
         let loaded = store.load().expect("should migrate v1 to current version");
 
         assert_eq!(loaded.settings.version, CURRENT_SETTINGS_VERSION);
+        assert_eq!(loaded.settings.profiles.len(), 1);
+        let profile = &loaded.settings.profiles[0];
+        assert_eq!(loaded.settings.active_profile_id, profile.id);
         assert_eq!(
-            loaded.settings.repository_path,
+            profile.name, "yaoyorozu",
+            "repository_pathの末尾フォルダ名を使う"
+        );
+        assert_eq!(
+            profile.repository_path,
             Some(PathBuf::from(r"C:\Users\yanqi\prj\yaoyorozu"))
         );
         assert!(
-            loaded.settings.selected_project_folders.is_empty(),
+            profile.selected_project_folders.is_empty(),
             "v1の旧selected_session_idsはフィールド置換により破棄される"
         );
         assert_eq!(loaded.settings.claude_projects_dir, None);
@@ -252,7 +303,7 @@ mod tests {
     }
 
     #[test]
-    fn load_migrates_v2_settings_to_current_version_discarding_old_session_ids() {
+    fn load_migrates_v2_settings_discarding_old_session_ids_and_keeping_claude_projects_dir() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
         // v2のJSON(selected_session_ids・claude_projects_dirを持つ)。
@@ -266,18 +317,80 @@ mod tests {
         let loaded = store.load().expect("should migrate v2 to current version");
 
         assert_eq!(loaded.settings.version, CURRENT_SETTINGS_VERSION);
+        assert_eq!(loaded.settings.profiles.len(), 1);
+        let profile = &loaded.settings.profiles[0];
+        assert_eq!(
+            profile.name, "default",
+            "repository_pathが未設定なのでdefault名になる"
+        );
         assert!(
-            loaded.settings.selected_project_folders.is_empty(),
+            profile.selected_project_folders.is_empty(),
             "v2の旧selected_session_idsはフィールド置換により破棄される"
         );
         assert_eq!(
             loaded.settings.claude_projects_dir,
-            Some(PathBuf::from(r"D:\custom\projects"))
+            Some(PathBuf::from(r"D:\custom\projects")),
+            "claude_projects_dirはグローバル項目として引き継がれる"
         );
         assert!(
             !loaded.recovered_from_corruption,
             "migration is not corruption"
         );
+    }
+
+    #[test]
+    fn load_migrates_v3_settings_wrapping_existing_three_items_into_a_single_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{"version":3,"repository_path":"C:\\Users\\yanqi\\prj\\yaoyorozu","github_project":{"owner":"yanqirenshi","number":51},"selected_project_folders":["proj1","proj2"],"claude_projects_dir":null}"#,
+        )
+        .unwrap();
+        let store = FileSettingsStore::new(path.clone());
+
+        let loaded = store.load().expect("should migrate v3 to current version");
+
+        assert_eq!(loaded.settings.version, CURRENT_SETTINGS_VERSION);
+        assert_eq!(loaded.settings.profiles.len(), 1);
+        let profile = &loaded.settings.profiles[0];
+        assert_eq!(loaded.settings.active_profile_id, profile.id);
+        assert_eq!(profile.name, "yaoyorozu");
+        assert_eq!(
+            profile.repository_path,
+            Some(PathBuf::from(r"C:\Users\yanqi\prj\yaoyorozu"))
+        );
+        assert_eq!(
+            profile.github_project,
+            Some(GithubProject {
+                owner: "yanqirenshi".to_string(),
+                number: 51,
+            })
+        );
+        assert_eq!(
+            profile.selected_project_folders,
+            vec!["proj1".to_string(), "proj2".to_string()]
+        );
+        assert!(
+            !loaded.recovered_from_corruption,
+            "migration is not corruption"
+        );
+    }
+
+    #[test]
+    fn load_migrates_v3_settings_with_null_repository_path_using_default_profile_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{"version":3,"repository_path":null,"github_project":null,"selected_project_folders":[]}"#,
+        )
+        .unwrap();
+        let store = FileSettingsStore::new(path.clone());
+
+        let loaded = store.load().expect("should migrate v3 to current version");
+
+        assert_eq!(loaded.settings.profiles[0].name, "default");
     }
 
     #[test]
