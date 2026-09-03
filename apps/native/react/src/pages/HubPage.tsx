@@ -244,7 +244,11 @@ function HubPage() {
   return (
     <div className="hub-page">
       {error && <p className="error">{error}</p>}
-      <D3Network rectum={rectum} />
+      {/* `D3Network`(Asshole)は初回マウント時にしか `rectum.selector()` を
+          呼ばないため、`rectum` を作り直した(=データが変わった)ときは
+          `key` も変えて強制的に作り直す(apps/web の d3系タブと同じ流儀。
+          そうしないと新しいデータが描画に反映されない)。 */}
+      <D3Network key={dataKey} rectum={rectum} />
     </div>
   );
 }
