@@ -21,34 +21,23 @@ const COLOR_SUMI = "#373737"; // 墨
 const COLOR_BORDER = "#a1a1aa";
 const COLOR_MUTED = "#737373";
 
-const COL_X = { pc: 90, window: 320, profile: 560, session: 800 };
+const COL_X = { pc: 90, profile: 400, session: 700 };
 const ROW_HEIGHT = 76;
 const ROW_START_Y = 70;
 
 // クリック時にどう振る舞うかを判定するための、ノードの元データ(`_core`)。
-// PC → Window → profile → session の階層(issue #84)。
+// PC → profile → session の階層(issue #84。Windowノードは廃止し、開いている
+// プロファイルは直接PCの下に並べる。ウィンドウの前面化は profile/session
+// ノード自身が `windowLabel` を持つことで行う)。
 type HubNodeCore = {
-  kind: "pc" | "window" | "profile" | "session" | "profile-unopened";
+  kind: "pc" | "profile" | "session" | "profile-unopened";
   windowLabel?: string;
   profileId?: string;
 };
 
-function windowNode(label: string, index: number, y: number) {
-  return {
-    id: `window:${label}`,
-    x: COL_X.window,
-    y,
-    move: "will",
-    label: { text: `ウィンドウ ${index + 1}`, fill: COLOR_SUMI, font: { size: 14 } },
-    circle: { r: 30, fill: COLOR_PEARL, stroke: { color: COLOR_KYO_MURASAKI, width: 3 } },
-    kind: "window",
-    windowLabel: label,
-  } satisfies { id: string; x: number; y: number } & HubNodeCore & Record<string, unknown>;
-}
-
 // このマシン上で開いているウィンドウ・プロファイル・セッションの状態から、
-// PC → Window → profile → session の階層グラフ(d3.network 用ノード・エッジ)
-// を組み立てる。座標は左→右の4列固定レイアウトを初期位置として自前計算する
+// PC → profile → session の階層グラフ(d3.network 用ノード・エッジ)を
+// 組み立てる。座標は左→右の3列固定レイアウトを初期位置として自前計算する
 // (issue #84。d3.network はノードに x/y が必須)。「このPC」ノードだけ
 // `move: "freeze"` で固定し、他のノードは `move: "will"` でforce
 // シミュレーションに委ね、ユーザーがドラッグで動かせるようにする。
@@ -71,10 +60,7 @@ function buildGraphData(windowStates: WindowStateDto[], profiles: ProfileSummary
 
   const openedProfileIds = new Set<string>();
 
-  windowStates.forEach((w, wi) => {
-    const windowStartRow = row;
-    const windowId = `window:${w.label}`;
-
+  windowStates.forEach((w) => {
     w.tabs.forEach((tab, ti) => {
       openedProfileIds.add(tab.profile_id);
       const y = ROW_START_Y + row * ROW_HEIGHT;
@@ -98,7 +84,7 @@ function buildGraphData(windowStates: WindowStateDto[], profiles: ProfileSummary
       });
       edges.push({
         id: `e${edgeSeq++}`,
-        source: windowId,
+        source: pcId,
         target: profileNodeId,
         line: { width: 2, color: COLOR_BORDER },
       });
@@ -129,18 +115,6 @@ function buildGraphData(windowStates: WindowStateDto[], profiles: ProfileSummary
 
       row += 1;
     });
-
-    // タブが1つも無いウィンドウ(理論上は起きないが安全側)でも1行は使う。
-    const windowRowCount = Math.max(row - windowStartRow, 1);
-    const windowY = ROW_START_Y + (windowStartRow + (windowRowCount - 1) / 2) * ROW_HEIGHT;
-    nodes.push(windowNode(w.label, wi, windowY));
-    edges.push({
-      id: `e${edgeSeq++}`,
-      source: pcId,
-      target: windowId,
-      line: { width: 2, color: COLOR_BORDER },
-    });
-    row = windowStartRow + windowRowCount;
   });
 
   // 未オープンのプロファイル(どのウィンドウでも開いていない)は、PC直下に
@@ -173,7 +147,7 @@ function buildGraphData(windowStates: WindowStateDto[], profiles: ProfileSummary
 
 // メインウィンドウの起点となる「俯瞰グラフ」画面(ハブ化 その2。issue #84)。
 // list_window_states(レジストリ。issue #83)+ get_settings(全プロファイル)
-// から PC → Window → profile → session の階層を描き、windows:changed /
+// から PC → profile → session の階層を描き、windows:changed /
 // settings:updated で再描画する。ノードのクリックで該当ウィンドウを前面化
 // (focus_window)、未オープンのプロファイルは新規ウィンドウを起動する
 // (open_profile_window。issue #76)。
