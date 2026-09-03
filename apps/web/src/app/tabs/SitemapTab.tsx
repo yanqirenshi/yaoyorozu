@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import D3Sitemap, { Rectum } from "@yanqirenshi/d3.sitemap";
 import Colonoscope from "@yanqirenshi/colonoscope";
-import { SITEMAP_DATA } from "@/data/sitemap";
+import { SITEMAP_DATA, SITEMAP_CANVAS_SIZE } from "@/data/sitemap";
 import {
   applyLayoutOverrides,
   loadLayoutOverrides,
@@ -161,7 +161,14 @@ export default function SitemapTab() {
   };
 
   return (
-    <div ref={containerRef} className="relative flex min-h-0 w-full flex-1">
+    <div
+      ref={containerRef}
+      className="relative flex w-full flex-1"
+      style={{
+        minWidth: SITEMAP_CANVAS_SIZE.w,
+        minHeight: SITEMAP_CANVAS_SIZE.h,
+      }}
+    >
       <D3Sitemap key={version} rectum={rectum} />
 
       <Colonoscope
