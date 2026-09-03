@@ -14,6 +14,9 @@ declare module "@yanqirenshi/d3.network" {
   };
 
   export type NodeClickHandler = (node: NodeDatum, event: MouseEvent) => void;
+  // d3.drag() のイベント(d3-dragのD3DragEvent)。詳細な型までは使わないため
+  // 緩く宣言する。
+  export type NodeDragHandler = (node: NodeDatum, event: unknown) => void;
 
   export class Rectum {
     constructor(params: {
@@ -23,6 +26,9 @@ declare module "@yanqirenshi/d3.network" {
           dblclick?: NodeClickHandler;
           mouseOver?: NodeClickHandler;
           mouseOut?: NodeClickHandler;
+          dragStarted?: NodeDragHandler;
+          dragged?: NodeDragHandler;
+          dragEnded?: NodeDragHandler;
         };
       };
     });

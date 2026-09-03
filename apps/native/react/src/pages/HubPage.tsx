@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import D3Network, { Rectum } from "@yanqirenshi/d3.network";
 import type { NodeDatum } from "@yanqirenshi/d3.network";
 import {
@@ -189,6 +189,29 @@ function HubPage() {
     }
   }, []);
 
+  // d3.network はノードの `<g>` に `d3.drag()` を無条件で付ける
+  // (move: "freeze" のノードを除く)。d3-drag は「ドラッグの後に発生する
+  // click」を抑制する仕組みを持っており、これがネイティブの `click`
+  // イベントごと(移動が無い、単なるクリックの場合も含めて)握りつぶして
+  // しまうため、`callbacks.node.click` は実際には呼ばれない。そこで
+  // dragStarted/dragged/dragEnded を使い、「dragEnded 時点で dragged が
+  // 一度も発生していなければクリックとみなす」という形でクリックを検出する
+  // (issue #84)。
+  const dragMovedRef = useRef(false);
+  const handleDragStarted = useCallback(() => {
+    dragMovedRef.current = false;
+  }, []);
+  const handleDragged = useCallback(() => {
+    dragMovedRef.current = true;
+  }, []);
+  const handleDragEnded = useCallback(
+    (d: NodeDatum) => {
+      if (dragMovedRef.current) return;
+      handleNodeClick(d);
+    },
+    [handleNodeClick],
+  );
+
   // Rectum(命令的API)は useMemo で生成する(apps/web の d3系タブと同じ
   // 流儀)。データが変わるたびに作り直す — d3.network はドラッグ以外の座標
   // 変更を追跡する仕組みを持たないため、再生成して確実に最新のグラフを
@@ -198,12 +221,18 @@ function HubPage() {
   const dataKey = JSON.stringify({ windowStates, profiles });
   const rectum = useMemo(() => {
     const instance = new Rectum({
-      callbacks: { node: { click: handleNodeClick } },
+      callbacks: {
+        node: {
+          dragStarted: handleDragStarted,
+          dragged: handleDragged,
+          dragEnded: handleDragEnded,
+        },
+      },
     });
     instance.data(buildGraphData(windowStates, profiles));
     return instance;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dataKey, handleNodeClick]);
+  }, [dataKey, handleDragStarted, handleDragged, handleDragEnded]);
 
   const dockItems = useMemo(
     () => [
