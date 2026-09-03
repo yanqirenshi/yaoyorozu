@@ -23,6 +23,7 @@ Claude Code で以下のセッションに役割を分けて対応する。
 - **実装:APP (画面:/settings)**: Tauri + TypeScript + React によるネイティブアプリの構築
 - **実装:APP (画面:/claude)**: Tauri + TypeScript + React によるネイティブアプリの構築
 - **実装:Web**: Next.js によるプロダクト情報管理Webアプリの構築
+- **UIデザイン**: UIデザイナーとして、Webアプリの UI ページ(`apps/web` の `/ui`、http://localhost:3000/ui)で UIコンポーネント(デザインシステム)を定義・作り込む。**デザインセッションを通さず**(イシュー化せず)直接作業してよい。ただし `apps/web` を編集するため web.md の規約には従う
 - **Lab**: 機能化についての調査、理解など。
 - **運用:リリース**: apps/native のリリース作業の実施。`/release <バージョン>` スキル(`.claude/skills/release/`)を実行し、バージョン更新 → タグ push → MSI ビルド確認 → GitHub Releases での公開までを行う
 - **管理**: このプロジェクト自体の管理、Claude Codeの利用方法の整理・実装
