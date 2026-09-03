@@ -38,7 +38,7 @@ function windowNode(label: string, index: number, y: number) {
     id: `window:${label}`,
     x: COL_X.window,
     y,
-    move: "freeze",
+    move: "will",
     label: { text: `ウィンドウ ${index + 1}`, fill: COLOR_SUMI, font: { size: 14 } },
     circle: { r: 30, fill: COLOR_PEARL, stroke: { color: COLOR_KYO_MURASAKI, width: 3 } },
     kind: "window",
@@ -48,9 +48,10 @@ function windowNode(label: string, index: number, y: number) {
 
 // このマシン上で開いているウィンドウ・プロファイル・セッションの状態から、
 // PC → Window → profile → session の階層グラフ(d3.network 用ノード・エッジ)
-// を組み立てる。座標は左→右の4列固定レイアウトで自前計算する(issue #84。
-// d3.network はノードに x/y が必須で、`move: "freeze"` を指定することで
-// forceシミュレーションによる位置ずれを止め、この座標に固定表示する)。
+// を組み立てる。座標は左→右の4列固定レイアウトを初期位置として自前計算する
+// (issue #84。d3.network はノードに x/y が必須)。「このPC」ノードだけ
+// `move: "freeze"` で固定し、他のノードは `move: "will"` でforce
+// シミュレーションに委ね、ユーザーがドラッグで動かせるようにする。
 function buildGraphData(windowStates: WindowStateDto[], profiles: ProfileSummaryDto[]) {
   const nodes: Record<string, unknown>[] = [];
   const edges: Record<string, unknown>[] = [];
@@ -85,7 +86,7 @@ function buildGraphData(windowStates: WindowStateDto[], profiles: ProfileSummary
         id: profileNodeId,
         x: COL_X.profile,
         y,
-        move: "freeze",
+        move: "will",
         label: { text: profileName, fill: COLOR_SUMI, font: { size: 13 } },
         circle: {
           r: 26,
@@ -108,7 +109,7 @@ function buildGraphData(windowStates: WindowStateDto[], profiles: ProfileSummary
           id: sessionNodeId,
           x: COL_X.session,
           y,
-          move: "freeze",
+          move: "will",
           label: {
             text: (tab.session_title ?? tab.session_id).slice(0, 24),
             fill: COLOR_MUTED,
@@ -152,7 +153,7 @@ function buildGraphData(windowStates: WindowStateDto[], profiles: ProfileSummary
         id: nodeId,
         x: COL_X.profile,
         y: ROW_START_Y + row * ROW_HEIGHT,
-        move: "freeze",
+        move: "will",
         label: { text: p.name, fill: COLOR_MUTED, font: { size: 13 } },
         circle: { r: 22, fill: COLOR_PEARL, stroke: { color: COLOR_BORDER, width: 2 } },
         kind: "profile-unopened",
@@ -216,8 +217,8 @@ function HubPage() {
   // Rectum(命令的API)は useMemo で生成する(apps/web の d3系タブと同じ
   // 流儀)。データが変わるたびに作り直す — d3.network はドラッグ以外の座標
   // 変更を追跡する仕組みを持たないため、再生成して確実に最新のグラフを
-  // 描き直す(全ノードを `move: "freeze"` で固定しているのでシミュレーション
-  // の再スタート自体に見た目上の影響は無い)。
+  // 描き直す(「このPC」以外は `move: "will"` でシミュレーションに委ねて
+  // いるため、再生成のたびにユーザーがドラッグした位置はリセットされる)。
   const dataKey = JSON.stringify({ windowStates, profiles });
   const rectum = useMemo(() => {
     const instance = new Rectum({
