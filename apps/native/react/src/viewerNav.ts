@@ -32,11 +32,17 @@ export type ViewerNav = {
   session: string | null;
   rule: string | null;
   skill: string | null;
+  // 選択中セッションの表示用タイトル。ウィンドウレジストリへの報告
+  // (issue #83)にのみ使う値で、URL駆動(単一ビュー)のときはここへの
+  // 反映先が無いため常に `null`(その場合は呼び出し側が別途、自分自身の
+  // 単一タブとして直接報告する)。
+  sessionTitle: string | null;
   setView: (next: PaneView) => void;
   setProjectAndSession: (project: string | null, session: string | null) => void;
   setRule: (fileName: string) => void;
   setSkill: (name: string) => void;
   clearProjectAndSession: () => void;
+  setSessionTitle: (title: string | null) => void;
 };
 
 // URL(`?view=&project=&session=&rule=&skill=` + `?profile=`)を状態源とする
@@ -107,6 +113,11 @@ export function useUrlViewerNav(): ViewerNav {
     });
   }, [setSearchParams]);
 
+  // URLにはタイトルの置き場が無い。単一ビューでの報告は呼び出し側
+  // (SessionsPage)が自分自身の値から直接組み立てるため、ここは何もしない
+  // (issue #83)。
+  const setSessionTitle = useCallback(() => {}, []);
+
   return {
     windowProfileId,
     view: searchParams.get("view"),
@@ -114,11 +125,13 @@ export function useUrlViewerNav(): ViewerNav {
     session: searchParams.get("session"),
     rule: searchParams.get("rule"),
     skill: searchParams.get("skill"),
+    sessionTitle: null,
     setView,
     setProjectAndSession,
     setRule,
     setSkill,
     clearProjectAndSession,
+    setSessionTitle,
   };
 }
 
@@ -132,6 +145,10 @@ export type TabPosition = {
   session: string | null;
   rule: string | null;
   skill: string | null;
+  // 選択中セッションの表示用タイトル。ウィンドウレジストリへの報告
+  // (issue #83)専用で、画面表示そのものには使わない(タイトルはSessionsPage
+  // 自身が `sessionGroups` から都度求める)。
+  sessionTitle: string | null;
 };
 
 export function useTabViewerNav(
@@ -152,6 +169,10 @@ export function useTabViewerNav(
     () => onChange({ project: null, session: null }),
     [onChange],
   );
+  const setSessionTitle = useCallback(
+    (title: string | null) => onChange({ sessionTitle: title }),
+    [onChange],
+  );
 
   return {
     windowProfileId: position.profileId,
@@ -160,10 +181,12 @@ export function useTabViewerNav(
     session: position.session,
     rule: position.rule,
     skill: position.skill,
+    sessionTitle: position.sessionTitle,
     setView,
     setProjectAndSession,
     setRule,
     setSkill,
     clearProjectAndSession,
+    setSessionTitle,
   };
 }

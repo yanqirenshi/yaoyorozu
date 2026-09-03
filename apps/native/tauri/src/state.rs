@@ -13,6 +13,10 @@ pub struct AppState {
     /// 起動時は `None` から始まり、既存トークンがあればバックグラウンドで
     /// 検証して設定される(`start_github_session_check`)。
     pub github_login: Option<String>,
+    /// 各ウィンドウの表示状態(ハブ化 その1。issue #83)。設定ファイルには
+    /// 保存しないランタイム状態で、起動時は常に空。ウィンドウが閉じられると
+    /// `on_window_event` の `Destroyed` で自動的に除去される。
+    pub window_states: app::WindowRegistry,
 }
 
 /// [`AppState::load`] の結果。設定ファイルの破損から復旧した場合、呼び出し側
@@ -33,6 +37,7 @@ impl AppState {
                 settings: loaded.settings,
                 save_path,
                 github_login: None,
+                window_states: app::WindowRegistry::new(),
             },
             recovered_from_corruption: loaded.recovered_from_corruption,
         })

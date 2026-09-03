@@ -40,6 +40,7 @@ import PaneTabs from "../PaneTabs";
 import { createProjectSettingsDockItems } from "../projectSettingsDockItems";
 import RulesPane from "../RulesPane";
 import SkillsPane from "../SkillsPane";
+import { useReportWindowState } from "../useReportWindowState";
 import { PANE_VIEWS, useUrlViewerNav } from "../viewerNav";
 import type { PaneView, ViewerNav } from "../viewerNav";
 
@@ -374,6 +375,30 @@ function SessionsPage({ nav: navProp }: SessionsPageProps) {
     .find((g) => g.folder === projectParam)
     ?.sessions.find((s) => s.id === sessionParam);
   const canSend = selectedSummary?.is_latest ?? false;
+
+  // ウィンドウレジストリ(issue #83)への報告。タブ化されている場合
+  // (navProp あり)は、選択中セッションのタイトルをタブ管理側の state へ
+  // 反映するだけにとどめ、実際の報告は TabbedSessionsPage が全タブぶん
+  // まとめて行う(複数箇所から報告すると互いの内容を消し合うため)。
+  // タブ化されていない場合(Phase 1 の別ウィンドウ)は自分自身の1タブとして
+  // 直接報告する。
+  const selectedSessionTitle = selectedSummary?.title ?? null;
+  useEffect(() => {
+    nav.setSessionTitle(selectedSessionTitle);
+  }, [selectedSessionTitle, nav.setSessionTitle]);
+  useReportWindowState(
+    windowProfileId
+      ? [
+          {
+            profile_id: windowProfileId,
+            session_id: sessionParam,
+            session_title: selectedSessionTitle,
+          },
+        ]
+      : [],
+    0,
+    !navProp,
+  );
 
   const confirmDiscardIfDirty = (): boolean => {
     if (view === "claude-md" && claudeMdDirty) {

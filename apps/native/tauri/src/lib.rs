@@ -8,7 +8,7 @@ use dto::{
     GithubProjectDto, GithubProjectSummaryDto, ProfileSummaryDto, ProjectDto, ProjectItemsPageDto,
     ProjectSettingsFileDto, RuleDto, RuleSummaryDto, SessionChangedEventDto, SessionDto,
     SessionSummaryDto, SettingsCorruptedEventDto, SettingsDto, SettingsInputDto, SkillDto,
-    SkillSummaryDto, TabStateDto,
+    SkillSummaryDto, TabStateDto, WindowStateDto, WindowTabDto,
 };
 use infra::{
     ClaudeCliAgent, FileClaudeMdStore, FileClaudeSettingsStore, FileProjectSettingsStore,
@@ -396,6 +396,58 @@ async fn open_profile_window(
         .build()
         .map_err(|e| AppErrorDto::from(app::AppError::Io(e.to_string())))?;
 
+    Ok(())
+}
+
+/// このウィンドウの表示状態(タブの配列+アクティブタブ)をレジストリへ
+/// 報告する(ハブ化 その1。issue #83)。ウィンドウのラベルは呼び出し元の
+/// Tauriウィンドウから取得する(フロントに送らせない。native.md §4)。
+/// 設定ファイルには保存しないランタイム状態のため永続化ステップは無い
+/// (native.md §3.1: ロック→更新→解放→emit)。
+#[tauri::command]
+async fn report_window_state(
+    app: tauri::AppHandle,
+    window: tauri::Window,
+    state: tauri::State<'_, Mutex<AppState>>,
+    tabs: Vec<WindowTabDto>,
+    active_tab_index: usize,
+) -> Result<(), AppErrorDto> {
+    let label = window.label().to_string();
+    let domain_tabs = tabs.into_iter().map(domain::WindowTab::from).collect();
+    {
+        let mut guard = state.lock().await;
+        guard.window_states =
+            app::report_window_state(&guard.window_states, label, domain_tabs, active_tab_index);
+    }
+    let _ = app.emit("windows:changed", ());
+    Ok(())
+}
+
+/// 全ウィンドウの表示状態の一覧を返す(ハブ化 その1。issue #83)。
+#[tauri::command]
+async fn list_window_states(
+    state: tauri::State<'_, Mutex<AppState>>,
+) -> Result<Vec<WindowStateDto>, AppErrorDto> {
+    let guard = state.lock().await;
+    Ok(app::list_window_states(&guard.window_states)
+        .into_iter()
+        .map(WindowStateDto::from)
+        .collect())
+}
+
+/// 指定ラベルのウィンドウを前面化する(最小化されていれば復元してから)。
+/// 存在しないラベルは `not_found`(ハブ化 その1。issue #83)。
+#[tauri::command]
+async fn focus_window(app: tauri::AppHandle, label: String) -> Result<(), AppErrorDto> {
+    let window = app.get_webview_window(&label).ok_or_else(|| {
+        AppErrorDto::from(app::AppError::NotFound(
+            "指定されたウィンドウが見つかりません".to_string(),
+        ))
+    })?;
+    if window.is_minimized().unwrap_or(false) {
+        let _ = window.unminimize();
+    }
+    let _ = window.set_focus();
     Ok(())
 }
 
@@ -1122,6 +1174,23 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // ウィンドウが閉じられたら(全ウィンドウ共通のハンドラ。issue #83)
+        // レジストリから自動除去する。フロント側の明示的な解除には頼らない。
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                let label = window.label().to_string();
+                let app = window.app_handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = app.state::<Mutex<AppState>>();
+                    {
+                        let mut guard = state.lock().await;
+                        guard.window_states =
+                            app::remove_window_state(&guard.window_states, &label);
+                    }
+                    let _ = app.emit("windows:changed", ());
+                });
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             list_projects,
             get_session,
@@ -1135,6 +1204,9 @@ pub fn run() {
             rename_profile,
             save_open_tabs,
             open_profile_window,
+            report_window_state,
+            list_window_states,
+            focus_window,
             get_repository_claude_md,
             save_repository_claude_md,
             get_project_claude_md,

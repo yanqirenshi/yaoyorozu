@@ -539,3 +539,50 @@ impl From<app::AppError> for AppErrorDto {
         }
     }
 }
+
+/// ウィンドウ内の1タブの表示状態(ハブ化 その1。issue #83)。
+/// `report_window_state` の引数と `list_window_states` の戻り値の両方に使う。
+#[derive(Serialize, Deserialize, Clone)]
+pub struct WindowTabDto {
+    pub profile_id: String,
+    pub session_id: Option<String>,
+    pub session_title: Option<String>,
+}
+
+impl From<domain::WindowTab> for WindowTabDto {
+    fn from(tab: domain::WindowTab) -> Self {
+        Self {
+            profile_id: tab.profile_id,
+            session_id: tab.session_id,
+            session_title: tab.session_title,
+        }
+    }
+}
+
+impl From<WindowTabDto> for domain::WindowTab {
+    fn from(tab: WindowTabDto) -> Self {
+        Self {
+            profile_id: tab.profile_id,
+            session_id: tab.session_id,
+            session_title: tab.session_title,
+        }
+    }
+}
+
+/// `list_window_states` の1件分(issue #83)。
+#[derive(Serialize, Clone)]
+pub struct WindowStateDto {
+    pub label: String,
+    pub tabs: Vec<WindowTabDto>,
+    pub active_tab_index: usize,
+}
+
+impl From<domain::WindowState> for WindowStateDto {
+    fn from(state: domain::WindowState) -> Self {
+        Self {
+            label: state.label,
+            tabs: state.tabs.into_iter().map(WindowTabDto::from).collect(),
+            active_tab_index: state.active_tab_index,
+        }
+    }
+}
