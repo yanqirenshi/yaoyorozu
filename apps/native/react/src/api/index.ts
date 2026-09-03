@@ -61,7 +61,6 @@ export type {
   SettingsInputDto,
   SkillDto,
   SkillSummaryDto,
-  TabStateDto,
   WindowStateDto,
   WindowTabDto,
 } from "./types";
@@ -148,12 +147,6 @@ export function deleteProfile(profileId: string): Promise<void> {
 
 export function renameProfile(profileId: string, name: string): Promise<void> {
   return invoke<void>("rename_profile", { profileId, name });
-}
-
-// メインウィンドウのタブバー(issue #77)で開いているタブの一覧を置き換える。
-// 表示順そのまま渡す(同じプロファイルを複数タブで開けるため重複可)。
-export function saveOpenTabs(profileIds: string[]): Promise<void> {
-  return invoke<void>("save_open_tabs", { profileIds });
 }
 
 // 指定プロファイルを対象に新しいウィンドウを開く(マルチウィンドウ Phase 1。

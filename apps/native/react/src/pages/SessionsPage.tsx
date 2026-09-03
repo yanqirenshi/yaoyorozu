@@ -26,6 +26,7 @@ import type {
   ProjectItemDto,
   ProjectStatusOptionDto,
   SessionSummaryDto,
+  WindowTabDto,
 } from "../api";
 import ClaudeMdEditor from "../ClaudeMdEditor";
 import type { ClaudeMdEditorHandle } from "../ClaudeMdEditor";
@@ -39,6 +40,7 @@ import PaneTabs from "../PaneTabs";
 import { createProjectSettingsDockItems } from "../projectSettingsDockItems";
 import RulesPane from "../RulesPane";
 import SkillsPane from "../SkillsPane";
+import { useReportWindowState } from "../useReportWindowState";
 import { PANE_VIEWS } from "../viewerNav";
 import type { PaneView, ViewerNav } from "../viewerNav";
 
@@ -77,14 +79,18 @@ function splitFolderNameForDisplay(name: string): { prefix: string; tail: string
 }
 
 type SessionsPageProps = {
-  // タブ管理側(TabbedSessionsPage)のstateから画面状態を読む(issue #77・
-  // #84。全てのビューアウィンドウがタブ化されたため、URL駆動の単一ビューは
-  // 廃止した。native.md §6)。
+  // 画面状態はURLクエリを状態源とする `useUrlViewerNav`(`ViewerPage`)から
+  // 渡される(issue #91。「1ウィンドウ=1プロファイル」への一本化でウィンドウ
+  // 内タブバーを廃止したため、再びURL駆動に戻した。native.md §6)。
   nav: ViewerNav;
 };
 
 function SessionsPage({ nav }: SessionsPageProps) {
   const windowProfileId = nav.windowProfileId;
+  // ウィンドウレジストリ(issue #83)への報告に使う、実際に表示中のプロファイル
+  // ID。`windowProfileId` が `null`(`/profiles` に id 省略)の場合はアクティブ
+  // プロファイルへフォールバックする(Rust側 `resolve_profile` と同じ規則)。
+  const [resolvedProfileId, setResolvedProfileId] = useState<string | null>(null);
   const [targetFolders, setTargetFolders] = useState<string[]>([]);
   const [sessionGroups, setSessionGroups] = useState<SessionGroup[]>([]);
   const [messages, setMessages] = useState<MessageDto[]>([]);
@@ -143,6 +149,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const loadTargetFoldersAndSessions = useCallback((): Promise<void> => {
     return getSettings(windowProfileId)
       .then((settings) => {
+        setResolvedProfileId(windowProfileId ?? settings.active_profile_id);
         setTargetFolders(settings.selected_project_folders);
         setGithubProject(settings.github_project);
         return loadSessionGroups(settings.selected_project_folders);
@@ -350,14 +357,21 @@ function SessionsPage({ nav }: SessionsPageProps) {
     ?.sessions.find((s) => s.id === sessionParam);
   const canSend = selectedSummary?.is_latest ?? false;
 
-  // ウィンドウレジストリ(issue #83)への報告は TabbedSessionsPage が全タブ
-  // ぶんまとめて行う(issue #84。全てのビューアウィンドウがタブ化された
-  // ため)。ここでは選択中セッションのタイトルをタブ管理側のstateへ
-  // 反映するだけにとどめる(複数箇所から報告すると互いの内容を消し合うため)。
+  // ウィンドウレジストリ(issue #83)へこのウィンドウの表示状態を報告する。
+  // 「1ウィンドウ=1プロファイル」への一本化(issue #91)でタブが無くなった
+  // ため常に要素数1の配列になるが、DTO・ハブ側のグラフ描画は変えずそのまま
+  // 使う。
   const selectedSessionTitle = selectedSummary?.title ?? null;
-  useEffect(() => {
-    nav.setSessionTitle(selectedSessionTitle);
-  }, [selectedSessionTitle, nav.setSessionTitle]);
+  const reportTabs: WindowTabDto[] = resolvedProfileId
+    ? [
+        {
+          profile_id: resolvedProfileId,
+          session_id: sessionParam,
+          session_title: selectedSessionTitle,
+        },
+      ]
+    : [];
+  useReportWindowState(reportTabs, 0, reportTabs.length > 0);
 
   const confirmDiscardIfDirty = (): boolean => {
     if (view === "claude-md" && claudeMdDirty) {

@@ -168,7 +168,9 @@ pub fn is_valid_skill_name(name: &str) -> bool {
 /// `claude_projects_dir` はマシン設定のためグローバルのまま(issue #72)。
 /// v4 -> v5: メインウィンドウのタブバー(issue #77)復元用に `open_tabs`
 /// (開いているタブの最小限のスナップショット)を追加。
-pub const CURRENT_SETTINGS_VERSION: u32 = 5;
+/// v5 -> v6: 「1ウィンドウ = 1プロファイル」への一本化(issue #91)でタブバーを
+/// 廃止したため、`open_tabs` を削除。
+pub const CURRENT_SETTINGS_VERSION: u32 = 6;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct GithubProject {
@@ -210,14 +212,6 @@ impl Profile {
     }
 }
 
-/// 開いているタブ1件分の、復元用の最小限のスナップショット。選択中セッション
-/// 等の細かい画面状態は含めない(起動のたびに、対象プロファイルの既定表示
-/// から始める。native.md §6・issue #77)。
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct TabState {
-    pub profile_id: String,
-}
-
 /// アプリの設定。複数の「プロファイル」(対象リポジトリ・GitHubプロジェクト・
 /// 対象フォルダの組)と、そのうちどれがアクティブかに加え、マシン設定である
 /// セッション一覧のルートディレクトリを持つ。永続化(JSON)は infra が担う
@@ -233,10 +227,6 @@ pub struct Settings {
     /// 持たない)を読めるようにするため。
     #[serde(default)]
     pub claude_projects_dir: Option<std::path::PathBuf>,
-    /// メインウィンドウのタブバー(issue #77)で開いているタブの一覧。
-    /// 別ウィンドウ(issue #76)のタブは復元対象外(スコープ外)。
-    #[serde(default)]
-    pub open_tabs: Vec<TabState>,
 }
 
 impl Default for Settings {
@@ -244,9 +234,6 @@ impl Default for Settings {
         let profile = Profile::new("default".to_string(), "default".to_string());
         Self {
             active_profile_id: profile.id.clone(),
-            open_tabs: vec![TabState {
-                profile_id: profile.id.clone(),
-            }],
             version: CURRENT_SETTINGS_VERSION,
             profiles: vec![profile],
             claude_projects_dir: None,
@@ -491,12 +478,6 @@ mod tests {
         assert_eq!(settings.profiles[0].github_project, None);
         assert!(settings.profiles[0].selected_project_folders.is_empty());
         assert_eq!(settings.claude_projects_dir, None);
-        assert_eq!(
-            settings.open_tabs,
-            vec![TabState {
-                profile_id: settings.profiles[0].id.clone()
-            }]
-        );
     }
 
     #[test]

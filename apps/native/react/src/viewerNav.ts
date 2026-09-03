@@ -1,4 +1,6 @@
 import { useCallback } from "react";
+import { useSearchParams } from "react-router";
+import { useWindowProfileId } from "./useWindowProfileId";
 
 // ビューア(SessionsPage)の右ペイン表示種別。
 export type PaneView =
@@ -21,8 +23,9 @@ export const PANE_VIEWS: PaneView[] = [
 ];
 
 // ビューアの「今どこを見ているか」を表す最小限のナビゲーション状態。
-// あらゆるビューアウィンドウがタブ化された(issue #84)ため、状態源は常に
-// タブ管理側(TabbedSessionsPage)の React state になる(native.md §6)。
+// 「1ウィンドウ = 1プロファイル」への一本化(issue #91)でウィンドウ内タブ
+// バーを廃止したため、画面状態は再びURL(クエリ)を状態源とする
+// (native.md §6)。プロファイル文脈はパスパラメータ(issue #88)で決まる。
 export type ViewerNav = {
   windowProfileId: string | null;
   view: string | null;
@@ -30,69 +33,71 @@ export type ViewerNav = {
   session: string | null;
   rule: string | null;
   skill: string | null;
-  // 選択中セッションの表示用タイトル。ウィンドウレジストリへの報告
-  // (issue #83)にのみ使う値。
-  sessionTitle: string | null;
   setView: (next: PaneView) => void;
   setProjectAndSession: (project: string | null, session: string | null) => void;
   setRule: (fileName: string) => void;
   setSkill: (name: string) => void;
   clearProjectAndSession: () => void;
-  setSessionTitle: (title: string | null) => void;
 };
 
-// タブ管理側のstate(タブ配列内の1件)を状態源とする実装(issue #77)。
-// `position` はタブの現在位置、`onChange` はタブ配列内のそのタブのフィールドを
-// 部分更新する関数(タブ管理側の `useCallback` で安定させた参照を渡すこと)。
-export type TabPosition = {
-  profileId: string;
-  view: string | null;
-  project: string | null;
-  session: string | null;
-  rule: string | null;
-  skill: string | null;
-  // 選択中セッションの表示用タイトル。ウィンドウレジストリへの報告
-  // (issue #83)専用で、画面表示そのものには使わない(タイトルはSessionsPage
-  // 自身が `sessionGroups` から都度求める)。
-  sessionTitle: string | null;
-};
+function withParam(
+  params: URLSearchParams,
+  key: string,
+  value: string | null,
+): URLSearchParams {
+  const next = new URLSearchParams(params);
+  if (value) {
+    next.set(key, value);
+  } else {
+    next.delete(key);
+  }
+  return next;
+}
 
-export function useTabViewerNav(
-  position: TabPosition,
-  onChange: (patch: Partial<Omit<TabPosition, "profileId">>) => void,
-): ViewerNav {
+// `/profiles/:profileId?` の画面状態をURLクエリで管理する(issue #91)。
+export function useUrlViewerNav(): ViewerNav {
+  const windowProfileId = useWindowProfileId();
+  const [searchParams, setSearchParams] = useSearchParams();
+
   const setView = useCallback(
-    (next: PaneView) => onChange({ view: next === "chat" ? null : next }),
-    [onChange],
+    (next: PaneView) => {
+      setSearchParams((prev) => withParam(prev, "view", next === "chat" ? null : next));
+    },
+    [setSearchParams],
   );
   const setProjectAndSession = useCallback(
-    (project: string | null, session: string | null) => onChange({ project, session }),
-    [onChange],
+    (project: string | null, session: string | null) => {
+      setSearchParams((prev) => withParam(withParam(prev, "project", project), "session", session));
+    },
+    [setSearchParams],
   );
-  const setRule = useCallback((fileName: string) => onChange({ rule: fileName }), [onChange]);
-  const setSkill = useCallback((name: string) => onChange({ skill: name }), [onChange]);
-  const clearProjectAndSession = useCallback(
-    () => onChange({ project: null, session: null }),
-    [onChange],
+  const setRule = useCallback(
+    (fileName: string) => {
+      setSearchParams((prev) => withParam(prev, "rule", fileName));
+    },
+    [setSearchParams],
   );
-  const setSessionTitle = useCallback(
-    (title: string | null) => onChange({ sessionTitle: title }),
-    [onChange],
+  const setSkill = useCallback(
+    (name: string) => {
+      setSearchParams((prev) => withParam(prev, "skill", name));
+    },
+    [setSearchParams],
   );
+  const clearProjectAndSession = useCallback(() => {
+    setSearchParams((prev) => withParam(withParam(prev, "project", null), "session", null));
+  }, [setSearchParams]);
 
   return {
-    windowProfileId: position.profileId,
-    view: position.view,
-    project: position.project,
-    session: position.session,
-    rule: position.rule,
-    skill: position.skill,
-    sessionTitle: position.sessionTitle,
+    windowProfileId,
+    view: searchParams.get("view"),
+    project: searchParams.get("project"),
+    session: searchParams.get("session"),
+    rule: searchParams.get("rule"),
+    skill: searchParams.get("skill"),
     setView,
     setProjectAndSession,
     setRule,
     setSkill,
     clearProjectAndSession,
-    setSessionTitle,
   };
 }
