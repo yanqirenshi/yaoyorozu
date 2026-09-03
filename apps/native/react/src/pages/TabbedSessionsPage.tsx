@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { getSettings, onSettingsUpdated, saveOpenTabs } from "../api";
-import type { ProfileSummaryDto } from "../api";
+import type { ProfileSummaryDto, WindowTabDto } from "../api";
 import { useDirtyGuardCheck } from "../DockItemsContext";
 import TabBar from "../TabBar";
+import { useReportWindowState } from "../useReportWindowState";
 import { useTabViewerNav } from "../viewerNav";
 import type { TabPosition } from "../viewerNav";
 import SessionsPage from "./SessionsPage";
@@ -22,6 +23,7 @@ function newTab(profileId: string): Tab {
     session: null,
     rule: null,
     skill: null,
+    sessionTitle: null,
   };
 }
 
@@ -124,6 +126,18 @@ function TabbedSessionsPage() {
     },
     [],
   );
+
+  // ウィンドウレジストリ(issue #83)へこのウィンドウの全タブをまとめて
+  // 報告する。個々のタブの `SessionsPage`(アクティブなものだけがマウント
+  // される)はここへは報告せず、`nav.setSessionTitle` でタイトルをタブの
+  // 位置情報へ反映するだけにとどめる(報告元を1箇所にするため)。
+  const reportTabs: WindowTabDto[] = (tabs ?? []).map((t) => ({
+    profile_id: t.profileId,
+    session_id: t.session,
+    session_title: t.sessionTitle,
+  }));
+  const reportActiveIndex = tabs?.findIndex((t) => t.id === activeTabId) ?? -1;
+  useReportWindowState(reportTabs, Math.max(0, reportActiveIndex), reportTabs.length > 0);
 
   if (!tabs || !activeTabId) {
     return (

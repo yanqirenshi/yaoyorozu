@@ -25,6 +25,8 @@ import type {
   SettingsInputDto,
   SkillDto,
   SkillSummaryDto,
+  WindowStateDto,
+  WindowTabDto,
 } from "./types";
 
 export type {
@@ -60,6 +62,8 @@ export type {
   SkillDto,
   SkillSummaryDto,
   TabStateDto,
+  WindowStateDto,
+  WindowTabDto,
 } from "./types";
 
 export function listProjects(): Promise<ProjectDto[]> {
@@ -156,6 +160,31 @@ export function saveOpenTabs(profileIds: string[]): Promise<void> {
 // issue #76)。ウィンドウ生成はRust側で行う(native.md §4)。
 export function openProfileWindow(profileId: string): Promise<void> {
   return invoke<void>("open_profile_window", { profileId });
+}
+
+// このウィンドウの表示状態(タブの配列+アクティブタブ)をレジストリへ
+// 報告する(ハブ化 その1。issue #83)。ウィンドウのラベルはRust側が呼び出し元
+// から取得するため引数に含めない。
+export function reportWindowState(
+  tabs: WindowTabDto[],
+  activeTabIndex: number,
+): Promise<void> {
+  return invoke<void>("report_window_state", { tabs, activeTabIndex });
+}
+
+export function listWindowStates(): Promise<WindowStateDto[]> {
+  return invoke<WindowStateDto[]>("list_window_states");
+}
+
+export function focusWindow(label: string): Promise<void> {
+  return invoke<void>("focus_window", { label });
+}
+
+// レジストリが変わるたびに発火する(ウィンドウの状態報告・閉鎖のいずれでも。
+// issue #83)。ペイロードは持たず、購読側が `listWindowStates` で取り直す。
+export function onWindowsChanged(callback: () => void): Promise<() => void> {
+  const unlisten = listen("windows:changed", () => callback());
+  return unlisten.then((fn) => fn);
 }
 
 // 設定(アクティブプロファイルの内容含む)が変わったことの通知。

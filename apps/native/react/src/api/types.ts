@@ -158,6 +158,21 @@ export type ProjectStatusOptionDto = {
   name: string;
 };
 
+// ウィンドウ内の1タブの表示状態(ハブ化 その1。issue #83)。
+// `reportWindowState` の引数と `listWindowStates` の戻り値の両方に使う。
+export type WindowTabDto = {
+  profile_id: string;
+  session_id: string | null;
+  session_title: string | null;
+};
+
+// `listWindowStates` の1件分(issue #83)。
+export type WindowStateDto = {
+  label: string;
+  tabs: WindowTabDto[];
+  active_tab_index: number;
+};
+
 export type ProjectItemsPageDto = {
   project_id: string;
   status_field_id: string | null;

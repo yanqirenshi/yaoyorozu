@@ -558,6 +558,47 @@ pub fn save_open_tabs(settings: &Settings, profile_ids: &[String]) -> Settings {
     }
 }
 
+/// ウィンドウレジストリ(ハブ化 その1。issue #83)。設定ファイルには保存
+/// しないランタイム状態(`AppState.window_states`)を表す。キーはウィンドウの
+/// ラベル。
+pub type WindowRegistry = std::collections::HashMap<String, domain::WindowState>;
+
+/// ウィンドウの表示状態を登録・更新する(`report_window_state` コマンドの
+/// 委譲先)。同じラベルが既にあれば置き換える(issue #83)。
+pub fn report_window_state(
+    registry: &WindowRegistry,
+    label: String,
+    tabs: Vec<domain::WindowTab>,
+    active_tab_index: usize,
+) -> WindowRegistry {
+    let mut updated = registry.clone();
+    updated.insert(
+        label.clone(),
+        domain::WindowState {
+            label,
+            tabs,
+            active_tab_index,
+        },
+    );
+    updated
+}
+
+/// ウィンドウが閉じられたときにレジストリから除去する(issue #83)。
+/// 登録されていないラベルを指定しても何も起きない。
+pub fn remove_window_state(registry: &WindowRegistry, label: &str) -> WindowRegistry {
+    let mut updated = registry.clone();
+    updated.remove(label);
+    updated
+}
+
+/// レジストリの内容を一覧として返す。表示順を安定させるためラベル順に
+/// ソートする(issue #83)。
+pub fn list_window_states(registry: &WindowRegistry) -> Vec<domain::WindowState> {
+    let mut states: Vec<_> = registry.values().cloned().collect();
+    states.sort_by(|a, b| a.label.cmp(&b.label));
+    states
+}
+
 /// `CLAUDE.md` を読む(存在しなければ `None`)。
 pub fn read_claude_md(
     store: &dyn ClaudeMdStore,
@@ -1389,6 +1430,117 @@ mod tests {
                 profile_id: "missing".to_string()
             }]
         );
+    }
+
+    fn window_tab(profile_id: &str) -> domain::WindowTab {
+        domain::WindowTab {
+            profile_id: profile_id.to_string(),
+            session_id: None,
+            session_title: None,
+        }
+    }
+
+    #[test]
+    fn report_window_state_registers_a_new_window() {
+        let registry = WindowRegistry::new();
+        let updated = report_window_state(&registry, "main".to_string(), vec![window_tab("a")], 0);
+        assert_eq!(updated.len(), 1);
+        let state = updated.get("main").expect("should be registered");
+        assert_eq!(state.label, "main");
+        assert_eq!(state.tabs, vec![window_tab("a")]);
+        assert_eq!(state.active_tab_index, 0);
+    }
+
+    #[test]
+    fn report_window_state_replaces_the_existing_entry_for_the_same_label() {
+        let mut registry = WindowRegistry::new();
+        registry.insert(
+            "main".to_string(),
+            domain::WindowState {
+                label: "main".to_string(),
+                tabs: vec![window_tab("a")],
+                active_tab_index: 0,
+            },
+        );
+        let updated = report_window_state(
+            &registry,
+            "main".to_string(),
+            vec![window_tab("a"), window_tab("b")],
+            1,
+        );
+        assert_eq!(updated.len(), 1, "same label should replace, not add");
+        let state = updated.get("main").unwrap();
+        assert_eq!(state.tabs, vec![window_tab("a"), window_tab("b")]);
+        assert_eq!(state.active_tab_index, 1);
+    }
+
+    #[test]
+    fn report_window_state_does_not_mutate_other_windows() {
+        let mut registry = WindowRegistry::new();
+        registry.insert(
+            "profile-1".to_string(),
+            domain::WindowState {
+                label: "profile-1".to_string(),
+                tabs: vec![window_tab("a")],
+                active_tab_index: 0,
+            },
+        );
+        let updated = report_window_state(&registry, "main".to_string(), vec![window_tab("b")], 0);
+        assert_eq!(updated.len(), 2);
+        assert!(updated.contains_key("profile-1"));
+        assert!(updated.contains_key("main"));
+    }
+
+    #[test]
+    fn remove_window_state_removes_the_matching_label() {
+        let mut registry = WindowRegistry::new();
+        registry.insert(
+            "main".to_string(),
+            domain::WindowState {
+                label: "main".to_string(),
+                tabs: vec![window_tab("a")],
+                active_tab_index: 0,
+            },
+        );
+        let updated = remove_window_state(&registry, "main");
+        assert!(updated.is_empty());
+    }
+
+    #[test]
+    fn remove_window_state_is_a_noop_for_unknown_label() {
+        let registry = WindowRegistry::new();
+        let updated = remove_window_state(&registry, "missing");
+        assert!(updated.is_empty());
+    }
+
+    #[test]
+    fn list_window_states_returns_entries_sorted_by_label() {
+        let mut registry = WindowRegistry::new();
+        registry.insert(
+            "profile-2".to_string(),
+            domain::WindowState {
+                label: "profile-2".to_string(),
+                tabs: vec![],
+                active_tab_index: 0,
+            },
+        );
+        registry.insert(
+            "main".to_string(),
+            domain::WindowState {
+                label: "main".to_string(),
+                tabs: vec![],
+                active_tab_index: 0,
+            },
+        );
+        let states = list_window_states(&registry);
+        let labels: Vec<&str> = states.iter().map(|s| s.label.as_str()).collect();
+        assert_eq!(labels, vec!["main", "profile-2"]);
+    }
+
+    #[test]
+    fn list_window_states_returns_empty_for_empty_registry() {
+        let registry = WindowRegistry::new();
+        assert!(list_window_states(&registry).is_empty());
     }
 
     #[derive(Default)]
