@@ -28,6 +28,7 @@ const DEFAULT_WINDOW_TITLE = "YAOYOROZU";
 // パスも用意しておく。
 const PAGE_LABEL_BY_PATH: Record<string, string> = {
   "/": "ビューア",
+  "/hub": "ハブ",
   "/settings": "設定",
   "/claude": "Claude",
 };
@@ -93,16 +94,25 @@ function Layout() {
   // 常に先頭(ページ固有アイテムより前)に置き、ページ間で位置が揺れないようにする。
   const navItems = useMemo<DockItem[]>(() => {
     const items: DockItem[] = [];
-    if (location.pathname !== "/") {
+    // `windowProfileId` があるウィンドウ(ハブから開いたビューア。issue #76)
+    // は自分自身のビューアへ戻るトリガーを、無いウィンドウ(メイン)は
+    // ハブへ戻るトリガーを出す(issue #84: メインウィンドウはハブが起点で
+    // あり、ビューアはハブから開いた別ウィンドウが担う)。
+    if (windowProfileId) {
+      if (location.pathname !== "/") {
+        items.push({
+          id: "nav-sessions",
+          label: VIEWER_ICON,
+          title: "ビューア",
+          onClick: () => navigate(`/?profile=${encodeURIComponent(windowProfileId)}`),
+        });
+      }
+    } else if (location.pathname !== "/hub") {
       items.push({
-        id: "nav-sessions",
+        id: "nav-hub",
         label: VIEWER_ICON,
-        title: "ビューア",
-        // このウィンドウのプロファイル文脈(`?profile=`)を保ったまま戻る
-        // (issue #76。設定・Claude画面はプロファイルに紐づかないため、
-        // それらへの遷移ではクエリを付けない)。
-        onClick: () =>
-          navigate(windowProfileId ? `/?profile=${encodeURIComponent(windowProfileId)}` : "/"),
+        title: "ハブ",
+        onClick: () => navigate("/hub"),
       });
     }
     if (location.pathname !== "/settings") {

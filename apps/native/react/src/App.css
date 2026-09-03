@@ -75,6 +75,21 @@ body,
   display: flex;
 }
 
+/* ハブ画面(issue #84)。`.app-shell` 直下の唯一のフレックス子として
+   d3.network のSVGを全面に表示する(D3Networkは react-measure で親要素の
+   サイズに追従するため、この要素自体が高さを持つ必要がある)。 */
+.hub-page {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.hub-page .error {
+  flex-shrink: 0;
+  margin: 8px 16px 0;
+}
+
 .tab-bar {
   flex-shrink: 0;
   display: flex;

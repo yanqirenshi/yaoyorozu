@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent, FormEvent } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { DockItem } from "command-dock";
 import type { ViewMode } from "@yanqirenshi/markdown.sitter";
@@ -40,8 +39,7 @@ import PaneTabs from "../PaneTabs";
 import { createProjectSettingsDockItems } from "../projectSettingsDockItems";
 import RulesPane from "../RulesPane";
 import SkillsPane from "../SkillsPane";
-import { useReportWindowState } from "../useReportWindowState";
-import { PANE_VIEWS, useUrlViewerNav } from "../viewerNav";
+import { PANE_VIEWS } from "../viewerNav";
 import type { PaneView, ViewerNav } from "../viewerNav";
 
 const PAGE_SIZE = 50;
@@ -78,32 +76,14 @@ function splitFolderNameForDisplay(name: string): { prefix: string; tail: string
   return { prefix: name.slice(0, idx + 1), tail: name.slice(idx + 1) };
 }
 
-// このウィンドウのプロファイルが削除された場合、`getSettings(profileId)` は
-// `not_found` を返す。セカンダリウィンドウ(`windowProfileId` あり)では
-// ウィンドウを閉じるだけでよい(issue #76)。メインウィンドウ
-// (`windowProfileId` なし)はこの経路を通らない(削除時は既定プロファイルの
-// 繰り上げに追従するだけで、閉じる対象ではないため)。
-function closeWindowIfProfileWasDeleted(windowProfileId: string | null, e: unknown): boolean {
-  if (windowProfileId && isAppError(e) && e.code === "not_found") {
-    void getCurrentWindow().close();
-    return true;
-  }
-  return false;
-}
-
 type SessionsPageProps = {
-  // 単一ビュー(URL駆動。省略時)/ タブ(タブ管理側state駆動。issue #77)の
-  // どちらから状態を読むかを外から注入する(native.md §6)。
-  nav?: ViewerNav;
+  // タブ管理側(TabbedSessionsPage)のstateから画面状態を読む(issue #77・
+  // #84。全てのビューアウィンドウがタブ化されたため、URL駆動の単一ビューは
+  // 廃止した。native.md §6)。
+  nav: ViewerNav;
 };
 
-function SessionsPage({ nav: navProp }: SessionsPageProps) {
-  // タブ側から nav が渡されない場合(メインウィンドウが未タブ化 or
-  // Phase 1 の別ウィンドウ)は、常に呼ぶ urlNav をそのまま使う(フックは
-  // 条件付きで呼べないため、navProp の有無に関わらず urlNav 自体は毎回計算
-  // する。navProp がある場合は単に使わないだけ)。
-  const urlNav = useUrlViewerNav();
-  const nav = navProp ?? urlNav;
+function SessionsPage({ nav }: SessionsPageProps) {
   const windowProfileId = nav.windowProfileId;
   const [targetFolders, setTargetFolders] = useState<string[]>([]);
   const [sessionGroups, setSessionGroups] = useState<SessionGroup[]>([]);
@@ -167,10 +147,7 @@ function SessionsPage({ nav: navProp }: SessionsPageProps) {
         setGithubProject(settings.github_project);
         return loadSessionGroups(settings.selected_project_folders);
       })
-      .catch((e) => {
-        if (closeWindowIfProfileWasDeleted(windowProfileId, e)) return;
-        setError(isAppError(e) ? e.message : String(e));
-      });
+      .catch((e) => setError(isAppError(e) ? e.message : String(e)));
   }, [loadSessionGroups, windowProfileId]);
 
   const loadGithubAuthStatus = useCallback((): Promise<void> => {
@@ -301,10 +278,7 @@ function SessionsPage({ nav: navProp }: SessionsPageProps) {
           }
           return loadSessionGroups(settings.selected_project_folders);
         })
-        .catch((e) => {
-          if (closeWindowIfProfileWasDeleted(windowProfileId, e)) return;
-          setError(isAppError(e) ? e.message : String(e));
-        });
+        .catch((e) => setError(isAppError(e) ? e.message : String(e)));
     });
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
@@ -376,29 +350,14 @@ function SessionsPage({ nav: navProp }: SessionsPageProps) {
     ?.sessions.find((s) => s.id === sessionParam);
   const canSend = selectedSummary?.is_latest ?? false;
 
-  // ウィンドウレジストリ(issue #83)への報告。タブ化されている場合
-  // (navProp あり)は、選択中セッションのタイトルをタブ管理側の state へ
-  // 反映するだけにとどめ、実際の報告は TabbedSessionsPage が全タブぶん
-  // まとめて行う(複数箇所から報告すると互いの内容を消し合うため)。
-  // タブ化されていない場合(Phase 1 の別ウィンドウ)は自分自身の1タブとして
-  // 直接報告する。
+  // ウィンドウレジストリ(issue #83)への報告は TabbedSessionsPage が全タブ
+  // ぶんまとめて行う(issue #84。全てのビューアウィンドウがタブ化された
+  // ため)。ここでは選択中セッションのタイトルをタブ管理側のstateへ
+  // 反映するだけにとどめる(複数箇所から報告すると互いの内容を消し合うため)。
   const selectedSessionTitle = selectedSummary?.title ?? null;
   useEffect(() => {
     nav.setSessionTitle(selectedSessionTitle);
   }, [selectedSessionTitle, nav.setSessionTitle]);
-  useReportWindowState(
-    windowProfileId
-      ? [
-          {
-            profile_id: windowProfileId,
-            session_id: sessionParam,
-            session_title: selectedSessionTitle,
-          },
-        ]
-      : [],
-    0,
-    !navProp,
-  );
 
   const confirmDiscardIfDirty = (): boolean => {
     if (view === "claude-md" && claudeMdDirty) {
