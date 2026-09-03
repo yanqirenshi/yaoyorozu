@@ -5,12 +5,13 @@ import {
   focusWindow,
   getSettings,
   isAppError,
+  listSessions,
   listWindowStates,
   onSettingsUpdated,
   onWindowsChanged,
   openProfileWindow,
 } from "../api";
-import type { ProfileSummaryDto, WindowStateDto } from "../api";
+import type { ProfileSummaryDto, SessionSummaryDto, WindowStateDto } from "../api";
 import { usePageDockItems } from "../DockItemsContext";
 import { RELOAD_ICON } from "../icons";
 
@@ -35,6 +36,11 @@ type HubNodeCore = {
   profileId?: string;
 };
 
+// プロファイルごとの全セッション一覧。`selected_project_folders` の
+// 各フォルダから集めたセッションをまとめたもの(タブで選択中の1件だけでは
+// なく、そのプロファイルの対象フォルダにある全セッションを表示するため)。
+type SessionsByProfile = Record<string, SessionSummaryDto[]>;
+
 // このマシン上で開いているウィンドウ・プロファイル・セッションの状態から、
 // PC → profile → session の階層グラフ(d3.network 用ノード・エッジ)を
 // 組み立てる。座標は左→右の3列固定レイアウトを初期位置として自前計算する
@@ -42,7 +48,11 @@ type HubNodeCore = {
 // `move: "freeze"` で固定、profileノードは `move: "support"` で初期位置に
 // 留めつつユーザーがドラッグで動かせるようにし、sessionノードは
 // `move: "will"` でforceシミュレーションに委ねる。
-function buildGraphData(windowStates: WindowStateDto[], profiles: ProfileSummaryDto[]) {
+function buildGraphData(
+  windowStates: WindowStateDto[],
+  profiles: ProfileSummaryDto[],
+  sessionsByProfile: SessionsByProfile,
+) {
   const nodes: Record<string, unknown>[] = [];
   const edges: Record<string, unknown>[] = [];
   let edgeSeq = 0;
@@ -64,20 +74,22 @@ function buildGraphData(windowStates: WindowStateDto[], profiles: ProfileSummary
   windowStates.forEach((w) => {
     w.tabs.forEach((tab, ti) => {
       openedProfileIds.add(tab.profile_id);
-      const y = ROW_START_Y + row * ROW_HEIGHT;
       const profileNodeId = `profile:${w.label}:${ti}`;
       const profileName = profiles.find((p) => p.id === tab.profile_id)?.name ?? tab.profile_id;
-      const isActive = ti === w.active_tab_index;
+      const isActiveTab = ti === w.active_tab_index;
+      const sessions = sessionsByProfile[tab.profile_id] ?? [];
 
+      const profileRow = row;
+      const profileY = ROW_START_Y + profileRow * ROW_HEIGHT;
       nodes.push({
         id: profileNodeId,
         x: COL_X.profile,
-        y,
+        y: profileY,
         move: "support",
         label: { text: profileName, fill: COLOR_SUMI, font: { size: 13 } },
         circle: {
           r: 26,
-          fill: isActive ? COLOR_KYO_MURASAKI : COLOR_PEARL,
+          fill: isActiveTab ? COLOR_KYO_MURASAKI : COLOR_PEARL,
           stroke: { color: COLOR_KYO_MURASAKI, width: 2 },
         },
         kind: "profile",
@@ -90,19 +102,26 @@ function buildGraphData(windowStates: WindowStateDto[], profiles: ProfileSummary
         line: { width: 2, color: COLOR_BORDER },
       });
 
-      if (tab.session_id) {
-        const sessionNodeId = `session:${w.label}:${ti}`;
+      // そのプロファイルの対象フォルダにある全セッションを並べる(選択中の
+      // ものだけではない)。選択中のセッションは強調表示する。
+      sessions.forEach((session, si) => {
+        const sessionNodeId = `session:${tab.profile_id}:${session.id}`;
+        const isSelected = session.id === tab.session_id;
         nodes.push({
           id: sessionNodeId,
           x: COL_X.session,
-          y,
+          y: ROW_START_Y + (profileRow + si) * ROW_HEIGHT,
           move: "will",
           label: {
-            text: (tab.session_title ?? tab.session_id).slice(0, 24),
-            fill: COLOR_MUTED,
+            text: session.title.slice(0, 24),
+            fill: isSelected ? COLOR_SUMI : COLOR_MUTED,
             font: { size: 12 },
           },
-          circle: { r: 20, fill: COLOR_PEARL, stroke: { color: COLOR_BORDER, width: 2 } },
+          circle: {
+            r: 20,
+            fill: isSelected ? COLOR_KYO_MURASAKI : COLOR_PEARL,
+            stroke: { color: isSelected ? COLOR_KYO_MURASAKI : COLOR_BORDER, width: 2 },
+          },
           kind: "session",
           windowLabel: w.label,
         });
@@ -112,9 +131,9 @@ function buildGraphData(windowStates: WindowStateDto[], profiles: ProfileSummary
           target: sessionNodeId,
           line: { width: 2, color: COLOR_BORDER },
         });
-      }
+      });
 
-      row += 1;
+      row += Math.max(sessions.length, 1);
     });
   });
 
@@ -155,7 +174,32 @@ function buildGraphData(windowStates: WindowStateDto[], profiles: ProfileSummary
 function HubPage() {
   const [windowStates, setWindowStates] = useState<WindowStateDto[]>([]);
   const [profiles, setProfiles] = useState<ProfileSummaryDto[]>([]);
+  const [sessionsByProfile, setSessionsByProfile] = useState<SessionsByProfile>({});
   const [error, setError] = useState<string | null>(null);
+
+  // 開いている(重複を除いた)プロファイルごとに、対象フォルダにある
+  // 全セッションを取得する。タブが選択中のセッションだけでなく、そのプロ
+  // ファイルの対象フォルダにある全セッションをグラフに出すため。
+  const loadSessionsForOpenProfiles = useCallback(
+    (states: WindowStateDto[]): Promise<SessionsByProfile> => {
+      const openProfileIds = Array.from(
+        new Set(states.flatMap((w) => w.tabs.map((t) => t.profile_id))),
+      );
+      return Promise.all(
+        openProfileIds.map((profileId) =>
+          getSettings(profileId)
+            .then((settings) =>
+              Promise.all(settings.selected_project_folders.map((folder) => listSessions(folder))),
+            )
+            .then((sessionsByFolder): [string, SessionSummaryDto[]] => [
+              profileId,
+              sessionsByFolder.flat(),
+            ]),
+        ),
+      ).then((entries) => Object.fromEntries(entries));
+    },
+    [],
+  );
 
   const load = useCallback((): Promise<void> => {
     return Promise.all([listWindowStates(), getSettings()])
@@ -163,9 +207,11 @@ function HubPage() {
         setWindowStates(states);
         setProfiles(settings.profiles);
         setError(null);
+        return loadSessionsForOpenProfiles(states);
       })
+      .then((sessions) => setSessionsByProfile(sessions))
       .catch((e) => setError(isAppError(e) ? e.message : String(e)));
-  }, []);
+  }, [loadSessionsForOpenProfiles]);
 
   useEffect(() => {
     load();
@@ -201,12 +247,12 @@ function HubPage() {
   // 抑制してしまい、この node.click コールバックが呼ばれない
   // (issue #84 のPRコメント参照)。ライブラリ本体の修正・バージョンアップ
   // 待ち。ここは修正後にそのまま動くよう、素直な形にしてある。
-  const dataKey = JSON.stringify({ windowStates, profiles });
+  const dataKey = JSON.stringify({ windowStates, profiles, sessionsByProfile });
   const rectum = useMemo(() => {
     const instance = new Rectum({
       callbacks: { node: { click: handleNodeClick } },
     });
-    instance.data(buildGraphData(windowStates, profiles));
+    instance.data(buildGraphData(windowStates, profiles, sessionsByProfile));
     return instance;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataKey, handleNodeClick]);
