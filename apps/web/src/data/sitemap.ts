@@ -3,7 +3,7 @@ import { COLOR_PALETTE } from "./uiDesign";
 
 const NODE_WIDTH = 220;
 const NODE_HEIGHT = 100;
-const COL = NODE_WIDTH + 100; // 列間隔
+const GAP_X = 100;
 const ROW = 260; // 階層間隔
 const sumi = COLOR_PALETTE.find((c) => c.name === "墨")!.hex;
 
@@ -21,14 +21,21 @@ type SitemapNode = {
   children: SitemapNode[];
 };
 
-function node(id: number, label: string, col: number, row: number): SitemapNode {
+function node(
+  id: number,
+  label: string,
+  x: number,
+  y: number,
+  size: { w: number; h: number } = { w: NODE_WIDTH, h: NODE_HEIGHT },
+  children: SitemapNode[] = [],
+): SitemapNode {
   return {
     type: "NODE",
     id,
     label: { contents: label, position: { x: 20, y: 20 } },
-    size: { w: NODE_WIDTH, h: NODE_HEIGHT },
-    position: { x: col * COL, y: row * ROW },
-    children: [],
+    size,
+    position: { x, y },
+    children,
   };
 }
 
@@ -41,72 +48,108 @@ function edge(id: number, fromId: number, toId: number) {
   };
 }
 
+// タブ切り替えはパスが変わらずクエリパラメータが変わるだけ(別ページへの遷移
+// ではない)ため、矢印で繋ぐ別ノードにはせず、ページのノードの children として
+// 内側に描画する。d3.sitemap の fitting() は children の position を
+// 親からの相対座標として親の絶対座標に加算し、親の size も children を
+// 包含するよう自動拡張するため、ここでは相対座標だけを与えればよい。
+const TAB_WIDTH = 140;
+const TAB_HEIGHT = 60;
+const TAB_GAP = 20;
+const TAB_PADDING_X = 30;
+const TAB_PADDING_TOP = 70; // ページ名ラベル分の余白
+
+function tabRow(startId: number, labels: string[]): SitemapNode[] {
+  return labels.map((label, index) =>
+    node(
+      startId + index,
+      label,
+      TAB_PADDING_X + index * (TAB_WIDTH + TAB_GAP),
+      TAB_PADDING_TOP,
+      { w: TAB_WIDTH, h: TAB_HEIGHT },
+    ),
+  );
+}
+
+// レイアウト(列位置の計算)専用。実際の描画サイズは fitting() が
+// children から自動算出するため、ノード自体の size には使わない。
+function tabRowWidth(tabCount: number) {
+  return TAB_PADDING_X + tabCount * TAB_WIDTH + (tabCount - 1) * TAB_GAP;
+}
+
 // ============ ネイティブアプリ: ページ ============
 const NATIVE_HUB_ID = 4; // / (ハブ)
 const NATIVE_PROFILES_ID = 5; // /profiles/:id? (ビューア)
 const NATIVE_SETTINGS_ID = 6; // /settings (設定)
 const NATIVE_CLAUDE_ID = 7; // /claude
 
-// /profiles/:id? の右ペインタブ
-const PROFILES_TABS = [
-  { id: 8, label: "会話" },
-  { id: 9, label: "GitHub Project" },
-  { id: 10, label: "CLAUDE.md" },
-  { id: 11, label: "Rules" },
-  { id: 12, label: "Skills" },
-  { id: 13, label: "settings.json" },
-  { id: 14, label: "settings.local.json" },
+// /profiles/:id? の右ペインタブ(id: 8-14)
+const PROFILES_TAB_LABELS = [
+  "会話",
+  "GitHub Project",
+  "CLAUDE.md",
+  "Rules",
+  "Skills",
+  "settings.json",
+  "settings.local.json",
 ];
+const PROFILES_TAB_FIRST_ID = 8;
+const PROFILES_WIDTH = tabRowWidth(PROFILES_TAB_LABELS.length);
 
-// /settings のタブ
-const SETTINGS_TABS = [
-  { id: 15, label: "対象リポジトリ" },
-  { id: 16, label: "GitHub" },
-  { id: 17, label: "Claude" },
-  { id: 18, label: "CLAUDE.md" },
-];
+// /settings のタブ(id: 15-18)
+const SETTINGS_TAB_LABELS = ["対象リポジトリ", "GitHub", "Claude", "CLAUDE.md"];
+const SETTINGS_TAB_FIRST_ID = 15;
+const SETTINGS_WIDTH = tabRowWidth(SETTINGS_TAB_LABELS.length);
 
 // Webアプリのページ(NAV_MENU_ITEMS から導出。メニューと自動同期する)
 const WEB_PAGE_FIRST_ID = 19;
 
-const PROFILES_TABS_COL_START = 1;
-const SETTINGS_TABS_COL_START = 8;
-const WEB_PAGES_COL_START = 13;
+// ============ ネイティブアプリの行レイアウト(左から順に配置) ============
+const NATIVE_HUB_X = 0;
+const NATIVE_PROFILES_X = NATIVE_HUB_X + NODE_WIDTH + GAP_X;
+const NATIVE_SETTINGS_X = NATIVE_PROFILES_X + PROFILES_WIDTH + GAP_X;
+const NATIVE_CLAUDE_X = NATIVE_SETTINGS_X + SETTINGS_WIDTH + GAP_X;
+const NATIVE_ROW_END_X = NATIVE_CLAUDE_X + NODE_WIDTH;
+const NATIVE_COL = (NATIVE_HUB_X + NATIVE_ROW_END_X) / 2;
 
-const centerOf = (start: number, count: number) => start + (count - 1) / 2;
-const NATIVE_COL = 6;
-const WEB_COL = centerOf(WEB_PAGES_COL_START, NAV_MENU_ITEMS.length);
+// ============ Webアプリの行レイアウト ============
+const WEB_ROW_START_X = NATIVE_ROW_END_X + GAP_X * 2;
+const WEB_COL =
+  WEB_ROW_START_X +
+  ((NAV_MENU_ITEMS.length - 1) * (NODE_WIDTH + GAP_X)) / 2;
 
 export const SITEMAP_DATA = {
   nodes: [
     node(ROOT_ID, "YAOYOROZU", (NATIVE_COL + WEB_COL) / 2, 0),
-    node(NATIVE_ID, "ネイティブアプリ", NATIVE_COL, 1),
-    node(WEB_ID, "Webアプリ", WEB_COL, 1),
+    node(NATIVE_ID, "ネイティブアプリ", NATIVE_COL, ROW),
+    node(WEB_ID, "Webアプリ", WEB_COL, ROW),
 
-    node(NATIVE_HUB_ID, "/", 0, 2),
+    node(NATIVE_HUB_ID, "/", NATIVE_HUB_X, ROW * 2),
     node(
       NATIVE_PROFILES_ID,
       "/profiles/:id?",
-      centerOf(PROFILES_TABS_COL_START, PROFILES_TABS.length),
-      2,
+      NATIVE_PROFILES_X,
+      ROW * 2,
+      { w: NODE_WIDTH, h: NODE_HEIGHT },
+      tabRow(PROFILES_TAB_FIRST_ID, PROFILES_TAB_LABELS),
     ),
     node(
       NATIVE_SETTINGS_ID,
       "/settings",
-      centerOf(SETTINGS_TABS_COL_START, SETTINGS_TABS.length),
-      2,
+      NATIVE_SETTINGS_X,
+      ROW * 2,
+      { w: NODE_WIDTH, h: NODE_HEIGHT },
+      tabRow(SETTINGS_TAB_FIRST_ID, SETTINGS_TAB_LABELS),
     ),
-    node(NATIVE_CLAUDE_ID, "/claude", 12, 2),
-
-    ...PROFILES_TABS.map((tab, index) =>
-      node(tab.id, tab.label, PROFILES_TABS_COL_START + index, 3),
-    ),
-    ...SETTINGS_TABS.map((tab, index) =>
-      node(tab.id, tab.label, SETTINGS_TABS_COL_START + index, 3),
-    ),
+    node(NATIVE_CLAUDE_ID, "/claude", NATIVE_CLAUDE_X, ROW * 2),
 
     ...NAV_MENU_ITEMS.map((item, index) =>
-      node(WEB_PAGE_FIRST_ID + index, item.label, WEB_PAGES_COL_START + index, 2),
+      node(
+        WEB_PAGE_FIRST_ID + index,
+        item.label,
+        WEB_ROW_START_X + index * (NODE_WIDTH + GAP_X),
+        ROW * 2,
+      ),
     ),
   ],
   edges: [
@@ -118,9 +161,6 @@ export const SITEMAP_DATA = {
     edge(104, NATIVE_ID, NATIVE_SETTINGS_ID),
     edge(105, NATIVE_ID, NATIVE_CLAUDE_ID),
 
-    ...PROFILES_TABS.map((tab, index) => edge(110 + index, NATIVE_PROFILES_ID, tab.id)),
-    ...SETTINGS_TABS.map((tab, index) => edge(120 + index, NATIVE_SETTINGS_ID, tab.id)),
-
     ...NAV_MENU_ITEMS.map((_, index) =>
       edge(130 + index, WEB_ID, WEB_PAGE_FIRST_ID + index),
     ),
@@ -128,12 +168,26 @@ export const SITEMAP_DATA = {
 };
 
 // d3.sitemap はズーム/パンを持たずコンテナのサイズそのままに描画するため、
-// 全ノードが収まる最小サイズを算出して SitemapTab 側でコンテナに反映する
-// (ブラウザの標準スクロールで全体を見られるようにするため)。
-export const SITEMAP_CANVAS_SIZE = SITEMAP_DATA.nodes.reduce(
-  (size, n) => ({
-    w: Math.max(size.w, n.position.x + n.size.w),
-    h: Math.max(size.h, n.position.y + n.size.h),
-  }),
-  { w: 0, h: 0 },
-);
+// 全ノード(children を含む。position は親からの相対座標なので絶対座標に
+// 変換しながら)が収まる最小サイズを算出し、SitemapTab 側でコンテナに
+// 反映する(ブラウザの標準スクロールで全体を見られるようにするため)。
+function extentOf(
+  nodes: SitemapNode[],
+  offsetX: number,
+  offsetY: number,
+): { w: number; h: number } {
+  return nodes.reduce(
+    (size, n) => {
+      const absX = offsetX + n.position.x;
+      const absY = offsetY + n.position.y;
+      const childSize = extentOf(n.children, absX, absY);
+      return {
+        w: Math.max(size.w, absX + n.size.w, childSize.w),
+        h: Math.max(size.h, absY + n.size.h, childSize.h),
+      };
+    },
+    { w: 0, h: 0 },
+  );
+}
+
+export const SITEMAP_CANVAS_SIZE = extentOf(SITEMAP_DATA.nodes, 0, 0);
