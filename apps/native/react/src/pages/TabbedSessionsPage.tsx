@@ -38,19 +38,19 @@ function newTab(profileId: string): Tab {
 // 破棄確認ガード(`usePageDockItems`/`usePageDirtyGuard`)がページ1つだけを
 // 前提にした既存の仕組みのまま使える。
 function TabbedSessionsPage() {
-  // `open_profile_window` で開かれたウィンドウは `?profile=<id>` を持つ
-  // (issue #76)。起動時のタブ復元(`Settings.open_tabs`)は行わない
-  // (issue #84: 起動時はハブのみが開き、ビューアはハブから常に単一
-  // プロファイルを指定して開かれるため)。
+  // `open_profile_window` で開かれたウィンドウは `/profiles/<id>` を持つ
+  // (issue #76。パスパラメータ化はissue #88)。起動時のタブ復元
+  // (`Settings.open_tabs`)は行わない(issue #84: 起動時はハブのみが開き、
+  // ビューアはハブから常に単一プロファイルを指定して開かれるため)。
   const initialProfileId = useWindowProfileId();
   const [tabs, setTabs] = useState<Tab[] | null>(null);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<ProfileSummaryDto[]>([]);
   const checkDirtyGuard = useDirtyGuardCheck();
 
-  // このウィンドウの最初のタブを用意する。URLに `?profile=` があればそれを
-  // 対象に、無ければアクティブプロファイルを対象にする(後者は通常
-  // 到達しない安全側のフォールバック)。
+  // このウィンドウの最初のタブを用意する。URLに `/profiles/<id>` があれば
+  // それを対象に、無ければ(`/profiles` のみ)アクティブプロファイルを
+  // 対象にする。
   useEffect(() => {
     getSettings()
       .then((settings) => {

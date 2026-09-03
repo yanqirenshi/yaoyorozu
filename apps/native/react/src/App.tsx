@@ -9,8 +9,8 @@ function App() {
   return (
     <Routes>
       <Route element={<Layout />}>
-        <Route path="/" element={<TabbedSessionsPage />} />
-        <Route path="/hub" element={<HubPage />} />
+        <Route path="/" element={<HubPage />} />
+        <Route path="/profiles/:profileId?" element={<TabbedSessionsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/claude" element={<ClaudePage />} />
       </Route>

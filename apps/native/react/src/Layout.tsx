@@ -13,25 +13,26 @@ import "./App.css";
 
 // OSウィンドウのタイトルバーに画面名を出す(ページ内の見出しは重複するため
 // 置かない)。tauri.conf.json の既定値("YAOYOROZU")へは設定画面以外で戻す。
-// メインウィンドウ(`?profile=`なし)の挙動はこのマップのみで決まり、
-// issue #76 での変更対象ではない(挙動不変)。
+// メインウィンドウ(プロファイル文脈なし)の挙動はこのマップのみで決まり、
+// issue #76 での変更対象ではない(挙動不変)。「/」(ハブ)はここに含めず
+// デフォルト値へフォールバックさせる(issue #88)。
 const WINDOW_TITLE_BY_PATH: Record<string, string> = {
   "/settings": "設定",
   "/claude": "Claude",
 };
 const DEFAULT_WINDOW_TITLE = "YAOYOROZU";
 
-// プロファイルを指定した別ウィンドウ(`?profile=`あり)のタイトルは
+// プロファイルを指定した別ウィンドウ(`/profiles/:id`)のタイトルは
 // 「<プロファイル名> - <ページ名>」にして、どのプロファイルのウィンドウかを
-// 区別できるようにする(issue #76)。新しいウィンドウは常にビューア(`/`)を
-// 開く(open_profile_window)ため実質「/」しか使わないが、念のため他の
-// パスも用意しておく。
-const PAGE_LABEL_BY_PATH: Record<string, string> = {
-  "/": "ビューア",
-  "/hub": "ハブ",
-  "/settings": "設定",
-  "/claude": "Claude",
-};
+// 区別できるようにする(issue #76)。新しいウィンドウは常にビューア
+// (`/profiles/<id>`。open_profile_window)を開く。`/profiles*` はパス
+// パラメータを含むため完全一致ではなくプレフィックス判定にする(issue #88)。
+function pageLabelForPath(pathname: string): string {
+  if (pathname === "/settings") return "設定";
+  if (pathname === "/claude") return "Claude";
+  if (pathname === "/profiles" || pathname.startsWith("/profiles/")) return "ビューア";
+  return DEFAULT_WINDOW_TITLE;
+}
 
 // AppDock(グローバルメニュー)は全画面共通のためレイアウト側に置く
 // (native.md §6)。画面遷移用の項目は常設、ページ固有の項目(再読み込み等)は
@@ -66,7 +67,7 @@ function Layout() {
       ? profiles.find((p) => p.id === windowProfileId)?.name
       : null;
     const title = profileName
-      ? `${profileName} - ${PAGE_LABEL_BY_PATH[location.pathname] ?? DEFAULT_WINDOW_TITLE}`
+      ? `${profileName} - ${pageLabelForPath(location.pathname)}`
       : (WINDOW_TITLE_BY_PATH[location.pathname] ?? DEFAULT_WINDOW_TITLE);
     void getCurrentWindow().setTitle(title);
   }, [location.pathname, windowProfileId, profiles]);
@@ -98,21 +99,22 @@ function Layout() {
     // は自分自身のビューアへ戻るトリガーを、無いウィンドウ(メイン)は
     // ハブへ戻るトリガーを出す(issue #84: メインウィンドウはハブが起点で
     // あり、ビューアはハブから開いた別ウィンドウが担う)。
+    const onViewerRoute = location.pathname === "/profiles" || location.pathname.startsWith("/profiles/");
     if (windowProfileId) {
-      if (location.pathname !== "/") {
+      if (!onViewerRoute) {
         items.push({
           id: "nav-sessions",
           label: VIEWER_ICON,
           title: "ビューア",
-          onClick: () => navigate(`/?profile=${encodeURIComponent(windowProfileId)}`),
+          onClick: () => navigate(`/profiles/${encodeURIComponent(windowProfileId)}`),
         });
       }
-    } else if (location.pathname !== "/hub") {
+    } else if (location.pathname !== "/") {
       items.push({
         id: "nav-hub",
         label: VIEWER_ICON,
         title: "ハブ",
-        onClick: () => navigate("/hub"),
+        onClick: () => navigate("/"),
       });
     }
     if (location.pathname !== "/settings") {

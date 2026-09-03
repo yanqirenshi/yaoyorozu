@@ -372,8 +372,8 @@ async fn save_open_tabs(
 /// Phase 1。issue #76)。ウィンドウ生成はRust側で行う(JSからのウィンドウ
 /// 生成に capability を追加せずに済ませ、権限を最小に保つため。native.md
 /// §4)。同じプロファイルを複数ウィンドウで開けるよう、ラベルは毎回一意に
-/// 生成する。URLのクエリ `?profile=<id>` がそのウィンドウの対象プロファイルを
-/// 表す(フロントは `useWindowProfileId` で読む)。
+/// 生成する。URLのパスパラメータ `/profiles/<id>` がそのウィンドウの対象
+/// プロファイルを表す(フロントは `useWindowProfileId` で読む。issue #88)。
 #[tauri::command]
 async fn open_profile_window(
     app: tauri::AppHandle,
@@ -388,7 +388,7 @@ async fn open_profile_window(
     };
 
     let label = format!("profile-{}", uuid::Uuid::new_v4());
-    let url = tauri::WebviewUrl::App(format!("index.html#/?profile={profile_id}").into());
+    let url = tauri::WebviewUrl::App(format!("index.html#/profiles/{profile_id}").into());
     tauri::WebviewWindowBuilder::new(&app, label, url)
         .title(format!("{profile_name} - ビューア"))
         .inner_size(800.0, 600.0)
