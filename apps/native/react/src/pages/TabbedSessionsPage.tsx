@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import { getSettings, onSettingsUpdated, saveOpenTabs } from "../api";
+import { getSettings, onSettingsUpdated } from "../api";
 import type { ProfileSummaryDto, WindowTabDto } from "../api";
 import { useDirtyGuardCheck } from "../DockItemsContext";
 import TabBar from "../TabBar";
 import { useReportWindowState } from "../useReportWindowState";
+import { useWindowProfileId } from "../useWindowProfileId";
 import { useTabViewerNav } from "../viewerNav";
 import type { TabPosition } from "../viewerNav";
 import SessionsPage from "./SessionsPage";
@@ -27,42 +28,45 @@ function newTab(profileId: string): Tab {
   };
 }
 
-// メインウィンドウのビューア(`/`)相当の内容をタブ化する(マルチウィンドウ
-// Phase 2。issue #77)。1つのタブ = 「プロファイル+画面状態」の組。実際に
-// マウントするのはアクティブなタブぶんの `SessionsPage` 1つだけで、タブを
-// 切り替えるたびに `key` を変えて作り直す(= その他のタブの画面状態は
-// SessionsPage 内部の state ではなく、このコンポーネントが持つ `tabs`
-// 配列側に置く。native.md §6)。これにより非アクティブなタブは常に
-// アンマウント状態になり、dock 項目・破棄確認ガード(`usePageDockItems`/
-// `usePageDirtyGuard`)がページ1つだけを前提にした既存の仕組みのまま使える。
+// あらゆるビューアウィンドウ(ハブから開いたウィンドウ含む。issue #84)の
+// `/` の内容をタブ化する(マルチウィンドウ Phase 2。issue #77)。1つのタブ
+// = 「プロファイル+画面状態」の組。実際にマウントするのはアクティブな
+// タブぶんの `SessionsPage` 1つだけで、タブを切り替えるたびに `key` を
+// 変えて作り直す(= その他のタブの画面状態は SessionsPage 内部の state
+// ではなく、このコンポーネントが持つ `tabs` 配列側に置く。native.md §6)。
+// これにより非アクティブなタブは常にアンマウント状態になり、dock 項目・
+// 破棄確認ガード(`usePageDockItems`/`usePageDirtyGuard`)がページ1つだけを
+// 前提にした既存の仕組みのまま使える。
 function TabbedSessionsPage() {
+  // `open_profile_window` で開かれたウィンドウは `?profile=<id>` を持つ
+  // (issue #76)。起動時のタブ復元(`Settings.open_tabs`)は行わない
+  // (issue #84: 起動時はハブのみが開き、ビューアはハブから常に単一
+  // プロファイルを指定して開かれるため)。
+  const initialProfileId = useWindowProfileId();
   const [tabs, setTabs] = useState<Tab[] | null>(null);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<ProfileSummaryDto[]>([]);
   const checkDirtyGuard = useDirtyGuardCheck();
 
-  // 起動時、保存されていたタブの一覧(プロファイルIDのみ。issue #77)を
-  // 復元する。既に削除されたプロファイルを指すタブは除外し、全て除外されて
-  // 何も残らなければアクティブプロファイル1件のタブから始める。
+  // このウィンドウの最初のタブを用意する。URLに `?profile=` があればそれを
+  // 対象に、無ければアクティブプロファイルを対象にする(後者は通常
+  // 到達しない安全側のフォールバック)。
   useEffect(() => {
     getSettings()
       .then((settings) => {
         setProfiles(settings.profiles);
-        const knownIds = new Set(settings.profiles.map((p) => p.id));
-        const restored = settings.open_tabs
-          .filter((t) => knownIds.has(t.profile_id))
-          .map((t) => newTab(t.profile_id));
-        const initial = restored.length > 0 ? restored : [newTab(settings.active_profile_id)];
-        setTabs(initial);
-        setActiveTabId(initial[0].id);
+        const tab = newTab(initialProfileId ?? settings.active_profile_id);
+        setTabs([tab]);
+        setActiveTabId(tab.id);
       })
       .catch((e) => console.error(e));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // プロファイル一覧は他画面(設定・dock)での追加・削除・名前変更にも
   // 追従させる(タブ追加メニュー・ラベル表示に使うため)。削除された
   // プロファイルを指すタブがあれば取り除く(Phase 1 のウィンドウ自動クローズ
-  // と同じ考え方)。
+  // と同じ考え方だが、ウィンドウ全体ではなくそのタブだけを閉じる)。
   useEffect(() => {
     const unlistenPromise = onSettingsUpdated(() => {
       getSettings()
@@ -91,16 +95,6 @@ function TabbedSessionsPage() {
       setActiveTabId(tabs[0]?.id ?? null);
     }
   }, [tabs, activeTabId]);
-
-  // 開いているタブの組み合わせ(プロファイルID・順序)が変わったときだけ
-  // 永続化する。タブ内の画面状態(選択中セッション等)は保存対象外
-  // (native.md §6)なので、位置更新のたびには保存しない。
-  const openProfileIdsKey = tabs ? tabs.map((t) => t.profileId).join(",") : null;
-  useEffect(() => {
-    if (openProfileIdsKey === null) return;
-    const ids = openProfileIdsKey === "" ? [] : openProfileIdsKey.split(",");
-    saveOpenTabs(ids).catch((e) => console.error(e));
-  }, [openProfileIdsKey]);
 
   const switchTab = (tabId: string) => {
     if (tabId === activeTabId) return;
