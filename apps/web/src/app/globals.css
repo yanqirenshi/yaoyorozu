@@ -15,15 +15,14 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+/* ダークテーマは基本デザイン(/ui)で未定義のため、配色を切り替えない。
+   定義するまでは MUI テーマ(ライト)と body の配色が食い違わない状態を保つ。 */
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  /* uiTypography.ts の font.sans と同じスタック。 */
+  font-family:
+    var(--font-geist-sans), "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI",
+    Meiryo, sans-serif;
 }
