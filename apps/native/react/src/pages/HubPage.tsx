@@ -38,9 +38,10 @@ type HubNodeCore = {
 // このマシン上で開いているウィンドウ・プロファイル・セッションの状態から、
 // PC → profile → session の階層グラフ(d3.network 用ノード・エッジ)を
 // 組み立てる。座標は左→右の3列固定レイアウトを初期位置として自前計算する
-// (issue #84。d3.network はノードに x/y が必須)。「このPC」ノードだけ
-// `move: "freeze"` で固定し、他のノードは `move: "will"` でforce
-// シミュレーションに委ね、ユーザーがドラッグで動かせるようにする。
+// (issue #84。d3.network はノードに x/y が必須)。「このPC」ノードは
+// `move: "freeze"` で固定、profileノードは `move: "support"`、session
+// ノードは `move: "will"` でforceシミュレーションに委ね、ユーザーが
+// ドラッグで動かせるようにする。
 function buildGraphData(windowStates: WindowStateDto[], profiles: ProfileSummaryDto[]) {
   const nodes: Record<string, unknown>[] = [];
   const edges: Record<string, unknown>[] = [];
@@ -72,7 +73,7 @@ function buildGraphData(windowStates: WindowStateDto[], profiles: ProfileSummary
         id: profileNodeId,
         x: COL_X.profile,
         y,
-        move: "will",
+        move: "support",
         label: { text: profileName, fill: COLOR_SUMI, font: { size: 13 } },
         circle: {
           r: 26,
@@ -127,7 +128,7 @@ function buildGraphData(windowStates: WindowStateDto[], profiles: ProfileSummary
         id: nodeId,
         x: COL_X.profile,
         y: ROW_START_Y + row * ROW_HEIGHT,
-        move: "will",
+        move: "support",
         label: { text: p.name, fill: COLOR_MUTED, font: { size: 13 } },
         circle: { r: 22, fill: COLOR_PEARL, stroke: { color: COLOR_BORDER, width: 2 } },
         kind: "profile-unopened",
