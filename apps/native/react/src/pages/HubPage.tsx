@@ -39,10 +39,9 @@ type HubNodeCore = {
 // PC → profile → session の階層グラフ(d3.network 用ノード・エッジ)を
 // 組み立てる。座標は左→右の3列固定レイアウトを初期位置として自前計算する
 // (issue #84。d3.network はノードに x/y が必須)。「このPC」ノードは
-// `move: "freeze"` で固定、profile/sessionノードは `move: "support"` で
-// 初期位置に留めつつユーザーがドラッグで動かせるようにする(`"will"` は
-// forceシミュレーションに完全に委ねてしまい、リンク先の近くへ寄って重なり
-// 見えなくなることがあるため使わない)。
+// `move: "freeze"` で固定、profileノードは `move: "support"` で初期位置に
+// 留めつつユーザーがドラッグで動かせるようにし、sessionノードは
+// `move: "will"` でforceシミュレーションに委ねる。
 function buildGraphData(windowStates: WindowStateDto[], profiles: ProfileSummaryDto[]) {
   const nodes: Record<string, unknown>[] = [];
   const edges: Record<string, unknown>[] = [];
@@ -97,7 +96,7 @@ function buildGraphData(windowStates: WindowStateDto[], profiles: ProfileSummary
           id: sessionNodeId,
           x: COL_X.session,
           y,
-          move: "support",
+          move: "will",
           label: {
             text: (tab.session_title ?? tab.session_id).slice(0, 24),
             fill: COLOR_MUTED,
@@ -193,8 +192,9 @@ function HubPage() {
   // Rectum(命令的API)は useMemo で生成する(apps/web の d3系タブと同じ
   // 流儀)。データが変わるたびに作り直す — d3.network はドラッグ以外の座標
   // 変更を追跡する仕組みを持たないため、再生成して確実に最新のグラフを
-  // 描き直す(再生成のたびに各ノードは初期位置(`move: "support"`)へ
-  // 戻るため、ユーザーがドラッグした位置はリセットされる)。
+  // 描き直す(再生成のたびに、`move: "support"` のprofileノードは初期位置へ
+  // 戻り、`move: "will"` のsessionノードはforceシミュレーションで再配置
+  // されるため、ユーザーがドラッグした位置はリセットされる)。
   const dataKey = JSON.stringify({ windowStates, profiles });
   const rectum = useMemo(() => {
     const instance = new Rectum({
