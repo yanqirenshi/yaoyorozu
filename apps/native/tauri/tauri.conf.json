@@ -15,8 +15,7 @@
         "title": "YAOYOROZU",
         "width": 960,
         "height": 640,
-        "dragDropEnabled": false,
-        "url": "index.html#/hub"
+        "dragDropEnabled": false
       }
     ],
     "security": {
