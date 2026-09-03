@@ -61,15 +61,9 @@ export type ProfileSummaryDto = {
   name: string;
 };
 
-// 開いているタブ1件分の、復元用の最小限のスナップショット(issue #77)。
-export type TabStateDto = {
-  profile_id: string;
-};
-
 export type SettingsDto = {
   active_profile_id: string;
   profiles: ProfileSummaryDto[];
-  open_tabs: TabStateDto[];
   repository_path: string | null;
   github_project: GithubProjectDto | null;
   selected_project_folders: string[];
