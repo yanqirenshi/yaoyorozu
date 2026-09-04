@@ -38,7 +38,7 @@ const LAYERS = [
     fill: tone("墨", 100),
   },
   {
-    label: "中間組立品",
+    label: "中間品",
     note: "props だけで動く",
     fill: tone("墨", 50),
   },
@@ -58,7 +58,7 @@ const SECTIONS: DocSection[] = [
       <>
         <Para>
           レイアウト(ページ・フレーム)は、コンポーネントの階層の上2段にあたる。
-          下の3段(製品・中間組立品・部品)が中身であり、レイアウトはそれを置く器である。
+          下の3段(製品・中間品・部品)が中身であり、レイアウトはそれを置く器である。
         </Para>
         <Sample surface="base" caption="上から下へ、大きいものから小さいものへ。">
           <div className="flex flex-col gap-2">
@@ -92,7 +92,7 @@ const SECTIONS: DocSection[] = [
         </Sample>
         <Para>
           この階層の意味は「データを取得してよいのは製品だけ」という1本の線にある。
-          中間組立品と部品は props だけで描画できるため、実データがなくてもカタログに並べられる。
+          中間品と部品は props だけで描画できるため、実データがなくてもカタログに並べられる。
         </Para>
       </>
     ),

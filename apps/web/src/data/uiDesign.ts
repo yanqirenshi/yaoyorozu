@@ -444,7 +444,7 @@ export const SEMANTIC_COLORS: SemanticColor[] = [
 /**
  * /ui のナビゲーション。
  *
- * コンポーネントは「レイアウト(構造)→ パーツ(製品 → 中間組立品 → 部品)」の順に並べ、
+ * コンポーネントは「レイアウト(構造)→ パーツ(製品 → 中間品 → 部品)」の順に並べ、
  * 上から読むと大きいものから小さいものへ下りるようにしている。
  * 「製品」はコンポーネントの最上位層を指し、YAOYOROZU というプロダクト自体のことではない。
  */
@@ -462,7 +462,7 @@ export const COMPONENT_NAV: NavItem[] = [
     label: "パーツ",
     children: [
       { key: "products", label: "製品" },
-      { key: "subassembly", label: "中間組立品" },
+      { key: "subassembly", label: "中間品" },
       { key: "part", label: "部品" },
     ],
   },
