@@ -1,11 +1,15 @@
+/* デザイントークン(scripts/generate-tokens.ts の生成物。issue #93)。
+   配色のソースオブトゥルースは apps/web/src/data/ui*.ts。 */
+@import "./tokens.css";
+
 :root {
   font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
   font-size: 16px;
   line-height: 24px;
   font-weight: 400;
 
-  color: #373737;
-  background-color: #fbfbf8;
+  color: var(--text-primary);
+  background-color: var(--surface-base);
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -14,32 +18,32 @@
   -webkit-text-size-adjust: 100%;
 
   /* command-dock テーマ契約(既存の伝統色パレットに合わせる) */
-  --dock-bg: #fbfbf8;
-  --dock-fg: #373737;
-  --dock-border: #a1a1aa;
-  --dock-accent: #9d5b8b;
+  --dock-bg: var(--surface-base);
+  --dock-fg: var(--text-primary);
+  --dock-border: var(--border-default);
+  --dock-accent: var(--color-primary);
 
   /* markdown.sitter テーマ契約(伝統色パレットに合わせる。issue #57) */
-  --md-bg: #fbfbf8;
-  --md-fg: #373737;
-  --md-fg-muted: #737373;
-  --md-border: #a1a1aa;
-  --md-link: #9d5b8b;
-  --md-link-hover: #7a4570;
-  --md-heading-fg: #9d5b8b;
-  --md-code-bg: rgba(157, 91, 139, 0.08);
-  --md-quote-bg: rgba(157, 91, 139, 0.06);
+  --md-bg: var(--surface-base);
+  --md-fg: var(--text-primary);
+  --md-fg-muted: var(--text-secondary);
+  --md-border: var(--border-default);
+  --md-link: var(--color-primary);
+  --md-link-hover: var(--link-default);
+  --md-heading-fg: var(--color-primary);
+  --md-code-bg: var(--state-hover);
+  --md-quote-bg: color-mix(in srgb, var(--color-primary) 6%, transparent);
   --md-mono-font: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   /* 下端はdock(画面下部に浮くフローティングツールバー)と重なるため、
      余白を残す(issue #59)。 */
   --md-padding: 0 0 222px 0;
   --md-max-width: none;
-  --md-editor-bg: #fbfbf8;
-  --md-editor-fg: #373737;
+  --md-editor-bg: var(--surface-base);
+  --md-editor-fg: var(--text-primary);
   --md-editor-padding: 0 0 222px 0;
   --md-editor-font-size: 0.9rem;
-  --md-resizer-bg: #a1a1aa;
-  --md-resizer-active-bg: #9d5b8b;
+  --md-resizer-bg: var(--border-default);
+  --md-resizer-active-bg: var(--color-primary);
 }
 
 html,
@@ -54,7 +58,7 @@ body,
   position: relative;
   display: flex;
   height: 100vh;
-  border: 1px solid #a1a1aa;
+  border: 1px solid var(--border-default);
   box-sizing: border-box;
   overflow-x: hidden;
 }
@@ -80,7 +84,7 @@ body,
 .settings-profile-pane {
   width: 320px;
   flex-shrink: 0;
-  border-right: 1px solid #a1a1aa;
+  border-right: 1px solid var(--border-default);
   overflow-y: auto;
   padding: 16px;
   display: flex;
@@ -110,7 +114,7 @@ body,
 .session-group-heading {
   font-size: 0.85rem;
   font-weight: 400;
-  color: #737373;
+  color: var(--text-secondary);
   margin: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -118,12 +122,12 @@ body,
 }
 
 .session-group-heading-prefix {
-  color: #a1a1aa;
+  color: var(--border-default);
 }
 
 .session-group-empty {
   font-size: 0.85rem;
-  color: #737373;
+  color: var(--text-secondary);
   margin: 0;
 }
 
@@ -134,10 +138,10 @@ body,
   width: 100%;
   box-sizing: border-box;
   text-align: left;
-  border: 1px solid #a1a1aa;
+  border: 1px solid var(--border-default);
   border-radius: 4px;
-  background: #fbfbf8;
-  color: #373737;
+  background: var(--surface-base);
+  color: var(--text-primary);
   padding: 10px 14px;
   font-size: 0.95rem;
   font-family: inherit;
@@ -153,16 +157,16 @@ body,
 
 .session-item-updated {
   font-size: 0.75rem;
-  color: #737373;
+  color: var(--text-secondary);
 }
 
 .project-item:hover {
-  background-color: rgba(157, 91, 139, 0.08);
+  background-color: var(--state-hover);
 }
 
 .project-item.selected {
-  background-color: rgba(157, 91, 139, 0.16);
-  border-color: #9d5b8b;
+  background-color: color-mix(in srgb, var(--color-primary) 16%, transparent);
+  border-color: var(--color-primary);
   font-weight: 600;
 }
 
@@ -177,7 +181,7 @@ body,
   display: flex;
   gap: 4px;
   padding: 8px 16px 0;
-  border-bottom: 1px solid #a1a1aa;
+  border-bottom: 1px solid var(--border-default);
   /* タブの本数が幅に収まらない場合は折り返さず横スクロールさせる
      (issue #79。他のペイン同様、overflow-x はペイン自身が管理する)。 */
   overflow-x: auto;
@@ -188,7 +192,7 @@ body,
   background: none;
   font-family: inherit;
   font-size: 0.9rem;
-  color: #737373;
+  color: var(--text-secondary);
   padding: 8px 12px;
   cursor: pointer;
   border-bottom: 2px solid transparent;
@@ -204,12 +208,12 @@ body,
 }
 
 .pane-tab:hover {
-  color: #373737;
+  color: var(--text-primary);
 }
 
 .pane-tab.active {
-  color: #9d5b8b;
-  border-bottom-color: #9d5b8b;
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
   font-weight: 600;
 }
 
@@ -233,7 +237,7 @@ body,
   flex: 1;
   min-height: 0;
   min-width: 0;
-  border: 1px solid #a1a1aa;
+  border: 1px solid var(--border-default);
   border-radius: 4px;
   overflow: hidden;
 }
@@ -253,7 +257,7 @@ body,
   flex-shrink: 0;
   min-height: 0;
   overflow-y: auto;
-  border-right: 1px solid #a1a1aa;
+  border-right: 1px solid var(--border-default);
   padding: 16px;
   display: flex;
   flex-direction: column;
@@ -267,10 +271,10 @@ body,
   width: 100%;
   box-sizing: border-box;
   text-align: left;
-  border: 1px solid #a1a1aa;
+  border: 1px solid var(--border-default);
   border-radius: 4px;
-  background: #fbfbf8;
-  color: #373737;
+  background: var(--surface-base);
+  color: var(--text-primary);
   padding: 10px 14px;
   font-size: 0.95rem;
   font-family: inherit;
@@ -278,12 +282,12 @@ body,
 }
 
 .file-list-item:hover {
-  background-color: rgba(157, 91, 139, 0.08);
+  background-color: var(--state-hover);
 }
 
 .file-list-item.selected {
-  background-color: rgba(157, 91, 139, 0.16);
-  border-color: #9d5b8b;
+  background-color: color-mix(in srgb, var(--color-primary) 16%, transparent);
+  border-color: var(--color-primary);
   font-weight: 600;
 }
 
@@ -295,7 +299,7 @@ body,
 
 .file-list-item-updated {
   font-size: 0.75rem;
-  color: #737373;
+  color: var(--text-secondary);
 }
 
 .file-content-pane {
@@ -341,10 +345,10 @@ body,
   font-size: 0.9rem;
   line-height: 1.5;
   padding: 12px;
-  border: 1px solid #a1a1aa;
+  border: 1px solid var(--border-default);
   border-radius: 4px;
-  background: #fbfbf8;
-  color: #373737;
+  background: var(--surface-base);
+  color: var(--text-primary);
 }
 
 .github-project-pane {
@@ -378,22 +382,22 @@ body,
   flex-direction: column;
   gap: 8px;
   min-height: 0;
-  border: 1px solid #d4d4d4;
+  border: 1px solid var(--border-default);
   border-radius: 6px;
-  background: #efefe9;
+  background: var(--color-sumi-100);
   padding: 10px;
 }
 
 .kanban-column.is-drop-target {
-  border-color: #9d5b8b;
-  background: rgba(157, 91, 139, 0.1);
+  border-color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 10%, transparent);
 }
 
 .kanban-column-heading {
   font-size: 0.9rem;
   font-weight: 600;
   margin: 0;
-  color: #373737;
+  color: var(--text-primary);
   display: flex;
   justify-content: space-between;
   align-items: baseline;
@@ -402,7 +406,7 @@ body,
 .kanban-column-count {
   font-size: 0.75rem;
   font-weight: 400;
-  color: #737373;
+  color: var(--text-secondary);
 }
 
 .kanban-column-body {
@@ -421,10 +425,10 @@ body,
   width: 100%;
   box-sizing: border-box;
   text-align: left;
-  border: 1px solid #a1a1aa;
+  border: 1px solid var(--border-default);
   border-radius: 4px;
-  background: #fbfbf8;
-  color: #373737;
+  background: var(--surface-base);
+  color: var(--text-primary);
   padding: 10px 14px;
   font-size: 0.95rem;
   font-family: inherit;
@@ -432,7 +436,7 @@ body,
 }
 
 .project-item-card:hover {
-  background-color: rgba(157, 91, 139, 0.08);
+  background-color: var(--state-hover);
 }
 
 .project-item-card.is-busy {
@@ -449,7 +453,7 @@ body,
 
 .project-item-meta {
   font-size: 0.75rem;
-  color: #737373;
+  color: var(--text-secondary);
 }
 
 .settings-page {
@@ -484,9 +488,9 @@ body,
   z-index: 10;
   margin: 0;
   padding: 10px 24px;
-  color: #b3261e;
-  background-color: rgba(179, 38, 30, 0.08);
-  border-bottom: 1px solid #b3261e;
+  color: var(--semantic-error-fg);
+  background-color: var(--semantic-error-bg);
+  border-bottom: 1px solid var(--semantic-error-border);
 }
 
 .settings-form {
@@ -514,7 +518,7 @@ body,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #6b7280;
+  color: var(--text-placeholder);
 }
 
 .settings-field {
@@ -522,20 +526,20 @@ body,
   flex-direction: column;
   gap: 4px;
   font-size: 0.85rem;
-  color: #6b7280;
+  color: var(--text-placeholder);
   margin-bottom: 12px;
 }
 
 .settings-field input,
 .settings-field select {
   box-sizing: border-box;
-  border: 1px solid #a1a1aa;
+  border: 1px solid var(--border-default);
   border-radius: 4px;
   padding: 8px 12px;
   font-size: 0.95rem;
   font-family: inherit;
-  color: #373737;
-  background: #fbfbf8;
+  color: var(--text-primary);
+  background: var(--surface-base);
 }
 
 .settings-github-auth {
@@ -567,22 +571,22 @@ body,
   gap: 10px;
   width: 100%;
   box-sizing: border-box;
-  border: 1px solid #a1a1aa;
+  border: 1px solid var(--border-default);
   border-radius: 4px;
-  background: #fbfbf8;
-  color: #373737;
+  background: var(--surface-base);
+  color: var(--text-primary);
   padding: 10px 14px;
   font-size: 0.9rem;
   cursor: pointer;
 }
 
 .settings-folder-item:hover {
-  background-color: rgba(157, 91, 139, 0.08);
+  background-color: var(--state-hover);
 }
 
 .settings-folder-item.selected {
-  background-color: rgba(157, 91, 139, 0.16);
-  border-color: #9d5b8b;
+  background-color: color-mix(in srgb, var(--color-primary) 16%, transparent);
+  border-color: var(--color-primary);
   font-weight: 600;
 }
 
@@ -607,10 +611,10 @@ body,
 .settings-profile-rename-input {
   width: 100%;
   box-sizing: border-box;
-  border: 1px solid #9d5b8b;
+  border: 1px solid var(--color-primary);
   border-radius: 4px;
-  background: #fbfbf8;
-  color: #373737;
+  background: var(--surface-base);
+  color: var(--text-primary);
   padding: 10px 14px;
   font-size: 0.95rem;
   font-family: inherit;
@@ -634,10 +638,10 @@ body,
   flex: 1;
   min-width: 0;
   box-sizing: border-box;
-  border: 1px solid #a1a1aa;
+  border: 1px solid var(--border-default);
   border-radius: 4px;
-  background: #fbfbf8;
-  color: #373737;
+  background: var(--surface-base);
+  color: var(--text-primary);
   padding: 8px 12px;
   font-size: 0.9rem;
   font-family: inherit;
@@ -645,13 +649,13 @@ body,
 
 .settings-save {
   align-self: flex-start;
-  border: 1px solid #9d5b8b;
+  border: 1px solid var(--color-primary);
   border-radius: 4px;
   padding: 8px 20px;
   font-size: 0.95rem;
   font-family: inherit;
-  color: #fbfbf8;
-  background-color: #9d5b8b;
+  color: var(--surface-base);
+  background-color: var(--color-primary);
   cursor: pointer;
 }
 
@@ -661,7 +665,7 @@ body,
 }
 
 .settings-saved {
-  color: #2e7d32;
+  color: var(--semantic-success-fg);
 }
 
 .message-form {
@@ -669,7 +673,7 @@ body,
   display: flex;
   gap: 8px;
   padding: 12px 24px;
-  border-bottom: 1px solid #a1a1aa;
+  border-bottom: 1px solid var(--border-default);
 }
 
 .message-form-notice {
@@ -677,21 +681,21 @@ body,
   margin: 0;
   padding: 6px 24px;
   font-size: 0.85rem;
-  color: #737373;
-  border-bottom: 1px solid #a1a1aa;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-default);
 }
 
 .message-input {
   flex: 1;
   min-width: 0;
   box-sizing: border-box;
-  border: 1px solid #a1a1aa;
+  border: 1px solid var(--border-default);
   border-radius: 4px;
   padding: 8px 12px;
   font-size: 0.95rem;
   font-family: inherit;
-  color: #373737;
-  background: #fbfbf8;
+  color: var(--text-primary);
+  background: var(--surface-base);
 }
 
 .message-input:disabled {
@@ -700,13 +704,13 @@ body,
 
 .message-send {
   flex-shrink: 0;
-  border: 1px solid #9d5b8b;
+  border: 1px solid var(--color-primary);
   border-radius: 4px;
   padding: 8px 16px;
   font-size: 0.95rem;
   font-family: inherit;
-  color: #fbfbf8;
-  background-color: #9d5b8b;
+  color: var(--surface-base);
+  background-color: var(--color-primary);
   cursor: pointer;
 }
 
@@ -723,7 +727,7 @@ body,
 }
 
 .error {
-  color: #b3261e;
+  color: var(--semantic-error-fg);
 }
 
 .messages {
@@ -735,13 +739,13 @@ body,
 .load-more {
   display: block;
   margin: 16px auto 0;
-  border: 1px solid #a1a1aa;
+  border: 1px solid var(--border-default);
   border-radius: 4px;
   padding: 8px 16px;
   font-size: 0.9rem;
   font-family: inherit;
-  color: #373737;
-  background: #fbfbf8;
+  color: var(--text-primary);
+  background: var(--surface-base);
   cursor: pointer;
 }
 
@@ -781,6 +785,8 @@ body,
   padding-left: 1.4em;
 }
 
+/* コード表示の網掛けはブランドカラーではなく中立な黒の薄いオーバーレイと
+   するため、意図的にトークンを使わずリテラルのまま残す(issue #93)。 */
 .message-text code {
   background-color: rgba(0, 0, 0, 0.06);
   border-radius: 3px;
@@ -802,24 +808,24 @@ body,
 }
 
 .message-text blockquote {
-  border-left: 3px solid #a1a1aa;
+  border-left: 3px solid var(--border-default);
   margin-left: 0;
   padding-left: 12px;
-  color: #6b7280;
+  color: var(--text-placeholder);
 }
 
 .message-text a {
-  color: #9d5b8b;
+  color: var(--color-primary);
 }
 
 .message-user {
   align-self: flex-start;
-  background-color: rgba(206, 122, 25, 0.1);
+  background-color: color-mix(in srgb, var(--color-secondary) 10%, transparent);
 }
 
 .message-assistant {
   align-self: flex-end;
   width: 77%;
   max-width: 77%;
-  background-color: rgba(157, 91, 139, 0.08);
+  background-color: var(--state-hover);
 }
