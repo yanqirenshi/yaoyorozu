@@ -1,28 +1,20 @@
 @import "tailwindcss";
 @import "bulma/css/bulma.min.css";
-
-:root {
-  /* COLOR_PALETTE(src/data/uiDesign.ts)の 真珠(#fbfbf8) / 墨(#373737) 由来。
-     CSS から TS の値を直接参照できないための値の重複であり、変更時は両方を揃えること。 */
-  --background: #fbfbf8;
-  --foreground: #373737;
-}
+/* デザイントークン(:root のカスタムプロパティ)。scripts/generate-tokens.ts が生成する。 */
+@import "./tokens.css";
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-background: var(--surface-base);
+  --color-foreground: var(--text-primary);
+  --font-sans: var(--font-family-sans);
+  --font-mono: var(--font-family-mono);
 }
 
 /* ダークテーマは基本デザイン(/ui)で未定義のため、配色を切り替えない。
    定義するまでは MUI テーマ(ライト)と body の配色が食い違わない状態を保つ。 */
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  /* uiTypography.ts の font.sans と同じスタック。 */
-  font-family:
-    var(--font-geist-sans), "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI",
-    Meiryo, sans-serif;
+  background: var(--surface-base);
+  color: var(--text-primary);
+  font-family: var(--font-family-sans);
 }

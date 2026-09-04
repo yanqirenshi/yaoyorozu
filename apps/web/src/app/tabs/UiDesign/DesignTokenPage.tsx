@@ -4,6 +4,8 @@ import Box from "@mui/material/Box";
 import {
   TOKEN_ANATOMY,
   TOKEN_LAYERS,
+  TOKEN_NAMING,
+  TOKEN_OUTPUTS,
   TOKEN_SCOPE,
 } from "@/data/uiDesignToken";
 import { KEY_COLORS, tone } from "@/data/uiDesign";
@@ -251,6 +253,85 @@ const SECTIONS: DocSection[] = [
     ),
   },
   {
+    id: "token-css",
+    title: "CSS カスタムプロパティとして配る",
+    body: (
+      <>
+        <Para>
+          トークンの定義は TypeScript だが、CSS ファイルからも、MUI を使わない apps/native からも、
+          TypeScript の値は参照できない。そこで定義から CSS カスタムプロパティを生成し、
+          <Code>:root</Code> に流している。生成物はリポジトリにコミットする。
+        </Para>
+        <Sample surface="sunken">
+          <Box
+            sx={{
+              ...textStyle("Mono-14N-150"),
+              fontFamily: "var(--font-geist-mono), ui-monospace, monospace",
+              whiteSpace: "pre-wrap",
+            }}
+          >
+            {"npm run tokens\n\n" +
+              ":root {\n" +
+              "  --color-kyomurasaki-500: " +
+              tone("京紫", 500) +
+              ";   /* プリミティブ */\n" +
+              "  --color-primary: " +
+              PRIMARY.value +
+              ";           /* セマンティック */\n" +
+              "  --border-default: " +
+              tone("墨", 200) +
+              ";\n" +
+              "  --space-4: 16px;\n" +
+              "  --radius-8: 8px;\n" +
+              "}"}
+          </Box>
+        </Sample>
+        <Para>
+          生成は <Code>scripts/generate-tokens.ts</Code> が行い、
+          <Code>npm run web:dev</Code> と <Code>npm run web:build</Code>{" "}
+          の先頭で毎回走る。生成物を手で編集しても次回の生成で失われるため、値を変えるときは必ず生成元の
+          TypeScript を直す。
+        </Para>
+        <TokenTable
+          columns={[
+            { key: "path", label: "出力先", mono: true, width: "300px" },
+            { key: "consumer", label: "消費者", width: "140px" },
+            { key: "status", label: "状態" },
+          ]}
+          rows={TOKEN_OUTPUTS.map((o) => ({
+            path: o.path,
+            consumer: o.consumer,
+            status: o.status,
+          }))}
+        />
+        <Para>
+          apps/native は npm workspace として apps/web に依存しないため、共有パッケージを新設せず、
+          同じ内容のファイルを2か所へ出力している。消費者が3つ目になった時点で
+          <Code>packages/</Code> への切り出しを検討する。
+        </Para>
+        <Box sx={{ ...textStyle("Head-16B-150"), mb: "8px" }}>命名規則</Box>
+        <TokenTable
+          columns={[
+            { key: "layer", label: "対象", width: "200px" },
+            { key: "pattern", label: "形式", mono: true, width: "320px" },
+            { key: "example", label: "例", mono: true },
+            { key: "note", label: "備考" },
+          ]}
+          rows={TOKEN_NAMING.map((n) => ({
+            layer: n.layer,
+            pattern: n.pattern,
+            example: n.example,
+            note: n.note,
+          }))}
+        />
+        <Note>
+          ブレークポイントは出力していない。CSS カスタムプロパティはメディアクエリの条件に使えないためである。
+          値は「レイアウト」のページと Tailwind の既定値を参照する。
+        </Note>
+      </>
+    ),
+  },
+  {
     id: "token-implementation",
     title: "YAOYOROZU での扱い",
     body: (
@@ -274,26 +355,38 @@ const SECTIONS: DocSection[] = [
               ),
             },
             {
-              item: "画面への届き方",
+              item: "画面への届き方(React)",
               value:
                 "MUI テーマ(src/theme.ts)経由と、各ページの sx 経由の2通り。最終的に Emotion が実行時に CSS を生成する。",
             },
             {
-              item: "CSS ファイル",
-              value:
-                "globals.css には背景色・文字色・フォントスタックのみ。TS の値を CSS から参照できないため、この3つだけ手で二重管理している。",
+              item: "画面への届き方(CSS)",
+              value: (
+                <>
+                  生成した <Code>tokens.css</Code> を globals.css から import
+                  し、カスタムプロパティとして参照する。
+                </>
+              ),
             },
             {
-              item: "変換(ビルド)",
+              item: "生成",
+              value: (
+                <>
+                  <Code>scripts/generate-tokens.ts</Code>(
+                  <Code>npm run tokens</Code>)。dev / build の先頭で毎回走る。
+                </>
+              ),
+            },
+            {
+              item: "生成物",
               value:
-                "なし。消費者が apps/web だけのため、JSON 化も CSS 変数の生成もしていない。",
+                "apps/web と apps/native の2か所に同じ内容の tokens.css を出力し、コミットする。",
             },
           ]}
         />
         <Para>
-          一般的なデザイントークンの構成と違うのは、変換の工程がない点である。
-          apps/native という2つ目の消費者が同じ値を参照するようになった時点で、
-          CSS カスタムプロパティなどへの変換をここに足すことになる。
+          値の重複はこれで解消しているが、apps/native 側はファイルを置いただけで、
+          App.css の色は依然として直書きのままである。取り込みは実装セッションの作業として切り出している。
         </Para>
         <Note>
           このページを含む /ui の全ページは、ここで説明したトークンだけを使って組んでいる。

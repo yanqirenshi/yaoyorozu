@@ -42,6 +42,8 @@ export type ColorTone = {
 };
 
 export type ColorScale = {
+  /** CSS カスタムプロパティ名に使うローマ字表記。 */
+  slug: string;
   name: string;
   reading: string;
   role: string;
@@ -58,6 +60,7 @@ export type ColorScale = {
 export const COLOR_SCALES: ColorScale[] = [
   {
     name: "京紫",
+    slug: "kyomurasaki",
     reading: "きょうむらさき",
     role: "プライマリー",
     description:
@@ -77,6 +80,7 @@ export const COLOR_SCALES: ColorScale[] = [
   },
   {
     name: "金茶",
+    slug: "kincha",
     reading: "きんちゃ",
     role: "セカンダリー",
     description:
@@ -96,6 +100,7 @@ export const COLOR_SCALES: ColorScale[] = [
   },
   {
     name: "草色",
+    slug: "kusairo",
     reading: "くさいろ",
     role: "ターシャリー",
     description:
@@ -115,6 +120,7 @@ export const COLOR_SCALES: ColorScale[] = [
   },
   {
     name: "蘇芳",
+    slug: "suou",
     reading: "すおう",
     role: "エラー",
     description:
@@ -134,6 +140,7 @@ export const COLOR_SCALES: ColorScale[] = [
   },
   {
     name: "墨",
+    slug: "sumi",
     reading: "すみ",
     role: "ニュートラル",
     description:

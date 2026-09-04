@@ -82,6 +82,61 @@ export const TOKEN_ANATOMY: TokenAnatomy[] = [
   },
 ];
 
+export type TokenNaming = {
+  layer: string;
+  pattern: string;
+  example: string;
+  note: string;
+};
+
+/** CSS カスタムプロパティの命名規則。 */
+export const TOKEN_NAMING: TokenNaming[] = [
+  {
+    layer: "プリミティブ(色)",
+    pattern: "--color-<ローマ字>-<段階>",
+    example: "--color-kyomurasaki-500",
+    note: "色名はローマ字。日本語の色名は /ui の表と TypeScript 側に残す。",
+  },
+  {
+    layer: "セマンティック(色)",
+    pattern: "--<トークン名のドットをハイフンに>",
+    example: "--color-primary / --border-default / --state-hover",
+    note: "画面が参照してよいのはこちら。",
+  },
+  {
+    layer: "セマンティック(状態色)",
+    pattern: "--semantic-<種別>-<fg|bg|border>",
+    example: "--semantic-error-fg",
+    note: "前景・背景・境界の3点セット。",
+  },
+  {
+    layer: "テキストスタイル",
+    pattern: "--text-<スタイル名>-<size|weight|line-height|tracking>",
+    example: "--text-body-16n-170-size",
+    note: "スタイル名は小文字にする。4つで1組。",
+  },
+  {
+    layer: "余白 / 角 / 高さ / アイコン / 幅",
+    pattern: "--space-<n> / --radius-<n> / --elevation-<n> / --icon-<n> / --width-<用途>",
+    example: "--space-4 / --radius-8 / --elevation-2",
+    note: "数値はトークン名の数値をそのまま使う。",
+  },
+];
+
+/** 生成された CSS の出力先。 */
+export const TOKEN_OUTPUTS = [
+  {
+    path: "apps/web/src/app/tokens.css",
+    consumer: "apps/web",
+    status: "globals.css から import 済み",
+  },
+  {
+    path: "apps/native/react/src/tokens.css",
+    consumer: "apps/native",
+    status: "配置のみ。取り込みは実装セッションで対応する",
+  },
+];
+
 /** トークンにするもの・しないものの線引き。 */
 export const TOKEN_SCOPE = {
   included: [
