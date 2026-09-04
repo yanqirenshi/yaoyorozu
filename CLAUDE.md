@@ -17,13 +17,15 @@ GitHub Projects で管理する: https://github.com/users/yanqirenshi/projects/5
 
 Claude Code で以下のセッションに役割を分けて対応する。
 
-- **デザイン**: 要件の整理・設計、実装イシューの作成
+- **デザイン (全体)**: 要件の整理・設計、実装イシューの作成
+- **デザイン (UI)**: UIデザイナーとして、Webアプリの UI ページ(`apps/web` の `/ui`、http://localhost:3000/ui)で UIコンポーネント(デザインシステム)を定義・作り込む。**デザイン (全体) セッションを通さず**(イシュー化せず)直接作業してよい。ただし `apps/web` を編集するため web.md の規約には従う
+- **デザイン (ドメイン:Data)**: ドメインモデルの データモデル として TM(`apps/web` の `/tm`)を作成する。`/tm` スキル(`.claude/skills/tm/`)に作業手順・TM(T字形ER)の規則・d3.ter の仕様・検証手順をまとめてある
+- **デザイン (ドメイン:オブジェクト)**: ドメインモデルの オブジェクトモデル として Classes(`apps/web` の `/class-diagram`)を作成する
 - **実装:APP**: Tauri + TypeScript + React によるネイティブアプリの構築
 - **実装:APP (画面:/)**: Tauri + TypeScript + React によるネイティブアプリの構築
 - **実装:APP (画面:/settings)**: Tauri + TypeScript + React によるネイティブアプリの構築
 - **実装:APP (画面:/claude)**: Tauri + TypeScript + React によるネイティブアプリの構築
 - **実装:Web**: Next.js によるプロダクト情報管理Webアプリの構築
-- **UIデザイン**: UIデザイナーとして、Webアプリの UI ページ(`apps/web` の `/ui`、http://localhost:3000/ui)で UIコンポーネント(デザインシステム)を定義・作り込む。**デザインセッションを通さず**(イシュー化せず)直接作業してよい。ただし `apps/web` を編集するため web.md の規約には従う
 - **Lab**: 機能化についての調査、理解など。
 - **運用:リリース**: apps/native のリリース作業の実施。`/release <バージョン>` スキル(`.claude/skills/release/`)を実行し、バージョン更新 → タグ push → MSI ビルド確認 → GitHub Releases での公開までを行う
 - **管理**: このプロジェクト自体の管理、Claude Codeの利用方法の整理・実装
