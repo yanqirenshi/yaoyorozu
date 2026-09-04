@@ -19,6 +19,7 @@ src/app/tabs/              画面本体("use client"。1画面 = 1ファイル)
 src/app/AppShell.tsx       全画面共通の枠(左メニュー)
 src/app/DiagramPage.tsx    図/WBS タブ切り替えの共通コンポーネント
 src/data/                  プロダクト情報(SSoT)
+src/app/tokens.css         デザイントークンの CSS カスタムプロパティ(自動生成。直接編集しない)
 src/theme.ts               MUI テーマ(COLOR_PALETTE から生成)
 src/types/                 型定義を同梱しない外部パッケージの補完宣言
 ```
@@ -51,6 +52,9 @@ src/types/                 型定義を同梱しない外部パッケージの�
 - MUST: レイアウト・余白・罫線などのユーティリティは Tailwind クラスで書く。
 - MUST: 配色は日本の伝統色パレット `COLOR_PALETTE`(`src/data/uiDesign.ts`)をソースオブトゥルースとする。MUI テーマへは `src/theme.ts` 経由で反映する。新しい色もここへ追加してから使う。
 - NEVER: コンポーネントに hex カラーを直書きする。`COLOR_PALETTE` またはテーマ(`palette.*`)経由で参照する。
+- MUST: 色以外のデザイントークン(タイポグラフィ、余白、角の形状、高さ、アイコンのサイズ)も `src/data/ui*.ts` をソースオブトゥルースとし、値の意味と使い分けは `/ui`(基本デザイン)に公開する。定義にない値をその場で決めない。
+- MUST: CSS ファイルからトークンを使う場合は、生成された `src/app/tokens.css` のカスタムプロパティ(`var(--color-primary)`、`var(--space-4)` 等)を経由する。CSS へ値を書き写さない。
+- NEVER: `src/app/tokens.css` を直接編集する。`scripts/generate-tokens.ts` の生成物であり(`npm run tokens`。`web:dev` / `web:build` の先頭で自動実行)、値を変えるときは生成元の `src/data/ui*.ts` を直して再生成する。
 - NEVER: Bulma のクラスをアプリコードで直接使う。`globals.css` の Bulma import は `@yanqirenshi/table.wbs` / `colonoscope` が内部で必要とするために維持しているだけである。
 
 ## 5. 外部パッケージ(`@yanqirenshi/*` ほか)
@@ -65,6 +69,7 @@ src/types/                 型定義を同梱しない外部パッケージの�
 ```bash
 npm run web:dev      # 開発サーバ (http://localhost:3000)
 npm run web:build    # 本番ビルド
+npm run tokens       # デザイントークンの CSS を再生成(dev/build の先頭で自動実行)
 npm run lint --workspace=web
 ```
 
