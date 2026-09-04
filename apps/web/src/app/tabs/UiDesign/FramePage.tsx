@@ -2,6 +2,7 @@
 
 import Box from "@mui/material/Box";
 import {
+  FRAME_DATA_SCOPE,
   FRAMES,
   FRAME_ANTIPATTERNS,
   FRAME_RULES,
@@ -30,7 +31,7 @@ const SECTIONS: DocSection[] = [
       <>
         <Para>
           フレームはページのトップレベルに置く骨格である。
-          ビューポートいっぱいの領域を確保し、その中を flex で配る役割だけを持つ。
+          ビューポートいっぱいの領域を確保し、その中を flex で配る。
         </Para>
         <Para>
           ページが高さやスクロールを自分で組まずに済むのは、フレームがその面倒を引き受けているからである。
@@ -162,6 +163,48 @@ const SECTIONS: DocSection[] = [
     ),
   },
   {
+    id: "frame-data",
+    title: "扱ってよいデータ",
+    body: (
+      <>
+        <Para>
+          フレームは構造だけを持つわけではない。ナビゲーションの項目、現在地、アカウント、
+          プロファイルの一覧のように、枠そのものを描くために必要なデータは、フレームが取得してよい。
+        </Para>
+        <Para>
+          取ってはいけないのは、ページの内容にあたるデータである。分かれ目は次の1点で判定する。
+        </Para>
+        <Sample surface="sunken">
+          <Box sx={{ ...textStyle("Head-16B-150") }}>
+            URL(ページ)が変わったときに、取り直す必要があるか
+          </Box>
+          <Box sx={{ ...textStyle("Body-16N-170"), mt: "8px" }}>
+            必要なら、そのデータはページの内容に属する。製品が取る。
+            <br />
+            不要なら、そのデータは枠に属する。フレームが取ってよい。
+          </Box>
+        </Sample>
+        <TokenTable
+          columns={[
+            { key: "scope", label: "データの種類", width: "220px" },
+            { key: "examples", label: "例" },
+            { key: "owner", label: "取得する層", width: "140px" },
+          ]}
+          rows={FRAME_DATA_SCOPE.map((d) => ({
+            scope: d.scope,
+            examples: d.examples,
+            owner: d.owner,
+          }))}
+        />
+        <Note>
+          apps/native では、取得したものを表示用のスナップショットとして扱う。
+          判定・計算・遷移条件のような業務ロジックは Rust 側に置き、フレームには持たせない
+          (<Code>.claude/rules/native.md</Code> §2)。
+        </Note>
+      </>
+    ),
+  },
+  {
     id: "frame-rules",
     title: "規則",
     body: <RuleList rules={FRAME_RULES} />,
@@ -176,10 +219,11 @@ export default function FramePage() {
         <>
           <Para>
             フレームは、ページが必ず1つ置くトップレベルのコンポーネントである。
-            ビューポートいっぱいの領域を確保し、内側を flex で配ることだけを担う。
+            ビューポートいっぱいの領域を確保し、内側を flex で配る。
           </Para>
           <Para>
-            データも業務状態も持たない。フレームが持つのは構造だけである。
+            ナビゲーションやアカウントのように、枠そのものを描くためのデータは取得してよい。
+            ページの内容にあたるデータは製品が取る。
           </Para>
         </>
       }

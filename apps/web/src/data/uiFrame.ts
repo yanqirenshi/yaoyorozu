@@ -71,6 +71,36 @@ export const FRAME_ANTIPATTERNS: FrameAntipattern[] = [
   },
 ];
 
+export type FrameData = {
+  scope: string;
+  examples: string;
+  owner: string;
+};
+
+/**
+ * フレームが扱ってよいデータの範囲。
+ * 判定は「URL(ページ)が変わったときに取り直す必要があるか」で行う。
+ */
+export const FRAME_DATA_SCOPE: FrameData[] = [
+  {
+    scope: "枠を描くためのデータ",
+    examples:
+      "ナビゲーションの項目、現在地、アカウント、プロファイルの一覧、ウィンドウの状態",
+    owner: "フレーム",
+  },
+  {
+    scope: "ページの内容にあたるデータ",
+    examples:
+      "一覧の中身、選択中の対象の詳細、図表の元データ",
+    owner: "製品",
+  },
+  {
+    scope: "受け取るだけのデータ",
+    examples: "props で渡された表示用の値",
+    owner: "中間品・部品",
+  },
+];
+
 export type FrameRule = {
   title: string;
   body: string;
@@ -78,8 +108,12 @@ export type FrameRule = {
 
 export const FRAME_RULES: FrameRule[] = [
   {
-    title: "構造だけを持つ",
-    body: "フレームはデータを取得せず、業務状態も持たない。持ってよいのはナビゲーションの状態(現在のページ、メニューの開閉)までとする。",
+    title: "取得してよいのは枠を描くためのデータ",
+    body: "フレームはナビゲーションやアカウントなど、自分自身を描くために必要なデータを取得してよい。取ってはいけないのはページの内容にあたるデータで、それは製品が取る。判定は「URL が変わったときに取り直す必要があるか」で行う。必要ならそのデータは製品のものである。",
+  },
+  {
+    title: "業務ロジックを持たない",
+    body: "取得したデータは表示用のスナップショットとして扱う。判定・計算・遷移条件のような業務ロジックはフレームに置かない(apps/native では業務状態を Rust 側に置く規約がある)。",
   },
   {
     title: "1ページに1つ、入れ子にしない",
