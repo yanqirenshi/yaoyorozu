@@ -8,7 +8,7 @@ use dto::{
     GithubProjectDto, GithubProjectSummaryDto, ProfileSummaryDto, ProjectDto, ProjectItemsPageDto,
     ProjectSettingsFileDto, RuleDto, RuleSummaryDto, SessionChangedEventDto, SessionDto,
     SessionSummaryDto, SettingsCorruptedEventDto, SettingsDto, SettingsInputDto, SkillDto,
-    SkillSummaryDto, TabStateDto, WindowStateDto, WindowTabDto,
+    SkillSummaryDto, WindowStateDto, WindowTabDto,
 };
 use infra::{
     ClaudeCliAgent, FileClaudeMdStore, FileClaudeSettingsStore, FileProjectSettingsStore,
@@ -202,11 +202,6 @@ async fn get_settings(
                 name: p.name,
             })
             .collect(),
-        open_tabs: settings
-            .open_tabs
-            .into_iter()
-            .map(TabStateDto::from)
-            .collect(),
         repository_path: profile.repository_path.map(|p| p.display().to_string()),
         github_project: profile.github_project.map(GithubProjectDto::from),
         selected_project_folders: profile.selected_project_folders,
@@ -340,26 +335,6 @@ async fn rename_profile(
     let (settings_to_persist, save_path) = {
         let mut guard = state.lock().await;
         let updated = app::rename_profile(&guard.settings, &profile_id, &name)?;
-        guard.settings = updated.clone();
-        (updated, guard.save_path.clone())
-    };
-    persist_settings(settings_to_persist, save_path).await?;
-    let _ = app.emit("settings:updated", ());
-    Ok(())
-}
-
-/// メインウィンドウのタブバー(issue #77)で開いているタブの一覧を置き換える。
-/// `profile_ids` は表示順そのまま(重複可。同じプロファイルを複数タブで
-/// 開けるため)。
-#[tauri::command]
-async fn save_open_tabs(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Mutex<AppState>>,
-    profile_ids: Vec<String>,
-) -> Result<(), AppErrorDto> {
-    let (settings_to_persist, save_path) = {
-        let mut guard = state.lock().await;
-        let updated = app::save_open_tabs(&guard.settings, &profile_ids);
         guard.settings = updated.clone();
         (updated, guard.save_path.clone())
     };
@@ -1202,7 +1177,6 @@ pub fn run() {
             create_profile,
             delete_profile,
             rename_profile,
-            save_open_tabs,
             open_profile_window,
             report_window_state,
             list_window_states,

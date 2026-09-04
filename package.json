@@ -12,7 +12,7 @@
     "tokens": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/generate-tokens.ts",
     "web:dev": "npm run tokens && npm run dev --workspace=web",
     "web:build": "npm run tokens && npm run build --workspace=web",
-    "native:dev": "npm run tauri:dev --workspace=native",
-    "native:build": "npm run tauri:build --workspace=native"
+    "native:dev": "npm run tokens && npm run tauri:dev --workspace=native",
+    "native:build": "npm run tokens && npm run tauri:build --workspace=native"
   }
 }

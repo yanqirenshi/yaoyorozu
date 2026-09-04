@@ -22,6 +22,7 @@ export const WBS_SOURCE = {
     { _id: 41, _class: "WBS", name: "identifiers" },
     { _id: 42, _class: "WBS", name: "attributes" },
     { _id: 43, _class: "WBS", name: "entities" },
+    { _id: 44, _class: "WBS", name: "relationships" },
     { _id: 50, _class: "WBS", name: "デザイン" },
     { _id: 51, _class: "WBS", name: "カラー" },
     { _id: 52, _class: "WBS", name: "タイポグラフィ" },
@@ -64,6 +65,7 @@ export const WBS_SOURCE = {
     { from_id: 40, from_class: "WBS", to_id: 41, to_class: "WBS" },
     { from_id: 40, from_class: "WBS", to_id: 42, to_class: "WBS" },
     { from_id: 40, from_class: "WBS", to_id: 43, to_class: "WBS" },
+    { from_id: 40, from_class: "WBS", to_id: 44, to_class: "WBS" },
     // 同上。/ui の「基本」と同じ並び(カラー → エヴェレーション)に見せる。
     { from_id: 50, from_class: "WBS", to_id: 58, to_class: "WBS" },
     { from_id: 50, from_class: "WBS", to_id: 57, to_class: "WBS" },
