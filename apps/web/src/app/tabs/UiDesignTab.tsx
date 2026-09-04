@@ -16,6 +16,7 @@ import ElevationPage from "./UiDesign/ElevationPage";
 import FramePage from "./UiDesign/FramePage";
 import LayoutIndexPage from "./UiDesign/LayoutIndexPage";
 import PagePage from "./UiDesign/PagePage";
+import PartsIndexPage from "./UiDesign/PartsIndexPage";
 import IconPage from "./UiDesign/IconPage";
 import LayoutPage from "./UiDesign/LayoutPage";
 import LinkTextPage from "./UiDesign/LinkTextPage";
@@ -92,6 +93,8 @@ function Content({
       return <PagePage />;
     case "frame":
       return <FramePage />;
+    case "parts":
+      return <PartsIndexPage onSelect={onSelect} />;
     case "basic":
       return <BasicIndexPage onSelect={onSelect} />;
     case "color":

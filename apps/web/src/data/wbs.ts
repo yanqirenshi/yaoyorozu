@@ -35,6 +35,7 @@ export const WBS_SOURCE = {
     { _id: 61, _class: "WBS", name: "レイアウト" },
     { _id: 611, _class: "WBS", name: "ページ" },
     { _id: 612, _class: "WBS", name: "フレーム" },
+    { _id: 65, _class: "WBS", name: "パーツ" },
     { _id: 64, _class: "WBS", name: "製品" },
     { _id: 62, _class: "WBS", name: "中間組立品" },
     { _id: 63, _class: "WBS", name: "部品" },
@@ -73,11 +74,12 @@ export const WBS_SOURCE = {
     { from_id: 50, from_class: "WBS", to_id: 52, to_class: "WBS" },
     { from_id: 50, from_class: "WBS", to_id: 51, to_class: "WBS" },
     // table.wbs は子を逆順に描画するため、/ui のナビと同じ並び
-    // (レイアウト → 製品 → 中間組立品 → 部品)に見えるよう逆順で書いている。
-    { from_id: 60, from_class: "WBS", to_id: 63, to_class: "WBS" },
-    { from_id: 60, from_class: "WBS", to_id: 62, to_class: "WBS" },
-    { from_id: 60, from_class: "WBS", to_id: 64, to_class: "WBS" },
+    // (レイアウト → パーツ{製品 → 中間組立品 → 部品})に見えるよう逆順で書いている。
+    { from_id: 60, from_class: "WBS", to_id: 65, to_class: "WBS" },
     { from_id: 60, from_class: "WBS", to_id: 61, to_class: "WBS" },
+    { from_id: 65, from_class: "WBS", to_id: 63, to_class: "WBS" },
+    { from_id: 65, from_class: "WBS", to_id: 62, to_class: "WBS" },
+    { from_id: 65, from_class: "WBS", to_id: 64, to_class: "WBS" },
     { from_id: 61, from_class: "WBS", to_id: 612, to_class: "WBS" },
     { from_id: 61, from_class: "WBS", to_id: 611, to_class: "WBS" },
   ],
