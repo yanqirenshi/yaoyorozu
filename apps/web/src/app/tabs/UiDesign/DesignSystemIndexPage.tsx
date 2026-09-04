@@ -10,6 +10,12 @@ export const DESIGN_SYSTEM_ITEMS: IndexItem[] = [
     summary:
       "デザイン上の決定に名前を付けて参照する仕組み。層の考え方、構成要素、トークンにするものとしないものの線引き。",
   },
+  {
+    key: "glossary",
+    label: "用語集",
+    summary:
+      "他のデザインシステムで使われている用語の対応表。共通語と、17システムの固有名詞、命名の流儀。",
+  },
 ];
 
 export default function DesignSystemIndexPage({

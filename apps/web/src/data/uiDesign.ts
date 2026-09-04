@@ -471,6 +471,9 @@ export const COMPONENT_NAV: NavItem[] = [
   {
     key: "design-system",
     label: "デザインシステム",
-    children: [{ key: "design-token", label: "デザイントークン" }],
+    children: [
+      { key: "design-token", label: "デザイントークン" },
+      { key: "glossary", label: "用語集" },
+    ],
   },
 ];
