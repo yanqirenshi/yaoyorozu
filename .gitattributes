@@ -1,0 +1,12 @@
+# 生成物の改行コードを LF に固定する。
+#
+# scripts/generate-tokens.ts は常に LF で書き出すが、Windows では
+# core.autocrlf=true によりチェックアウト時に CRLF へ変換される。その結果、
+# npm run tokens(dev / build の先頭で自動実行)を回すたびに、内容が同じまま
+# git 上は「変更あり」になっていた(イシュー #97)。
+#
+# 対象を生成物に絞っているのは、リポジトリ全体(* text=auto eol=lf)に広げると
+# 全ファイルが renormalize され、進行中のブランチと大量に競合するため。
+# 全体への適用は、ブランチが片付いた時点で別途行う。
+apps/web/src/app/tokens.css eol=lf
+apps/native/react/src/tokens.css eol=lf
