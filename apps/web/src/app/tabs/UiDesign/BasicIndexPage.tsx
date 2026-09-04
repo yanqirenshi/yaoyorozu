@@ -95,7 +95,7 @@ export default function BasicIndexPage({
       lead={
         <Para>
           基本デザインは、YAOYOROZU の画面に共通する視覚的な規則である。
-          個々のコンポーネント(部品・中間組立品・レイアウト)は、すべてここで定義した値の上に組み立てる。
+          個々のコンポーネント(レイアウト・製品・中間組立品・部品)は、すべてここで定義した値の上に組み立てる。
         </Para>
       }
       sections={sections}
