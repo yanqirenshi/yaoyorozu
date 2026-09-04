@@ -1,0 +1,244 @@
+/*
+ * このファイルは scripts/generate-tokens.ts が生成する。直接編集しないこと。
+ *
+ * 生成元: apps/web/src/data/ui*.ts
+ * 生成:   npm run tokens
+ *
+ * 値の変更は生成元の TypeScript を編集し、再生成して両方をコミットする。
+ * 定義の意味と使い分けは /ui(基本デザイン)を参照。
+ */
+
+:root {
+
+  /* プリミティブカラー(トーンスケール) */
+
+  /* 京紫(きょうむらさき) */
+  --color-kyomurasaki-50: #f8f6f8;
+  --color-kyomurasaki-100: #f0ebee;
+  --color-kyomurasaki-200: #e1d6de;
+  --color-kyomurasaki-300: #ceb6c7;
+  --color-kyomurasaki-400: #bc8bae;
+  --color-kyomurasaki-500: #9d5b8b;
+  --color-kyomurasaki-600: #8e527e;
+  --color-kyomurasaki-700: #744367;
+  --color-kyomurasaki-800: #59364f;
+  --color-kyomurasaki-900: #3f2739;
+
+  /* 金茶(きんちゃ) */
+  --color-kincha-50: #fbf8f4;
+  --color-kincha-100: #f5eee5;
+  --color-kincha-200: #ebdccc;
+  --color-kincha-300: #e6c49e;
+  --color-kincha-400: #eba85b;
+  --color-kincha-500: #e58b25;
+  --color-kincha-600: #CE7A19;
+  --color-kincha-700: #a46114;
+  --color-kincha-800: #7a4b15;
+  --color-kincha-900: #57360f;
+
+  /* 草色(くさいろ) */
+  --color-kusairo-50: #f8f9f6;
+  --color-kusairo-100: #eff1ea;
+  --color-kusairo-200: #dfe3d4;
+  --color-kusairo-300: #cbd3b1;
+  --color-kusairo-400: #b5c581;
+  --color-kusairo-500: #9cb257;
+  --color-kusairo-600: #7b8d41;
+  --color-kusairo-700: #6e7e3a;
+  --color-kusairo-800: #545f30;
+  --color-kusairo-900: #3c4422;
+
+  /* 蘇芳(すおう) */
+  --color-suou-50: #f9f5f6;
+  --color-suou-100: #f1e9e9;
+  --color-suou-200: #e4d3d3;
+  --color-suou-300: #d6adae;
+  --color-suou-400: #cc7b7c;
+  --color-suou-500: #bb4e51;
+  --color-suou-600: #9e3d3f;
+  --color-suou-700: #843335;
+  --color-suou-800: #642b2c;
+  --color-suou-900: #471f20;
+
+  /* 墨(すみ) */
+  --color-sumi-50: #f7f7f7;
+  --color-sumi-100: #ededed;
+  --color-sumi-200: #dbdbdb;
+  --color-sumi-300: #c2c2c2;
+  --color-sumi-400: #a3a3a3;
+  --color-sumi-500: #858585;
+  --color-sumi-600: #707070;
+  --color-sumi-700: #5c5c5c;
+  --color-sumi-800: #474747;
+  --color-sumi-900: #373737;
+
+  /* キーカラー */
+  --color-primary: #9d5b8b;
+  --color-secondary: #CE7A19;
+  --color-tertiary: #7b8d41;
+
+  /* 面と境界 */
+  --surface-base: #fbfbf8;
+  --surface-raised: #ffffff;
+  --surface-sunken: #f7f7f7;
+  --surface-overlay-shade: rgba(55, 55, 55, 0.48);
+  --border-default: #dbdbdb;
+  --border-strong: #858585;
+
+  /* 文字色 */
+  --text-primary: #373737;
+  --text-secondary: #5c5c5c;
+  --text-placeholder: #707070;
+  --text-disabled: #a3a3a3;
+  --text-inverse: #ffffff;
+
+  /* 機能カラー */
+  --link-default: #744367;
+  --link-visited: #3f2739;
+  --focus-ring: #CE7A19;
+  --state-hover: rgba(157, 91, 139, 0.08);
+  --state-selected: rgba(157, 91, 139, 0.12);
+  --state-selected-hover: rgba(157, 91, 139, 0.18);
+  --state-disabled: #ededed;
+
+  /* セマンティックカラー(前景 / 背景 / 境界) */
+  --semantic-success-fg: #545f30;
+  --semantic-success-bg: #eff1ea;
+  --semantic-success-border: #7b8d41;
+  --semantic-warning-fg: #7a4b15;
+  --semantic-warning-bg: #f5eee5;
+  --semantic-warning-border: #CE7A19;
+  --semantic-error-fg: #843335;
+  --semantic-error-bg: #f1e9e9;
+  --semantic-error-border: #bb4e51;
+  --semantic-info-fg: #744367;
+  --semantic-info-bg: #f0ebee;
+  --semantic-info-border: #9d5b8b;
+
+  /* フォントファミリー */
+  --font-family-sans: var(--font-geist-sans), "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", Meiryo, sans-serif;
+  --font-family-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* 書体の太さ */
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-bold: 700;
+
+  /* テキストスタイル */
+
+  /* Display(Disp) */
+  --text-disp-32b-140-size: 32px;
+  --text-disp-32b-140-weight: 700;
+  --text-disp-32b-140-line-height: 140%;
+  --text-disp-32b-140-tracking: 0;
+  --text-disp-28b-140-size: 28px;
+  --text-disp-28b-140-weight: 700;
+  --text-disp-28b-140-line-height: 140%;
+  --text-disp-28b-140-tracking: 0;
+
+  /* Heading(Head) */
+  --text-head-24b-150-size: 24px;
+  --text-head-24b-150-weight: 700;
+  --text-head-24b-150-line-height: 150%;
+  --text-head-24b-150-tracking: 0.01em;
+  --text-head-20b-150-size: 20px;
+  --text-head-20b-150-weight: 700;
+  --text-head-20b-150-line-height: 150%;
+  --text-head-20b-150-tracking: 0.02em;
+  --text-head-18b-150-size: 18px;
+  --text-head-18b-150-weight: 700;
+  --text-head-18b-150-line-height: 150%;
+  --text-head-18b-150-tracking: 0.02em;
+  --text-head-16b-150-size: 16px;
+  --text-head-16b-150-weight: 700;
+  --text-head-16b-150-line-height: 150%;
+  --text-head-16b-150-tracking: 0.02em;
+
+  /* Body */
+  --text-body-16n-170-size: 16px;
+  --text-body-16n-170-weight: 400;
+  --text-body-16n-170-line-height: 170%;
+  --text-body-16n-170-tracking: 0.02em;
+  --text-body-16b-170-size: 16px;
+  --text-body-16b-170-weight: 700;
+  --text-body-16b-170-line-height: 170%;
+  --text-body-16b-170-tracking: 0.02em;
+  --text-body-14n-170-size: 14px;
+  --text-body-14n-170-weight: 400;
+  --text-body-14n-170-line-height: 170%;
+  --text-body-14n-170-tracking: 0.02em;
+
+  /* Dense(Dns) */
+  --text-dns-16n-150-size: 16px;
+  --text-dns-16n-150-weight: 400;
+  --text-dns-16n-150-line-height: 150%;
+  --text-dns-16n-150-tracking: 0.02em;
+  --text-dns-14n-150-size: 14px;
+  --text-dns-14n-150-weight: 400;
+  --text-dns-14n-150-line-height: 150%;
+  --text-dns-14n-150-tracking: 0.02em;
+  --text-dns-14b-150-size: 14px;
+  --text-dns-14b-150-weight: 700;
+  --text-dns-14b-150-line-height: 150%;
+  --text-dns-14b-150-tracking: 0.02em;
+
+  /* UI(Oneline) */
+  --text-ui-16m-100-size: 16px;
+  --text-ui-16m-100-weight: 500;
+  --text-ui-16m-100-line-height: 100%;
+  --text-ui-16m-100-tracking: 0.02em;
+  --text-ui-14m-100-size: 14px;
+  --text-ui-14m-100-weight: 500;
+  --text-ui-14m-100-line-height: 100%;
+  --text-ui-14m-100-tracking: 0.02em;
+  --text-ui-14n-100-size: 14px;
+  --text-ui-14n-100-weight: 400;
+  --text-ui-14n-100-line-height: 100%;
+  --text-ui-14n-100-tracking: 0.02em;
+
+  /* Mono */
+  --text-mono-16n-150-size: 16px;
+  --text-mono-16n-150-weight: 400;
+  --text-mono-16n-150-line-height: 150%;
+  --text-mono-16n-150-tracking: 0;
+  --text-mono-14n-150-size: 14px;
+  --text-mono-14n-150-weight: 400;
+  --text-mono-14n-150-line-height: 150%;
+  --text-mono-14n-150-tracking: 0;
+
+  /* 余白 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* 角の形状 */
+  --radius-0: 0px;
+  --radius-2: 2px;
+  --radius-4: 4px;
+  --radius-8: 8px;
+  --radius-12: 12px;
+  --radius-full: 9999px;
+
+  /* エヴェレーション(高さ) */
+  --elevation-0: none;
+  --elevation-1: 0 1px 2px rgba(55, 55, 55, 0.08), 0 1px 1px rgba(55, 55, 55, 0.06);
+  --elevation-2: 0 2px 4px rgba(55, 55, 55, 0.08), 0 1px 2px rgba(55, 55, 55, 0.06);
+  --elevation-3: 0 4px 8px rgba(55, 55, 55, 0.1), 0 2px 4px rgba(55, 55, 55, 0.06);
+  --elevation-4: 0 8px 16px rgba(55, 55, 55, 0.12), 0 4px 8px rgba(55, 55, 55, 0.06);
+  --elevation-5: 0 16px 32px rgba(55, 55, 55, 0.14), 0 8px 16px rgba(55, 55, 55, 0.08);
+
+  /* アイコンのサイズ */
+  --icon-16: 16px;
+  --icon-20: 20px;
+  --icon-24: 24px;
+  --icon-32: 32px;
+
+  /* コンテンツの最大幅 */
+  --width-prose: 720px;
+  --width-doc: 1080px;
+}

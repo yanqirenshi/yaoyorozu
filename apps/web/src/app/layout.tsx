@@ -30,7 +30,9 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">
+      {/* 縦スクロールはペイン単位にするため(基本デザイン「レイアウト」)、
+          body 自体はスクロールさせず、高さをビューポートに固定する。 */}
+      <body className="h-full flex flex-col overflow-hidden">
         <AppRouterCacheProvider>
           <Providers>
             <AppShell>{children}</AppShell>

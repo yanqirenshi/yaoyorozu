@@ -2,13 +2,16 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import Box from "@mui/material/Box";
 import MenuList from "@mui/material/MenuList";
 import MenuItem from "@mui/material/MenuItem";
 import ListItemText from "@mui/material/ListItemText";
 import { NAV_MENU_ITEMS } from "@/data/navigation";
-import { COLOR_PALETTE } from "@/data/uiDesign";
+import { COLOR_PALETTE, roleColor } from "@/data/uiDesign";
 
 const kyoMurasaki = COLOR_PALETTE.find((c) => c.name === "京紫")!.hex;
+// ペインの区切りは1pxの罫線(基本デザイン「レイアウト」)。
+const border = "1px solid " + roleColor("border.default");
 
 export default function AppShell({
   children,
@@ -18,8 +21,8 @@ export default function AppShell({
   const pathname = usePathname();
 
   return (
-    <div className="flex flex-1 border border-zinc-400 font-sans">
-      <div className="w-64 shrink-0 border-r border-zinc-400">
+    <Box className="flex min-h-0 flex-1 font-sans" sx={{ border }}>
+      <Box className="w-64 shrink-0 overflow-auto" sx={{ borderRight: border }}>
         <div className="px-4 pt-4 pb-3">
           <h1
             className="text-xl font-bold tracking-wide"
@@ -53,8 +56,8 @@ export default function AppShell({
             </MenuItem>
           ))}
         </MenuList>
-      </div>
+      </Box>
       <div className="flex min-h-0 flex-1 overflow-auto">{children}</div>
-    </div>
+    </Box>
   );
 }

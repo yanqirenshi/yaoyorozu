@@ -4,8 +4,21 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import MenuList from "@mui/material/MenuList";
 import MenuItem from "@mui/material/MenuItem";
 import ListItemText from "@mui/material/ListItemText";
-import { Section } from "tion";
-import { COLOR_PALETTE, COMPONENT_NAV, type NavItem } from "@/data/uiDesign";
+import Box from "@mui/material/Box";
+import { COMPONENT_NAV, type NavItem } from "@/data/uiDesign";
+import BasicIndexPage from "./UiDesign/BasicIndexPage";
+import ColorPage from "./UiDesign/ColorPage";
+import CornerPage from "./UiDesign/CornerPage";
+import DesignSystemIndexPage from "./UiDesign/DesignSystemIndexPage";
+import DesignTokenPage from "./UiDesign/DesignTokenPage";
+import ElevationPage from "./UiDesign/ElevationPage";
+import IconPage from "./UiDesign/IconPage";
+import LayoutPage from "./UiDesign/LayoutPage";
+import LinkTextPage from "./UiDesign/LinkTextPage";
+import SpacingPage from "./UiDesign/SpacingPage";
+import TypographyPage from "./UiDesign/TypographyPage";
+import FoundationPage, { Para } from "./UiDesign/FoundationPage";
+import { BORDER, textStyle } from "./UiDesign/tokens";
 
 type FlatNavItem = { item: NavItem; depth: number };
 
@@ -34,58 +47,66 @@ function NavMenu({
           onClick={() => onSelect(entry.item.key)}
           sx={{ pl: 2 + entry.depth * 2 }}
         >
-          <ListItemText>{entry.item.label}</ListItemText>
+          <ListItemText
+            slotProps={{ primary: { sx: textStyle("UI-16M-100") } }}
+          >
+            {entry.item.label}
+          </ListItemText>
         </MenuItem>
       ))}
     </MenuList>
   );
 }
 
-function ColorPaletteSwatches() {
+/** 未定義の項目。基本デザインが固まるまでは、ここに何を書くかだけを示す。 */
+function PlaceholderPage({ item }: { item: NavItem }) {
   return (
-    <div className="flex flex-col gap-4">
-      {COLOR_PALETTE.map((color) => (
-        <div key={color.name} className="flex items-center gap-4">
-          <div
-            className="h-12 w-12 shrink-0 rounded border border-black/10"
-            style={{ backgroundColor: color.hex }}
-          />
-          <div className="flex flex-col">
-            <span className="font-semibold">{color.name}</span>
-            <span className="text-sm text-zinc-500">
-              {color.hex}
-              {color.ratio !== undefined
-                ? ` / ${color.ratio}%`
-                : color.usage
-                  ? `(${color.usage})`
-                  : ""}
-            </span>
-          </div>
-        </div>
-      ))}
-    </div>
+    <FoundationPage
+      title={item.label}
+      lead={
+        <Para>
+          このページはまだ定義していない。基本デザイン(色・文字・余白・角・高さ)が固まったあと、
+          その値を使って組み立てたコンポーネントとして定義する。
+        </Para>
+      }
+      sections={[]}
+    />
   );
 }
 
-function ContentSections({
-  items,
-  level = 3,
+function Content({
+  item,
+  onSelect,
 }: {
-  items: NavItem[];
-  level?: number;
+  item: NavItem;
+  onSelect: (key: string) => void;
 }) {
-  return (
-    <>
-      {items.map((item) => (
-        <Section key={item.key} title={item.label} lev={level}>
-          {item.key === "color" && <ColorPaletteSwatches />}
-          {item.children && (
-            <ContentSections items={item.children} level={level + 1} />
-          )}
-        </Section>
-      ))}
-    </>
-  );
+  switch (item.key) {
+    case "basic":
+      return <BasicIndexPage onSelect={onSelect} />;
+    case "color":
+      return <ColorPage />;
+    case "typography":
+      return <TypographyPage />;
+    case "icon":
+      return <IconPage />;
+    case "basic-layout":
+      return <LayoutPage />;
+    case "link-text":
+      return <LinkTextPage />;
+    case "spacing":
+      return <SpacingPage />;
+    case "corner":
+      return <CornerPage />;
+    case "elevation":
+      return <ElevationPage />;
+    case "design-system":
+      return <DesignSystemIndexPage onSelect={onSelect} />;
+    case "design-token":
+      return <DesignTokenPage />;
+    default:
+      return <PlaceholderPage item={item} />;
+  }
 }
 
 export default function UiDesignTab() {
@@ -93,7 +114,7 @@ export default function UiDesignTab() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const selected = searchParams.get("item") ?? FLAT_NAV[0]?.item.key ?? "";
+  const selected = searchParams.get("item") ?? "basic";
   const selectedItem =
     FLAT_NAV.find((entry) => entry.item.key === selected)?.item ??
     FLAT_NAV[0]?.item;
@@ -106,12 +127,19 @@ export default function UiDesignTab() {
 
   return (
     <div className="flex min-h-0 w-full flex-1">
-      <div className="w-64 shrink-0 overflow-auto border-r border-zinc-400">
-        <h2 className="px-4 pt-4 pb-2 text-lg font-bold">コンポーネント</h2>
+      <Box
+        className="w-64 shrink-0 overflow-auto"
+        sx={{ borderRight: "1px solid " + BORDER }}
+      >
+        <Box sx={{ ...textStyle("Head-16B-150"), px: "16px", pt: "16px", pb: "8px" }}>
+          コンポーネント
+        </Box>
         <NavMenu selected={selected} onSelect={handleSelect} />
-      </div>
-      <div className="flex-1 overflow-auto p-6">
-        {selectedItem && <ContentSections items={[selectedItem]} />}
+      </Box>
+      <div className="flex-1 overflow-auto px-6 py-8">
+        {selectedItem && (
+          <Content item={selectedItem} onSelect={handleSelect} />
+        )}
       </div>
     </div>
   );
