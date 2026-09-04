@@ -11,7 +11,12 @@ import ColorPage from "./UiDesign/ColorPage";
 import CornerPage from "./UiDesign/CornerPage";
 import DesignSystemIndexPage from "./UiDesign/DesignSystemIndexPage";
 import DesignTokenPage from "./UiDesign/DesignTokenPage";
+import GlossaryPage from "./UiDesign/GlossaryPage";
 import ElevationPage from "./UiDesign/ElevationPage";
+import FramePage from "./UiDesign/FramePage";
+import LayoutIndexPage from "./UiDesign/LayoutIndexPage";
+import PagePage from "./UiDesign/PagePage";
+import PartsIndexPage from "./UiDesign/PartsIndexPage";
 import IconPage from "./UiDesign/IconPage";
 import LayoutPage from "./UiDesign/LayoutPage";
 import LinkTextPage from "./UiDesign/LinkTextPage";
@@ -82,6 +87,14 @@ function Content({
   onSelect: (key: string) => void;
 }) {
   switch (item.key) {
+    case "layout":
+      return <LayoutIndexPage onSelect={onSelect} />;
+    case "page":
+      return <PagePage />;
+    case "frame":
+      return <FramePage />;
+    case "parts":
+      return <PartsIndexPage onSelect={onSelect} />;
     case "basic":
       return <BasicIndexPage onSelect={onSelect} />;
     case "color":
@@ -104,6 +117,8 @@ function Content({
       return <DesignSystemIndexPage onSelect={onSelect} />;
     case "design-token":
       return <DesignTokenPage />;
+    case "glossary":
+      return <GlossaryPage />;
     default:
       return <PlaceholderPage item={item} />;
   }
