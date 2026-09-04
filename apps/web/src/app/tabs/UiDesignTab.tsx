@@ -9,6 +9,8 @@ import { COMPONENT_NAV, type NavItem } from "@/data/uiDesign";
 import BasicIndexPage from "./UiDesign/BasicIndexPage";
 import ColorPage from "./UiDesign/ColorPage";
 import CornerPage from "./UiDesign/CornerPage";
+import DesignSystemIndexPage from "./UiDesign/DesignSystemIndexPage";
+import DesignTokenPage from "./UiDesign/DesignTokenPage";
 import ElevationPage from "./UiDesign/ElevationPage";
 import IconPage from "./UiDesign/IconPage";
 import LayoutPage from "./UiDesign/LayoutPage";
@@ -98,6 +100,10 @@ function Content({
       return <CornerPage />;
     case "elevation":
       return <ElevationPage />;
+    case "design-system":
+      return <DesignSystemIndexPage onSelect={onSelect} />;
+    case "design-token":
+      return <DesignTokenPage />;
     default:
       return <PlaceholderPage item={item} />;
   }

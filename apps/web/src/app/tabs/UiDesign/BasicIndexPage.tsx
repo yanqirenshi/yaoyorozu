@@ -1,12 +1,10 @@
 "use client";
 
-import Box from "@mui/material/Box";
-import ButtonBase from "@mui/material/ButtonBase";
 import FoundationPage, { Code, Para, type DocSection } from "./FoundationPage";
-import { BORDER, STATE_HOVER, TEXT_SECONDARY, textStyle } from "./tokens";
+import IndexPage, { type IndexItem } from "./IndexPage";
 
 /** 基本デザインの一覧。summary は各ページのリード文の要約。 */
-export const BASIC_ITEMS: { key: string; label: string; summary: string }[] = [
+export const BASIC_ITEMS: IndexItem[] = [
   {
     key: "color",
     label: "カラー",
@@ -66,33 +64,7 @@ export default function BasicIndexPage({
     {
       id: "basic-list",
       title: "基本デザイン一覧",
-      body: (
-        <div className="flex flex-col gap-3">
-          {BASIC_ITEMS.map((item) => (
-            <ButtonBase
-              key={item.key}
-              onClick={() => onSelect(item.key)}
-              sx={{
-                display: "block",
-                textAlign: "left",
-                border: "1px solid " + BORDER,
-                borderRadius: "8px",
-                p: "16px",
-                "&:hover": { backgroundColor: STATE_HOVER },
-              }}
-            >
-              <Box sx={{ ...textStyle("Head-18B-150"), mb: "4px" }}>
-                {item.label}
-              </Box>
-              <Box
-                sx={{ ...textStyle("Body-14N-170"), color: TEXT_SECONDARY }}
-              >
-                {item.summary}
-              </Box>
-            </ButtonBase>
-          ))}
-        </div>
-      ),
+      body: <IndexPage items={BASIC_ITEMS} onSelect={onSelect} />,
     },
     {
       id: "basic-how-to-use",
@@ -110,6 +82,7 @@ export default function BasicIndexPage({
           <Para>
             トークンの実体は <Code>apps/web/src/data/ui*.ts</Code>{" "}
             にあり、このページはそのファイルを表示しているだけである。値を変えるとこのページと画面の両方が同時に変わる。
+            トークンという考え方そのものは「デザインシステム」の「デザイントークン」で説明している。
           </Para>
         </>
       ),

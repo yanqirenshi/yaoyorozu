@@ -61,8 +61,13 @@ export function Bullets({ items }: { items: ReactNode[] }) {
   return (
     <Box
       component="ul"
-      sx={{ ...textStyle("Body-16N-170"), mb: "16px", pl: "20px" }}
-      className="list-disc"
+      sx={{
+        ...textStyle("Body-16N-170"),
+        mb: "16px",
+        pl: "20px",
+        // Bulma が ul に list-style: none を当てるため、ここで指定し直す。
+        listStyleType: "disc",
+      }}
     >
       {items.map((item, index) => (
         <li key={index} className="mb-1">
