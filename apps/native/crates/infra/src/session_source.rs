@@ -1,7 +1,7 @@
 use app::{AppError, SessionSource};
 use domain::{
-    extract_custom_title, extract_cwd, extract_message, extract_session_id, resolve_session_title,
-    AgentKind, Project, Role, Session, SessionSummary,
+    extract_custom_title, extract_cwd, extract_git_branch, extract_message, extract_session_id,
+    resolve_session_title, AgentKind, Project, Role, Session, SessionSummary,
 };
 use notify::RecursiveMode;
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
@@ -229,15 +229,17 @@ impl SessionSource for FileSystemRepository {
             .iter()
             .map(|path| {
                 let modified_at_ms = to_millis(fs::metadata(path).and_then(|m| m.modified()));
-                let (id, title) = cached_or_scanned_summary(path, modified_at_ms)?;
+                let scanned = cached_or_scanned_summary(path, modified_at_ms)?;
                 Ok(SessionSummary {
-                    id,
-                    title,
+                    id: scanned.id,
+                    title: scanned.title,
                     modified_at_ms,
                     // `is_latest` はフォルダ内での相対比較が必要なため、
                     // ここでは決められない(app::list_sessions が
                     // `sort_sessions_by_recency` で確定させる)。
                     is_latest: false,
+                    cwd: scanned.cwd,
+                    git_branch: scanned.git_branch,
                 })
             })
             .collect()
@@ -248,13 +250,18 @@ impl SessionSource for FileSystemRepository {
 /// セッションファイルは数MBになりうり、`custom-title` はファイル末尾付近と
 /// は限らないため全行走査が必要になる。未変更のファイルを毎回再走査しない
 /// ため、プロセス内メモリでキャッシュする(永続化不要。issue #33)。
+/// `cwd`/`git_branch`(issue #104)も同じ全行走査のついでに求まるため、
+/// このキャッシュに含める。
 /// `FileSystemRepository` はコマンド呼び出しごとに使い捨てで生成される
 /// (tauri層)ため、インスタンスのフィールドではなくモジュール静的な領域に
 /// 置く。
+#[derive(Clone)]
 struct CachedSessionSummary {
     modified_at_ms: u64,
     id: String,
     title: String,
+    cwd: Option<String>,
+    git_branch: Option<String>,
 }
 
 static SESSION_SUMMARY_CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedSessionSummary>>> =
@@ -269,44 +276,43 @@ fn session_summary_cache() -> &'static Mutex<HashMap<PathBuf, CachedSessionSumma
 fn cached_or_scanned_summary(
     path: &Path,
     modified_at_ms: u64,
-) -> Result<(String, String), AppError> {
+) -> Result<CachedSessionSummary, AppError> {
     {
         let cache = session_summary_cache()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(cached) = cache.get(path) {
             if cached.modified_at_ms == modified_at_ms {
-                return Ok((cached.id.clone(), cached.title.clone()));
+                return Ok(cached.clone());
             }
         }
     }
 
-    let (id, title) = scan_session_summary(path)?;
+    let mut scanned = scan_session_summary(path)?;
+    scanned.modified_at_ms = modified_at_ms;
 
     let mut cache = session_summary_cache()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    cache.insert(
-        path.to_path_buf(),
-        CachedSessionSummary {
-            modified_at_ms,
-            id: id.clone(),
-            title: title.clone(),
-        },
-    );
-    Ok((id, title))
+    cache.insert(path.to_path_buf(), scanned.clone());
+    Ok(scanned)
 }
 
-/// セッションファイルを1行ずつ走査し、ID と表示用タイトルを求める。
-/// `custom-title` はファイルのどこにでも出現しうる(リネームのたびに追記)
-/// ため、早期終了せず全行を読む。
-fn scan_session_summary(path: &Path) -> Result<(String, String), AppError> {
+/// セッションファイルを1行ずつ走査し、ID・表示用タイトル・作業ディレクトリ
+/// (cwd)・ブランチ(git_branch)を求める(issue #104でcwd/git_branchを追加)。
+/// `custom-title`/`gitBranch` はファイルのどこにでも出現しうる(リネーム・
+/// checkoutのたびに追記)ため、早期終了せず全行を読む。`cwd` は最初に記録
+/// された値(プロジェクトルート)、`git_branch` は最後に記録された値
+/// (checkoutの最終状態)を採用する。
+fn scan_session_summary(path: &Path) -> Result<CachedSessionSummary, AppError> {
     let file = fs::File::open(path)
         .map_err(|e| AppError::Io(format!("{} を開けませんでした: {}", path.display(), e)))?;
 
     let mut id: Option<String> = None;
     let mut last_custom_title: Option<String> = None;
     let mut first_user_message: Option<String> = None;
+    let mut cwd: Option<String> = None;
+    let mut git_branch: Option<String> = None;
 
     for value in BufReader::new(file)
         .lines()
@@ -326,6 +332,12 @@ fn scan_session_summary(path: &Path) -> Result<(String, String), AppError> {
                 }
             }
         }
+        if cwd.is_none() {
+            cwd = extract_cwd(&value);
+        }
+        if let Some(branch) = extract_git_branch(&value) {
+            git_branch = Some(branch);
+        }
     }
 
     let id = id.ok_or_else(|| AppError::Io("セッションIDを取得できませんでした".to_string()))?;
@@ -334,7 +346,15 @@ fn scan_session_summary(path: &Path) -> Result<(String, String), AppError> {
         first_user_message.as_deref(),
         &id,
     );
-    Ok((id, title))
+    Ok(CachedSessionSummary {
+        // 呼び出し側(`cached_or_scanned_summary`)が上書きする。走査直後の
+        // 値が未確定なことを型で示すため、ここでは仮に0を入れる。
+        modified_at_ms: 0,
+        id,
+        title,
+        cwd,
+        git_branch,
+    })
 }
 
 #[cfg(test)]
@@ -462,6 +482,50 @@ mod tests {
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].id, "s1");
         assert_eq!(sessions[0].title, "最後のタイトル");
+    }
+
+    #[test]
+    fn list_sessions_uses_the_first_cwd_and_the_last_git_branch() {
+        // cwdは最初の値(プロジェクトルート)、git_branchは最後の値
+        // (checkoutの最終状態)を採用する(issue #104)。
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        fs::write(
+            project_dir.join("s1.jsonl"),
+            [
+                r#"{"type":"user","sessionId":"s1","cwd":"/repo","gitBranch":"main","message":{"content":"hello"}}"#,
+                r#"{"type":"user","sessionId":"s1","cwd":"/repo/sub","gitBranch":"feature/x","message":{"content":"world"}}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let sessions = repo.list_sessions("proj").expect("should list sessions");
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].cwd.as_deref(), Some("/repo"));
+        assert_eq!(sessions[0].git_branch.as_deref(), Some("feature/x"));
+    }
+
+    #[test]
+    fn list_sessions_leaves_cwd_and_git_branch_none_when_never_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        fs::write(
+            project_dir.join("s1.jsonl"),
+            r#"{"type":"queue-operation","sessionId":"s1"}"#,
+        )
+        .unwrap();
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let sessions = repo.list_sessions("proj").expect("should list sessions");
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].cwd, None);
+        assert_eq!(sessions[0].git_branch, None);
     }
 
     #[test]

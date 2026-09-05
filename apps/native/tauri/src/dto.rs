@@ -97,6 +97,12 @@ pub struct SessionSummaryDto {
     /// 送信フォームを有効にする(`--continue` の性質上、最新以外へは
     /// 送信できないため。issue #33)。
     pub is_latest: bool,
+    /// セッションの作業ディレクトリ。JSONLに記録が無ければ `null`
+    /// (ハブのグラフ階層用。issue #104)。
+    pub cwd: Option<String>,
+    /// セッションのgitブランチ(セッション中の最後の記録値)。`"HEAD"` は
+    /// デタッチ状態、記録が無ければ `null`(ハブのグラフ階層用。issue #104)。
+    pub git_branch: Option<String>,
 }
 
 impl From<domain::SessionSummary> for SessionSummaryDto {
@@ -106,6 +112,8 @@ impl From<domain::SessionSummary> for SessionSummaryDto {
             title: summary.title,
             modified_at: summary.modified_at_ms,
             is_latest: summary.is_latest,
+            cwd: summary.cwd,
+            git_branch: summary.git_branch,
         }
     }
 }

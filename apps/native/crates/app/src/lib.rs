@@ -1016,12 +1016,16 @@ mod tests {
                 title: "old".to_string(),
                 modified_at_ms: 1,
                 is_latest: false,
+                cwd: None,
+                git_branch: None,
             },
             SessionSummary {
                 id: "new".to_string(),
                 title: "new".to_string(),
                 modified_at_ms: 2,
                 is_latest: false,
+                cwd: None,
+                git_branch: None,
             },
         ];
 

@@ -31,6 +31,9 @@ export type SessionSummaryDto = {
   title: string;
   modified_at: number;
   is_latest: boolean;
+  // ハブのグラフ階層(issue #104)。JSONLに記録が無ければ `null`。
+  cwd: string | null;
+  git_branch: string | null;
 };
 
 export type AppErrorDto = {
