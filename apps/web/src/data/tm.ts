@@ -224,7 +224,7 @@ const ENTITY_DEFS: EntityDef[] = [
     name: { physical: "ProjectFolder", logical: "作業ディレクトリ" },
     type: "RESOURCE",
     description:
-      "Claude Code を起動した作業ディレクトリ。~/.claude/projects/<フォルダ名>/ のフォルダ名は、この絶対パスの英数字以外を1文字ずつ - に置換したもの(報告書 §1)。日付が帰属しないためリソース。",
+      "作業ディレクトリの絶対パス。~/.claude/projects/<フォルダ名>/ のフォルダ名は、セッション開始時のこのパスの英数字以外を1文字ずつ - に置換したもの(報告書 §1)。日付が帰属しないためリソース。集合にはフォルダを決めたパスだけでなく、行の cwd として現れる全てのパス(サブディレクトリや node_modules 配下を含む)が入る。",
     position: { x: 0, y: 0 },
     identifiers: ["cwd"],
     attributes: ["folderName"],
@@ -253,7 +253,7 @@ const ENTITY_DEFS: EntityDef[] = [
     name: { physical: "ChainLine", logical: "ログ行" },
     type: "EVENT",
     description:
-      "uuid / parentUuid で親子チェーンを構成する行(user / assistant / system / attachment)。記録日時という過去の出来事の日付が帰属するためイベント。cwd を作業ディレクトリへの (R) として左側に置いているのは、これが行単位のメタデータで、ファイルの置き場所(セッションが属するフォルダ)と一致しないことがあるため(報告書 §2.3)。",
+      "uuid / parentUuid で親子チェーンを構成する行(user / assistant / system / attachment)。記録日時という過去の出来事の日付が帰属するためイベント。cwd を作業ディレクトリへの (R) として左側に置いているのは、これが行単位のメタデータで、ファイルの置き場所と一致しないことが実際にあるため(報告書 §2.3)。このPCの ~/.claude/projects/ 直下の .jsonl 54件を実測したところ、27件(50%)が1ファイル内に複数の cwd を持ち、同じ27件がフォルダ名にエンコードされないパスを含んでいた。最多の1件は14種類で、別プロジェクトのディレクトリまで含む。したがってセッション経由(対照表)の関係だけでは行の記録場所を表現できず、この関係は対照表と重複しない。",
     position: { x: 580, y: 120 },
     identifiers: ["uuid", "sessionId(R)", "cwd(R)"],
     attributes: [
@@ -397,8 +397,8 @@ const RELATIONSHIP_DEFS: RelationshipDef[] = [
     to: { entity: "ProjectFolderSession", position: 0, cardinality: 1, optionality: 1 },
   },
   // 作業ディレクトリ 1 : ログ行 複数(1以上)。E-R。
-  // 上のセッション経由の関係とは別に張る。行の cwd はファイルの置き場所と
-  // 一致しないことがあり(報告書 §2.3)、別個の事実だからである。
+  // 対照表(セッション経由)の関係とは別に張る。行の cwd はファイルの置き場所と
+  // 一致しないことが実測で確認されており(54件中27件)、別個の事実だからである。
   {
     from: { entity: "ProjectFolder", position: 270, cardinality: 1, optionality: 1 },
     to: { entity: "ChainLine", position: 105, cardinality: 3, optionality: 1 },
