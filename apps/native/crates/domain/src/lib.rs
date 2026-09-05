@@ -5,8 +5,8 @@ mod session_line;
 /// は挙動を変えないリファクタリングとして既存の呼び出し元(infra)から
 /// そのまま使えるよう、モジュール名を介さずクレート直下に再エクスポートする。
 pub use session_line::{
-    extract_custom_title, extract_cwd, extract_message, extract_session_id, AssistantLine,
-    AttachmentLine, ChainLineBase, SessionLine, SystemLevel, UserLine,
+    extract_custom_title, extract_cwd, extract_git_branch, extract_message, extract_session_id,
+    AssistantLine, AttachmentLine, ChainLineBase, SessionLine, SystemLevel, UserLine,
 };
 
 /// 会話を生成しているエージェントの種類。現時点では Claude Code のみ。
@@ -48,13 +48,18 @@ pub struct Session {
 /// セッション一覧(ビューア左ペイン)表示用の1件分。全メッセージを読まずに
 /// 一覧を出すための最小限の情報。`is_latest` はそのフォルダ内で最終更新が
 /// 最も新しいセッションかどうか(`--continue` で送信できるのはこれだけ。
-/// issue #33)。
+/// issue #33)。`cwd`/`git_branch` はハブのグラフ階層(issue #104)用に
+/// JSONLから抽出した値。どちらもセッションによっては記録されておらず
+/// `None` になりうる(古いセッション・`gitBranch` が実行環境の都合で
+/// 記録されない場合など)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionSummary {
     pub id: String,
     pub title: String,
     pub modified_at_ms: u64,
     pub is_latest: bool,
+    pub cwd: Option<String>,
+    pub git_branch: Option<String>,
 }
 
 pub fn sort_projects_by_recency(projects: &mut [Project]) {
@@ -548,6 +553,8 @@ mod tests {
             title: "title".to_string(),
             modified_at_ms,
             is_latest: false,
+            cwd: None,
+            git_branch: None,
         }
     }
 
