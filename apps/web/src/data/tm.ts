@@ -17,8 +17,8 @@
  * `system` 4種 / `attachment` 23種の詳細、`pr-link` と GitHub の関係は次段以降で追加する。
  *
  * 【関係の検証(モノ × モノ の網羅性)】
- * 9エンティティの全36ペアを確認した。関係があるのは10ペア(11本)。
- * 残る26ペアのうち、以下4ペアは「語彙は存在するが今は関係を構成していない」ものであり、
+ * 10エンティティの全45ペアを確認した。関係があるのは11ペア(12本)。
+ * 残る34ペアのうち、以下4ペアは「語彙は存在するが今は関係を構成していない」ものであり、
  * 見落としではなく判断の記録として残す。
  *
  * - ログ行 × 入力キュー / 入力キュー × ユーザー行
@@ -31,9 +31,9 @@
  *   対する関係として立つ。その際、現在 sourceToolAssistantUUID で直接張っている
  *   ユーザー行 × AI応答行 の関係も、ツール呼び出し経由に組み替わる可能性がある。
  *
- * 他の22ペアは関係を構成しないのが正しい。内訳は、サブセットが親(ログ行)から行UUIDを
- * 継承しており親で張った関係がそのまま効くもの12ペアと、対応する語彙がそもそも存在
- * しないもの10ペア。
+ * 他の30ペアは直接の関係を構成しないのが正しい。内訳は、サブセットが親(ログ行)から
+ * 行UUIDを継承しており親で張った関係がそのまま効くもの12ペア、対応する語彙がそもそも
+ * 存在しないもの17ペア、対照表を経由するもの1ペア(作業ディレクトリ × セッション)。
  *
  * 【オブジェクトモデル(/class-diagram)との違い】
  * Classes は `.jsonl` の「型の構造」(serde でどうデシリアライズするか)を描く。
@@ -224,7 +224,7 @@ const ENTITY_DEFS: EntityDef[] = [
     name: { physical: "ProjectFolder", logical: "作業ディレクトリ" },
     type: "RESOURCE",
     description:
-      "Claude Code を起動した作業ディレクトリ。~/.claude/projects/<フォルダ名>/ のフォルダ名は、この絶対パスの英数字以外を1文字ずつ - に置換したもの(報告書 §1)。日付が帰属しないためリソース。",
+      "作業ディレクトリの絶対パス。~/.claude/projects/<フォルダ名>/ のフォルダ名は、セッション開始時のこのパスの英数字以外を1文字ずつ - に置換したもの(報告書 §1)。日付が帰属しないためリソース。集合にはフォルダを決めたパスだけでなく、行の cwd として現れる全てのパス(サブディレクトリや node_modules 配下を含む)が入る。",
     position: { x: 0, y: 0 },
     identifiers: ["cwd"],
     attributes: ["folderName"],
@@ -233,10 +233,19 @@ const ENTITY_DEFS: EntityDef[] = [
     name: { physical: "Session", logical: "セッション" },
     type: "RESOURCE",
     description:
-      "1会話 = 1つの .jsonl ファイル。セッションIDは会話開始時に発番される UUID v4 でファイル名にもなる。ログにセッション開始日時という語彙は無く(あるのは行ごとの timestamp)、日付が帰属しないためリソース。会話タイトル・モード等は custom-title / ai-title / mode 行として追記されるが、これらは個体指定子を持たないためモノにはならず、セッションの属性になる。",
-    position: { x: 0, y: 220 },
-    identifiers: ["sessionId", "cwd(R)"],
+      "1つの会話。セッションIDは会話開始時に発番される UUID v4 で、直下の .jsonl のファイル名にもなる。ただしセッションIDはファイルを識別しない: サブエージェントの会話は <セッションID>/subagents/agent-<ID>.jsonl に分離され、親と同じ sessionId を引き継ぐ(報告書 §7。実測でも87件すべてが親と同一)。ファイルをモノとして立てるのは第3弾(サブエージェント)の課題として残している。ログにセッション開始日時という語彙は無く(あるのは行ごとの timestamp)、日付が帰属しないためリソース。会話タイトル・モード等は custom-title / ai-title / mode 行として追記されるが、これらは個体指定子を持たないためモノにはならず、セッションの属性になる。",
+    position: { x: 0, y: 350 },
+    identifiers: ["sessionId"],
     attributes: ["customTitle", "aiTitle", "mode", "slug", "lastPrompt"],
+  },
+  {
+    name: { physical: "ProjectFolderSession", logical: "作業ディレクトリ．セッション．対照表" },
+    type: "COMPARATIVE",
+    description:
+      "どのセッション(.jsonl)がどの作業ディレクトリのフォルダに置かれているか。作業ディレクトリとセッションはどちらもリソースであり、TM では R-R の関係は多重度によらず対照表で構成する。ログ側に対応する語彙は無く、対になる事実だけを持つ単なる mapping-list になる。",
+    position: { x: 0, y: 160 },
+    identifiers: ["cwd(R)", "sessionId(R)"],
+    attributes: [],
   },
 
   // ============ イベント ============
@@ -244,8 +253,8 @@ const ENTITY_DEFS: EntityDef[] = [
     name: { physical: "ChainLine", logical: "ログ行" },
     type: "EVENT",
     description:
-      "uuid / parentUuid で親子チェーンを構成する行(user / assistant / system / attachment)。記録日時という過去の出来事の日付が帰属するためイベント。cwd を作業ディレクトリへの (R) として左側に置いているのは、これが行単位のメタデータで、ファイルの置き場所(セッションが属するフォルダ)と一致しないことがあるため(報告書 §2.3)。",
-    position: { x: 500, y: 120 },
+      "uuid / parentUuid で親子チェーンを構成する行(user / assistant / system / attachment)。記録日時という過去の出来事の日付が帰属するためイベント。cwd を作業ディレクトリへの (R) として左側に置いているのは、これが行単位のメタデータで、ファイルの置き場所と一致しないことが実際にあるため(報告書 §2.3)。このPCの ~/.claude/projects/ 直下の .jsonl 54件を実測したところ、27件(50%)が1ファイル内に複数の cwd を持ち、同じ27件がフォルダ名にエンコードされないパスを含んでいた。最多の1件は14種類で、別プロジェクトのディレクトリまで含む。したがってセッション経由(対照表)の関係だけでは行の記録場所を表現できず、この関係は対照表と重複しない。",
+    position: { x: 580, y: 120 },
     identifiers: ["uuid", "sessionId(R)", "cwd(R)"],
     attributes: [
       "timestamp",
@@ -302,7 +311,7 @@ const ENTITY_DEFS: EntityDef[] = [
     // (投入日時という過去の行為の日付が帰属するのでイベントとしても成立する)。
     description:
       "queue-operation 行。ユーザーが入力を送信した瞬間の記録で、user 行より先に書かれる(報告書 §4.3)。1セッションに複数あるためセッションの多値(MO)。d3.ter に多値の種別が無いため EVENT で代用している。",
-    position: { x: 0, y: 540 },
+    position: { x: 0, y: 620 },
     identifiers: ["sessionId(R)"],
     attributes: ["enqueuedAt", "content"],
   },
@@ -313,7 +322,7 @@ const ENTITY_DEFS: EntityDef[] = [
     type: "RECURSION",
     description:
       "ログ行どうしの親子関係。物理チェーン(parentUuid)と論理チェーン(logicalParentUuid)の2種があり、後者は compact_boundary で parentUuid が null に戻った際に圧縮前の末尾を指す(報告書 §4.9)。チェーン種別で区別する。",
-    position: { x: 990, y: 120 },
+    position: { x: 1070, y: 120 },
     identifiers: ["parentUuid", "childUuid"],
     attributes: ["linkKind"],
   },
@@ -376,16 +385,20 @@ type RelationshipPortDef = {
 type RelationshipDef = { from: RelationshipPortDef; to: RelationshipPortDef };
 
 const RELATIONSHIP_DEFS: RelationshipDef[] = [
-  // 作業ディレクトリ 1 : セッション 複数(1以上)。
-  // R-R だが「複数対複数」ではなく、ファイルがどのフォルダに置かれるかという
-  // 1対複数の包含関係のため、対照表は作らずセッション側に (R) を持たせている。
+  // R-R(作業ディレクトリ × セッション)は対照表で構成する。
+  // 作業ディレクトリ 1 に対し対照表の行は 1以上。
   {
     from: { entity: "ProjectFolder", position: 0, cardinality: 1, optionality: 1 },
-    to: { entity: "Session", position: 180, cardinality: 3, optionality: 1 },
+    to: { entity: "ProjectFolderSession", position: 180, cardinality: 3, optionality: 1 },
+  },
+  // セッション 1 に対し対照表の行は必ず1件(ファイルの置き場所は1つ)。
+  {
+    from: { entity: "Session", position: 180, cardinality: 1, optionality: 1 },
+    to: { entity: "ProjectFolderSession", position: 0, cardinality: 1, optionality: 1 },
   },
   // 作業ディレクトリ 1 : ログ行 複数(1以上)。E-R。
-  // 上のセッション経由の関係とは別に張る。行の cwd はファイルの置き場所と
-  // 一致しないことがあり(報告書 §2.3)、別個の事実だからである。
+  // 対照表(セッション経由)の関係とは別に張る。行の cwd はファイルの置き場所と
+  // 一致しないことが実測で確認されており(54件中27件)、別個の事実だからである。
   {
     from: { entity: "ProjectFolder", position: 270, cardinality: 1, optionality: 1 },
     to: { entity: "ChainLine", position: 105, cardinality: 3, optionality: 1 },
