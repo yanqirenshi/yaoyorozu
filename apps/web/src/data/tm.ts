@@ -233,7 +233,7 @@ const ENTITY_DEFS: EntityDef[] = [
     name: { physical: "Session", logical: "セッション" },
     type: "RESOURCE",
     description:
-      "1会話 = 1つの .jsonl ファイル。セッションIDは会話開始時に発番される UUID v4 でファイル名にもなる。ログにセッション開始日時という語彙は無く(あるのは行ごとの timestamp)、日付が帰属しないためリソース。会話タイトル・モード等は custom-title / ai-title / mode 行として追記されるが、これらは個体指定子を持たないためモノにはならず、セッションの属性になる。",
+      "1つの会話。セッションIDは会話開始時に発番される UUID v4 で、直下の .jsonl のファイル名にもなる。ただしセッションIDはファイルを識別しない: サブエージェントの会話は <セッションID>/subagents/agent-<ID>.jsonl に分離され、親と同じ sessionId を引き継ぐ(報告書 §7。実測でも87件すべてが親と同一)。ファイルをモノとして立てるのは第3弾(サブエージェント)の課題として残している。ログにセッション開始日時という語彙は無く(あるのは行ごとの timestamp)、日付が帰属しないためリソース。会話タイトル・モード等は custom-title / ai-title / mode 行として追記されるが、これらは個体指定子を持たないためモノにはならず、セッションの属性になる。",
     position: { x: 0, y: 350 },
     identifiers: ["sessionId"],
     attributes: ["customTitle", "aiTitle", "mode", "slug", "lastPrompt"],
