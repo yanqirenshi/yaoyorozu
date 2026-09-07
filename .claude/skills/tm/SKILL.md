@@ -186,3 +186,8 @@ const svg = document.querySelector('g.entity').ownerSVGElement;
   contextmenu のコールバックも無いため、コンテナへの委譲で拾っている。
 - インスペクタの「適用」は `key` を変えて D3Ter を貼り替える。rectum を作り直す
   だけでは再描画されないため。
+- インスペクタの幅は左端のハンドルで伸縮できる(初期 444px / 最小 222px / 最大 888px)。
+  Colonoscope はルートに `width: 300` をインラインで持ち幅の props が無いため、
+  `.tm-inspector-host > .colonoscope` を `!important` で上書きしている。
+  web.md §4 からの逸脱で、理由は TmTab のコメントに残してある。
+  Colonoscope に幅の props が入ったらこの上書きごと差し替える。

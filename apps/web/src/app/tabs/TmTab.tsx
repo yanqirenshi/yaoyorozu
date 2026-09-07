@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import D3Ter, { Rectum } from "@yanqirenshi/d3.ter";
 import Colonoscope from "@yanqirenshi/colonoscope";
 import { TM_DATA, TM_ENTITY_KEY_BY_ID } from "@/data/tm";
@@ -41,6 +48,13 @@ function toNumber(value: string, fallback: number) {
   return Number.isNaN(parsed) ? fallback : parsed;
 }
 
+/** インスペクタの幅(px)。マウスで伸縮できる。 */
+const INSPECTOR_WIDTH = { initial: 444, min: 222, max: 888 } as const;
+
+function clampWidth(value: number) {
+  return Math.min(INSPECTOR_WIDTH.max, Math.max(INSPECTOR_WIDTH.min, value));
+}
+
 export default function TmTab() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   // 図の再構築に使う値。ドラッグでは更新せず(DOM 側が既に正しいため)、
@@ -50,6 +64,10 @@ export default function TmTab() {
   const overridesRef = useRef<LayoutOverrides>(overrides);
   const [version, setVersion] = useState(0);
   const [selected, setSelected] = useState<SelectedEntity | null>(null);
+  const [inspectorWidth, setInspectorWidth] = useState<number>(
+    INSPECTOR_WIDTH.initial,
+  );
+  const [resizing, setResizing] = useState(false);
 
   const rectum = useMemo(() => {
     const instance = new Rectum({ callbacks: {} });
@@ -160,6 +178,27 @@ export default function TmTab() {
     };
   }, []);
 
+  // インスペクタ幅の伸縮。ハンドルを掴んでいるあいだ window で追う。
+  useEffect(() => {
+    if (!resizing) return;
+
+    const handleMouseMove = (event: MouseEvent) => {
+      const container = containerRef.current;
+      if (!container) return;
+      // パネルは右端に貼り付くので、コンテナ右端からの距離がそのまま幅になる。
+      const right = container.getBoundingClientRect().right;
+      setInspectorWidth(clampWidth(right - event.clientX));
+    };
+    const stop = () => setResizing(false);
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", stop);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", stop);
+    };
+  }, [resizing]);
+
   const handleApply = useCallback(
     (values: Record<string, string>) => {
       if (!selected) return;
@@ -183,8 +222,42 @@ export default function TmTab() {
   );
 
   return (
-    <div ref={containerRef} className="relative flex min-h-0 w-full flex-1">
+    <div
+      ref={containerRef}
+      className="tm-inspector-host relative flex min-h-0 w-full flex-1"
+      style={
+        {
+          "--tm-inspector-width": `${inspectorWidth}px`,
+          // 伸縮中はテキスト選択で掴んだ感触が濁るため止める。
+          userSelect: resizing ? "none" : undefined,
+        } as CSSProperties
+      }
+    >
+      {/*
+        Colonoscope はルートに width: 300 をインラインで持ち、幅を変える props が
+        無い(@yanqirenshi/colonoscope@0.1.0)。安定して付く `colonoscope` クラスを
+        この画面の中だけで上書きする。インラインスタイルより優先させるため
+        `!important` が要る。web.md §4 の「MUI + Tailwind」からの逸脱にあたるが、
+        外部コンポーネントのインライン幅を上書きする手段が他に無いため。
+        Colonoscope 側に幅の props が入ったら、この style ごと差し替える。
+      */}
+      <style>{`.tm-inspector-host > .colonoscope { width: var(--tm-inspector-width) !important; }`}</style>
+
       <D3Ter key={version} id="d3-ter-graph" rectum={rectum} />
+
+      {selected && (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="インスペクタの幅を変更"
+          onMouseDown={(event) => {
+            event.preventDefault();
+            setResizing(true);
+          }}
+          className="absolute top-0 bottom-0 z-10 w-1.5 cursor-col-resize hover:bg-zinc-300"
+          style={{ right: `calc(var(--tm-inspector-width) - 3px)` }}
+        />
+      )}
 
       <Colonoscope
         target={selected}
