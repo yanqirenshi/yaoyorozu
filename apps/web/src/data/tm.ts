@@ -567,6 +567,15 @@ const RELATIONSHIPS: TmRelationship[] = RELATIONSHIP_DEFS.map((def, i) => ({
   ...(def.subset ? { subset: def.subset } : {}),
 }));
 
+/**
+ * エンティティ ID → 物理名。レイアウトの手調整を保存するときのキーに使う。
+ * 図から読み取れるのは `_id`(配列順で採番)だけだが、順序を入れ替えると値が
+ * ずれるため、保存キーには並べ替えに強い物理名を使う(Classes と同じ流儀)。
+ */
+export const TM_ENTITY_KEY_BY_ID: Record<number, string> = Object.fromEntries(
+  ENTITY_DEFS.map((def, i) => [ENTITY_BASE_ID + i, def.name.physical]),
+);
+
 export const TM_DATA: TmData = {
   identifiers: IDENTIFIERS,
   attributes: ATTRIBUTES,
