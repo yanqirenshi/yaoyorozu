@@ -57,21 +57,21 @@ function branchLabel(gitBranch: string | null): string {
   return gitBranch === "HEAD" ? DETACHED_BRANCH_LABEL : gitBranch;
 }
 
-// プロファイル1件あたりに表示するセッションノードの上限(issue #100)。
-// 対象フォルダによってはセッションが数十件あり、全表示するとグラフが
-// 破綻するため。超過分は集約ノード1個(「+n件」)にまとめる。
-const MAX_SESSIONS_PER_PROFILE = 10;
+// インスペクタ(issue #109)の幅。マウスドラッグで変更できる。
+const INSPECTOR_INITIAL_WIDTH = 444;
+const INSPECTOR_MIN_WIDTH = 222;
+const INSPECTOR_MAX_WIDTH = 888;
 
 // クリック・右クリック時にどう振る舞うか/何を表示するかを判定するための、
 // ノードの元データ(`_core`)。PC → profile → 作業ディレクトリ → ブランチ →
 // session の階層(issue #84・#104。Windowノードは廃止し、開いている
 // プロファイルは直接PCの下に並べる)。`windowLabel` があればそのウィンドウを
 // 前面化、無ければ `profileId` のウィンドウを新規に開く(profile・cwd・
-// branch・session・session-more のどのノードも同じ判定でよい。issue #100・
-// #104)。それ以外のフィールドはインスペクタ(issue #109)の表示専用で、
-// ノード種別によってどれが埋まっているかが変わる。
+// branch・session のどのノードも同じ判定でよい。issue #100・#104)。
+// それ以外のフィールドはインスペクタ(issue #109)の表示専用で、ノード種別に
+// よってどれが埋まっているかが変わる。
 type HubNodeCore = {
-  kind: "pc" | "profile" | "cwd" | "branch" | "session" | "profile-unopened" | "session-more";
+  kind: "pc" | "profile" | "cwd" | "branch" | "session" | "profile-unopened";
   windowLabel?: string;
   profileId?: string;
   // pc
@@ -162,14 +162,15 @@ function buildGraphData(
     return groups;
   }
 
-  // 指定プロファイルのセッション枝を `profileNodeId` の下に生やす。セッションは
-  // 最大 `MAX_SESSIONS_PER_PROFILE` 件(新しい順)まで、作業ディレクトリ→
-  // ブランチの2段でグループ化して表示し、超過分は集約ノード1個にまとめる
-  // (issue #104。上限・集約はプロファイル単位のまま。issue #100)。ウィンドウが
-  // 開いているプロファイル(`windowLabel` あり)・未オープンのプロファイル
-  // (`windowLabel` 無し)の両方から呼ぶ(issue #100でセッションの取得元を
-  // ウィンドウレジストリからディスク上の実体に変えたため、両者の枝の作り方を
-  // 共通化できる)。消費した行数を返す(呼び出し側の `row` 更新用)。
+  // 指定プロファイルのセッション枝を `profileNodeId` の下に生やす。全セッション
+  // (新しい順)を作業ディレクトリ→ブランチの2段でグループ化して表示する
+  // (issue #104)。表示件数の上限は設けない(issue #100で導入した上限+
+  // 集約ノードは、実運用でグラフより一覧性の高いビューアで確認したいという
+  // 要望により撤廃した)。ウィンドウが開いているプロファイル(`windowLabel`
+  // あり)・未オープンのプロファイル(`windowLabel` 無し)の両方から呼ぶ
+  // (issue #100でセッションの取得元をウィンドウレジストリからディスク上の
+  // 実体に変えたため、両者の枝の作り方を共通化できる)。消費した行数を返す
+  // (呼び出し側の `row` 更新用)。
   function addSessionBranch(
     profileNodeId: string,
     profileId: string,
@@ -178,12 +179,10 @@ function buildGraphData(
     startRow: number,
   ): number {
     const sessions = sessionsByProfile[profileId] ?? [];
-    const visible = sessions.slice(0, MAX_SESSIONS_PER_PROFILE);
-    const overflow = sessions.length - visible.length;
 
     let row = startRow;
 
-    const cwdGroups = groupBy(visible, (s) => s.cwd ?? UNKNOWN_CWD);
+    const cwdGroups = groupBy(sessions, (s) => s.cwd ?? UNKNOWN_CWD);
     for (const cwdGroup of cwdGroups) {
       const cwdNodeId = `cwd:${profileId}:${cwdGroup.key}`;
       const cwdRowStart = row;
@@ -269,28 +268,6 @@ function buildGraphData(
         target: cwdNodeId,
         line: { width: 2, color: COLOR_BORDER },
       });
-    }
-
-    if (overflow > 0) {
-      const moreNodeId = `session-more:${profileId}`;
-      nodes.push({
-        id: moreNodeId,
-        x: COL_X.session,
-        y: ROW_START_Y + row * ROW_HEIGHT,
-        move: "will",
-        label: { text: `+${overflow}件`, fill: COLOR_MUTED, font: { size: 12 } },
-        circle: { r: 18, fill: COLOR_PEARL, stroke: { color: COLOR_BORDER, width: 2 } },
-        kind: "session-more",
-        windowLabel,
-        profileId,
-      });
-      edges.push({
-        id: `e${edgeSeq++}`,
-        source: profileNodeId,
-        target: moreNodeId,
-        line: { width: 2, color: COLOR_BORDER },
-      });
-      row += 1;
     }
 
     return Math.max(row - startRow, 1);
@@ -383,8 +360,7 @@ function formatGithubProject(project: GithubProjectDto | null | undefined): stri
 
 // ノードの `_core`(issue #109)からインスペクタの表示内容を組み立てる。
 // 追加のbackend呼び出しはせず、グラフ構築時に `_core` へ埋め込んだ値のみを
-// 使う。「+n件」の集約ノード(session-more)は対象外(issue本文の指示どおり
-// 何もしない)。
+// 使う。
 function buildInspectorContent(
   core: HubNodeCore,
   actions: {
@@ -456,8 +432,6 @@ function buildInspectorContent(
         ],
         action,
       };
-    case "session-more":
-      return null;
     default:
       return null;
   }
@@ -582,8 +556,8 @@ function HubPage() {
   }, [loadSessionsForProfile]);
 
   // `windowLabel` があればそのウィンドウを前面化、無ければ `profileId` の
-  // ウィンドウを新規に開く。session-more(集約)ノードも同じ判定でよい
-  // (開いていれば前面化、未オープンなら新規起動。issue #100)。
+  // ウィンドウを新規に開く(開いていれば前面化、未オープンなら新規起動。
+  // issue #100)。
   const handleNodeClick = useCallback((d: NodeDatum) => {
     const core = d._core as HubNodeCore;
     if (core.windowLabel) {
@@ -595,18 +569,36 @@ function HubPage() {
     }
   }, []);
 
-  // Rectum(命令的API)は useMemo で生成する(apps/web の d3系タブと同じ
-  // 流儀)。データが変わるたびに作り直す — d3.network はドラッグ以外の座標
-  // 変更を追跡する仕組みを持たないため、再生成して確実に最新のグラフを
-  // 描き直す(再生成のたびに、`move: "support"` のprofileノードは初期位置へ
-  // 戻り、`move: "will"` のsessionノードはforceシミュレーションで再配置
-  // されるため、ユーザーがドラッグした位置はリセットされる)。
+  // Rectum(命令的API)は初回に一度だけ生成し、以後は同じインスタンスを
+  // 使い続ける。`@yanqirenshi/assh0le` の `Colon.data()` は、`selector()`
+  // (`Asshole` がマウント時に一度だけ呼ぶ)が設定済みであれば、以後の
+  // `.data(newData)` 呼び出しのたびにD3のenter/update/exit差分更新で
+  // 再描画するだけで済む(カメラ=パン/ズームには触れない)。以前は
+  // データが変わるたびにRectumを作り直し、`<D3Network key={dataKey}>` で
+  // コンポーネントごと強制再マウントしていたため、ウィンドウを開く操作
+  // (`windows:changed` → 再取得 → データ更新)のたびに視点・ズームが
+  // 初期状態にリセットされる不具合があった。`handleNodeClick` は
+  // 空配列依存で安定しているため、このRectumは `HubPage` のマウント中
+  // ずっと同一インスタンスのままになる。
   //
   // NOTE: 現状 @yanqirenshi/d3.network 側の既知の問題により、ノードの
   // `<g>` に無条件で付く d3.drag() がネイティブの click イベントを
   // 抑制してしまい、この node.click コールバックが呼ばれない
   // (issue #84 のPRコメント参照)。ライブラリ本体の修正・バージョンアップ
   // 待ち。ここは修正後にそのまま動くよう、素直な形にしてある。
+  const rectum = useMemo(() => {
+    return new Rectum({ callbacks: { node: { click: handleNodeClick } } });
+  }, [handleNodeClick]);
+
+  // データが変わるたびに同じRectumインスタンスへ `.data()` を呼んで更新
+  // する。`move: "support"`(profile・作業ディレクトリ・ブランチ)の
+  // ノードは `buildGraphData` が毎回座標を計算し直すため、ユーザーが
+  // ドラッグした位置は更新のたびにリセットされる(これはRectumを作り
+  // 直すかどうかに関係ない、`move: "support"` の既知の仕様。カメラ=
+  // パン/ズームとは別の話)。`Asshole` の `rectum.selector()` 呼び出し
+  // より先にこのeffectが走った場合でも、`Colon.data()` は selector 未設定
+  // なら描画せず値を保持するだけなので、後から selector が設定された時点で
+  // 自動的に初回描画される。
   const dataKey = JSON.stringify({
     windowStates,
     profiles,
@@ -614,16 +606,24 @@ function HubPage() {
     profileDetails,
     effectiveProjectsDir,
   });
-  const rectum = useMemo(() => {
-    const instance = new Rectum({
-      callbacks: { node: { click: handleNodeClick } },
-    });
-    instance.data(
+  useEffect(() => {
+    // NOTE: `@yanqirenshi/d3.network` の `Edges.js`(`draw()`)には、IDが
+    // 一致した既存の辺要素(本来は「更新」として残すべきもの)まで無条件に
+    // `remove()` してしまうバグがある(`Nodes.js` 側は `exit()` のみを
+    // 正しく削除しており影響を受けない)。Rectumインスタンスを使い回す
+    // ようになった(このeffect)ことで、2回目以降の `.data()` 呼び出しで
+    // このバグが表面化し、辺(接続線)だけが全部消えてノードだけが残る
+    // 状態になっていた。ライブラリ本体の修正待ちの間、ここで毎回いったん
+    // 既存の辺要素を明示的に空にしてから `.data()` を呼ぶことで、
+    // ライブラリの `enter()` が必ず全辺を新規追加として作り直すようにする
+    // (辺自体はドラッグ位置等の保持すべき状態を持たないため、毎回作り
+    // 直しても実害はない)。
+    hubPageRef.current?.querySelectorAll("path.ng-edge").forEach((el) => el.remove());
+    rectum.data(
       buildGraphData(windowStates, profiles, sessionsByProfile, profileDetails, effectiveProjectsDir),
     );
-    return instance;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dataKey, handleNodeClick]);
+  }, [rectum, dataKey]);
 
   // ノードの右クリックでインスペクタ(issue #109)を表示する。d3.network の
   // ノードAPI(node.click等)にcontextmenuの仕組みが無いため、描画後のDOMへ
@@ -648,8 +648,6 @@ function HubPage() {
       if (!nodeGroup?.__data__) return;
       e.preventDefault();
       const core = nodeGroup.__data__._core as HubNodeCore;
-      // 「+n件」ノードの右クリックは対象外(issue #109)。
-      if (core.kind === "session-more") return;
       setInspectorCore(core);
     };
     container.addEventListener("contextmenu", handleContextMenu);
@@ -682,6 +680,42 @@ function HubPage() {
       })
     : null;
 
+  // インスペクタの幅をマウスドラッグで変更できるようにする(初期444px・
+  // 最小222px・最大888px)。パネルは右端固定(`right:0`)のため、幅は
+  // 「`.hub-page` の右端 - マウスのX座標」で都度算出する(ドラッグ開始時の
+  // 差分ではなく現在位置から直接計算するため、stateの古い値を参照する心配が
+  // ない)。
+  const [inspectorWidth, setInspectorWidth] = useState(INSPECTOR_INITIAL_WIDTH);
+  const handleResizeStart = useCallback((e: ReactMouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const rect = hubPageRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const nextWidth = rect.right - moveEvent.clientX;
+      setInspectorWidth(
+        Math.min(INSPECTOR_MAX_WIDTH, Math.max(INSPECTOR_MIN_WIDTH, nextWidth)),
+      );
+    };
+    const handleMouseUp = () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+      // ドラッグ終了時にマウス下にあった要素(グラフのノード等)へ、ドラッグ
+      // 操作の一部として直後に発火する click が誤って渡らないよう、次の
+      // 1回だけキャプチャ段階で止める。
+      window.addEventListener(
+        "click",
+        (clickEvent) => {
+          clickEvent.stopPropagation();
+          clickEvent.preventDefault();
+        },
+        { capture: true, once: true },
+      );
+    };
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+  }, []);
+
   const dockItems = useMemo(
     () => [
       {
@@ -698,13 +732,18 @@ function HubPage() {
   return (
     <div className="hub-page" ref={hubPageRef} onClick={handleHubPageClick}>
       {error && <p className="error">{error}</p>}
-      {/* `D3Network`(Asshole)は初回マウント時にしか `rectum.selector()` を
-          呼ばないため、`rectum` を作り直した(=データが変わった)ときは
-          `key` も変えて強制的に作り直す(apps/web の d3系タブと同じ流儀。
-          そうしないと新しいデータが描画に反映されない)。 */}
-      <D3Network key={dataKey} rectum={rectum} />
+      {/* `rectum` はマウント中ずっと同一インスタンス(上記参照)なので、
+          `key` は付けない。`key` を付けて`dataKey`が変わるたびに強制再
+          マウントすると、そのたびにカメラ(パン/ズーム)がリセットされて
+          しまう。 */}
+      <D3Network rectum={rectum} />
       {inspectorContent && (
-        <HubInspector content={inspectorContent} onClose={() => setInspectorCore(null)} />
+        <HubInspector
+          content={inspectorContent}
+          width={inspectorWidth}
+          onClose={() => setInspectorCore(null)}
+          onResizeStart={handleResizeStart}
+        />
       )}
     </div>
   );

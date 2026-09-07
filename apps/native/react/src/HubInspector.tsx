@@ -1,3 +1,5 @@
+import type { MouseEvent as ReactMouseEvent } from "react";
+
 export type InspectorField = { label: string; value: string };
 export type InspectorAction = { label: string; onClick: () => void };
 
@@ -13,15 +15,25 @@ export type InspectorContent = {
 
 type HubInspectorProps = {
   content: InspectorContent;
+  width: number;
   onClose: () => void;
+  onResizeStart: (e: ReactMouseEvent<HTMLDivElement>) => void;
 };
 
-// 画面右端に固定幅で表示するパネル(issue #109)。グラフのオーバーレイと
-// して被せるだけで、グラフ自体のレイアウトには影響しない(App.css の
-// `.hub-inspector` 参照)。
-function HubInspector({ content, onClose }: HubInspectorProps) {
+// 画面右端に表示するパネル(issue #109)。グラフのオーバーレイとして
+// 被せるだけで、グラフ自体のレイアウトには影響しない(App.css の
+// `.hub-inspector` 参照)。幅は左端のハンドルをドラッグして変更できる
+// (初期444px・最小222px・最大888pxはHubPage側でクランプする)。
+function HubInspector({ content, width, onClose, onResizeStart }: HubInspectorProps) {
   return (
-    <div className="hub-inspector" role="dialog" aria-label={content.title}>
+    <div className="hub-inspector" role="dialog" aria-label={content.title} style={{ width }}>
+      <div
+        className="hub-inspector-resizer"
+        onMouseDown={onResizeStart}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="インスペクタの幅を変更"
+      />
       <div className="hub-inspector-header">
         <h3>{content.title}</h3>
         <button
