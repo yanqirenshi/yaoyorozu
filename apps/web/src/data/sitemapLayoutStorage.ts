@@ -1,14 +1,13 @@
 // サイトマップの手調整(ノードのドラッグ移動・インスペクタでの数値指定)の
-// 退避先。web.md §2 により localStorage に置いてよいのは表示補助情報だけで、
-// 調整が安定したら値を sitemap.ts へ戻す。
-const STORAGE_KEY = "yaoyorozu:sitemap:layout";
+// 保存先。web.md §2 により、開発時専用の保存API経由でリポジトリ内ファイル
+// (`src/data/layout/sitemap.json`)に保存する。
+import layoutFile from "./layout/sitemap.json";
+import { saveLayoutToApi } from "./layoutSaveApi";
 
-// 保存する座標系のバージョン。version 1 は children の位置を絶対座標のまま
-// 保存しており、読み戻すと d3.sitemap の fitting() が親の絶対座標を再度
-// 加算して二重にずれた(相対座標で保存する version 2 で修正)。保存値だけ
-// からは絶対・相対のどちらで書かれたか判別できず変換もできないため、
-// 古い版は読み込み時に破棄する(手調整はリセットされる)。
-const STORAGE_VERSION = 2;
+// 旧方式(localStorage)からの一時的な移行処理で使うキーとバージョン。
+// 全環境の移行が済んだら READ_LEGACY 関連ごと削除してよい。
+const LEGACY_STORAGE_KEY = "yaoyorozu:sitemap:layout";
+const LEGACY_STORAGE_VERSION = 2;
 
 export type NodeLayout = {
   // children の位置は「親からの相対座標」。SITEMAP_DATA と同じ座標系で持つ
@@ -22,28 +21,46 @@ export type NodeLayout = {
 
 export type LayoutOverrides = Record<number, NodeLayout>;
 
-type StoredLayout = {
+type LegacyStoredLayout = {
   version: number;
   nodes: LayoutOverrides;
 };
 
-export function loadLayoutOverrides(): LayoutOverrides {
-  if (typeof window === "undefined") return {};
+const fileOverrides = (layoutFile as LayoutOverrides) ?? {};
+const hasFileOverrides = Object.keys(fileOverrides).length > 0;
+
+function readLegacyOverrides(): LayoutOverrides | null {
+  if (typeof window === "undefined") return null;
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return {};
-    const stored = JSON.parse(raw) as StoredLayout;
-    if (stored?.version !== STORAGE_VERSION) return {};
-    return stored.nodes ?? {};
+    const raw = window.localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (!raw) return null;
+    const stored = JSON.parse(raw) as LegacyStoredLayout;
+    if (stored?.version !== LEGACY_STORAGE_VERSION) return null;
+    return stored.nodes ?? null;
   } catch {
-    return {};
+    return null;
   }
 }
 
-export function saveLayoutOverrides(overrides: LayoutOverrides): void {
-  if (typeof window === "undefined") return;
-  const stored: StoredLayout = { version: STORAGE_VERSION, nodes: overrides };
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+export function loadLayoutOverrides(): LayoutOverrides {
+  if (hasFileOverrides) return fileOverrides;
+  return readLegacyOverrides() ?? {};
+}
+
+/**
+ * 旧方式(localStorage)からの一時的な自己移行。全環境の移行が済んだら削除してよい。
+ *
+ * レイアウトファイルが空で、かつ localStorage に旧データが残っている場合、
+ * それを保存APIへ送ってファイル化し、成功したら旧キーを削除する。
+ */
+export function migrateLegacyLayoutIfNeeded(): void {
+  if (hasFileOverrides) return;
+  const legacy = readLegacyOverrides();
+  if (!legacy || Object.keys(legacy).length === 0) return;
+
+  saveLayoutToApi("sitemap", legacy).then(({ ok }) => {
+    if (ok) window.localStorage.removeItem(LEGACY_STORAGE_KEY);
+  });
 }
 
 type SitemapNode = {

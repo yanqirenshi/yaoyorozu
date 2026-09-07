@@ -8,9 +8,13 @@ import {
   applyLayoutOverrides,
   buildParentIdMap,
   loadLayoutOverrides,
-  saveLayoutOverrides,
+  migrateLegacyLayoutIfNeeded,
   type LayoutOverrides,
 } from "@/data/sitemapLayoutStorage";
+import {
+  useLayoutSaveStatus,
+  LayoutSaveStatusSnackbar,
+} from "./layout/LayoutSaveStatus";
 
 const PARENT_ID_BY_NODE_ID = buildParentIdMap(SITEMAP_DATA.nodes);
 
@@ -44,10 +48,17 @@ export default function SitemapTab() {
   );
   const containerRef = useRef<HTMLDivElement | null>(null);
   const overridesRef = useRef(overrides);
+  const { state: saveState, save, close: closeSaveStatus } =
+    useLayoutSaveStatus("sitemap");
 
   useEffect(() => {
     overridesRef.current = overrides;
   }, [overrides]);
+
+  // 旧方式(localStorage)からの一時的な自己移行。全環境の移行が済んだら削除してよい。
+  useEffect(() => {
+    migrateLegacyLayoutIfNeeded();
+  }, []);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -120,7 +131,7 @@ export default function SitemapTab() {
 
       if (!changed) return;
       setOverrides(next);
-      saveLayoutOverrides(next);
+      save(next);
     };
 
     window.addEventListener("mousedown", handleMouseDown, { capture: true });
@@ -133,7 +144,7 @@ export default function SitemapTab() {
         capture: true,
       });
     };
-  }, []);
+  }, [save]);
 
   const rectum = useMemo(() => {
     const instance = new Rectum({
@@ -169,7 +180,7 @@ export default function SitemapTab() {
     };
 
     setOverrides(next);
-    saveLayoutOverrides(next);
+    save(next);
     setSelected(null);
     setVersion((v) => v + 1);
   };
@@ -197,6 +208,8 @@ export default function SitemapTab() {
         onApply={handleApply}
         onClose={() => setSelected(null)}
       />
+
+      <LayoutSaveStatusSnackbar state={saveState} onClose={closeSaveStatus} />
     </div>
   );
 }

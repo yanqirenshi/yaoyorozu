@@ -7,9 +7,13 @@ import { SESSION_LINE_CLASS_DATA } from "@/data/classes-session-line";
 import {
   applyLayoutOverrides,
   loadLayoutOverrides,
-  saveLayoutOverrides,
+  migrateLegacyLayoutIfNeeded,
   type LayoutOverrides,
 } from "@/data/classesLayoutStorage";
+import {
+  useLayoutSaveStatus,
+  LayoutSaveStatusSnackbar,
+} from "./layout/LayoutSaveStatus";
 
 type SelectedClass = {
   id: string; // ClassDiagram 内部の "class-N"(getClass で引くためだけに使う)
@@ -29,6 +33,13 @@ export default function ClassesTab() {
   const diagramRef = useRef<ClassDiagram | null>(null);
   const overridesRef = useRef<LayoutOverrides>(loadLayoutOverrides());
   const [selected, setSelected] = useState<SelectedClass | null>(null);
+  const { state: saveState, save, close: closeSaveStatus } =
+    useLayoutSaveStatus("classes");
+
+  // 旧方式(localStorage)からの一時的な自己移行。全環境の移行が済んだら削除してよい。
+  useEffect(() => {
+    migrateLegacyLayoutIfNeeded();
+  }, []);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -93,7 +104,7 @@ export default function ClassesTab() {
 
       if (!changed) return;
       overridesRef.current = next;
-      saveLayoutOverrides(next);
+      save(next);
       // 移動を伴った操作の直後に発生する click でインスペクタが開かないようにする
       // (d3-sitemap の Rectum が「静止クリックだけ届ける」のと同じ意図)。
       suppressNextClick = true;
@@ -136,7 +147,7 @@ export default function ClassesTab() {
       container.innerHTML = "";
       diagramRef.current = null;
     };
-  }, []);
+  }, [save]);
 
   const handleApply = (values: Record<string, string>) => {
     if (!selected) return;
@@ -151,7 +162,7 @@ export default function ClassesTab() {
       [selected.physical]: { x, y },
     };
     overridesRef.current = next;
-    saveLayoutOverrides(next);
+    save(next);
     setSelected(null);
   };
 
@@ -171,6 +182,8 @@ export default function ClassesTab() {
         onApply={handleApply}
         onClose={() => setSelected(null)}
       />
+
+      <LayoutSaveStatusSnackbar state={saveState} onClose={closeSaveStatus} />
     </div>
   );
 }
