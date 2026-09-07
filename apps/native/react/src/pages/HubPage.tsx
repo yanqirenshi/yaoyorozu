@@ -62,6 +62,11 @@ function branchLabel(gitBranch: string | null): string {
 // 破綻するため。超過分は集約ノード1個(「+n件」)にまとめる。
 const MAX_SESSIONS_PER_PROFILE = 10;
 
+// インスペクタ(issue #109)の幅。マウスドラッグで変更できる。
+const INSPECTOR_INITIAL_WIDTH = 444;
+const INSPECTOR_MIN_WIDTH = 222;
+const INSPECTOR_MAX_WIDTH = 888;
+
 // クリック・右クリック時にどう振る舞うか/何を表示するかを判定するための、
 // ノードの元データ(`_core`)。PC → profile → 作業ディレクトリ → ブランチ →
 // session の階層(issue #84・#104。Windowノードは廃止し、開いている
@@ -682,6 +687,42 @@ function HubPage() {
       })
     : null;
 
+  // インスペクタの幅をマウスドラッグで変更できるようにする(初期444px・
+  // 最小222px・最大888px)。パネルは右端固定(`right:0`)のため、幅は
+  // 「`.hub-page` の右端 - マウスのX座標」で都度算出する(ドラッグ開始時の
+  // 差分ではなく現在位置から直接計算するため、stateの古い値を参照する心配が
+  // ない)。
+  const [inspectorWidth, setInspectorWidth] = useState(INSPECTOR_INITIAL_WIDTH);
+  const handleResizeStart = useCallback((e: ReactMouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const rect = hubPageRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const nextWidth = rect.right - moveEvent.clientX;
+      setInspectorWidth(
+        Math.min(INSPECTOR_MAX_WIDTH, Math.max(INSPECTOR_MIN_WIDTH, nextWidth)),
+      );
+    };
+    const handleMouseUp = () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+      // ドラッグ終了時にマウス下にあった要素(グラフのノード等)へ、ドラッグ
+      // 操作の一部として直後に発火する click が誤って渡らないよう、次の
+      // 1回だけキャプチャ段階で止める。
+      window.addEventListener(
+        "click",
+        (clickEvent) => {
+          clickEvent.stopPropagation();
+          clickEvent.preventDefault();
+        },
+        { capture: true, once: true },
+      );
+    };
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+  }, []);
+
   const dockItems = useMemo(
     () => [
       {
@@ -704,7 +745,12 @@ function HubPage() {
           そうしないと新しいデータが描画に反映されない)。 */}
       <D3Network key={dataKey} rectum={rectum} />
       {inspectorContent && (
-        <HubInspector content={inspectorContent} onClose={() => setInspectorCore(null)} />
+        <HubInspector
+          content={inspectorContent}
+          width={inspectorWidth}
+          onClose={() => setInspectorCore(null)}
+          onResizeStart={handleResizeStart}
+        />
       )}
     </div>
   );
