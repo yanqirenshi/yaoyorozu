@@ -186,8 +186,12 @@ const svg = document.querySelector('g.entity').ownerSVGElement;
   contextmenu のコールバックも無いため、コンテナへの委譲で拾っている。
 - インスペクタの「適用」は `key` を変えて D3Ter を貼り替える。rectum を作り直す
   だけでは再描画されないため。
-- インスペクタの幅は左端のハンドルで伸縮できる(初期 444px / 最小 222px / 最大 888px)。
-  Colonoscope はルートに `width: 300` をインラインで持ち幅の props が無いため、
-  `.tm-inspector-host > .colonoscope` を `!important` で上書きしている。
-  web.md §4 からの逸脱で、理由は TmTab のコメントに残してある。
-  Colonoscope に幅の props が入ったらこの上書きごと差し替える。
+- インスペクタの中身は **基本 / 説明** の2タブ([TmInspector.tsx](../../../apps/web/src/app/tabs/tm/TmInspector.tsx))。
+  基本は物理名・X・Y、説明は `description` を出す。幅は左端のハンドルで伸縮できる
+  (初期 444px / 最小 222px / 最大 888px)。
+- **TM のインスペクタは Colonoscope を使っていない**(Classes / サイトマップは使用中)。
+  Colonoscope の項目は平らな1枚リストでタブに分けられず、幅も 300px 固定だったため
+  MUI で自前に置き換えた。パッケージ側にタブと幅の受け口が入ったら戻すことを検討する
+  (幅は Foolsgolds/Assholes#21 で起票済み)。
+- 対象を切り替えてもタブの選択は保つ(説明を読み比べられるように)。入力欄の差し替えは
+  レンダー中の setState で行う。effect で書くと `react-hooks/set-state-in-effect` に当たる。
