@@ -171,13 +171,15 @@ const svg = document.querySelector('g.entity').ownerSVGElement;
 - WBS([wbs.ts](../../../apps/web/src/data/wbs.ts))の TM 配下(`_id: 40`)にモデルの構成要素が並んでいる。
   エンティティの種類を増やしたらここも合わせる。
   `/tm` の「WBS」タブが見ているのは画面としての TM(`_id: 26`)であり別物なので注意。
-- レイアウトの手調整は localStorage に保存される([tmLayoutStorage.ts](../../../apps/web/src/data/tmLayoutStorage.ts)、
-  キーは `yaoyorozu:tm:layout`)。図上でエンティティをドラッグすると、その位置が
-  **物理名をキーに**上書きとして残り、`tm.ts` の `position` より優先される。
-  - そのため「tm.ts を直したのに図が変わらない」ときは、まず localStorage の
-    上書きを疑う(ブラウザで `localStorage.removeItem("yaoyorozu:tm:layout")`)。
-  - web.md §2 のとおり、調整が固まったら値を tm.ts の `position` に反映して
-    リポジトリへ戻す。localStorage はあくまで一時的な手調整の置き場である。
+- レイアウトの手調整は**リポジトリ内のファイル** `src/data/layout/tm.json` に保存される
+  ([tmLayoutStorage.ts](../../../apps/web/src/data/tmLayoutStorage.ts))。開発時専用の
+  保存API(`POST /api/layout/tm`)経由で書き込む。web.md §2 の規定であり、
+  **localStorage への保存は NEVER**(旧方式は廃止済み)。
+  - ファイルの形は `{ entities, ports }`。エンティティ位置は**物理名をキー**にした
+    上書きで、`tm.ts` の `position` より優先される。
+  - そのため「tm.ts を直したのに図が変わらない」ときは、まず `tm.json` を疑う。
+  - web.md §2 のとおり、調整が固まったら値を tm.ts に反映し、`tm.json` は空に戻す。
+  - 保存は開発サーバーでしか通らない(本番ビルドでは 405)。成否はスナックバーに出る。
 - d3.ter にはドラッグ完了を知らせるコールバックが無い。TmTab は window の capture
   フェーズで mousedown/mouseup を拾い、`g.entity` の `__data__.position` を前後で
   比較して変化したものだけ保存している(SitemapTab と同じ方式)。
@@ -187,8 +189,15 @@ const svg = document.querySelector('g.entity').ownerSVGElement;
 - インスペクタの「適用」は `key` を変えて D3Ter を貼り替える。rectum を作り直す
   だけでは再描画されないため。
 - インスペクタの中身は **基本 / 説明** の2タブ([TmInspector.tsx](../../../apps/web/src/app/tabs/tm/TmInspector.tsx))。
-  基本は物理名・X・Y、説明は `description` を出す。幅は左端のハンドルで伸縮できる
-  (初期 444px / 最小 222px / 最大 888px)。
+  基本は物理名・X・Y と**そのエンティティに繋がる結線の一覧**(相手の名前・ラベル・
+  このエンティティ側のポート角度)、説明は `description` を出す。幅は左端のハンドルで
+  伸縮できる(初期 444px / 最小 222px / 最大 888px)。
+- ポート角度も同じ `tm.json` の `ports` に入る。キーは
+  `<from物理名>-><to物理名>[#ラベル]:<from|to>` で、同じ端点の組が複数ある場合だけ
+  ラベルで区別する(ログ行 × 再帰表 が親・子の2本)。重複したら `tm.ts` が例外を投げる。
+  - 保存APIはファイルを丸ごと置き換えるため、**位置だけ・角度だけを書かない**。
+    `buildLayoutFile(entities, ports)` で必ず両方を含めて保存する
+    (片方だけ書くともう片方が消える)。
 - **TM のインスペクタは Colonoscope を使っていない**(Classes / サイトマップは使用中)。
   Colonoscope の項目は平らな1枚リストでタブに分けられず、幅も 300px 固定だったため
   MUI で自前に置き換えた。パッケージ側にタブと幅の受け口が入ったら戻すことを検討する

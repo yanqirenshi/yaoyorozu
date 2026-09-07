@@ -2,13 +2,25 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import D3Ter, { Rectum } from "@yanqirenshi/d3.ter";
-import TmInspector, { type TmInspectorTarget } from "./tm/TmInspector";
-import { TM_DATA, TM_ENTITY_KEY_BY_ID } from "@/data/tm";
+import TmInspector, {
+  type TmInspectorPort,
+  type TmInspectorTarget,
+} from "./tm/TmInspector";
+import {
+  TM_DATA,
+  TM_ENTITY_KEY_BY_ID,
+  TM_RELATIONSHIP_KEY_BY_ID,
+} from "@/data/tm";
 import {
   applyLayoutOverrides,
+  applyPortOverrides,
+  buildLayoutFile,
   loadLayoutOverrides,
+  loadPortOverrides,
   migrateLegacyLayoutIfNeeded,
+  portOverrideKey,
   type LayoutOverrides,
+  type PortOverrides,
 } from "@/data/tmLayoutStorage";
 import {
   useLayoutSaveStatus,
@@ -34,6 +46,48 @@ function clampWidth(value: number) {
   return Math.min(INSPECTOR_WIDTH.max, Math.max(INSPECTOR_WIDTH.min, value));
 }
 
+/**
+ * 指定エンティティに繋がる結線を、そのエンティティ側の端点として並べる。
+ * 相手側の角度はここには出さない(相手を選べばそちらから編集できる)。
+ */
+function buildPorts(
+  entityId: number,
+  overrides: PortOverrides,
+): TmInspectorPort[] {
+  const ports: TmInspectorPort[] = [];
+
+  for (const relationship of TM_DATA.relationships) {
+    const relationshipKey = TM_RELATIONSHIP_KEY_BY_ID[relationship.id];
+    if (!relationshipKey) continue;
+
+    const ends: ("from" | "to")[] = [];
+    if (relationship.from.entity === entityId) ends.push("from");
+    if (relationship.to.entity === entityId) ends.push("to");
+
+    for (const end of ends) {
+      const counterpartId =
+        end === "from" ? relationship.to.entity : relationship.from.entity;
+      const key = portOverrideKey(relationshipKey, end);
+      const base =
+        end === "from"
+          ? relationship.from.position
+          : relationship.to.position;
+
+      ports.push({
+        key,
+        counterpart:
+          TM_DATA.entities.find((entity) => entity.id === counterpartId)?.name ??
+          "",
+        label: relationship.label,
+        outgoing: end === "from",
+        angle: overrides[key] ?? base,
+      });
+    }
+  }
+
+  return ports;
+}
+
 export default function TmTab() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   // 図の再構築に使う値。ドラッグでは更新せず(DOM 側が既に正しいため)、
@@ -41,6 +95,15 @@ export default function TmTab() {
   const [overrides, setOverrides] = useState<LayoutOverrides>(loadLayoutOverrides);
   // 常に最新の手調整。ドラッグ保存はこちらだけを更新する。
   const overridesRef = useRef<LayoutOverrides>(overrides);
+  // ポート角度はドラッグで変わらないので state だけで足りる。
+  const [portOverrides, setPortOverrides] =
+    useState<PortOverrides>(loadPortOverrides);
+  // 右クリックのハンドラは deps 空の effect の中にあり state を読めないため、
+  // 開いた時点の値を渡せるよう ref に写しておく。
+  const portOverridesRef = useRef<PortOverrides>(portOverrides);
+  useEffect(() => {
+    portOverridesRef.current = portOverrides;
+  }, [portOverrides]);
   const [version, setVersion] = useState(0);
   const [selected, setSelected] = useState<TmInspectorTarget | null>(null);
   const [inspectorWidth, setInspectorWidth] = useState<number>(
@@ -64,9 +127,14 @@ export default function TmTab() {
         TM_ENTITY_KEY_BY_ID,
         overrides,
       ),
+      relationships: applyPortOverrides(
+        TM_DATA.relationships,
+        TM_RELATIONSHIP_KEY_BY_ID,
+        portOverrides,
+      ),
     });
     return instance;
-  }, [overrides]);
+  }, [overrides, portOverrides]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -114,7 +182,9 @@ export default function TmTab() {
 
       if (!changed) return;
       overridesRef.current = next;
-      save(next);
+      // 同じ tm.json にポート角度も入るため、保存済みの角度を必ず一緒に書く
+      // (エンティティ位置だけを書くと角度が消える)。
+      save(buildLayoutFile(next, portOverridesRef.current));
     };
 
     // 右クリックでインスペクタを開く(issue #109 と同じ流儀)。d3.ter に
@@ -143,6 +213,7 @@ export default function TmTab() {
         description: core.description,
         // ドラッグ後の実値を見せる(TM_DATA の初期値ではない)。
         position: { ...datum.position },
+        ports: buildPorts(datum._id, portOverridesRef.current),
       });
     };
 
@@ -186,17 +257,29 @@ export default function TmTab() {
   }, [resizing]);
 
   const handleApply = useCallback(
-    (position: { x: number; y: number }) => {
+    (values: {
+      position: { x: number; y: number };
+      ports: Record<string, number>;
+    }) => {
       if (!selected) return;
 
       // ドラッグで保存済みの分を落とさないよう、常に ref を土台にする。
-      const next: LayoutOverrides = {
+      const nextLayout: LayoutOverrides = {
         ...overridesRef.current,
-        [selected.key]: { x: position.x, y: position.y },
+        [selected.key]: { x: values.position.x, y: values.position.y },
       };
-      overridesRef.current = next;
-      save(next);
-      setOverrides(next);
+      const nextPorts: PortOverrides = {
+        ...portOverridesRef.current,
+        ...values.ports,
+      };
+
+      overridesRef.current = nextLayout;
+      portOverridesRef.current = nextPorts;
+      // 位置と角度は同じ tm.json に入るので、1回の保存でまとめて書く。
+      save(buildLayoutFile(nextLayout, nextPorts));
+      setOverrides(nextLayout);
+      setPortOverrides(nextPorts);
+
       // rectum を作り直しただけでは再描画されないため、D3Ter を貼り替える。
       setVersion((v) => v + 1);
       setSelected(null);

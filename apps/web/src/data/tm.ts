@@ -576,6 +576,41 @@ export const TM_ENTITY_KEY_BY_ID: Record<number, string> = Object.fromEntries(
   ENTITY_DEFS.map((def, i) => [ENTITY_BASE_ID + i, def.name.physical]),
 );
 
+/**
+ * リレーションシップ ID → 安定キー。ポート角度の手調整を保存するキーに使う。
+ *
+ * エンティティと同じく `_id` は配列順の採番なので保存キーには使えない。
+ * 端点の物理名の組(`Session->ChainLine`)を基本とし、同じ組が複数ある場合だけ
+ * ラベルで区別する(ログ行 × 再帰表 が親・子の2本あるため)。
+ * それでも重複するならモデル側で区別が付いていないということなので、例外にする。
+ */
+const RELATIONSHIP_KEYS: string[] = (() => {
+  const pairCount = new Map<string, number>();
+  for (const def of RELATIONSHIP_DEFS) {
+    const pair = `${def.from.entity}->${def.to.entity}`;
+    pairCount.set(pair, (pairCount.get(pair) ?? 0) + 1);
+  }
+
+  const keys = RELATIONSHIP_DEFS.map((def) => {
+    const pair = `${def.from.entity}->${def.to.entity}`;
+    return (pairCount.get(pair) ?? 0) > 1 ? `${pair}#${def.label ?? ""}` : pair;
+  });
+
+  const seen = new Set<string>();
+  for (const key of keys) {
+    if (seen.has(key)) {
+      throw new Error(`duplicate relationship key: ${key}`);
+    }
+    seen.add(key);
+  }
+  return keys;
+})();
+
+export const TM_RELATIONSHIP_KEY_BY_ID: Record<number, string> =
+  Object.fromEntries(
+    RELATIONSHIP_KEYS.map((key, i) => [RELATIONSHIP_BASE_ID + i, key]),
+  );
+
 export const TM_DATA: TmData = {
   identifiers: IDENTIFIERS,
   attributes: ATTRIBUTES,
