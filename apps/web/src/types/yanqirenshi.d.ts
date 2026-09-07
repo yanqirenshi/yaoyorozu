@@ -28,18 +28,8 @@ declare module "@yanqirenshi/d3.sitemap" {
   export default D3Sitemap;
 }
 
-declare module "@yanqirenshi/d3.ter" {
-  import type { ComponentType } from "react";
-
-  export class Rectum {
-    constructor(params: Record<string, unknown>);
-    data(value: Record<string, unknown>): unknown;
-    selector(value: string): void;
-  }
-
-  const D3Ter: ComponentType<{ rectum: Rectum; id?: string }>;
-  export default D3Ter;
-}
+// d3.ter は 0.1.22 から型定義を同梱しているため、ここでの宣言は不要
+// (Foolsgolds/Assholes#19)。
 
 declare module "@yanqirenshi/d3.wireframe" {
   import type { ComponentType } from "react";

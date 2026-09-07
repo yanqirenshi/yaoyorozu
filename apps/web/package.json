@@ -17,7 +17,7 @@
     "@yanqirenshi/d3.classes": "^0.5.0",
     "@yanqirenshi/d3.deployment": "^0.8.4",
     "@yanqirenshi/d3.sitemap": "^0.5.1",
-    "@yanqirenshi/d3.ter": "^0.1.16",
+    "@yanqirenshi/d3.ter": "^0.1.22",
     "@yanqirenshi/d3.wireframe": "^0.1.1",
     "@yanqirenshi/table.wbs": "^0.0.16",
     "@yanqirenshi/wnqi.big.size": "^0.0.2",
