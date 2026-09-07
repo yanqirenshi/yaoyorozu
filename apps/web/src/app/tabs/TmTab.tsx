@@ -1,15 +1,8 @@
 "use client";
 
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import D3Ter, { Rectum } from "@yanqirenshi/d3.ter";
-import Colonoscope from "@yanqirenshi/colonoscope";
+import TmInspector, { type TmInspectorTarget } from "./tm/TmInspector";
 import { TM_DATA, TM_ENTITY_KEY_BY_ID } from "@/data/tm";
 import {
   applyLayoutOverrides,
@@ -30,24 +23,6 @@ type TerEntityDatum = {
 
 type Position = { x: number; y: number };
 
-/**
- * インスペクタに渡す1件分。図の内部データではなく `TM_DATA` を正として組み立てる
- * (名前・種別・説明はモデル側の値。位置だけはドラッグ後の実値を図から読む)。
- */
-type SelectedEntity = {
-  id: number;
-  key: string;
-  name: string;
-  type: string;
-  description: string;
-  position: Position;
-};
-
-function toNumber(value: string, fallback: number) {
-  const parsed = Number(value);
-  return Number.isNaN(parsed) ? fallback : parsed;
-}
-
 /** インスペクタの幅(px)。マウスで伸縮できる。 */
 const INSPECTOR_WIDTH = { initial: 444, min: 222, max: 888 } as const;
 
@@ -63,7 +38,7 @@ export default function TmTab() {
   // 常に最新の手調整。ドラッグ保存はこちらだけを更新する。
   const overridesRef = useRef<LayoutOverrides>(overrides);
   const [version, setVersion] = useState(0);
-  const [selected, setSelected] = useState<SelectedEntity | null>(null);
+  const [selected, setSelected] = useState<TmInspectorTarget | null>(null);
   const [inspectorWidth, setInspectorWidth] = useState<number>(
     INSPECTOR_WIDTH.initial,
   );
@@ -200,16 +175,13 @@ export default function TmTab() {
   }, [resizing]);
 
   const handleApply = useCallback(
-    (values: Record<string, string>) => {
+    (position: { x: number; y: number }) => {
       if (!selected) return;
-
-      const x = toNumber(values["position.x"], selected.position.x);
-      const y = toNumber(values["position.y"], selected.position.y);
 
       // ドラッグで保存済みの分を落とさないよう、常に ref を土台にする。
       const next: LayoutOverrides = {
         ...overridesRef.current,
-        [selected.key]: { x, y },
+        [selected.key]: { x: position.x, y: position.y },
       };
       overridesRef.current = next;
       saveLayoutOverrides(next);
@@ -224,25 +196,12 @@ export default function TmTab() {
   return (
     <div
       ref={containerRef}
-      className="tm-inspector-host relative flex min-h-0 w-full flex-1"
-      style={
-        {
-          "--tm-inspector-width": `${inspectorWidth}px`,
-          // 伸縮中はテキスト選択で掴んだ感触が濁るため止める。
-          userSelect: resizing ? "none" : undefined,
-        } as CSSProperties
-      }
+      className="relative flex min-h-0 w-full flex-1"
+      style={{
+        // 伸縮中はテキスト選択で掴んだ感触が濁るため止める。
+        userSelect: resizing ? "none" : undefined,
+      }}
     >
-      {/*
-        Colonoscope はルートに width: 300 をインラインで持ち、幅を変える props が
-        無い(@yanqirenshi/colonoscope@0.1.0)。安定して付く `colonoscope` クラスを
-        この画面の中だけで上書きする。インラインスタイルより優先させるため
-        `!important` が要る。web.md §4 の「MUI + Tailwind」からの逸脱にあたるが、
-        外部コンポーネントのインライン幅を上書きする手段が他に無いため。
-        Colonoscope 側に幅の props が入ったら、この style ごと差し替える。
-      */}
-      <style>{`.tm-inspector-host > .colonoscope { width: var(--tm-inspector-width) !important; }`}</style>
-
       <D3Ter key={version} id="d3-ter-graph" rectum={rectum} />
 
       {selected && (
@@ -254,24 +213,19 @@ export default function TmTab() {
             event.preventDefault();
             setResizing(true);
           }}
-          className="absolute top-0 bottom-0 z-10 w-1.5 cursor-col-resize hover:bg-zinc-300"
-          style={{ right: `calc(var(--tm-inspector-width) - 3px)` }}
+          className="absolute top-0 bottom-0 z-20 w-1.5 cursor-col-resize hover:bg-zinc-300"
+          style={{ right: inspectorWidth - 3 }}
         />
       )}
 
-      <Colonoscope
-        target={selected}
-        title={(t: SelectedEntity) => t.name}
-        subtitle={(t: SelectedEntity) => t.type}
-        fields={[
-          { path: "key", label: "物理名", type: "readonly" },
-          { path: "description", label: "説明", type: "readonly" },
-          { path: "position.x", label: "X", type: "number" },
-          { path: "position.y", label: "Y", type: "number" },
-        ]}
-        onApply={handleApply}
-        onClose={() => setSelected(null)}
-      />
+      {selected && (
+        <TmInspector
+          target={selected}
+          width={inspectorWidth}
+          onApply={handleApply}
+          onClose={() => setSelected(null)}
+        />
+      )}
     </div>
   );
 }
