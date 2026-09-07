@@ -160,6 +160,11 @@ const svg = document.querySelector('g.entity').ownerSVGElement;
 - コンソールエラーが無い(`read_console_messages`)。
   ただし `/wbs` を経由するとログが残るため、`/tm` を単独でリロードしてから見る。
 
+図の操作(ドラッグ・右クリック)を合成イベントで検証するときは、**React の再レンダーを
+待たずに DOM を読むと「開いていない」と誤判定する**。イベントを投げたあとに
+`await new Promise(r => setTimeout(r, 150))` を挟んでから判定すること(実際に一度
+誤った結論を出した)。`cardinality` などの結線記号は再描画を伴わないので待ち不要。
+
 ## 注意
 
 - 図が横に伸びやすい。実寸を測ってから `position` を詰める。手で見積もると外れる。
@@ -176,3 +181,8 @@ const svg = document.querySelector('g.entity').ownerSVGElement;
 - d3.ter にはドラッグ完了を知らせるコールバックが無い。TmTab は window の capture
   フェーズで mousedown/mouseup を拾い、`g.entity` の `__data__.position` を前後で
   比較して変化したものだけ保存している(SitemapTab と同じ方式)。
+- エンティティの**右クリックでインスペクタ**(Colonoscope)が開く。種別・物理名・
+  説明を表示し、X / Y を数値で指定できる。閉じるのは `✕` / Esc / 空白部の右クリック。
+  contextmenu のコールバックも無いため、コンテナへの委譲で拾っている。
+- インスペクタの「適用」は `key` を変えて D3Ter を貼り替える。rectum を作り直す
+  だけでは再描画されないため。
