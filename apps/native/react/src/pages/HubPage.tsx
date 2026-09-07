@@ -569,18 +569,36 @@ function HubPage() {
     }
   }, []);
 
-  // Rectum(命令的API)は useMemo で生成する(apps/web の d3系タブと同じ
-  // 流儀)。データが変わるたびに作り直す — d3.network はドラッグ以外の座標
-  // 変更を追跡する仕組みを持たないため、再生成して確実に最新のグラフを
-  // 描き直す(再生成のたびに、`move: "support"` のprofileノードは初期位置へ
-  // 戻り、`move: "will"` のsessionノードはforceシミュレーションで再配置
-  // されるため、ユーザーがドラッグした位置はリセットされる)。
+  // Rectum(命令的API)は初回に一度だけ生成し、以後は同じインスタンスを
+  // 使い続ける。`@yanqirenshi/assh0le` の `Colon.data()` は、`selector()`
+  // (`Asshole` がマウント時に一度だけ呼ぶ)が設定済みであれば、以後の
+  // `.data(newData)` 呼び出しのたびにD3のenter/update/exit差分更新で
+  // 再描画するだけで済む(カメラ=パン/ズームには触れない)。以前は
+  // データが変わるたびにRectumを作り直し、`<D3Network key={dataKey}>` で
+  // コンポーネントごと強制再マウントしていたため、ウィンドウを開く操作
+  // (`windows:changed` → 再取得 → データ更新)のたびに視点・ズームが
+  // 初期状態にリセットされる不具合があった。`handleNodeClick` は
+  // 空配列依存で安定しているため、このRectumは `HubPage` のマウント中
+  // ずっと同一インスタンスのままになる。
   //
   // NOTE: 現状 @yanqirenshi/d3.network 側の既知の問題により、ノードの
   // `<g>` に無条件で付く d3.drag() がネイティブの click イベントを
   // 抑制してしまい、この node.click コールバックが呼ばれない
   // (issue #84 のPRコメント参照)。ライブラリ本体の修正・バージョンアップ
   // 待ち。ここは修正後にそのまま動くよう、素直な形にしてある。
+  const rectum = useMemo(() => {
+    return new Rectum({ callbacks: { node: { click: handleNodeClick } } });
+  }, [handleNodeClick]);
+
+  // データが変わるたびに同じRectumインスタンスへ `.data()` を呼んで更新
+  // する。`move: "support"`(profile・作業ディレクトリ・ブランチ)の
+  // ノードは `buildGraphData` が毎回座標を計算し直すため、ユーザーが
+  // ドラッグした位置は更新のたびにリセットされる(これはRectumを作り
+  // 直すかどうかに関係ない、`move: "support"` の既知の仕様。カメラ=
+  // パン/ズームとは別の話)。`Asshole` の `rectum.selector()` 呼び出し
+  // より先にこのeffectが走った場合でも、`Colon.data()` は selector 未設定
+  // なら描画せず値を保持するだけなので、後から selector が設定された時点で
+  // 自動的に初回描画される。
   const dataKey = JSON.stringify({
     windowStates,
     profiles,
@@ -588,16 +606,12 @@ function HubPage() {
     profileDetails,
     effectiveProjectsDir,
   });
-  const rectum = useMemo(() => {
-    const instance = new Rectum({
-      callbacks: { node: { click: handleNodeClick } },
-    });
-    instance.data(
+  useEffect(() => {
+    rectum.data(
       buildGraphData(windowStates, profiles, sessionsByProfile, profileDetails, effectiveProjectsDir),
     );
-    return instance;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dataKey, handleNodeClick]);
+  }, [rectum, dataKey]);
 
   // ノードの右クリックでインスペクタ(issue #109)を表示する。d3.network の
   // ノードAPI(node.click等)にcontextmenuの仕組みが無いため、描画後のDOMへ
@@ -706,11 +720,11 @@ function HubPage() {
   return (
     <div className="hub-page" ref={hubPageRef} onClick={handleHubPageClick}>
       {error && <p className="error">{error}</p>}
-      {/* `D3Network`(Asshole)は初回マウント時にしか `rectum.selector()` を
-          呼ばないため、`rectum` を作り直した(=データが変わった)ときは
-          `key` も変えて強制的に作り直す(apps/web の d3系タブと同じ流儀。
-          そうしないと新しいデータが描画に反映されない)。 */}
-      <D3Network key={dataKey} rectum={rectum} />
+      {/* `rectum` はマウント中ずっと同一インスタンス(上記参照)なので、
+          `key` は付けない。`key` を付けて`dataKey`が変わるたびに強制再
+          マウントすると、そのたびにカメラ(パン/ズーム)がリセットされて
+          しまう。 */}
+      <D3Network rectum={rectum} />
       {inspectorContent && (
         <HubInspector
           content={inspectorContent}
