@@ -607,6 +607,18 @@ function HubPage() {
     effectiveProjectsDir,
   });
   useEffect(() => {
+    // NOTE: `@yanqirenshi/d3.network` の `Edges.js`(`draw()`)には、IDが
+    // 一致した既存の辺要素(本来は「更新」として残すべきもの)まで無条件に
+    // `remove()` してしまうバグがある(`Nodes.js` 側は `exit()` のみを
+    // 正しく削除しており影響を受けない)。Rectumインスタンスを使い回す
+    // ようになった(このeffect)ことで、2回目以降の `.data()` 呼び出しで
+    // このバグが表面化し、辺(接続線)だけが全部消えてノードだけが残る
+    // 状態になっていた。ライブラリ本体の修正待ちの間、ここで毎回いったん
+    // 既存の辺要素を明示的に空にしてから `.data()` を呼ぶことで、
+    // ライブラリの `enter()` が必ず全辺を新規追加として作り直すようにする
+    // (辺自体はドラッグ位置等の保持すべき状態を持たないため、毎回作り
+    // 直しても実害はない)。
+    hubPageRef.current?.querySelectorAll("path.ng-edge").forEach((el) => el.remove());
     rectum.data(
       buildGraphData(windowStates, profiles, sessionsByProfile, profileDetails, effectiveProjectsDir),
     );
