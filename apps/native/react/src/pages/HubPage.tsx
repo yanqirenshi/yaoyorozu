@@ -57,11 +57,6 @@ function branchLabel(gitBranch: string | null): string {
   return gitBranch === "HEAD" ? DETACHED_BRANCH_LABEL : gitBranch;
 }
 
-// プロファイル1件あたりに表示するセッションノードの上限(issue #100)。
-// 対象フォルダによってはセッションが数十件あり、全表示するとグラフが
-// 破綻するため。超過分は集約ノード1個(「+n件」)にまとめる。
-const MAX_SESSIONS_PER_PROFILE = 10;
-
 // インスペクタ(issue #109)の幅。マウスドラッグで変更できる。
 const INSPECTOR_INITIAL_WIDTH = 444;
 const INSPECTOR_MIN_WIDTH = 222;
@@ -72,11 +67,11 @@ const INSPECTOR_MAX_WIDTH = 888;
 // session の階層(issue #84・#104。Windowノードは廃止し、開いている
 // プロファイルは直接PCの下に並べる)。`windowLabel` があればそのウィンドウを
 // 前面化、無ければ `profileId` のウィンドウを新規に開く(profile・cwd・
-// branch・session・session-more のどのノードも同じ判定でよい。issue #100・
-// #104)。それ以外のフィールドはインスペクタ(issue #109)の表示専用で、
-// ノード種別によってどれが埋まっているかが変わる。
+// branch・session のどのノードも同じ判定でよい。issue #100・#104)。
+// それ以外のフィールドはインスペクタ(issue #109)の表示専用で、ノード種別に
+// よってどれが埋まっているかが変わる。
 type HubNodeCore = {
-  kind: "pc" | "profile" | "cwd" | "branch" | "session" | "profile-unopened" | "session-more";
+  kind: "pc" | "profile" | "cwd" | "branch" | "session" | "profile-unopened";
   windowLabel?: string;
   profileId?: string;
   // pc
@@ -167,14 +162,15 @@ function buildGraphData(
     return groups;
   }
 
-  // 指定プロファイルのセッション枝を `profileNodeId` の下に生やす。セッションは
-  // 最大 `MAX_SESSIONS_PER_PROFILE` 件(新しい順)まで、作業ディレクトリ→
-  // ブランチの2段でグループ化して表示し、超過分は集約ノード1個にまとめる
-  // (issue #104。上限・集約はプロファイル単位のまま。issue #100)。ウィンドウが
-  // 開いているプロファイル(`windowLabel` あり)・未オープンのプロファイル
-  // (`windowLabel` 無し)の両方から呼ぶ(issue #100でセッションの取得元を
-  // ウィンドウレジストリからディスク上の実体に変えたため、両者の枝の作り方を
-  // 共通化できる)。消費した行数を返す(呼び出し側の `row` 更新用)。
+  // 指定プロファイルのセッション枝を `profileNodeId` の下に生やす。全セッション
+  // (新しい順)を作業ディレクトリ→ブランチの2段でグループ化して表示する
+  // (issue #104)。表示件数の上限は設けない(issue #100で導入した上限+
+  // 集約ノードは、実運用でグラフより一覧性の高いビューアで確認したいという
+  // 要望により撤廃した)。ウィンドウが開いているプロファイル(`windowLabel`
+  // あり)・未オープンのプロファイル(`windowLabel` 無し)の両方から呼ぶ
+  // (issue #100でセッションの取得元をウィンドウレジストリからディスク上の
+  // 実体に変えたため、両者の枝の作り方を共通化できる)。消費した行数を返す
+  // (呼び出し側の `row` 更新用)。
   function addSessionBranch(
     profileNodeId: string,
     profileId: string,
@@ -183,12 +179,10 @@ function buildGraphData(
     startRow: number,
   ): number {
     const sessions = sessionsByProfile[profileId] ?? [];
-    const visible = sessions.slice(0, MAX_SESSIONS_PER_PROFILE);
-    const overflow = sessions.length - visible.length;
 
     let row = startRow;
 
-    const cwdGroups = groupBy(visible, (s) => s.cwd ?? UNKNOWN_CWD);
+    const cwdGroups = groupBy(sessions, (s) => s.cwd ?? UNKNOWN_CWD);
     for (const cwdGroup of cwdGroups) {
       const cwdNodeId = `cwd:${profileId}:${cwdGroup.key}`;
       const cwdRowStart = row;
@@ -274,28 +268,6 @@ function buildGraphData(
         target: cwdNodeId,
         line: { width: 2, color: COLOR_BORDER },
       });
-    }
-
-    if (overflow > 0) {
-      const moreNodeId = `session-more:${profileId}`;
-      nodes.push({
-        id: moreNodeId,
-        x: COL_X.session,
-        y: ROW_START_Y + row * ROW_HEIGHT,
-        move: "will",
-        label: { text: `+${overflow}件`, fill: COLOR_MUTED, font: { size: 12 } },
-        circle: { r: 18, fill: COLOR_PEARL, stroke: { color: COLOR_BORDER, width: 2 } },
-        kind: "session-more",
-        windowLabel,
-        profileId,
-      });
-      edges.push({
-        id: `e${edgeSeq++}`,
-        source: profileNodeId,
-        target: moreNodeId,
-        line: { width: 2, color: COLOR_BORDER },
-      });
-      row += 1;
     }
 
     return Math.max(row - startRow, 1);
@@ -388,8 +360,7 @@ function formatGithubProject(project: GithubProjectDto | null | undefined): stri
 
 // ノードの `_core`(issue #109)からインスペクタの表示内容を組み立てる。
 // 追加のbackend呼び出しはせず、グラフ構築時に `_core` へ埋め込んだ値のみを
-// 使う。「+n件」の集約ノード(session-more)は対象外(issue本文の指示どおり
-// 何もしない)。
+// 使う。
 function buildInspectorContent(
   core: HubNodeCore,
   actions: {
@@ -461,8 +432,6 @@ function buildInspectorContent(
         ],
         action,
       };
-    case "session-more":
-      return null;
     default:
       return null;
   }
@@ -587,8 +556,8 @@ function HubPage() {
   }, [loadSessionsForProfile]);
 
   // `windowLabel` があればそのウィンドウを前面化、無ければ `profileId` の
-  // ウィンドウを新規に開く。session-more(集約)ノードも同じ判定でよい
-  // (開いていれば前面化、未オープンなら新規起動。issue #100)。
+  // ウィンドウを新規に開く(開いていれば前面化、未オープンなら新規起動。
+  // issue #100)。
   const handleNodeClick = useCallback((d: NodeDatum) => {
     const core = d._core as HubNodeCore;
     if (core.windowLabel) {
@@ -653,8 +622,6 @@ function HubPage() {
       if (!nodeGroup?.__data__) return;
       e.preventDefault();
       const core = nodeGroup.__data__._core as HubNodeCore;
-      // 「+n件」ノードの右クリックは対象外(issue #109)。
-      if (core.kind === "session-more") return;
       setInspectorCore(core);
     };
     container.addEventListener("contextmenu", handleContextMenu);
