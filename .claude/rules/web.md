@@ -33,12 +33,14 @@ src/types/                 型定義を同梱しない外部パッケージの�
 
 プロダクト情報の唯一の真実は `src/data/*.ts` であり、git が履歴管理を担う。編集は人・AI セッションによるファイル編集で行い、Webアプリは閲覧に徹する。
 
-- MUST: プロダクト情報(WBS、構成図、サイトマップ、クラス図、TM、デザイントークン等)は `src/data/*.ts` に静的 TypeScript オブジェクトとして置く。API・DB は導入しない。
+- MUST: プロダクト情報(WBS、構成図、サイトマップ、クラス図、TM、デザイントークン等)は `src/data/*.ts` に静的 TypeScript オブジェクトとして置く。API・DB は導入しない(唯一の例外は下記のレイアウト保存 API)。
 - MUST: データファイルは型(`export type`)とデータ(`export const`)を明示し、表示コンポーネントから分離する。
 - NEVER: コンポーネント内にプロダクト情報を直書きする。
-- NEVER: プロダクト情報の本体を localStorage・cookie 等のブラウザ内ストレージに保存する(情報の断片化になる)。
-- localStorage を使ってよいのは「レイアウトの手調整」のような表示補助情報のみ。キーは `yaoyorozu:<画面>:<用途>` 形式とし、読み書きは `src/data/*Storage.ts` に集約する(例: `sitemapLayoutStorage.ts`)。
-- SHOULD: localStorage 上の調整結果が安定したら、値を `src/data/*.ts` に反映してリポジトリへ戻す。
+- NEVER: プロダクト情報・レイアウト調整を localStorage・cookie 等のブラウザ内ストレージに保存する(オリジン・ブラウザに紐づき、情報の断片化になる。旧方式の `yaoyorozu:<画面>:layout` は廃止済み)。
+- MUST: 図のレイアウト調整(ノード座標・サイズ等の表示補助情報)は、**開発時専用のレイアウト保存 API** 経由でリポジトリ内のファイルに保存する:
+  - Route Handler `POST /api/layout/<図名>` が `src/data/layout/<図名>.json` に書き込み、ページは同 JSON を import して初期レイアウトに使う(git が履歴管理を担う)
+  - この API は「API・DB は導入しない」の**唯一の例外**であり、開発時専用とする(`NODE_ENV !== "development"` では 405 を返す)
+  - 図名はサーバ側の許可リストで検証する。フロントから保存先パス・ファイル名を受け取らない
 
 ## 3. UI 状態
 
@@ -83,7 +85,7 @@ npm run lint --workspace=web
 |---|---|
 | `tabs/` の1ファイルが肥大化する | `tabs/<画面名>/` に画面専用コンポーネントを分割(§1 で許可済み) |
 | 画面横断の共通ロジック・部品が増える | フィーチャーベース構成へ再編(`features/<機能>/{components,hooks,types}` + `shared/`) |
-| Web からの編集機能(Route Handlers / Server Actions)を導入する | データアクセス層を分離し、ビジネスロジックはフレームワーク非依存の純粋 TS(`src/core/`)に置く(native の B型と同じ発想の部分適用) |
+| Web からの編集機能(Route Handlers / Server Actions)を導入する | データアクセス層を分離し、ビジネスロジックはフレームワーク非依存の純粋 TS(`src/core/`)に置く(native の B型と同じ発想の部分適用)。※レイアウト保存 API(§2)として限定適用済み。プロダクト情報本体の編集に広げる段階で `core/` 分離を行う |
 
 - MUST: 上記の移行はいずれも「規約(本ファイル)の改定 → 実装」の順で行う。実装が先行して規約と乖離した状態を作らない。
 - NEVER: 兆候がないうちから FSD・クリーンアーキテクチャ等の重い構造を導入する。
