@@ -21,6 +21,7 @@ Claude Code で以下のセッションに役割を分けて対応する。
 - **デザイン (UI)**: UIデザイナーとして、Webアプリの UI ページ(`apps/web` の `/ui`、http://localhost:3000/ui)で UIコンポーネント(デザインシステム)を定義・作り込む。**デザイン (全体) セッションを通さず**(イシュー化せず)直接作業してよい。ただし `apps/web` を編集するため web.md の規約には従う
 - **デザイン (ドメイン:Data)**: ドメインモデルの データモデル として TM(`apps/web` の `/tm`)を作成する。`/tm` スキル(`.claude/skills/tm/`)に作業手順・TM(T字形ER)の規則・d3.ter の仕様・検証手順をまとめてある
 - **デザイン (ドメイン:オブジェクト)**: ドメインモデルの オブジェクトモデル として Classes(`apps/web` の `/class-diagram`)を作成する
+- **デザイン (画面構成)**: 画面構成を管理する。主に サイトマップ(`apps/web` の `/sitemap`、http://localhost:3001/sitemap)を管理する
 - **実装:APP**: Tauri + TypeScript + React によるネイティブアプリの構築
 - **実装:APP (画面:/)**: Tauri + TypeScript + React によるネイティブアプリの構築
 - **実装:APP (画面:/settings)**: Tauri + TypeScript + React によるネイティブアプリの構築
