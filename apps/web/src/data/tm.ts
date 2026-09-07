@@ -47,26 +47,35 @@
  * モノにならず、セッションという1つのモノの属性に落ちる。
  */
 
+import type { TerData, TerEntityType } from "@yanqirenshi/d3.ter";
+
 /* ------------------------------------------------------------------ *
  *  d3.ter に渡すデータの型
+ *
+ *  0.1.22 から型定義が同梱されたため、原則そちら(Ter*)に合わせる。
+ *  `TmDataCheck` で TerData への代入可能性をコンパイル時に検証している。
+ *  ただし同梱の型と実装で食い違う点が3つあり、いずれも実装側に合わせている
+ *  (Foolsgolds/Assholes へ別途起票する)。
+ *   1. エンティティの `name` は `string` 宣言。実装(utils/Name.js の set)は
+ *      `{ physical, logical }` も受け付けるが、宣言に従って論理名の文字列を渡し、
+ *      物理名は ENTITY_DEFS 側に保持する。
+ *   2. 識別子・属性インスタンスの `name`(マスタ名の上書き)が宣言されていないが、
+ *      実装は `data.name ? data.name : master.name` で受け付ける。
+ *      TM の `(R)` 表記をマスタを重複させずに実現するために使う。
+ *   3. `optionality` の説明が「0=必須, 1=任意」と書かれているが、実装は逆。
+ *      (Port.js の positionOptionality が 0 で丸、1 で横棒を描く)
  * ------------------------------------------------------------------ */
 
 /** 物理名(JSON のフィールド名)と論理名(日本語)。図には論理名が表示される。 */
 export type TmName = { physical: string; logical: string };
 
 /**
- * エンティティの種別。d3.ter の Entity が解釈できる値のみ(未知の値は例外で落ちる)。
- * `COMPARATIVE` が対照表(TS)、`CORRESPONDENCE` が対応表(TO)にあたる。
- * TM の多値(MO / MA)に対応する種別は d3.ter に無い(§ SessionInputQueue のコメント)。
+ * エンティティの種別。d3.ter が解釈できる値のみ(未知の値は例外で落ちる)。
+ * `COMPARATIVE` が対照表(TS)、`CORRESPONDENCE` が対応表(TO)、
+ * `MANY-VALUED-OR` / `MANY-VALUED-AND` が多値(MO / MA)にあたる。
+ * 0.1.22 で多値と `CLASS` が追加された(Foolsgolds/Assholes#14、#17)。
  */
-export type TmEntityType =
-  | "RESOURCE"
-  | "RESOURCE-SUBSET"
-  | "EVENT"
-  | "EVENT-SUBSET"
-  | "COMPARATIVE"
-  | "CORRESPONDENCE"
-  | "RECURSION";
+export type TmEntityType = TerEntityType;
 
 export type TmIdentifier = { id: number; name: TmName };
 export type TmAttribute = { id: number; name: TmName };
@@ -74,7 +83,8 @@ export type TmAttribute = { id: number; name: TmName };
 export type TmEntity = {
   id: number;
   type: TmEntityType;
-  name: TmName;
+  /** 図に出す名前。同梱の型が `string` 宣言のため論理名だけを渡す(物理名は ENTITY_DEFS 側に残す)。 */
+  name: string;
   /** 図には描画されないが、モデルの根拠を残すために持たせる(d3.ter は保持のみ)。 */
   description: string;
   position: { x: number; y: number; z: number };
@@ -91,7 +101,9 @@ export type TmEntity = {
  *   基準ベクトルを (0, +対角長) から回すため **0=下 / 90=左 / 180=上 / 270=右**
  *   (SVG座標なので y は下向き)。
  * - `cardinality`: 1=単一(横棒) / 3=複数(鳥足)。
- * - `optionality`: 1=必須(横棒) / 0=任意(丸)。
+ * - `optionality`: **1=必須(横棒) / 0=任意(丸)**。
+ *   同梱の型定義のコメントは「0=必須, 1=任意」と逆に書かれているが、実装
+ *   (Port.js の positionOptionality)は 0 で丸、1 で横棒を描く。実装に合わせる。
  *
  * TM の4つの結線(1対1 / 1対複数 / 1対「1または値なし」/ 1対「複数または値なし」)は
  * この2つの組み合わせで表す。
@@ -103,7 +115,18 @@ export type TmPort = {
   optionality: 0 | 1;
 };
 
-export type TmRelationship = { id: number; from: TmPort; to: TmPort };
+/** サブセット結線の区分コード表記(0.1.22 で追加。Foolsgolds/Assholes#15)。 */
+export type TmSubset = { kind: "same" | "different"; code: string };
+
+export type TmRelationship = {
+  id: number;
+  from: TmPort;
+  to: TmPort;
+  /** 結線の中点に出すラベル(0.1.22 で追加。Foolsgolds/Assholes#16)。 */
+  label?: string;
+  /** サブセットへの結線に `=区分コード` / `×区分コード` を出す。label より優先される。 */
+  subset?: TmSubset;
+};
 
 export type TmData = {
   identifiers: TmIdentifier[];
@@ -111,6 +134,10 @@ export type TmData = {
   entities: TmEntity[];
   relationships: TmRelationship[];
 };
+
+/** `TmData` が d3.ter の受け取る構造と矛盾していないことをコンパイル時に確かめる。 */
+type AssertAssignable<T extends TerData> = T;
+export type TmDataCheck = AssertAssignable<TmData & TerData>;
 
 /* ------------------------------------------------------------------ *
  *  個体指定子と属性のプール
@@ -125,12 +152,14 @@ const IDENTIFIER_DEFS: TmName[] = [
   { physical: "filePath", logical: "ファイルパス" },
   { physical: "sessionId", logical: "セッションID" },
   { physical: "uuid", logical: "行UUID" },
-  // 再帰表が継承する行UUID。TM の部品表の例と同じく、親子の役割を名前で区別する
-  // (T字形の中だけでは親子の別が読めないため)。
-  { physical: "parentUuid", logical: "親-行UUID(R)" },
-  { physical: "childUuid", logical: "子-行UUID(R)" },
+  // 再帰表が継承する行UUID。0.1.22 で結線にラベルを出せるようになったため
+  // (Foolsgolds/Assholes#16)、親子の別は線のラベルで示し、箱の中は TM の
+  // 部品表の例と同じく両方とも `行UUID(R)` と書く。
+  { physical: "parentUuid", logical: "行UUID(R)" },
+  { physical: "childUuid", logical: "行UUID(R)" },
   // ツール実行結果の行が、その tool_use を発行した AI応答行を指す(E-E の先行・後続)。
-  { physical: "sourceToolAssistantUUID", logical: "ツール発行元-行UUID(R)" },
+  // 役割は結線のラベルで示すため、箱の中は `行UUID(R)` と書く。
+  { physical: "sourceToolAssistantUUID", logical: "行UUID(R)" },
 ];
 
 const ATTRIBUTE_DEFS: TmName[] = [
@@ -329,13 +358,9 @@ const ENTITY_DEFS: EntityDef[] = [
   },
   {
     name: { physical: "SessionInputQueue", logical: "セッション．入力キュー" },
-    type: "EVENT",
-    // web.md「規約を逸脱する場合は理由をコメントに残す」に従う。
-    // TM 上これは多値のOR(MO)であり、個体指定子は セッションID(R) だけで行ごとに
-    // 一意ではない。d3.ter に MO / MA の種別が無いため EVENT で代用している
-    // (投入日時という過去の行為の日付が帰属するのでイベントとしても成立する)。
+    type: "MANY-VALUED-OR",
     description:
-      "queue-operation 行。ユーザーが入力を送信した瞬間の記録で、user 行より先に書かれる(報告書 §4.3)。1セッションに複数あるためセッションの多値(MO)。d3.ter に多値の種別が無いため EVENT で代用している。",
+      "queue-operation 行。ユーザーが入力を送信した瞬間の記録で、user 行より先に書かれる(報告書 §4.3)。1セッションに複数あるためセッションの多値(MO)。個体指定子は セッションID(R) だけで、行ごとに一意ではない。投入日時が並べるための語彙にあたる。",
     position: { x: 0, y: 980 },
     identifiers: ["sessionId(R)"],
     attributes: ["enqueuedAt", "content"],
@@ -359,7 +384,7 @@ let attributeInstanceSeq = ATTRIBUTE_INSTANCE_BASE_ID;
 const ENTITIES: TmEntity[] = ENTITY_DEFS.map((def, i) => ({
   id: ENTITY_BASE_ID + i,
   type: def.type,
-  name: def.name,
+  name: def.name.logical,
   description: def.description,
   position: { x: def.position.x, y: def.position.y, z: 0 },
   // d3.ter が内容から実寸を算出するため 0 を渡す。
@@ -407,7 +432,21 @@ type RelationshipPortDef = {
   optionality: 0 | 1;
 };
 
-type RelationshipDef = { from: RelationshipPortDef; to: RelationshipPortDef };
+type RelationshipDef = {
+  from: RelationshipPortDef;
+  to: RelationshipPortDef;
+  label?: string;
+  subset?: TmSubset;
+};
+
+/**
+ * ログ行のサブセットを切る区分コード(相違のサブセット)。
+ * d3.ter は `親エンティティ + 区分コード` で結線をグルーピングし、幹 → バス →
+ * 各サブセット という1本の分岐として描く。そのため4本に同じ区分コードを与えると、
+ * 線は1本の木、ラベルも `×行種別` が1つだけになる(TM のサブセット表記どおり)。
+ * カーディナリティ・オプショナリティの記号はサブセット結線には描かれない。
+ */
+const LINE_TYPE_SUBSET: TmSubset = { kind: "different", code: "行種別" };
 
 const RELATIONSHIP_DEFS: RelationshipDef[] = [
   // R-R(作業ディレクトリ × ファイル)は対照表で構成する。
@@ -438,6 +477,7 @@ const RELATIONSHIP_DEFS: RelationshipDef[] = [
   {
     from: { entity: "ProjectFolder", position: 270, cardinality: 1, optionality: 1 },
     to: { entity: "ChainLine", position: 110, cardinality: 3, optionality: 1 },
+    label: "記録時の cwd",
   },
   // ファイル 1 : ログ行 複数(1以上)。E-R。
   // どのファイルに書かれた行かは、親の会話とサブエージェントの会話を区別する唯一の
@@ -445,12 +485,14 @@ const RELATIONSHIP_DEFS: RelationshipDef[] = [
   {
     from: { entity: "SessionFile", position: 270, cardinality: 1, optionality: 1 },
     to: { entity: "ChainLine", position: 90, cardinality: 3, optionality: 1 },
+    label: "書かれた先",
   },
   // セッション 1 : ログ行 複数(1以上)。E-R。
   // ファイル経由でも辿れるが、sessionId は全行に明示的に記録される語彙のため残す。
   {
     from: { entity: "Session", position: 270, cardinality: 1, optionality: 1 },
     to: { entity: "ChainLine", position: 70, cardinality: 3, optionality: 1 },
+    label: "所属",
   },
   // セッション 1 : 入力キュー 複数または値なし。
   // queue-operation は 49/146ファイルにしかないため任意。
@@ -459,24 +501,28 @@ const RELATIONSHIP_DEFS: RelationshipDef[] = [
     to: { entity: "SessionInputQueue", position: 180, cardinality: 3, optionality: 0 },
   },
 
-  // ログ行のサブセット(区分コードは行種別、相違のサブセット)。1対「1または値なし」。
-  // ログ行の下辺から角度をずらして出す。0=下 を基準に、30 → 330 の順で
-  // 下辺の左から右へ接続点が移動する。
+  // ログ行のサブセット。属性構成が異なるので相違のサブセット(×行種別)。
+  // 1対「1または値なし」。ログ行の下辺から角度をずらして出す。0=下 を基準に、
+  // 30 → 330 の順で下辺の左から右へ接続点が移動する。
   {
     from: { entity: "ChainLine", position: 30, cardinality: 1, optionality: 1 },
     to: { entity: "UserLine", position: 180, cardinality: 1, optionality: 0 },
+    subset: LINE_TYPE_SUBSET,
   },
   {
     from: { entity: "ChainLine", position: 10, cardinality: 1, optionality: 1 },
     to: { entity: "AssistantLine", position: 180, cardinality: 1, optionality: 0 },
+    subset: LINE_TYPE_SUBSET,
   },
   {
     from: { entity: "ChainLine", position: 350, cardinality: 1, optionality: 1 },
     to: { entity: "SystemLine", position: 180, cardinality: 1, optionality: 0 },
+    subset: LINE_TYPE_SUBSET,
   },
   {
     from: { entity: "ChainLine", position: 330, cardinality: 1, optionality: 1 },
     to: { entity: "AttachmentLine", position: 180, cardinality: 1, optionality: 0 },
+    subset: LINE_TYPE_SUBSET,
   },
 
   // 再帰(親側): チェーン1件には親行が必ず1件。1つの行を親とするチェーンは
@@ -484,12 +530,14 @@ const RELATIONSHIP_DEFS: RelationshipDef[] = [
   {
     from: { entity: "ChainLine", position: 255, cardinality: 1, optionality: 1 },
     to: { entity: "ChainLineRecursion", position: 105, cardinality: 3, optionality: 0 },
+    label: "親",
   },
   // 再帰(子側): チェーン1件には子行が必ず1件。1つの行を子とするチェーンは
   // 1件または値なし(親は1つだけ。チェーンの起点行は親を持たない)。
   {
     from: { entity: "ChainLine", position: 285, cardinality: 1, optionality: 1 },
     to: { entity: "ChainLineRecursion", position: 75, cardinality: 1, optionality: 0 },
+    label: "子",
   },
 
   // E-E(先行・後続): tool_use を発行した AI応答行 → その結果を記録したユーザー行。
@@ -497,6 +545,7 @@ const RELATIONSHIP_DEFS: RelationshipDef[] = [
   {
     from: { entity: "AssistantLine", position: 90, cardinality: 1, optionality: 0 },
     to: { entity: "UserLine", position: 270, cardinality: 1, optionality: 0 },
+    label: "ツール発行元",
   },
 ];
 
@@ -514,6 +563,8 @@ const RELATIONSHIPS: TmRelationship[] = RELATIONSHIP_DEFS.map((def, i) => ({
     cardinality: def.to.cardinality,
     optionality: def.to.optionality,
   },
+  ...(def.label ? { label: def.label } : {}),
+  ...(def.subset ? { subset: def.subset } : {}),
 }));
 
 export const TM_DATA: TmData = {
