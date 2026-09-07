@@ -7,7 +7,9 @@ description: apps/web の /tm(ドメインモデルのデータモデル)を編�
 
 apps/web の TM(データモデル)を編集する。担当は「デザイン (ドメイン:Data)」セッション。
 
-- **唯一の編集対象**は [tm.ts](../../../apps/web/src/data/tm.ts)。表示側([TmTab.tsx](../../../apps/web/src/app/tabs/TmTab.tsx))は触らない。
+- **モデルの編集対象**は [tm.ts](../../../apps/web/src/data/tm.ts)。表示側
+  ([TmTab.tsx](../../../apps/web/src/app/tabs/TmTab.tsx))は、図の見せ方そのものを変える
+  依頼(ドラッグ位置の保存など)でなければ触らない。
 - 記法は TM(T字形ER)に従う。出典は佐藤正美/SDI「モデル作成の手続き」。
   同資料は複写・転写が禁止されているため、**本スキルにも tm.ts にも文面を転記しない**(手順として書き下したものだけを置く)。
 - [web.md](../../../.claude/rules/web.md) の規約に従う(`src/data/*.ts` が SSoT、規約を逸脱する場合は理由をコメントに残す)。
@@ -164,5 +166,13 @@ const svg = document.querySelector('g.entity').ownerSVGElement;
 - WBS([wbs.ts](../../../apps/web/src/data/wbs.ts))の TM 配下(`_id: 40`)にモデルの構成要素が並んでいる。
   エンティティの種類を増やしたらここも合わせる。
   `/tm` の「WBS」タブが見ているのは画面としての TM(`_id: 26`)であり別物なので注意。
-- レイアウトの手調整を localStorage に持たせる仕組みは TM にはまだ無い(Classes / サイトマップにはある)。
-  位置は tm.ts に直接書く。
+- レイアウトの手調整は localStorage に保存される([tmLayoutStorage.ts](../../../apps/web/src/data/tmLayoutStorage.ts)、
+  キーは `yaoyorozu:tm:layout`)。図上でエンティティをドラッグすると、その位置が
+  **物理名をキーに**上書きとして残り、`tm.ts` の `position` より優先される。
+  - そのため「tm.ts を直したのに図が変わらない」ときは、まず localStorage の
+    上書きを疑う(ブラウザで `localStorage.removeItem("yaoyorozu:tm:layout")`)。
+  - web.md §2 のとおり、調整が固まったら値を tm.ts の `position` に反映して
+    リポジトリへ戻す。localStorage はあくまで一時的な手調整の置き場である。
+- d3.ter にはドラッグ完了を知らせるコールバックが無い。TmTab は window の capture
+  フェーズで mousedown/mouseup を拾い、`g.entity` の `__data__.position` を前後で
+  比較して変化したものだけ保存している(SitemapTab と同じ方式)。
