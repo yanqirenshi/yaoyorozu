@@ -6,10 +6,13 @@ import Colonoscope from "@yanqirenshi/colonoscope";
 import { SITEMAP_DATA, SITEMAP_CANVAS_SIZE } from "@/data/sitemap";
 import {
   applyLayoutOverrides,
+  buildParentIdMap,
   loadLayoutOverrides,
   saveLayoutOverrides,
   type LayoutOverrides,
 } from "@/data/sitemapLayoutStorage";
+
+const PARENT_ID_BY_NODE_ID = buildParentIdMap(SITEMAP_DATA.nodes);
 
 type SitemapNodeCore = {
   id: number;
@@ -26,7 +29,6 @@ type SitemapNodeCore = {
 type SitemapDatum = {
   _id: number;
   position: { x: number; y: number };
-  size: { w: number; h: number };
 };
 
 function toNumber(value: string, fallback: number) {
@@ -55,14 +57,35 @@ export default function SitemapTab() {
     // 実際に動いたノードだけを検出する(未変更のノードまで上書き保存しないため)。
     let before: Map<number, { x: number; y: number }> | null = null;
 
+    // d3.sitemap の fitting() は描画前に children の position を
+    // 「親の絶対座標 + 相対座標」へ書き換えるため、`<g class="node">` の
+    // __data__ が持つ位置は children も絶対座標である。一方 SITEMAP_DATA と
+    // オーバーライドは children を相対座標で持つ(そのまま絶対座標で保存すると
+    // 次回描画時に fitting() が親の座標を二重に加算してずれる)。そこで保存前に
+    // 親の絶対座標を引いて相対座標へ戻す。
+    // 副次的な効果として、親をドラッグしてサブツリーごと動いた場合は children の
+    // 相対座標が変わらないため、子に不要なオーバーライドが書かれなくなる。
     const snapshotPositions = () => {
-      const map = new Map<number, { x: number; y: number }>();
+      const absolute = new Map<number, { x: number; y: number }>();
       container.querySelectorAll<SVGGElement>("g.node").forEach((el) => {
         const datum = (el as unknown as { __data__?: SitemapDatum })
           .__data__;
-        if (datum) map.set(datum._id, { ...datum.position });
+        if (datum) absolute.set(datum._id, { ...datum.position });
       });
-      return map;
+
+      const relative = new Map<number, { x: number; y: number }>();
+      absolute.forEach((position, id) => {
+        const parentId = PARENT_ID_BY_NODE_ID.get(id);
+        const parent =
+          parentId === undefined ? undefined : absolute.get(parentId);
+        relative.set(
+          id,
+          parent
+            ? { x: position.x - parent.x, y: position.y - parent.y }
+            : position,
+        );
+      });
+      return relative;
     };
 
     // d3-drag(v7)自体が mousedown/mousemove/mouseup で実装されているため
@@ -84,23 +107,14 @@ export default function SitemapTab() {
       const next: LayoutOverrides = { ...current };
       let changed = false;
 
-      container.querySelectorAll<SVGGElement>("g.node").forEach((el) => {
-        const datum = (el as unknown as { __data__?: SitemapDatum })
-          .__data__;
-        if (!datum) return;
+      snapshotPositions().forEach((position, id) => {
+        const prev = beforePositions.get(id);
+        if (!prev || (prev.x === position.x && prev.y === position.y)) return;
 
-        const prev = beforePositions.get(datum._id);
-        if (
-          !prev ||
-          (prev.x === datum.position.x && prev.y === datum.position.y)
-        ) {
-          return;
-        }
-
-        next[datum._id] = {
-          position: { x: datum.position.x, y: datum.position.y },
-          size: current[datum._id]?.size ?? datum.size,
-        };
+        // サイズはドラッグでは変わらないため、インスペクタで指定済みの値だけを
+        // 引き継ぐ(描画データ上のサイズは fitting() が children を包含するよう
+        // 拡張した後の値であり、保存すると元データのサイズを上書きしてしまう)。
+        next[id] = { position, size: current[id]?.size };
         changed = true;
       });
 
