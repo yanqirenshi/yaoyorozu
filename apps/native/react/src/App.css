@@ -60,15 +60,25 @@ body,
   height: 100vh;
   border: 1px solid var(--border-default);
   box-sizing: border-box;
-  overflow-x: hidden;
+  /* 各画面が自前のスクロール領域(`.project-list` 等)を持つ前提のため、
+     外枠自体はどちらの方向にもスクロールさせない(issue #109で判明: 縦方向の
+     指定が漏れていたため、内容が縦に長くなるページ(ハブのグラフ等)で
+     ウィンドウ全体に不要な縦スクロールバーが出ていた)。 */
+  overflow: hidden;
 }
 
 /* ハブ画面(issue #84)。`.app-shell` 直下の唯一のフレックス子として
    d3.network のSVGを全面に表示する(D3Networkは react-measure で親要素の
-   サイズに追従するため、この要素自体が高さを持つ必要がある)。 */
+   サイズに追従するため、この要素自体が高さを持つ必要がある)。`position:
+   relative` はインスペクタ(issue #109)をこの要素基準で絶対配置するため。
+   `min-height: 0` はflexアイテムの既定値(`auto`)がコンテンツの最小サイズを
+   確保しようとして`.app-shell`をはみ出させるのを防ぐ(issue #109で判明。
+   `min-width: 0` と対になる縦方向の対策)。 */
 .hub-page {
+  position: relative;
   flex: 1;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
@@ -76,6 +86,103 @@ body,
 .hub-page .error {
   flex-shrink: 0;
   margin: 8px 16px 0;
+}
+
+/* ノードの右クリックで表示するインスペクタ(issue #109)。オーバーレイで
+   被せるだけでグラフの再レイアウトを起こさない。高さは画面いっぱい(top/
+   bottom とも0)。dock(画面下部に浮くフローティングツールバー)との重なりは
+   このコンテナ自身の `padding-bottom` 1箇所だけで避ける(issue #59と同じ
+   理由)。子要素側にも余白を足すと合算されて不要なスクロールを生むため、
+   ここでだけ確保する。 */
+.hub-inspector {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 320px;
+  box-sizing: border-box;
+  padding-bottom: 96px;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-raised);
+  border-left: 1px solid var(--border-default);
+  box-shadow: var(--elevation-3);
+  overflow-y: auto;
+  z-index: 5;
+}
+
+.hub-inspector-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.hub-inspector-header h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.hub-inspector-close {
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  font-size: 1.1rem;
+  line-height: 1;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px;
+}
+
+.hub-inspector-close:hover {
+  color: var(--text-primary);
+}
+
+.hub-inspector-fields {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.hub-inspector-field dt {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin: 0 0 2px;
+}
+
+/* 長い値(フルパス・IDなど)は折り返し、選択してコピーできるようにする
+   (issue #109)。 */
+.hub-inspector-field dd {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.hub-inspector-action {
+  flex-shrink: 0;
+  margin: 0 16px 16px;
+  border: 1px solid var(--color-primary);
+  border-radius: 4px;
+  padding: 8px 16px;
+  font-size: 0.9rem;
+  font-family: inherit;
+  color: var(--color-primary);
+  background: none;
+  cursor: pointer;
+}
+
+.hub-inspector-action:hover {
+  background: var(--state-hover);
 }
 
 /* 画面左の一覧ペイン(固定幅+縦スクロール)。ビューアのセッション一覧と
