@@ -7,9 +7,13 @@ import { TM_DATA, TM_ENTITY_KEY_BY_ID } from "@/data/tm";
 import {
   applyLayoutOverrides,
   loadLayoutOverrides,
-  saveLayoutOverrides,
+  migrateLegacyLayoutIfNeeded,
   type LayoutOverrides,
 } from "@/data/tmLayoutStorage";
+import {
+  useLayoutSaveStatus,
+  LayoutSaveStatusSnackbar,
+} from "./layout/LayoutSaveStatus";
 
 // d3.ter はエンティティのドラッグ移動をライブラリ内部で完結させており、移動を
 // 知らせるコールバックが無い(Painters/Entities.js の dragEnd は `_drag` を消す
@@ -43,6 +47,13 @@ export default function TmTab() {
     INSPECTOR_WIDTH.initial,
   );
   const [resizing, setResizing] = useState(false);
+  const { state: saveState, save, close: closeSaveStatus } =
+    useLayoutSaveStatus("tm");
+
+  // 旧方式(localStorage)からの一時的な自己移行。全環境の移行が済んだら削除してよい。
+  useEffect(() => {
+    migrateLegacyLayoutIfNeeded();
+  }, []);
 
   const rectum = useMemo(() => {
     const instance = new Rectum({ callbacks: {} });
@@ -103,7 +114,7 @@ export default function TmTab() {
 
       if (!changed) return;
       overridesRef.current = next;
-      saveLayoutOverrides(next);
+      save(next);
     };
 
     // 右クリックでインスペクタを開く(issue #109 と同じ流儀)。d3.ter に
@@ -151,7 +162,7 @@ export default function TmTab() {
       window.removeEventListener("keydown", handleKeyDown);
       container.removeEventListener("contextmenu", handleContextMenu);
     };
-  }, []);
+  }, [save]);
 
   // インスペクタ幅の伸縮。ハンドルを掴んでいるあいだ window で追う。
   useEffect(() => {
@@ -184,13 +195,13 @@ export default function TmTab() {
         [selected.key]: { x: position.x, y: position.y },
       };
       overridesRef.current = next;
-      saveLayoutOverrides(next);
+      save(next);
       setOverrides(next);
       // rectum を作り直しただけでは再描画されないため、D3Ter を貼り替える。
       setVersion((v) => v + 1);
       setSelected(null);
     },
-    [selected],
+    [selected, save],
   );
 
   return (
@@ -226,6 +237,8 @@ export default function TmTab() {
           onClose={() => setSelected(null)}
         />
       )}
+
+      <LayoutSaveStatusSnackbar state={saveState} onClose={closeSaveStatus} />
     </div>
   );
 }

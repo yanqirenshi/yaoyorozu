@@ -1,4 +1,12 @@
-const STORAGE_KEY = "yaoyorozu:classes:layout";
+// Classesページの手調整(クラスのドラッグ移動・インスペクタでの数値指定)の
+// 保存先。web.md §2 により、開発時専用の保存API経由でリポジトリ内ファイル
+// (`src/data/layout/classes.json`)に保存する。
+import layoutFile from "./layout/classes.json";
+import { saveLayoutToApi } from "./layoutSaveApi";
+
+// 旧方式(localStorage)からの一時的な移行処理で使うキー。
+// 全環境の移行が済んだら READ_LEGACY 関連ごと削除してよい。
+const LEGACY_STORAGE_KEY = "yaoyorozu:classes:layout";
 
 export type NodePosition = { x: number; y: number };
 
@@ -6,19 +14,38 @@ export type NodePosition = { x: number; y: number };
 // 並べ替えに弱いため、位置の保存キーには使わない。
 export type LayoutOverrides = Record<string, NodePosition>;
 
-export function loadLayoutOverrides(): LayoutOverrides {
-  if (typeof window === "undefined") return {};
+const fileOverrides = (layoutFile as LayoutOverrides) ?? {};
+const hasFileOverrides = Object.keys(fileOverrides).length > 0;
+
+function readLegacyOverrides(): LayoutOverrides | null {
+  if (typeof window === "undefined") return null;
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as LayoutOverrides) : {};
+    const raw = window.localStorage.getItem(LEGACY_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as LayoutOverrides) : null;
   } catch {
-    return {};
+    return null;
   }
 }
 
-export function saveLayoutOverrides(overrides: LayoutOverrides): void {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(overrides));
+export function loadLayoutOverrides(): LayoutOverrides {
+  if (hasFileOverrides) return fileOverrides;
+  return readLegacyOverrides() ?? {};
+}
+
+/**
+ * 旧方式(localStorage)からの一時的な自己移行。全環境の移行が済んだら削除してよい。
+ *
+ * レイアウトファイルが空で、かつ localStorage に旧データが残っている場合、
+ * それを保存APIへ送ってファイル化し、成功したら旧キーを削除する。
+ */
+export function migrateLegacyLayoutIfNeeded(): void {
+  if (hasFileOverrides) return;
+  const legacy = readLegacyOverrides();
+  if (!legacy || Object.keys(legacy).length === 0) return;
+
+  saveLayoutToApi("classes", legacy).then(({ ok }) => {
+    if (ok) window.localStorage.removeItem(LEGACY_STORAGE_KEY);
+  });
 }
 
 type ClassLike = {
