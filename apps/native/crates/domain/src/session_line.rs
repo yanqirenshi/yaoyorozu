@@ -439,6 +439,12 @@ impl SessionLine {
     pub fn cwd(&self) -> Option<&str> {
         self.base().and_then(|b| b.cwd.as_deref())
     }
+
+    /// `gitBranch`。会話チェーン行のみが持つ(セッションメタ行・未知の行は
+    /// `None`)。値が `"HEAD"` はデタッチ状態を表す(issue #104)。
+    pub fn git_branch(&self) -> Option<&str> {
+        self.base().and_then(|b| b.git_branch.as_deref())
+    }
 }
 
 fn user_content_text(content: &Option<UserContent>) -> String {
@@ -502,6 +508,16 @@ pub fn extract_cwd(value: &serde_json::Value) -> Option<String> {
     serde_json::from_value::<SessionLine>(value.clone())
         .ok()?
         .cwd()
+        .map(String::from)
+}
+
+/// 1行分のJSONLエントリから `gitBranch` を取り出す(issue #104)。セッション中の
+/// checkout に追従して複数回出現しうるため、呼び出し側で最後に見つかった
+/// ものを採用すること(`custom-title` と同じ流儀)。
+pub fn extract_git_branch(value: &serde_json::Value) -> Option<String> {
+    serde_json::from_value::<SessionLine>(value.clone())
+        .ok()?
+        .git_branch()
         .map(String::from)
 }
 
@@ -669,6 +685,45 @@ mod tests {
             "sessionId": "s1"
         });
         assert!(extract_cwd(&value).is_none());
+    }
+
+    #[test]
+    fn extract_git_branch_reads_field_when_present() {
+        let value = json!({
+            "type": "user",
+            "gitBranch": "feature/hub-cwd-branch",
+            "message": { "role": "user", "content": "hello" }
+        });
+        assert_eq!(
+            extract_git_branch(&value).as_deref(),
+            Some("feature/hub-cwd-branch")
+        );
+    }
+
+    #[test]
+    fn extract_git_branch_returns_none_when_missing() {
+        let value = json!({ "type": "user", "message": { "content": "hello" } });
+        assert!(extract_git_branch(&value).is_none());
+    }
+
+    #[test]
+    fn extract_git_branch_returns_head_verbatim_for_detached_state() {
+        let value = json!({
+            "type": "user",
+            "gitBranch": "HEAD",
+            "message": { "role": "user", "content": "hello" }
+        });
+        assert_eq!(extract_git_branch(&value).as_deref(), Some("HEAD"));
+    }
+
+    #[test]
+    fn extract_git_branch_returns_none_for_session_meta_lines() {
+        let value = json!({
+            "type": "custom-title",
+            "customTitle": "タイトル",
+            "sessionId": "s1"
+        });
+        assert!(extract_git_branch(&value).is_none());
     }
 
     #[test]
