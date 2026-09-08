@@ -24,14 +24,12 @@ export function useLayoutSaveStatus(diagram: LayoutDiagram) {
       const result = await saveLayoutToApi(diagram, overrides);
       if (result.ok) {
         setState({ open: true, severity: "success", message: "レイアウトを保存しました" });
-      } else if (result.status === 405) {
+      } else {
         setState({
           open: true,
           severity: "error",
-          message: "本番では保存できません(開発サーバーで実行してください)",
+          message: result.message ?? "保存に失敗しました",
         });
-      } else {
-        setState({ open: true, severity: "error", message: "保存に失敗しました" });
       }
       return result;
     },
