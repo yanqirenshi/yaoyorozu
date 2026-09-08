@@ -12,6 +12,13 @@
  * - 導出できる値には `(D)` を付ける。
  * - サブセットは区分コードによる切断。部分集合は区分コードを持つ。
  *
+ * 【実行環境(PC / ユーザー / Gitリポジトリ)】
+ * セッションログの中身だけでなく、それを生んだ環境も同じ図に置く。CLAUDE.md や
+ * settings.json は「作成」というイベントではなく、既存の `ファイル`(個体指定子 =
+ * ファイルパス)の要素として扱い、所属先(Gitリポジトリ / ユーザー)を対照表で結ぶ。
+ * ファイルの `created_at` / `updated_at` は TM が日付として認めない「データ登録日・
+ * 更新日」にあたり、実装でも楽観ロックにしか使っていないため、イベントにはしない。
+ *
  * 【第1弾のスコープ】セッションと行の骨格まで。
  * メッセージ本体(コンテンツブロック・ツール・トークン使用量)、`system` 4種 /
  * `attachment` 23種の詳細、`pr-link` と GitHub の関係は次段以降で追加する。
@@ -20,8 +27,8 @@
  * セットへの展開、エージェントID、meta.json(agentType / name / toolUseId)は第3弾で扱う。
  *
  * 【関係の検証(モノ × モノ の網羅性)】
- * 12エンティティの全66ペアを確認した。関係があるのは14ペア(15本)。
- * 残る52ペアのうち、以下4ペアは「語彙は存在するが今は関係を構成していない」ものであり、
+ * 20エンティティの全190ペアを確認した。関係があるのは24ペア(25本)。
+ * 残る166ペアのうち、以下4ペアは「語彙は存在するが今は関係を構成していない」ものであり、
  * 見落としではなく判断の記録として残す。
  *
  * - ログ行 × 入力キュー / 入力キュー × ユーザー行
@@ -34,10 +41,11 @@
  *   対する関係として立つ。その際、現在 sourceToolAssistantUUID で直接張っている
  *   ユーザー行 × AI応答行 の関係も、ツール呼び出し経由に組み替わる可能性がある。
  *
- * 他の48ペアは直接の関係を構成しないのが正しい。内訳は、サブセットが親(ログ行)から
- * 行UUIDを継承しており親で張った関係がそのまま効くもの16ペア、対応する語彙がそもそも
- * 存在しないもの29ペア、対照表を経由するもの3ペア(作業ディレクトリ × ファイル /
- * セッション × ファイル / 作業ディレクトリ × セッション)。
+ * 他の162ペアは直接の関係を構成しないのが正しい。内訳は、サブセットが親(ログ行)から
+ * 行UUIDを継承しており親で張った関係がそのまま効くもの16ペア、対照表を経由するもの
+ * 8ペア(PC × ユーザー / PC × Gitリポジトリ / ユーザー × セッション / ユーザー ×
+ * ファイル / Gitリポジトリ × ファイル / 作業ディレクトリ × ファイル / 作業ディレクトリ
+ * × セッション / ファイル × セッション)、対応する語彙がそもそも存在しないもの138ペア。
  *
  * 【オブジェクトモデル(/class-diagram)との違い】
  * Classes は `.jsonl` の「型の構造」(serde でどうデシリアライズするか)を描く。
@@ -148,6 +156,11 @@ export type TmDataCheck = AssertAssignable<TmData & TerData>;
  * ------------------------------------------------------------------ */
 
 const IDENTIFIER_DEFS: TmName[] = [
+  // OS 由来の実在値を使う(勝手に採番しない)。systemUuid は Windows の
+  // MachineGuid のようなマシン固有の値、userId は OS のユーザー名。
+  { physical: "systemUuid", logical: "システムUUID" },
+  { physical: "userId", logical: "ユーザーID" },
+  { physical: "repositoryPath", logical: "リポジトリパス" },
   { physical: "cwd", logical: "作業ディレクトリパス" },
   { physical: "filePath", logical: "ファイルパス" },
   { physical: "sessionId", logical: "セッションID" },
@@ -163,6 +176,12 @@ const IDENTIFIER_DEFS: TmName[] = [
 ];
 
 const ATTRIBUTE_DEFS: TmName[] = [
+  { physical: "pcName", logical: "PC名" },
+  // PC と Gitリポジトリ で同じ語彙を共有する。
+  { physical: "description", logical: "説明" },
+  { physical: "userName", logical: "ユーザー名" },
+  { physical: "homeDirectory", logical: "ホームディレクトリ" },
+  { physical: "repositoryName", logical: "リポジトリ名" },
   // フォルダ名は作業ディレクトリパスから機械的に導出される(英数字以外を1文字ずつ `-`
   // に置換)。置換は不可逆でフォルダ名からパスは復元できないため、個体指定子はパスの側。
   { physical: "folderName", logical: "フォルダ名(D)" },
@@ -255,13 +274,87 @@ type EntityDef = {
 };
 
 const ENTITY_DEFS: EntityDef[] = [
+  // ============ 実行環境(PC / ユーザー / Gitリポジトリ) ============
+  {
+    name: { physical: "Pc", logical: "PC" },
+    type: "RESOURCE",
+    description:
+      "Claude Code を動かしているマシン。個体指定子は OS 由来のマシン固有値(Windows なら MachineGuid 等)を使い、アプリで勝手に採番しない。日付が帰属しないためリソース。",
+    position: { x: 0, y: 0 },
+    identifiers: ["systemUuid"],
+    attributes: ["pcName", "description"],
+  },
+  {
+    name: { physical: "User", logical: "ユーザー" },
+    type: "RESOURCE",
+    description:
+      "マシンを使う人。個体指定子は OS のユーザー名。ホームディレクトリ配下(~/.claude/)に CLAUDE.md や settings.json を持つ。日付が帰属しないためリソース。",
+    position: { x: 0, y: 400 },
+    identifiers: ["userId"],
+    attributes: ["userName", "homeDirectory"],
+  },
+  {
+    name: { physical: "GitRepository", logical: "Gitリポジトリ" },
+    type: "RESOURCE",
+    description:
+      "プロダクト開発の対象リポジトリ。個体指定子はリポジトリのパス。配下に CLAUDE.md / .claude/settings.json / .claude/settings.local.json を持つ。作業ディレクトリとは別のモノとして扱う(作業ディレクトリは行の cwd として現れた任意のパスの集合であり、リポジトリは管理対象として登録されたものだけ)。両者の対応が必要になった段階で対照表を立てる。",
+    position: { x: 560, y: 400 },
+    identifiers: ["repositoryPath"],
+    attributes: ["repositoryName", "description"],
+  },
+  {
+    name: { physical: "PcUser", logical: "PC．ユーザー．対照表" },
+    type: "COMPARATIVE",
+    description:
+      "どのユーザーがどのマシンを使うか。PC とユーザーはどちらもリソースであり、R-R の関係は多重度によらず対照表で構成する。",
+    position: { x: 0, y: 190 },
+    identifiers: ["systemUuid(R)", "userId(R)"],
+    attributes: [],
+  },
+  {
+    name: { physical: "PcGitRepository", logical: "PC．Gitリポジトリ．対照表" },
+    type: "COMPARATIVE",
+    description:
+      "どのマシンにどのリポジトリが置かれているか。同じリポジトリを複数のマシンにクローンしうるため、R-R の対照表が要る。",
+    position: { x: 560, y: 190 },
+    identifiers: ["systemUuid(R)", "repositoryPath(R)"],
+    attributes: [],
+  },
+  {
+    name: { physical: "UserSession", logical: "ユーザー．セッション．対照表" },
+    type: "COMPARATIVE",
+    description:
+      "どの会話が誰のものか。ユーザーとセッションはどちらもリソースのため対照表で構成する。",
+    position: { x: 0, y: 660 },
+    identifiers: ["userId(R)", "sessionId(R)"],
+    attributes: [],
+  },
+  {
+    name: { physical: "GitRepositoryFile", logical: "Gitリポジトリ．ファイル．対照表" },
+    type: "COMPARATIVE",
+    description:
+      "リポジトリ配下のファイル(CLAUDE.md / .claude/settings.json / .claude/settings.local.json)。ファイルパスにはリポジトリパスが前置されるが、どこまでがリポジトリのルートかはリポジトリの集合を知らないと決まらないため、導出では代替できない。",
+    position: { x: 560, y: 660 },
+    identifiers: ["repositoryPath(R)", "filePath(R)"],
+    attributes: [],
+  },
+  {
+    name: { physical: "UserFile", logical: "ユーザー．ファイル．対照表" },
+    type: "COMPARATIVE",
+    description:
+      "ユーザーのホームディレクトリ配下のファイル(~/.claude/CLAUDE.md、~/.claude/settings.json)。リポジトリ配下のものと同じ「ファイル」の要素であり、所属先が違うだけ。",
+    position: { x: 0, y: 880 },
+    identifiers: ["userId(R)", "filePath(R)"],
+    attributes: [],
+  },
+
   // ============ リソース ============
   {
     name: { physical: "ProjectFolder", logical: "作業ディレクトリ" },
     type: "RESOURCE",
     description:
       "作業ディレクトリの絶対パス。~/.claude/projects/<フォルダ名>/ のフォルダ名は、セッション開始時のこのパスの英数字以外を1文字ずつ - に置換したもの(報告書 §1)。日付が帰属しないためリソース。集合にはフォルダを決めたパスだけでなく、行の cwd として現れる全てのパス(サブディレクトリや node_modules 配下を含む)が入る。",
-    position: { x: 0, y: 0 },
+    position: { x: 1150, y: 0 },
     identifiers: ["cwd"],
     attributes: ["folderName"],
   },
@@ -270,7 +363,7 @@ const ENTITY_DEFS: EntityDef[] = [
     type: "RESOURCE",
     description:
       "1つの会話。セッションIDは会話開始時に発番される UUID v4 で、直下の .jsonl のファイル名にもなる。ただしセッションIDはファイルを識別しない: サブエージェントの会話は <セッションID>/subagents/agent-<ID>.jsonl に分離され、親と同じ sessionId を引き継ぐ(報告書 §7。実測でも87件すべてが親と同一)。ファイルをモノとして立てるのは第3弾(サブエージェント)の課題として残している。ログにセッション開始日時という語彙は無く(あるのは行ごとの timestamp)、日付が帰属しないためリソース。会話タイトル・モード等は custom-title / ai-title / mode 行として追記されるが、これらは個体指定子を持たないためモノにはならず、セッションの属性になる。",
-    position: { x: 0, y: 710 },
+    position: { x: 1150, y: 710 },
     identifiers: ["sessionId"],
     attributes: ["customTitle", "aiTitle", "mode", "slug", "lastPrompt"],
   },
@@ -279,7 +372,7 @@ const ENTITY_DEFS: EntityDef[] = [
     type: "RESOURCE",
     description:
       "セッションログの .jsonl ファイル1件。個体指定子はファイルパス。会話ファイルは <フォルダ名>/<セッションID>.jsonl、サブエージェントのファイルは <フォルダ名>/<セッションID>/subagents/agent-<エージェントID>.jsonl(報告書 §1、§7)。日付が帰属しないためリソース。ファイル種別によるサブセットへの展開と、エージェントID・meta.json の語彙は第3弾で扱う。",
-    position: { x: 0, y: 360 },
+    position: { x: 1150, y: 360 },
     identifiers: ["filePath"],
     attributes: ["fileKind"],
   },
@@ -288,7 +381,7 @@ const ENTITY_DEFS: EntityDef[] = [
     type: "COMPARATIVE",
     description:
       "どのファイルがどの作業ディレクトリのフォルダに置かれているか。作業ディレクトリとファイルはどちらもリソースであり、TM では R-R の関係は多重度によらず対照表で構成する。ファイルパスにはフォルダ名が含まれるが、エンコードが不可逆でそこから作業ディレクトリパスを復元できないため、この関係は導出では代替できない。ログ側に対応する語彙は無く、対になる事実だけを持つ mapping-list になる。",
-    position: { x: 0, y: 160 },
+    position: { x: 1150, y: 160 },
     identifiers: ["cwd(R)", "filePath(R)"],
     attributes: [],
   },
@@ -297,7 +390,7 @@ const ENTITY_DEFS: EntityDef[] = [
     type: "COMPARATIVE",
     description:
       "どのファイルがどの会話に属するか。セッションとファイルはどちらもリソースであり R-R のため対照表で構成する。1セッションに対しファイルは会話ファイル1件とサブエージェントのファイル0件以上。サブエージェントのファイルは親と同じ sessionId を引き継ぐため(実測で87件すべて)、セッションIDはファイルを識別しない。",
-    position: { x: 0, y: 520 },
+    position: { x: 1150, y: 520 },
     identifiers: ["sessionId(R)", "filePath(R)"],
     attributes: [],
   },
@@ -308,7 +401,7 @@ const ENTITY_DEFS: EntityDef[] = [
     type: "EVENT",
     description:
       "uuid / parentUuid で親子チェーンを構成する行(user / assistant / system / attachment)。記録日時という過去の出来事の日付が帰属するためイベント。cwd を作業ディレクトリへの (R) として左側に置いているのは、これが行単位のメタデータで、ファイルの置き場所と一致しないことが実際にあるため(報告書 §2.3)。このPCの ~/.claude/projects/ 直下の .jsonl 54件を実測したところ、27件(50%)が1ファイル内に複数の cwd を持ち、同じ27件がフォルダ名にエンコードされないパスを含んでいた。最多の1件は14種類で、別プロジェクトのディレクトリまで含む。したがってセッション経由(対照表)の関係だけでは行の記録場所を表現できず、この関係は対照表と重複しない。",
-    position: { x: 620, y: 200 },
+    position: { x: 1770, y: 200 },
     identifiers: ["uuid", "filePath(R)", "sessionId(R)", "cwd(R)"],
     attributes: [
       "timestamp",
@@ -325,7 +418,7 @@ const ENTITY_DEFS: EntityDef[] = [
     type: "EVENT-SUBSET",
     description:
       "行種別による相違のサブセット(×行種別)。type = user。人間の入力(content が文字列)とツール実行結果(content が配列)の両方を含み、実測では約9割がツール実行結果(報告書 §4.1)。ツール実行結果の行は sourceToolAssistantUUID で tool_use を発行した AI応答行を指す(E-E の先行・後続)。",
-    position: { x: 620, y: 760 },
+    position: { x: 1770, y: 760 },
     identifiers: ["uuid", "sourceToolAssistantUUID"],
     attributes: ["type", "promptId", "permissionMode"],
   },
@@ -334,7 +427,7 @@ const ENTITY_DEFS: EntityDef[] = [
     type: "EVENT-SUBSET",
     description:
       "行種別による相違のサブセット(×行種別)。type = assistant。1回のAPI応答が複数ブロックを含む場合はブロックごとに別行となり、同じ messageId を共有する(報告書 §4.2)。messageId は「1回のAPI応答」の個体指定子とみなせるため、第2弾でモノとして切り出す候補。",
-    position: { x: 1000, y: 760 },
+    position: { x: 2150, y: 760 },
     identifiers: ["uuid"],
     attributes: ["type", "requestId", "messageId", "model", "stopReason"],
   },
@@ -343,7 +436,7 @@ const ENTITY_DEFS: EntityDef[] = [
     type: "EVENT-SUBSET",
     description:
       "行種別による相違のサブセット(×行種別)。type = system。subtype で stop_hook_summary / api_error / compact_boundary / informational の4種にさらに切れる(報告書 §4.9)。第4弾で扱う。",
-    position: { x: 1300, y: 760 },
+    position: { x: 2450, y: 760 },
     identifiers: ["uuid"],
     attributes: ["type", "subtype", "level"],
   },
@@ -352,7 +445,7 @@ const ENTITY_DEFS: EntityDef[] = [
     type: "EVENT-SUBSET",
     description:
       "行種別による相違のサブセット(×行種別)。type = attachment。実行環境が会話に注入した情報で、attachment.type で23種にさらに切れる(報告書 §4.10)。第4弾で扱う。",
-    position: { x: 1600, y: 760 },
+    position: { x: 2750, y: 760 },
     identifiers: ["uuid"],
     attributes: ["type", "attachmentType"],
   },
@@ -361,7 +454,7 @@ const ENTITY_DEFS: EntityDef[] = [
     type: "MANY-VALUED-OR",
     description:
       "queue-operation 行。ユーザーが入力を送信した瞬間の記録で、user 行より先に書かれる(報告書 §4.3)。1セッションに複数あるためセッションの多値(MO)。個体指定子は セッションID(R) だけで、行ごとに一意ではない。投入日時が並べるための語彙にあたる。",
-    position: { x: 0, y: 980 },
+    position: { x: 1150, y: 980 },
     identifiers: ["sessionId(R)"],
     attributes: ["enqueuedAt", "content"],
   },
@@ -372,7 +465,7 @@ const ENTITY_DEFS: EntityDef[] = [
     type: "RECURSION",
     description:
       "ログ行どうしの親子関係。物理チェーン(parentUuid)と論理チェーン(logicalParentUuid)の2種があり、後者は compact_boundary で parentUuid が null に戻った際に圧縮前の末尾を指す(報告書 §4.9)。チェーン種別で区別する。",
-    position: { x: 1110, y: 200 },
+    position: { x: 2260, y: 200 },
     identifiers: ["parentUuid", "childUuid"],
     attributes: ["linkKind"],
   },
@@ -449,6 +542,58 @@ type RelationshipDef = {
 const LINE_TYPE_SUBSET: TmSubset = { kind: "different", code: "行種別" };
 
 const RELATIONSHIP_DEFS: RelationshipDef[] = [
+  // ---- 実行環境(PC / ユーザー / Gitリポジトリ)----
+  // PC 1 : 対照表 1以上(マシンには少なくとも1人のユーザーがいる)。
+  {
+    from: { entity: "Pc", position: 0, cardinality: 1, optionality: 1 },
+    to: { entity: "PcUser", position: 180, cardinality: 3, optionality: 1 },
+  },
+  // ユーザー 1 : 対照表 1以上(同じユーザー名が複数マシンにありうる)。
+  {
+    from: { entity: "User", position: 180, cardinality: 1, optionality: 1 },
+    to: { entity: "PcUser", position: 0, cardinality: 3, optionality: 1 },
+  },
+  // PC 1 : 対照表 複数または値なし(リポジトリが1つも無いマシンもある)。
+  {
+    from: { entity: "Pc", position: 300, cardinality: 1, optionality: 1 },
+    to: { entity: "PcGitRepository", position: 180, cardinality: 3, optionality: 0 },
+  },
+  // Gitリポジトリ 1 : 対照表 1以上(どこかのマシンには置かれている)。
+  {
+    from: { entity: "GitRepository", position: 180, cardinality: 1, optionality: 1 },
+    to: { entity: "PcGitRepository", position: 0, cardinality: 3, optionality: 1 },
+  },
+  // ユーザー 1 : 対照表 複数または値なし(会話をまだ始めていないこともある)。
+  {
+    from: { entity: "User", position: 0, cardinality: 1, optionality: 1 },
+    to: { entity: "UserSession", position: 180, cardinality: 3, optionality: 0 },
+  },
+  // セッション 1 : 対照表 必ず1件(会話は必ず誰かのもの)。
+  {
+    from: { entity: "Session", position: 90, cardinality: 1, optionality: 1 },
+    to: { entity: "UserSession", position: 270, cardinality: 1, optionality: 1 },
+  },
+  // Gitリポジトリ 1 : 対照表 複数または値なし(設定ファイルが無いリポジトリもある)。
+  {
+    from: { entity: "GitRepository", position: 0, cardinality: 1, optionality: 1 },
+    to: { entity: "GitRepositoryFile", position: 180, cardinality: 3, optionality: 0 },
+  },
+  // ファイル 1 : 対照表 1件または値なし(会話ログはリポジトリ配下ではない)。
+  {
+    from: { entity: "SessionFile", position: 100, cardinality: 1, optionality: 0 },
+    to: { entity: "GitRepositoryFile", position: 280, cardinality: 1, optionality: 0 },
+  },
+  // ユーザー 1 : 対照表 複数または値なし(~/.claude/ に何も置いていないこともある)。
+  {
+    from: { entity: "User", position: 20, cardinality: 1, optionality: 1 },
+    to: { entity: "UserFile", position: 180, cardinality: 3, optionality: 0 },
+  },
+  // ファイル 1 : 対照表 1件または値なし。
+  {
+    from: { entity: "SessionFile", position: 80, cardinality: 1, optionality: 0 },
+    to: { entity: "UserFile", position: 300, cardinality: 1, optionality: 0 },
+  },
+
   // R-R(作業ディレクトリ × ファイル)は対照表で構成する。
   // 作業ディレクトリ 1 に対し対照表の行は 1以上。
   {
