@@ -177,3 +177,15 @@ export type ProjectItemsPageDto = {
   next_cursor: string | null;
   status_options: ProjectStatusOptionDto[];
 };
+
+// ハブグラフのノード1件分の座標(issue #121)。`saveHubLayout` の引数にも
+// `getHubLayout` の戻り値にも使う。
+export type NodePositionDto = {
+  x: number;
+  y: number;
+};
+
+// `getHubLayout` の戻り値。キーはノードの安定ID(positionKey)。
+export type HubLayoutDto = {
+  positions: Record<string, NodePositionDto>;
+};

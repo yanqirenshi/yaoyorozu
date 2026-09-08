@@ -11,6 +11,8 @@ import type {
   GithubAuthStatusDto,
   GithubAuthenticatedEvent,
   GithubProjectSummaryDto,
+  HubLayoutDto,
+  NodePositionDto,
   ProfileSummaryDto,
   ProjectDto,
   ProjectItemsPageDto,
@@ -42,7 +44,9 @@ export type {
   GithubAuthenticatedEvent,
   GithubProjectDto,
   GithubProjectSummaryDto,
+  HubLayoutDto,
   MessageDto,
+  NodePositionDto,
   ProfileSummaryDto,
   ProjectDto,
   ProjectItemDto,
@@ -171,6 +175,19 @@ export function listWindowStates(): Promise<WindowStateDto[]> {
 
 export function focusWindow(label: string): Promise<void> {
   return invoke<void>("focus_window", { label });
+}
+
+// ハブグラフのノード位置(ドラッグ固定)を取得する(issue #121)。
+export function getHubLayout(): Promise<HubLayoutDto> {
+  return invoke<HubLayoutDto>("get_hub_layout");
+}
+
+// ハブグラフのノード位置を丸ごと置き換えて保存する(issue #121)。マージ
+// ではなく置き換えなので、呼び出し側は現在有効な全ノード分の位置を渡すこと。
+export function saveHubLayout(
+  positions: Record<string, NodePositionDto>,
+): Promise<void> {
+  return invoke<void>("save_hub_layout", { positions });
 }
 
 // レジストリが変わるたびに発火する(ウィンドウの状態報告・閉鎖のいずれでも。

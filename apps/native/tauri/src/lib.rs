@@ -5,15 +5,15 @@ use app::{SessionSource, SettingsStore, TokenStore};
 use dto::{
     AgentKindDto, AgentModeDto, AppErrorDto, AppWarningDto, ClaudeMdDto, ClaudeSettingsDto,
     DeviceCodeDto, GithubAuthFailedEventDto, GithubAuthStatusDto, GithubAuthenticatedEventDto,
-    GithubProjectDto, GithubProjectSummaryDto, ProfileSummaryDto, ProjectDto, ProjectItemsPageDto,
-    ProjectSettingsFileDto, RuleDto, RuleSummaryDto, SessionChangedEventDto, SessionDto,
-    SessionSummaryDto, SettingsCorruptedEventDto, SettingsDto, SettingsInputDto, SkillDto,
-    SkillSummaryDto, WindowStateDto, WindowTabDto,
+    GithubProjectDto, GithubProjectSummaryDto, HubLayoutDto, NodePositionDto, ProfileSummaryDto,
+    ProjectDto, ProjectItemsPageDto, ProjectSettingsFileDto, RuleDto, RuleSummaryDto,
+    SessionChangedEventDto, SessionDto, SessionSummaryDto, SettingsCorruptedEventDto, SettingsDto,
+    SettingsInputDto, SkillDto, SkillSummaryDto, WindowStateDto, WindowTabDto,
 };
 use infra::{
-    ClaudeCliAgent, FileClaudeMdStore, FileClaudeSettingsStore, FileProjectSettingsStore,
-    FileRulesStore, FileSettingsStore, FileSkillsStore, FileSystemRepository, GithubApiClient,
-    KeyringTokenStore,
+    ClaudeCliAgent, FileClaudeMdStore, FileClaudeSettingsStore, FileHubLayoutStore,
+    FileProjectSettingsStore, FileRulesStore, FileSettingsStore, FileSkillsStore,
+    FileSystemRepository, GithubApiClient, KeyringTokenStore,
 };
 use state::AppState;
 use std::path::PathBuf;
@@ -424,6 +424,63 @@ async fn focus_window(app: tauri::AppHandle, label: String) -> Result<(), AppErr
     }
     let _ = window.set_focus();
     Ok(())
+}
+
+/// `hub-layout.json` の保存先パスを解決する。`settings.json` と同じ
+/// `app_data_dir()` 配下に置く(native.md §2)が、`AppState` には持たせない
+/// (issue #121。プロファイル非依存かつ設定本体のマイグレーション履歴を
+/// 汚さないための独立ファイル)。
+fn hub_layout_path(app: &tauri::AppHandle) -> Result<PathBuf, AppErrorDto> {
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join("hub-layout.json"))
+        .map_err(|e| AppErrorDto::from(app::AppError::Io(e.to_string())))
+}
+
+/// ハブグラフのノード位置(ドラッグ固定)を返す(issue #121)。プロファイル
+/// 非依存のためステートレスに解決する(`get_repository_claude_md` と同じ
+/// パターン)。
+#[tauri::command]
+async fn get_hub_layout(app: tauri::AppHandle) -> Result<HubLayoutDto, AppErrorDto> {
+    let path = hub_layout_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || -> Result<HubLayoutDto, app::AppError> {
+        let store = FileHubLayoutStore::new(path);
+        let layout = app::load_hub_layout(&store)?;
+        Ok(layout.into())
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
+}
+
+/// ハブグラフのノード位置を丸ごと置き換えて保存する(issue #121)。マージ
+/// ではなく置き換えなので、呼び出し側は現在有効な全ノード分の位置を渡す
+/// こと(存在しないノードの残骸は自然に消える)。
+#[tauri::command]
+async fn save_hub_layout(
+    app: tauri::AppHandle,
+    positions: std::collections::HashMap<String, NodePositionDto>,
+) -> Result<(), AppErrorDto> {
+    let path = hub_layout_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), app::AppError> {
+        let store = FileHubLayoutStore::new(path);
+        let positions = positions
+            .into_iter()
+            .map(|(key, position)| (key, position.into()))
+            .collect();
+        app::save_hub_layout(&store, positions)
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
 }
 
 /// `AppState` から対象リポジトリのパスを取り出す。未設定なら
@@ -1181,6 +1238,8 @@ pub fn run() {
             report_window_state,
             list_window_states,
             focus_window,
+            get_hub_layout,
+            save_hub_layout,
             get_repository_claude_md,
             save_repository_claude_md,
             get_project_claude_md,
