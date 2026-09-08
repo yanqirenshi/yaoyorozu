@@ -325,7 +325,7 @@ const ENTITY_DEFS: EntityDef[] = [
     attributes: ["repositoryName", "description"],
   },
   {
-    name: { physical: "PcUser", logical: "PC．ユーザー．対照表" },
+    name: { physical: "PcUser", logical: "PC．ユーザー" },
     type: "COMPARATIVE",
     description:
       "どのユーザーがどのマシンを使うか。PC とユーザーはどちらもリソースであり、R-R の関係は多重度によらず対照表で構成する。",
@@ -334,7 +334,7 @@ const ENTITY_DEFS: EntityDef[] = [
     attributes: [],
   },
   {
-    name: { physical: "PcGitRepository", logical: "PC．Gitリポジトリ．対照表" },
+    name: { physical: "PcGitRepository", logical: "PC．Gitリポジトリ" },
     type: "COMPARATIVE",
     description:
       "どのマシンにどのリポジトリが置かれているか。同じリポジトリを複数のマシンにクローンしうるため、R-R の対照表が要る。",
@@ -343,7 +343,7 @@ const ENTITY_DEFS: EntityDef[] = [
     attributes: [],
   },
   {
-    name: { physical: "UserSession", logical: "ユーザー．セッション．対照表" },
+    name: { physical: "UserSession", logical: "ユーザー．セッション" },
     type: "COMPARATIVE",
     description:
       "どの会話が誰のものか。ユーザーとセッションはどちらもリソースのため対照表で構成する。",
@@ -417,7 +417,7 @@ const ENTITY_DEFS: EntityDef[] = [
     attributes: ["fileKind"],
   },
   {
-    name: { physical: "ProjectFolderFile", logical: "作業ディレクトリ．セッションファイル．対照表" },
+    name: { physical: "ProjectFolderFile", logical: "作業ディレクトリ．セッションファイル" },
     type: "COMPARATIVE",
     description:
       "どのファイルがどの作業ディレクトリのフォルダに置かれているか。作業ディレクトリとファイルはどちらもリソースであり、TM では R-R の関係は多重度によらず対照表で構成する。ファイルパスにはフォルダ名が含まれるが、エンコードが不可逆でそこから作業ディレクトリパスを復元できないため、この関係は導出では代替できない。ログ側に対応する語彙は無く、対になる事実だけを持つ mapping-list になる。",
@@ -426,7 +426,7 @@ const ENTITY_DEFS: EntityDef[] = [
     attributes: [],
   },
   {
-    name: { physical: "SessionFileMap", logical: "セッション．セッションファイル．対照表" },
+    name: { physical: "SessionFileMap", logical: "セッション．セッションファイル" },
     type: "COMPARATIVE",
     description:
       "どのファイルがどの会話に属するか。セッションとファイルはどちらもリソースであり R-R のため対照表で構成する。1セッションに対しファイルは会話ファイル1件とサブエージェントのファイル0件以上。サブエージェントのファイルは親と同じ sessionId を引き継ぐため(実測で87件すべて)、セッションIDはファイルを識別しない。",
@@ -501,7 +501,7 @@ const ENTITY_DEFS: EntityDef[] = [
 
   // ============ 再帰 ============
   {
-    name: { physical: "ChainLineRecursion", logical: "ログ行．ログ行．再帰表" },
+    name: { physical: "ChainLineRecursion", logical: "ログ行．ログ行" },
     type: "RECURSION",
     description:
       "ログ行どうしの親子関係。物理チェーン(parentUuid)と論理チェーン(logicalParentUuid)の2種があり、後者は compact_boundary で parentUuid が null に戻った際に圧縮前の末尾を指す(報告書 §4.9)。チェーン種別で区別する。",
