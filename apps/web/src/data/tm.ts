@@ -44,8 +44,8 @@
  * セットへの展開、エージェントID、meta.json(agentType / name / toolUseId)は第3弾で扱う。
  *
  * 【関係の検証(モノ × モノ の網羅性)】
- * 22エンティティの全231ペアを確認した。関係があるのは24ペア(25本)。
- * 残る207ペアのうち、以下4ペアは「語彙は存在するが今は関係を構成していない」ものであり、
+ * 25エンティティの全300ペアを確認した。関係があるのは28ペア(29本)。
+ * 残る272ペアのうち、以下5ペアは「語彙は存在するが今は関係を構成していない」ものであり、
  * 見落としではなく判断の記録として残す。
  *
  * - ログ行 × 入力キュー / 入力キュー × ユーザー行
@@ -57,12 +57,18 @@
  *   指す(報告書 §4.10、§5)。第2弾で「ツール呼び出し」をモノにした時点で、そちらに
  *   対する関係として立つ。その際、現在 sourceToolAssistantUUID で直接張っている
  *   ユーザー行 × AI応答行 の関係も、ツール呼び出し経由に組み替わる可能性がある。
+ * - ログ行 × Gitブランチ
+ *   ログ行は gitBranch(ブランチ名)を右側の属性として持つが、関係では結ばない。
+ *   ログに記録されるのは名前だけで新設した GitブランチID は無く、行が持つのは cwd で
+ *   リポジトリパスではないため(cwd は node_modules 配下も含む)、どのリポジトリの
+ *   どのブランチかを個体指定子で決められない。
  *
- * 他の203ペアは直接の関係を構成しないのが正しい。内訳は、サブセットが親(ログ行)から
- * 行UUIDを継承しており親で張った関係がそのまま効くもの16ペア、対照表を経由するもの
- * 6ペア(PC × ユーザー / PC × Gitリポジトリ / ユーザー × セッション / 作業ディレクトリ
- * × セッションファイル / 作業ディレクトリ × セッション / セッションファイル ×
- * セッション)、対応する語彙がそもそも存在しないもの181ペア。
+ * 他の267ペアは直接の関係を構成しないのが正しい。内訳は、サブセットが親(ログ行)から
+ * 行UUIDを継承しており親で張った関係がそのまま効くもの16ペア、対照表・対応表を経由する
+ * もの7ペア(PC × ユーザー / PC × Gitリポジトリ / ユーザー × セッション / Gitブランチ
+ * × ワーキングツリー / 作業ディレクトリ × セッションファイル / 作業ディレクトリ ×
+ * セッション / セッションファイル × セッション)、対応する語彙がそもそも存在しない
+ * もの244ペア。
  *
  * 【オブジェクトモデル(/class-diagram)との違い】
  * Classes は `.jsonl` の「型の構造」(serde でどうデシリアライズするか)を描く。
@@ -178,6 +184,12 @@ const IDENTIFIER_DEFS: TmName[] = [
   { physical: "systemUuid", logical: "システムUUID" },
   { physical: "userId", logical: "ユーザーID" },
   { physical: "repositoryPath", logical: "リポジトリパス" },
+  // git はブランチにもワーキングツリーにも ID を持たない(ブランチの実体は
+  // refs/heads/<名前> にコミットハッシュが1行あるだけ)。現状分析としては
+  // 「管理対象と認識されていない」という結論だが、業務改善として管理対象に
+  // するため ID を新設する。
+  { physical: "branchId", logical: "GitブランチID" },
+  { physical: "worktreeId", logical: "ワーキングツリーID" },
   { physical: "cwd", logical: "作業ディレクトリパス" },
   { physical: "filePath", logical: "ファイルパス" },
   { physical: "sessionId", logical: "セッションID" },
@@ -199,6 +211,15 @@ const ATTRIBUTE_DEFS: TmName[] = [
   { physical: "userName", logical: "ユーザー名" },
   { physical: "homeDirectory", logical: "ホームディレクトリ" },
   { physical: "repositoryName", logical: "リポジトリ名" },
+  { physical: "branchName", logical: "ブランチ名" },
+  { physical: "worktreeName", logical: "ワーキングツリー名" },
+  // ワーキングツリーは2つのパスを持つ。実物のディレクトリ(Claude Code が
+  // .claude/worktrees/ 配下に作る)と、その直下の .git ファイル(66バイトで、
+  // git 側の台帳 .git/worktrees/<名前> を指す)。
+  { physical: "worktreeFolderPath", logical: "フォルダパス(Claude)" },
+  { physical: "worktreeGitFilePath", logical: "ファイルパス(git)" },
+  { physical: "createdAtTime", logical: "作成日時" },
+  { physical: "deletedAtTime", logical: "削除日時" },
   // アプリが管理する設定ファイルの手配イベントで使う。ファイルパスは
   // リポジトリ(またはホーム)からの位置が決まっているため右側に置く。
   { physical: "filePathFull", logical: "ファイルパス" },
@@ -323,6 +344,40 @@ const ENTITY_DEFS: EntityDef[] = [
     position: { x: 560, y: 400 },
     identifiers: ["repositoryPath"],
     attributes: ["repositoryName", "description"],
+  },
+  {
+    name: { physical: "GitBranch", logical: "Gitブランチ" },
+    type: "EVENT",
+    description:
+      "ブランチの作成・削除。git 自体はブランチに ID を持たず、実体は refs/heads/<名前> にコミットハッシュが1行あるだけで、改名すると前後を結ぶ情報が残らない。現状分析としては「管理対象と認識されていない」が、業務改善として管理対象にするため GitブランチID を新設する。アプリがブランチを作る・消すことが業務であるためイベント。",
+    position: { x: 1150, y: 1400 },
+    identifiers: ["branchId", "repositoryPath(R)"],
+    attributes: ["branchName", "description", "createdAtTime", "deletedAtTime"],
+  },
+  {
+    name: { physical: "GitWorktree", logical: "ワーキングツリー" },
+    type: "EVENT",
+    description:
+      "ワーキングツリーの作成・削除。git はワーキングツリーにも ID を持たず、識別子は台帳(.git/worktrees/<名前>)のディレクトリ名だけで、これはパス由来である。ブランチと同じく業務改善として ワーキングツリーID を新設する。フォルダパス(Claude)は実物のディレクトリ、ファイルパス(git)はその直下の .git ファイル(66バイトで台帳を指す)。",
+    position: { x: 1770, y: 1400 },
+    identifiers: ["worktreeId", "repositoryPath(R)"],
+    attributes: [
+      "worktreeName",
+      "description",
+      "worktreeFolderPath",
+      "worktreeGitFilePath",
+      "createdAtTime",
+      "deletedAtTime",
+    ],
+  },
+  {
+    name: { physical: "GitBranchWorktree", logical: "Gitブランチ．ワーキングツリー" },
+    type: "CORRESPONDENCE",
+    description:
+      "どのブランチをどのワーキングツリーが開いているか。どちらもイベントのため E-E であり、対応表で構成する(リソースどうしなら対照表だが、ここは両方イベント)。同じブランチを同時に開けるワーキングツリーは1つだけで、detached HEAD のワーキングツリーはブランチを持たない。",
+    position: { x: 2400, y: 1400 },
+    identifiers: ["branchId(R)", "worktreeId(R)"],
+    attributes: [],
   },
   {
     name: { physical: "PcUser", logical: "PC．ユーザー" },
@@ -626,6 +681,28 @@ const RELATIONSHIP_DEFS: RelationshipDef[] = [
   {
     from: { entity: "GitRepository", position: 10, cardinality: 1, optionality: 1 },
     to: { entity: "RepoSettingsLocal", position: 130, cardinality: 1, optionality: 0 },
+  },
+  // Gitリポジトリ 1 : Gitブランチ 複数または値なし。E-R。
+  {
+    from: { entity: "GitRepository", position: 340, cardinality: 1, optionality: 1 },
+    to: { entity: "GitBranch", position: 180, cardinality: 3, optionality: 0 },
+  },
+  // Gitリポジトリ 1 : ワーキングツリー 1以上(リポジトリ本体のディレクトリが
+  // 常に1つ目のワーキングツリーであるため)。E-R。
+  {
+    from: { entity: "GitRepository", position: 320, cardinality: 1, optionality: 1 },
+    to: { entity: "GitWorktree", position: 160, cardinality: 3, optionality: 1 },
+  },
+  // E-E は対応表で構成する。ブランチ 1 に対し、それを開いているワーキングツリーは
+  // 1つまで(同じブランチを2箇所で開けない)。
+  {
+    from: { entity: "GitBranch", position: 270, cardinality: 1, optionality: 0 },
+    to: { entity: "GitBranchWorktree", position: 90, cardinality: 1, optionality: 0 },
+  },
+  // ワーキングツリー 1 が開いているブランチも1つまで(detached HEAD なら 0)。
+  {
+    from: { entity: "GitWorktree", position: 270, cardinality: 1, optionality: 0 },
+    to: { entity: "GitBranchWorktree", position: 100, cardinality: 1, optionality: 0 },
   },
   // ユーザー 1 : CLAUDE.md(ユーザー)の手配 1件または値なし。E-R。
   {
