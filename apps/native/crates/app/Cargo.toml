@@ -6,5 +6,7 @@ edition = "2021"
 [dependencies]
 domain = { path = "../domain" }
 thiserror = "2"
+serde_json = "1"
 # create_profile のID生成用(issue #72。`Date.now` 系に依存しない安定ID)。
+# ローカルAPIサーバの認証トークン生成にも使う(issue #122)。
 uuid = { version = "1", features = ["v4"] }

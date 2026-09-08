@@ -412,6 +412,70 @@ pub fn save_hub_layout(
     store.save(&layout)
 }
 
+/// ローカルAPIサーバ(native.md §7)の既定ポート。ハードコードの散在を防ぐため
+/// ここに1箇所だけ定義する(issue #122)。
+pub const LOCAL_API_PORT: u16 = 14200;
+
+/// `POST /layout/{diagram}` で受け付ける図名の許可リスト(issue #122)。
+/// `apps/web` の `src/data/layout/<diagram>.json` に対応する。
+pub const ALLOWED_LAYOUT_DIAGRAMS: [&str; 3] = ["sitemap", "classes", "tm"];
+
+/// レイアウトJSON(`apps/web/src/data/layout/<diagram>.json`)の書き込み
+/// (port)。パスの組み立て(`save_layout` 参照)はこの port の外(app層)の
+/// 責務で、実装(infra)は解決済みパスへの汎用アトミック書き込みだけを担う
+/// (issue #122)。
+pub trait LayoutStore {
+    fn save(&self, path: &Path, content: &serde_json::Value) -> Result<(), AppError>;
+}
+
+/// ローカルAPIサーバの認証トークンの永続化(port)。実体(ファイル形式・
+/// 保存先の解決)は infra に閉じ込める(issue #122)。
+pub trait LocalApiTokenStore {
+    fn save(&self, token: &str) -> Result<(), AppError>;
+}
+
+/// ローカルAPIサーバの認証トークンを新規生成する。アプリ起動のたびに
+/// 呼び出し、前回のトークンは無効化する(native.md §7)。
+pub fn generate_local_api_token() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+/// 生成した認証トークンを永続化する。
+pub fn save_local_api_token(store: &dyn LocalApiTokenStore, token: &str) -> Result<(), AppError> {
+    store.save(token)
+}
+
+/// ローカルAPIサーバ経由のレイアウト保存(issue #122)。`diagram` が許可
+/// リストに無ければ `NotFound`(HTTP層で404)、`repo_root` が登録済み
+/// プロファイルの `repository_path` のいずれとも完全一致しなければ
+/// `InvalidInput`(HTTP層で403)を返す。書き込み先パスは
+/// `<repo_root>/apps/web/src/data/layout/<diagram>.json` に固定し、
+/// クライアントから任意のパスを受け取らない(native.md §4・§7)。
+pub fn save_layout(
+    store: &dyn LayoutStore,
+    settings: &Settings,
+    diagram: &str,
+    repo_root: &Path,
+    overrides: &serde_json::Value,
+) -> Result<(), AppError> {
+    if !ALLOWED_LAYOUT_DIAGRAMS.contains(&diagram) {
+        return Err(AppError::NotFound(format!("未知の図名です: {diagram}")));
+    }
+    let is_registered = settings
+        .profiles
+        .iter()
+        .any(|p| p.repository_path.as_deref() == Some(repo_root));
+    if !is_registered {
+        return Err(AppError::InvalidInput(
+            "登録されていないリポジトリです".to_string(),
+        ));
+    }
+    let path = repo_root
+        .join("apps/web/src/data/layout")
+        .join(format!("{diagram}.json"));
+    store.save(&path, overrides)
+}
+
 /// 設定項目のうち、この時点で検証できる最小限の内容(各プロファイルの
 /// GitHubプロジェクトの owner が空でないこと)を確認する。GitHubプロジェクトの
 /// 実在確認等の高度なバリデーションはスコープ外(issue #17)。
@@ -2485,5 +2549,97 @@ mod tests {
         assert_eq!(saved.len(), 1);
         assert_eq!(saved[0].version, CURRENT_HUB_LAYOUT_VERSION);
         assert_eq!(saved[0].positions, new_positions);
+    }
+
+    struct FakeLayoutStore {
+        fail: bool,
+        saved: std::cell::RefCell<Vec<(PathBuf, serde_json::Value)>>,
+    }
+
+    impl FakeLayoutStore {
+        fn new() -> Self {
+            Self {
+                fail: false,
+                saved: std::cell::RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl LayoutStore for FakeLayoutStore {
+        fn save(&self, path: &Path, content: &serde_json::Value) -> Result<(), AppError> {
+            if self.fail {
+                return Err(AppError::Io("boom".to_string()));
+            }
+            self.saved
+                .borrow_mut()
+                .push((path.to_path_buf(), content.clone()));
+            Ok(())
+        }
+    }
+
+    fn registered_profile_settings(repository_path: PathBuf) -> Settings {
+        let mut profile = domain::Profile::new("p1".to_string(), "p1".to_string());
+        profile.repository_path = Some(repository_path);
+        settings_with_profile(profile)
+    }
+
+    #[test]
+    fn save_layout_rejects_unknown_diagram() {
+        let store = FakeLayoutStore::new();
+        let settings = registered_profile_settings(PathBuf::from(r"C:\repo"));
+
+        let error = save_layout(
+            &store,
+            &settings,
+            "unknown",
+            Path::new(r"C:\repo"),
+            &serde_json::json!({}),
+        )
+        .expect_err("should reject unknown diagram");
+
+        assert!(matches!(error, AppError::NotFound(_)));
+        assert!(store.saved.borrow().is_empty());
+    }
+
+    #[test]
+    fn save_layout_rejects_repo_root_not_matching_any_registered_profile() {
+        let store = FakeLayoutStore::new();
+        let settings = registered_profile_settings(PathBuf::from(r"C:\repo"));
+
+        let error = save_layout(
+            &store,
+            &settings,
+            "sitemap",
+            Path::new(r"C:\other"),
+            &serde_json::json!({}),
+        )
+        .expect_err("should reject unregistered repo_root");
+
+        assert!(matches!(error, AppError::InvalidInput(_)));
+        assert!(store.saved.borrow().is_empty());
+    }
+
+    #[test]
+    fn save_layout_writes_to_apps_web_data_layout_path_for_registered_repo_root() {
+        let store = FakeLayoutStore::new();
+        let settings = registered_profile_settings(PathBuf::from(r"C:\repo"));
+        let overrides = serde_json::json!({ "nodeA": { "x": 1, "y": 2 } });
+
+        save_layout(
+            &store,
+            &settings,
+            "sitemap",
+            Path::new(r"C:\repo"),
+            &overrides,
+        )
+        .expect("should save layout");
+
+        let saved = store.saved.borrow();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(
+            saved[0].0,
+            PathBuf::from(r"C:\repo\apps\web\src\data\layout\sitemap.json")
+        );
+        assert_eq!(saved[0].1, overrides);
     }
 }
