@@ -1,8 +1,8 @@
 {
   "camera": {
-    "k": 0.28717458874925894,
-    "x": 681.4967751041677,
-    "y": 328.91117474276075
+    "k": 0.5000000000000012,
+    "x": 576.7296660495788,
+    "y": 244.65420498289816
   },
   "entities": {
     "AssistantLine": {
@@ -18,8 +18,8 @@
       "y": 1661.4340476989746
     },
     "ChainLineRecursion": {
-      "x": 2012.3104438781736,
-      "y": 1725.437578201294
+      "x": 1801.6371574401855,
+      "y": 1737.6254148483276
     },
     "GitRepository": {
       "x": -3.68648910522461,
@@ -95,7 +95,13 @@
     }
   },
   "ports": {
+    "ChainLine->ChainLineRecursion#子:from": 280,
+    "ChainLine->ChainLineRecursion#子:to": 90,
+    "ChainLine->ChainLineRecursion#親:from": 270,
+    "ChainLine->ChainLineRecursion#親:to": 90,
     "GitRepository->PcGitRepository:from": 90,
+    "GitRepository->RepoClaudeMd:from": 10,
+    "GitRepository->RepoSettingsLocal:from": 350,
     "Pc->PcGitRepository:from": 270,
     "Pc->PcGitRepository:to": 0,
     "Pc->PcUser:to": 270,
