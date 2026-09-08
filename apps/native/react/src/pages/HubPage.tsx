@@ -16,6 +16,7 @@ import {
 import type { GithubProjectDto, ProfileSummaryDto, SessionSummaryDto, WindowStateDto } from "../api";
 import { usePageDockItems } from "../DockItemsContext";
 import { RELOAD_ICON } from "../icons";
+import { HUB_NODE_ICON_URIS } from "../hubNodeIcons";
 import HubInspector from "../HubInspector";
 import type { InspectorContent, InspectorField } from "../HubInspector";
 
@@ -55,6 +56,16 @@ function cwdTail(cwd: string): string {
 function branchLabel(gitBranch: string | null): string {
   if (gitBranch === null) return UNKNOWN_BRANCH;
   return gitBranch === "HEAD" ? DETACHED_BRANCH_LABEL : gitBranch;
+}
+
+// ノード種別アイコン(issue #119)導入にあたり、ラベル文字を円の下に逃がす
+// (アイコンは円の中央にデフォルト位置で描くため、ラベルが重なる)。
+// `d3.network` の label.y はテキストの上端基準で、実際の描画は
+// `y = label.y + label.font.size`(ベースライン相当)になる(Nodes.js
+// `drawCircleLabel` 参照)。
+const LABEL_GAP_BELOW_CIRCLE = 6;
+function labelYBelowCircle(circleR: number): number {
+  return circleR + LABEL_GAP_BELOW_CIRCLE;
 }
 
 // インスペクタ(issue #109)の幅。マウスドラッグで変更できる。
@@ -140,8 +151,9 @@ function buildGraphData(
     x: COL_X.pc,
     y: ROW_START_Y,
     move: "freeze",
-    label: { text: "このPC", fill: COLOR_SUMI, font: { size: 16 } },
+    label: { text: "このPC", fill: COLOR_SUMI, font: { size: 16 }, y: labelYBelowCircle(34) },
     circle: { r: 34, fill: COLOR_PEARL, stroke: { color: COLOR_SUMI, width: 3 } },
+    icon: { url: HUB_NODE_ICON_URIS.pc },
     kind: "pc",
     effectiveProjectsDir,
   });
@@ -204,12 +216,14 @@ function buildGraphData(
               text: session.title.slice(0, 24),
               fill: isSelected ? COLOR_SUMI : COLOR_MUTED,
               font: { size: 12 },
+              y: labelYBelowCircle(20),
             },
             circle: {
               r: 20,
               fill: isSelected ? COLOR_KYO_MURASAKI : COLOR_PEARL,
               stroke: { color: isSelected ? COLOR_KYO_MURASAKI : COLOR_BORDER, width: 2 },
             },
+            icon: { url: HUB_NODE_ICON_URIS.session },
             kind: "session",
             windowLabel,
             profileId,
@@ -233,8 +247,9 @@ function buildGraphData(
           x: COL_X.branch,
           y: ROW_START_Y + branchRowStart * ROW_HEIGHT,
           move: "support",
-          label: { text: branchGroup.key, fill: COLOR_SUMI, font: { size: 12 } },
+          label: { text: branchGroup.key, fill: COLOR_SUMI, font: { size: 12 }, y: labelYBelowCircle(20) },
           circle: { r: 20, fill: COLOR_PEARL, stroke: { color: COLOR_KUSAIRO, width: 2 } },
+          icon: { url: HUB_NODE_ICON_URIS.branch },
           kind: "branch",
           windowLabel,
           profileId,
@@ -254,8 +269,9 @@ function buildGraphData(
         x: COL_X.cwd,
         y: ROW_START_Y + cwdRowStart * ROW_HEIGHT,
         move: "support",
-        label: { text: cwdTail(cwdGroup.key), fill: COLOR_SUMI, font: { size: 12 } },
+        label: { text: cwdTail(cwdGroup.key), fill: COLOR_SUMI, font: { size: 12 }, y: labelYBelowCircle(22) },
         circle: { r: 22, fill: COLOR_PEARL, stroke: { color: COLOR_KINCHA, width: 2 } },
+        icon: { url: HUB_NODE_ICON_URIS.cwd },
         kind: "cwd",
         windowLabel,
         profileId,
@@ -289,12 +305,13 @@ function buildGraphData(
         x: COL_X.profile,
         y: profileY,
         move: "support",
-        label: { text: profileName, fill: COLOR_SUMI, font: { size: 13 } },
+        label: { text: profileName, fill: COLOR_SUMI, font: { size: 13 }, y: labelYBelowCircle(26) },
         circle: {
           r: 26,
           fill: isActiveTab ? COLOR_KYO_MURASAKI : COLOR_PEARL,
           stroke: { color: COLOR_KYO_MURASAKI, width: 2 },
         },
+        icon: { url: HUB_NODE_ICON_URIS.profile },
         kind: "profile",
         windowLabel: w.label,
         profileId: tab.profile_id,
@@ -328,8 +345,9 @@ function buildGraphData(
         x: COL_X.profile,
         y: ROW_START_Y + profileRow * ROW_HEIGHT,
         move: "support",
-        label: { text: p.name, fill: COLOR_MUTED, font: { size: 13 } },
+        label: { text: p.name, fill: COLOR_MUTED, font: { size: 13 }, y: labelYBelowCircle(22) },
         circle: { r: 22, fill: COLOR_PEARL, stroke: { color: COLOR_BORDER, width: 2 } },
+        icon: { url: HUB_NODE_ICON_URIS.profile },
         kind: "profile-unopened",
         profileId: p.id,
         profileName: p.name,
