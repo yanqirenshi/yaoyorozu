@@ -13,11 +13,19 @@
  * - サブセットは区分コードによる切断。部分集合は区分コードを持つ。
  *
  * 【実行環境(PC / ユーザー / Gitリポジトリ)】
- * セッションログの中身だけでなく、それを生んだ環境も同じ図に置く。CLAUDE.md や
- * settings.json は「作成」というイベントではなく、既存の `ファイル`(個体指定子 =
- * ファイルパス)の要素として扱い、所属先(Gitリポジトリ / ユーザー)を対照表で結ぶ。
- * ファイルの `created_at` / `updated_at` は TM が日付として認めない「データ登録日・
- * 更新日」にあたり、実装でも楽観ロックにしか使っていないため、イベントにはしない。
+ * セッションログの中身だけでなく、それを生んだ環境も同じ図に置く。
+ *
+ * CLAUDE.md / settings.json / settings.local.json は**イベント**として立てている。
+ * TM には「ネジは部品か製品か」という観点があり、同じモノでもドメインでの扱いが変わる。
+ * 部品として扱うならリソースだが、製品として扱うならその手配(組立・購入)が業務に
+ * なりイベントになる。このアプリはこれらの設定ファイルを**作成・編集すること自体が
+ * 機能**(infra の claude_md_store / project_settings_store)なので、製品として扱う。
+ * したがって `作成日` / `更新日` は「データ登録日・更新日」ではなく、手配という行為の
+ * 日付にあたる。
+ *
+ * セッションログの `.jsonl` は逆で、アプリは読むだけで作らない。こちらは部品として
+ * 扱い、`セッションファイル(jsonl)` というリソースのままにしている。同じ「ファイル」
+ * でも扱いが違うため、1つのエンティティにまとめない。
  *
  * 【第1弾のスコープ】セッションと行の骨格まで。
  * メッセージ本体(コンテンツブロック・ツール・トークン使用量)、`system` 4種 /
@@ -27,8 +35,8 @@
  * セットへの展開、エージェントID、meta.json(agentType / name / toolUseId)は第3弾で扱う。
  *
  * 【関係の検証(モノ × モノ の網羅性)】
- * 20エンティティの全190ペアを確認した。関係があるのは24ペア(25本)。
- * 残る166ペアのうち、以下4ペアは「語彙は存在するが今は関係を構成していない」ものであり、
+ * 22エンティティの全231ペアを確認した。関係があるのは24ペア(25本)。
+ * 残る207ペアのうち、以下4ペアは「語彙は存在するが今は関係を構成していない」ものであり、
  * 見落としではなく判断の記録として残す。
  *
  * - ログ行 × 入力キュー / 入力キュー × ユーザー行
@@ -41,11 +49,11 @@
  *   対する関係として立つ。その際、現在 sourceToolAssistantUUID で直接張っている
  *   ユーザー行 × AI応答行 の関係も、ツール呼び出し経由に組み替わる可能性がある。
  *
- * 他の162ペアは直接の関係を構成しないのが正しい。内訳は、サブセットが親(ログ行)から
+ * 他の203ペアは直接の関係を構成しないのが正しい。内訳は、サブセットが親(ログ行)から
  * 行UUIDを継承しており親で張った関係がそのまま効くもの16ペア、対照表を経由するもの
- * 8ペア(PC × ユーザー / PC × Gitリポジトリ / ユーザー × セッション / ユーザー ×
- * ファイル / Gitリポジトリ × ファイル / 作業ディレクトリ × ファイル / 作業ディレクトリ
- * × セッション / ファイル × セッション)、対応する語彙がそもそも存在しないもの138ペア。
+ * 6ペア(PC × ユーザー / PC × Gitリポジトリ / ユーザー × セッション / 作業ディレクトリ
+ * × セッションファイル / 作業ディレクトリ × セッション / セッションファイル ×
+ * セッション)、対応する語彙がそもそも存在しないもの181ペア。
  *
  * 【オブジェクトモデル(/class-diagram)との違い】
  * Classes は `.jsonl` の「型の構造」(serde でどうデシリアライズするか)を描く。
@@ -182,6 +190,11 @@ const ATTRIBUTE_DEFS: TmName[] = [
   { physical: "userName", logical: "ユーザー名" },
   { physical: "homeDirectory", logical: "ホームディレクトリ" },
   { physical: "repositoryName", logical: "リポジトリ名" },
+  // アプリが管理する設定ファイルの手配イベントで使う。ファイルパスは
+  // リポジトリ(またはホーム)からの位置が決まっているため右側に置く。
+  { physical: "filePathFull", logical: "ファイルパス" },
+  { physical: "createdAt", logical: "作成日" },
+  { physical: "updatedAt", logical: "更新日" },
   // フォルダ名は作業ディレクトリパスから機械的に導出される(英数字以外を1文字ずつ `-`
   // に置換)。置換は不可逆でフォルダ名からパスは復元できないため、個体指定子はパスの側。
   { physical: "folderName", logical: "フォルダ名(D)" },
@@ -330,22 +343,40 @@ const ENTITY_DEFS: EntityDef[] = [
     attributes: [],
   },
   {
-    name: { physical: "GitRepositoryFile", logical: "Gitリポジトリ．ファイル．対照表" },
-    type: "COMPARATIVE",
+    name: { physical: "RepoClaudeMd", logical: "CLAUDE.md(リポジトリ)" },
+    type: "EVENT",
     description:
-      "リポジトリ配下のファイル(CLAUDE.md / .claude/settings.json / .claude/settings.local.json)。ファイルパスにはリポジトリパスが前置されるが、どこまでがリポジトリのルートかはリポジトリの集合を知らないと決まらないため、導出では代替できない。",
+      "リポジトリ直下の CLAUDE.md をアプリが作成・編集する行為(infra の claude_md_store)。このアプリにとって設定ファイルは「部品」ではなく「製品」であり、その手配(作成・編集)が業務そのものであるためイベントとして扱う。1リポジトリに1つなのでリポジトリパスで識別できる。",
     position: { x: 560, y: 660 },
-    identifiers: ["repositoryPath(R)", "filePath(R)"],
-    attributes: [],
+    identifiers: ["repositoryPath(R)"],
+    attributes: ["filePathFull", "createdAt", "updatedAt"],
   },
   {
-    name: { physical: "UserFile", logical: "ユーザー．ファイル．対照表" },
-    type: "COMPARATIVE",
+    name: { physical: "RepoSettings", logical: "settings.json(リポジトリ)" },
+    type: "EVENT",
     description:
-      "ユーザーのホームディレクトリ配下のファイル(~/.claude/CLAUDE.md、~/.claude/settings.json)。リポジトリ配下のものと同じ「ファイル」の要素であり、所属先が違うだけ。",
+      "リポジトリの .claude/settings.json をアプリが作成・編集する行為(infra の project_settings_store)。",
+    position: { x: 560, y: 880 },
+    identifiers: ["repositoryPath(R)"],
+    attributes: ["filePathFull", "createdAt", "updatedAt"],
+  },
+  {
+    name: { physical: "RepoSettingsLocal", logical: "settings.local.json(リポジトリ)" },
+    type: "EVENT",
+    description:
+      "リポジトリの .claude/settings.local.json をアプリが作成・編集する行為(infra の project_settings_store)。settings.json と属性構成は同じだが、扱う値の性質(共有しないローカル設定)が違うため別のモノとして立てる。",
+    position: { x: 560, y: 1100 },
+    identifiers: ["repositoryPath(R)"],
+    attributes: ["filePathFull", "createdAt", "updatedAt"],
+  },
+  {
+    name: { physical: "UserClaudeMd", logical: "CLAUDE.md(ユーザー)" },
+    type: "EVENT",
+    description:
+      "ホームディレクトリ配下(~/.claude/CLAUDE.md)をアプリが作成・編集する行為。現時点のアプリにこのファイル用の store は無く(ユーザー側で扱っているのは ~/.claude/settings.json)、これから機能化する対象として置いている。",
     position: { x: 0, y: 880 },
-    identifiers: ["userId(R)", "filePath(R)"],
-    attributes: [],
+    identifiers: ["userId(R)"],
+    attributes: ["filePathFull", "createdAt", "updatedAt"],
   },
 
   // ============ リソース ============
@@ -368,7 +399,7 @@ const ENTITY_DEFS: EntityDef[] = [
     attributes: ["customTitle", "aiTitle", "mode", "slug", "lastPrompt"],
   },
   {
-    name: { physical: "SessionFile", logical: "ファイル" },
+    name: { physical: "SessionFile", logical: "セッションファイル(jsonl)" },
     type: "RESOURCE",
     description:
       "セッションログの .jsonl ファイル1件。個体指定子はファイルパス。会話ファイルは <フォルダ名>/<セッションID>.jsonl、サブエージェントのファイルは <フォルダ名>/<セッションID>/subagents/agent-<エージェントID>.jsonl(報告書 §1、§7)。日付が帰属しないためリソース。ファイル種別によるサブセットへの展開と、エージェントID・meta.json の語彙は第3弾で扱う。",
@@ -377,7 +408,7 @@ const ENTITY_DEFS: EntityDef[] = [
     attributes: ["fileKind"],
   },
   {
-    name: { physical: "ProjectFolderFile", logical: "作業ディレクトリ．ファイル．対照表" },
+    name: { physical: "ProjectFolderFile", logical: "作業ディレクトリ．セッションファイル．対照表" },
     type: "COMPARATIVE",
     description:
       "どのファイルがどの作業ディレクトリのフォルダに置かれているか。作業ディレクトリとファイルはどちらもリソースであり、TM では R-R の関係は多重度によらず対照表で構成する。ファイルパスにはフォルダ名が含まれるが、エンコードが不可逆でそこから作業ディレクトリパスを復元できないため、この関係は導出では代替できない。ログ側に対応する語彙は無く、対になる事実だけを持つ mapping-list になる。",
@@ -386,7 +417,7 @@ const ENTITY_DEFS: EntityDef[] = [
     attributes: [],
   },
   {
-    name: { physical: "SessionFileMap", logical: "セッション．ファイル．対照表" },
+    name: { physical: "SessionFileMap", logical: "セッション．セッションファイル．対照表" },
     type: "COMPARATIVE",
     description:
       "どのファイルがどの会話に属するか。セッションとファイルはどちらもリソースであり R-R のため対照表で構成する。1セッションに対しファイルは会話ファイル1件とサブエージェントのファイル0件以上。サブエージェントのファイルは親と同じ sessionId を引き継ぐため(実測で87件すべて)、セッションIDはファイルを識別しない。",
@@ -573,25 +604,24 @@ const RELATIONSHIP_DEFS: RelationshipDef[] = [
     from: { entity: "Session", position: 90, cardinality: 1, optionality: 1 },
     to: { entity: "UserSession", position: 270, cardinality: 1, optionality: 1 },
   },
-  // Gitリポジトリ 1 : 対照表 複数または値なし(設定ファイルが無いリポジトリもある)。
+  // Gitリポジトリ 1 : 設定ファイルの手配 各1件または値なし(まだ作っていない
+  // リポジトリもある)。E-R。
+  {
+    from: { entity: "GitRepository", position: 350, cardinality: 1, optionality: 1 },
+    to: { entity: "RepoClaudeMd", position: 180, cardinality: 1, optionality: 0 },
+  },
   {
     from: { entity: "GitRepository", position: 0, cardinality: 1, optionality: 1 },
-    to: { entity: "GitRepositoryFile", position: 180, cardinality: 3, optionality: 0 },
+    to: { entity: "RepoSettings", position: 150, cardinality: 1, optionality: 0 },
   },
-  // ファイル 1 : 対照表 1件または値なし(会話ログはリポジトリ配下ではない)。
   {
-    from: { entity: "SessionFile", position: 100, cardinality: 1, optionality: 0 },
-    to: { entity: "GitRepositoryFile", position: 280, cardinality: 1, optionality: 0 },
+    from: { entity: "GitRepository", position: 10, cardinality: 1, optionality: 1 },
+    to: { entity: "RepoSettingsLocal", position: 130, cardinality: 1, optionality: 0 },
   },
-  // ユーザー 1 : 対照表 複数または値なし(~/.claude/ に何も置いていないこともある)。
+  // ユーザー 1 : CLAUDE.md(ユーザー)の手配 1件または値なし。E-R。
   {
     from: { entity: "User", position: 20, cardinality: 1, optionality: 1 },
-    to: { entity: "UserFile", position: 180, cardinality: 3, optionality: 0 },
-  },
-  // ファイル 1 : 対照表 1件または値なし。
-  {
-    from: { entity: "SessionFile", position: 80, cardinality: 1, optionality: 0 },
-    to: { entity: "UserFile", position: 300, cardinality: 1, optionality: 0 },
+    to: { entity: "UserClaudeMd", position: 180, cardinality: 1, optionality: 0 },
   },
 
   // R-R(作業ディレクトリ × ファイル)は対照表で構成する。
