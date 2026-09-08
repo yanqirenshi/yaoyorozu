@@ -4,7 +4,7 @@ use axum::extract::{Path as AxumPath, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use infra::{FileLayoutStore, FileLocalApiTokenStore};
+use infra::{FileLayoutStore, FileLocalApiTokenStore, SystemGitWorktreeLister};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -68,7 +68,15 @@ async fn save_layout_handler(
 
     let result = tauri::async_runtime::spawn_blocking(move || {
         let store = FileLayoutStore::new();
-        app::save_layout(&store, &settings, &diagram, &repo_root, &body.overrides)
+        let worktrees = SystemGitWorktreeLister::new();
+        app::save_layout(
+            &store,
+            &worktrees,
+            &settings,
+            &diagram,
+            &repo_root,
+            &body.overrides,
+        )
     })
     .await
     .unwrap_or_else(|_| {

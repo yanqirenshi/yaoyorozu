@@ -1,6 +1,7 @@
 mod claude_cli_agent;
 mod claude_md_store;
 mod claude_settings_store;
+mod git_worktree_lister;
 mod github_api_client;
 mod hub_layout_store;
 mod keyring_token_store;
@@ -15,6 +16,7 @@ mod skills_store;
 pub use claude_cli_agent::ClaudeCliAgent;
 pub use claude_md_store::FileClaudeMdStore;
 pub use claude_settings_store::FileClaudeSettingsStore;
+pub use git_worktree_lister::SystemGitWorktreeLister;
 pub use github_api_client::GithubApiClient;
 pub use hub_layout_store::FileHubLayoutStore;
 pub use keyring_token_store::KeyringTokenStore;

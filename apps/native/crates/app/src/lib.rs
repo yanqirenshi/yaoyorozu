@@ -434,6 +434,17 @@ pub trait LocalApiTokenStore {
     fn save(&self, token: &str) -> Result<(), AppError>;
 }
 
+/// 指定リポジトリに属する git worktree の一覧(port)。`repo_root` が
+/// 登録済みプロファイルの `repository_path` そのものだけでなく、その
+/// worktree(`git worktree add` で作られた作業ツリー)であっても保存を
+/// 許可するために使う(issue #129)。実体(`git` コマンドの実行)は infra に
+/// 閉じ込める。
+pub trait GitWorktreeLister {
+    /// `repo_root` で `git worktree list` を実行し、そのリポジトリに属する
+    /// 全worktreeの絶対パス(mainのworktree自身を含む)を返す。
+    fn list_worktree_paths(&self, repo_root: &Path) -> Result<Vec<PathBuf>, AppError>;
+}
+
 /// ローカルAPIサーバの認証トークンを新規生成する。アプリ起動のたびに
 /// 呼び出し、前回のトークンは無効化する(native.md §7)。
 pub fn generate_local_api_token() -> String {
@@ -445,14 +456,18 @@ pub fn save_local_api_token(store: &dyn LocalApiTokenStore, token: &str) -> Resu
     store.save(token)
 }
 
-/// ローカルAPIサーバ経由のレイアウト保存(issue #122)。`diagram` が許可
-/// リストに無ければ `NotFound`(HTTP層で404)、`repo_root` が登録済み
-/// プロファイルの `repository_path` のいずれとも完全一致しなければ
-/// `InvalidInput`(HTTP層で403)を返す。書き込み先パスは
-/// `<repo_root>/apps/web/src/data/layout/<diagram>.json` に固定し、
+/// ローカルAPIサーバ経由のレイアウト保存(issue #122・#129)。`diagram` が
+/// 許可リストに無ければ `NotFound`(HTTP層で404)を返す。`repo_root` は
+/// 登録済みプロファイルの `repository_path` に完全一致するか、その
+/// worktree(`GitWorktreeLister` で判定)である場合のみ許可し、
+/// どちらでもなければ `InvalidInput`(HTTP層で403)を返す。CLAUDE.md の
+/// 並行作業ルールにより通常の作業は worktree で行われるため、worktree
+/// からの保存を拒否すると実運用と噛み合わない(issue #129)。書き込み先
+/// パスは `<repo_root>/apps/web/src/data/layout/<diagram>.json` に固定し、
 /// クライアントから任意のパスを受け取らない(native.md §4・§7)。
 pub fn save_layout(
     store: &dyn LayoutStore,
+    worktrees: &dyn GitWorktreeLister,
     settings: &Settings,
     diagram: &str,
     repo_root: &Path,
@@ -461,10 +476,20 @@ pub fn save_layout(
     if !ALLOWED_LAYOUT_DIAGRAMS.contains(&diagram) {
         return Err(AppError::NotFound(format!("未知の図名です: {diagram}")));
     }
-    let is_registered = settings
-        .profiles
-        .iter()
-        .any(|p| p.repository_path.as_deref() == Some(repo_root));
+    let is_registered = settings.profiles.iter().any(|profile| {
+        let Some(registered_path) = profile.repository_path.as_deref() else {
+            return false;
+        };
+        if registered_path == repo_root {
+            return true;
+        }
+        // `git worktree list` の実行に失敗した場合(gitが無い等)は、
+        // 許可の根拠が得られないため fail-closed(未登録扱い)にする。
+        worktrees
+            .list_worktree_paths(registered_path)
+            .map(|paths| paths.iter().any(|path| path.as_path() == repo_root))
+            .unwrap_or(false)
+    });
     if !is_registered {
         return Err(AppError::InvalidInput(
             "登録されていないリポジトリです".to_string(),
@@ -2583,13 +2608,59 @@ mod tests {
         settings_with_profile(profile)
     }
 
+    struct FakeGitWorktreeLister {
+        // repo_root -> そのリポジトリに属するworktreeパス一覧。
+        worktrees_by_repo: std::collections::HashMap<PathBuf, Vec<PathBuf>>,
+        fail: bool,
+    }
+
+    impl FakeGitWorktreeLister {
+        fn new() -> Self {
+            Self {
+                worktrees_by_repo: std::collections::HashMap::new(),
+                fail: false,
+            }
+        }
+
+        fn with_worktree(mut self, repo_root: PathBuf, worktree: PathBuf) -> Self {
+            self.worktrees_by_repo
+                .entry(repo_root)
+                .or_default()
+                .push(worktree);
+            self
+        }
+
+        fn failing() -> Self {
+            Self {
+                worktrees_by_repo: std::collections::HashMap::new(),
+                fail: true,
+            }
+        }
+    }
+
+    impl GitWorktreeLister for FakeGitWorktreeLister {
+        fn list_worktree_paths(&self, repo_root: &Path) -> Result<Vec<PathBuf>, AppError> {
+            if self.fail {
+                return Err(AppError::Io("git worktree list に失敗しました".to_string()));
+            }
+            // `git worktree list` はmainのworktree自身も含めて返す。
+            let mut paths = vec![repo_root.to_path_buf()];
+            if let Some(extra) = self.worktrees_by_repo.get(repo_root) {
+                paths.extend(extra.iter().cloned());
+            }
+            Ok(paths)
+        }
+    }
+
     #[test]
     fn save_layout_rejects_unknown_diagram() {
         let store = FakeLayoutStore::new();
+        let worktrees = FakeGitWorktreeLister::new();
         let settings = registered_profile_settings(PathBuf::from(r"C:\repo"));
 
         let error = save_layout(
             &store,
+            &worktrees,
             &settings,
             "unknown",
             Path::new(r"C:\repo"),
@@ -2602,12 +2673,17 @@ mod tests {
     }
 
     #[test]
-    fn save_layout_rejects_repo_root_not_matching_any_registered_profile() {
+    fn save_layout_rejects_repo_root_not_matching_any_registered_profile_or_its_worktrees() {
         let store = FakeLayoutStore::new();
+        let worktrees = FakeGitWorktreeLister::new().with_worktree(
+            PathBuf::from(r"C:\repo"),
+            PathBuf::from(r"C:\repo\.claude\worktrees\some-other-worktree"),
+        );
         let settings = registered_profile_settings(PathBuf::from(r"C:\repo"));
 
         let error = save_layout(
             &store,
+            &worktrees,
             &settings,
             "sitemap",
             Path::new(r"C:\other"),
@@ -2622,11 +2698,13 @@ mod tests {
     #[test]
     fn save_layout_writes_to_apps_web_data_layout_path_for_registered_repo_root() {
         let store = FakeLayoutStore::new();
+        let worktrees = FakeGitWorktreeLister::new();
         let settings = registered_profile_settings(PathBuf::from(r"C:\repo"));
         let overrides = serde_json::json!({ "nodeA": { "x": 1, "y": 2 } });
 
         save_layout(
             &store,
+            &worktrees,
             &settings,
             "sitemap",
             Path::new(r"C:\repo"),
@@ -2641,5 +2719,47 @@ mod tests {
             PathBuf::from(r"C:\repo\apps\web\src\data\layout\sitemap.json")
         );
         assert_eq!(saved[0].1, overrides);
+    }
+
+    #[test]
+    fn save_layout_allows_repo_root_that_is_a_worktree_of_a_registered_profile() {
+        let store = FakeLayoutStore::new();
+        let registered = PathBuf::from(r"C:\repo");
+        let worktree = PathBuf::from(r"C:\repo\.claude\worktrees\feature-x");
+        let worktrees =
+            FakeGitWorktreeLister::new().with_worktree(registered.clone(), worktree.clone());
+        let settings = registered_profile_settings(registered);
+        let overrides = serde_json::json!({ "nodeA": { "x": 1, "y": 2 } });
+
+        save_layout(&store, &worktrees, &settings, "tm", &worktree, &overrides)
+            .expect("should allow saving from a registered repo's worktree");
+
+        let saved = store.saved.borrow();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(
+            saved[0].0,
+            worktree.join("apps/web/src/data/layout/tm.json")
+        );
+    }
+
+    #[test]
+    fn save_layout_rejects_repo_root_when_worktree_lister_fails() {
+        let store = FakeLayoutStore::new();
+        let worktrees = FakeGitWorktreeLister::failing();
+        let settings = registered_profile_settings(PathBuf::from(r"C:\repo"));
+        let worktree = PathBuf::from(r"C:\repo\.claude\worktrees\feature-x");
+
+        let error = save_layout(
+            &store,
+            &worktrees,
+            &settings,
+            "tm",
+            &worktree,
+            &serde_json::json!({}),
+        )
+        .expect_err("should fail closed when git worktree list fails");
+
+        assert!(matches!(error, AppError::InvalidInput(_)));
+        assert!(store.saved.borrow().is_empty());
     }
 }
