@@ -1,1 +1,118 @@
-{}
+{
+  "camera": {
+    "k": 0.28717458874925894,
+    "x": 681.4967751041677,
+    "y": 328.91117474276075
+  },
+  "entities": {
+    "AssistantLine": {
+      "x": 1091.4104747474194,
+      "y": 2170.292014479637
+    },
+    "AttachmentLine": {
+      "x": 1743.6435832977295,
+      "y": 2226.0070456266403
+    },
+    "ChainLine": {
+      "x": 1266.3535179495811,
+      "y": 1661.4340476989746
+    },
+    "ChainLineRecursion": {
+      "x": 2012.3104438781736,
+      "y": 1725.437578201294
+    },
+    "GitRepository": {
+      "x": -3.68648910522461,
+      "y": -20.325506806373596
+    },
+    "Pc": {
+      "x": -860.3191905021667,
+      "y": -15.83409595489502
+    },
+    "PcGitRepository": {
+      "x": -609.5480508804321,
+      "y": -108.18419027328493
+    },
+    "PcUser": {
+      "x": -1118.942746937275,
+      "y": 319.31178307533264
+    },
+    "ProjectFolder": {
+      "x": 1929.0784034729004,
+      "y": 875.0527132749557
+    },
+    "ProjectFolderFile": {
+      "x": 1298.4773559570312,
+      "y": 771.2551012039185
+    },
+    "RepoClaudeMd": {
+      "x": -275.24849700927734,
+      "y": 355.1936368942261
+    },
+    "RepoSettings": {
+      "x": 121.66821670532228,
+      "y": 356.9096305370331
+    },
+    "RepoSettingsLocal": {
+      "x": 524.3072700500488,
+      "y": 358.1046772003174
+    },
+    "Session": {
+      "x": 3.620883464813232,
+      "y": 822.7880054712296
+    },
+    "SessionFile": {
+      "x": 894.3779296875,
+      "y": 878.4410232305527
+    },
+    "SessionFileMap": {
+      "x": 329.2010498046875,
+      "y": 773.0394815504551
+    },
+    "SessionInputQueue": {
+      "x": 425.6099624633789,
+      "y": 984.0083361268044
+    },
+    "SystemLine": {
+      "x": 1426.2325267791748,
+      "y": 2215.560510158539
+    },
+    "User": {
+      "x": -894.9679312705994,
+      "y": 866.0723901987076
+    },
+    "UserClaudeMd": {
+      "x": -920.7845134735109,
+      "y": 1360.9334800243378
+    },
+    "UserLine": {
+      "x": 756.6791833043098,
+      "y": 2198.149588227272
+    },
+    "UserSession": {
+      "x": -495.30686950683594,
+      "y": 958.1203837394714
+    }
+  },
+  "ports": {
+    "GitRepository->PcGitRepository:from": 90,
+    "Pc->PcGitRepository:from": 270,
+    "Pc->PcGitRepository:to": 0,
+    "Pc->PcUser:to": 270,
+    "ProjectFolder->ChainLine:from": 0,
+    "ProjectFolder->ProjectFolderFile:from": 90,
+    "ProjectFolder->ProjectFolderFile:to": 0,
+    "Session->ChainLine:from": 0,
+    "Session->SessionFileMap:from": 270,
+    "Session->SessionInputQueue:from": 290,
+    "Session->SessionInputQueue:to": 90,
+    "Session->UserSession:to": 180,
+    "SessionFile->ChainLine:from": 0,
+    "SessionFile->ProjectFolderFile:from": 270,
+    "SessionFile->SessionFileMap:from": 90,
+    "SessionFile->SessionFileMap:to": 0,
+    "User->PcUser:to": 270,
+    "User->UserClaudeMd:from": 0,
+    "User->UserSession:from": 270
+  }
+}
