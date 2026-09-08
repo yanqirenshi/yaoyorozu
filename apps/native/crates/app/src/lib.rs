@@ -1,9 +1,10 @@
 use domain::{
     is_valid_json, is_valid_rule_file_name, is_valid_session_id, is_valid_skill_name,
     order_messages_newest_first, paginate_messages, sort_projects_by_recency,
-    sort_sessions_by_recency, ClaudeMdFile, ClaudeSettingsFile, Project, RuleSummary, Session,
-    SessionSummary, Settings, SkillSummary,
+    sort_sessions_by_recency, ClaudeMdFile, ClaudeSettingsFile, HubLayout, NodePosition, Project,
+    RuleSummary, Session, SessionSummary, Settings, SkillSummary, CURRENT_HUB_LAYOUT_VERSION,
 };
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, thiserror::Error)]
@@ -168,6 +169,14 @@ pub trait ProjectSettingsStore {
 pub struct LoadedSettings {
     pub settings: Settings,
     pub recovered_from_corruption: bool,
+}
+
+/// ハブグラフのノード位置の永続化(port)。`settings.json` とは別ファイルに
+/// 保存する低重要度データであり、`SettingsStore` とは分離する(issue #121。
+/// `domain::HubLayout` のドキュメントコメント参照)。
+pub trait HubLayoutStore {
+    fn load(&self) -> Result<HubLayout, AppError>;
+    fn save(&self, layout: &HubLayout) -> Result<(), AppError>;
 }
 
 /// GitHub OAuth(デバイスフロー)+ Projects(v2) 取得(port)。実体(HTTP通信)は
@@ -381,6 +390,26 @@ pub fn send_message(
 /// デフォルト値へのフォールバックは `SettingsStore` 実装(infra)側の責務。
 pub fn load_settings(store: &dyn SettingsStore) -> Result<LoadedSettings, AppError> {
     store.load()
+}
+
+/// ハブグラフのノード位置(ドラッグ固定)を読み込む。ファイルが存在しない/
+/// 壊れている場合のデフォルト値へのフォールバックは `HubLayoutStore` 実装
+/// (infra)側の責務(issue #121)。
+pub fn load_hub_layout(store: &dyn HubLayoutStore) -> Result<HubLayout, AppError> {
+    store.load()
+}
+
+/// ハブグラフのノード位置を丸ごと置き換えて保存する。マージではなく置き換え
+/// にすることで、既に存在しないノードの位置が自然に消える(issue #121)。
+pub fn save_hub_layout(
+    store: &dyn HubLayoutStore,
+    positions: HashMap<String, NodePosition>,
+) -> Result<(), AppError> {
+    let layout = HubLayout {
+        version: CURRENT_HUB_LAYOUT_VERSION,
+        positions,
+    };
+    store.save(&layout)
 }
 
 /// 設定項目のうち、この時点で検証できる最小限の内容(各プロファイルの
@@ -1970,6 +1999,11 @@ mod tests {
         assert!(store.read_calls.borrow().is_empty());
     }
 
+    // (project_id, item_id, status_field_id, option_id) の呼び出し履歴。
+    // clippy::type_complexity 対策(このテスト用struct専用の型なので、
+    // 意味付けは呼び出し側のフィールド名で十分)。
+    type UpdateItemStatusCall = (String, String, String, Option<String>);
+
     struct FakeGithubGateway {
         device_authorization: DeviceAuthorization,
         poll_responses:
@@ -1982,7 +2016,7 @@ mod tests {
         projects: Vec<domain::GithubProjectSummary>,
         project_items: domain::ProjectItemsPage,
         fail_update_item_status_with_scope_insufficient: bool,
-        update_item_status_calls: std::cell::RefCell<Vec<(String, String, String, Option<String>)>>,
+        update_item_status_calls: std::cell::RefCell<Vec<UpdateItemStatusCall>>,
     }
 
     impl FakeGithubGateway {
@@ -2393,5 +2427,63 @@ mod tests {
         .expect_err("should propagate scope insufficient error");
 
         assert!(matches!(error, AppError::GithubScopeInsufficient(_)));
+    }
+
+    struct FakeHubLayoutStore {
+        loaded: HubLayout,
+        saved: std::cell::RefCell<Vec<HubLayout>>,
+    }
+
+    impl FakeHubLayoutStore {
+        fn new(loaded: HubLayout) -> Self {
+            Self {
+                loaded,
+                saved: std::cell::RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl HubLayoutStore for FakeHubLayoutStore {
+        fn load(&self) -> Result<HubLayout, AppError> {
+            Ok(self.loaded.clone())
+        }
+
+        fn save(&self, layout: &HubLayout) -> Result<(), AppError> {
+            self.saved.borrow_mut().push(layout.clone());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn load_hub_layout_returns_store_result_unchanged() {
+        let mut positions = HashMap::new();
+        positions.insert("cwd:proj1".to_string(), NodePosition { x: 1.0, y: 2.0 });
+        let layout = HubLayout {
+            version: CURRENT_HUB_LAYOUT_VERSION,
+            positions,
+        };
+        let store = FakeHubLayoutStore::new(layout.clone());
+
+        let loaded = load_hub_layout(&store).expect("should load hub layout");
+        assert_eq!(loaded, layout);
+    }
+
+    #[test]
+    fn save_hub_layout_replaces_positions_wholesale_instead_of_merging() {
+        let mut initial_positions = HashMap::new();
+        initial_positions.insert("cwd:stale".to_string(), NodePosition { x: 1.0, y: 1.0 });
+        let store = FakeHubLayoutStore::new(HubLayout {
+            version: CURRENT_HUB_LAYOUT_VERSION,
+            positions: initial_positions,
+        });
+
+        let mut new_positions = HashMap::new();
+        new_positions.insert("cwd:fresh".to_string(), NodePosition { x: 9.0, y: 9.0 });
+        save_hub_layout(&store, new_positions.clone()).expect("should save hub layout");
+
+        let saved = store.saved.borrow();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].version, CURRENT_HUB_LAYOUT_VERSION);
+        assert_eq!(saved[0].positions, new_positions);
     }
 }

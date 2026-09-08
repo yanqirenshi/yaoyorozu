@@ -4,6 +4,7 @@ import D3Network, { Rectum } from "@yanqirenshi/d3.network";
 import type { NodeDatum } from "@yanqirenshi/d3.network";
 import {
   focusWindow,
+  getHubLayout,
   getSettings,
   isAppError,
   listSessions,
@@ -12,10 +13,17 @@ import {
   onSettingsUpdated,
   onWindowsChanged,
   openProfileWindow,
+  saveHubLayout,
 } from "../api";
-import type { GithubProjectDto, ProfileSummaryDto, SessionSummaryDto, WindowStateDto } from "../api";
+import type {
+  GithubProjectDto,
+  NodePositionDto,
+  ProfileSummaryDto,
+  SessionSummaryDto,
+  WindowStateDto,
+} from "../api";
 import { usePageDockItems } from "../DockItemsContext";
-import { RELOAD_ICON } from "../icons";
+import { LAYOUT_RESET_ICON, RELOAD_ICON } from "../icons";
 import { HUB_NODE_ICON_URIS } from "../hubNodeIcons";
 import HubInspector from "../HubInspector";
 import type { InspectorContent, InspectorField } from "../HubInspector";
@@ -73,6 +81,11 @@ const INSPECTOR_INITIAL_WIDTH = 444;
 const INSPECTOR_MIN_WIDTH = 222;
 const INSPECTOR_MAX_WIDTH = 888;
 
+// ノード位置(ドラッグ固定)の保存(issue #121)のデバウンス間隔。ドラッグ中の
+// 連続した dragEnded 呼び出し(同一ドラッグでは1回だが、短時間に複数ノードを
+// 続けて動かした場合)をまとめて1回の保存にする。
+const HUB_LAYOUT_SAVE_DEBOUNCE_MS = 500;
+
 // クリック・右クリック時にどう振る舞うか/何を表示するかを判定するための、
 // ノードの元データ(`_core`)。PC → profile → 作業ディレクトリ → ブランチ →
 // session の階層(issue #84・#104。Windowノードは廃止し、開いている
@@ -85,6 +98,10 @@ type HubNodeCore = {
   kind: "pc" | "profile" | "cwd" | "branch" | "session" | "profile-unopened";
   windowLabel?: string;
   profileId?: string;
+  // ドラッグ位置の永続化(issue #121)に使う安定キー。`id` はウィンドウ起動の
+  // たびに変わるラベルを含む場合がある(profile系)ため別に持つ。`move:
+  // "support"` のノード(profile・cwd・branch)にのみ設定する。
+  positionKey?: string;
   // pc
   effectiveProjectsDir?: string;
   // profile / profile-unopened
@@ -125,6 +142,33 @@ type ProfileSession = SessionSummaryDto & { folder: string };
 // (issue #100)。
 type SessionsByProfile = Record<string, ProfileSession[]>;
 
+// 保存済み位置(issue #121)があればそれを使い、無ければ自前計算した初期
+// レイアウト位置(fallback)を使う。`move: "support"` のノード(profile・
+// 作業ディレクトリ・ブランチ)はD3の `.data()` 差分更新で `id` が一致する
+// 既存ノードでも新しいデータオブジェクトの x/y でまるごと置き換わる仕様
+// (`Nodes.js` の `drawGroup`)のため、ドラッグ位置は呼び出し側(このヘルパー)
+// で明示的に引き継がないと再描画のたびに消える。
+//
+// NOTE(issue #121からの逸脱): issueの設計では保存位置のあるノードを
+// `move: "freeze"` にする案だったが、`Simulation.js` の
+// `makeDragAndDropCallbacks` を確認したところ `freeze` は
+// dragStarted/dragged/dragEnded の全てを即 return させ、ドラッグ自体を
+// 受け付けない(fx/fyの固定うんぬん以前にイベントが握れない)。これでは
+// issue自身が要求する「保存済みノードを再度ドラッグした場合も再固定+保存」
+// が満たせないため、既存の `move: "support"`(ドラッグ可能かつ
+// dragEnded後もfx/fyを保持=事実上の固定)をそのまま使う。挙動としては
+// 「保存位置があれば固定、無ければ自動配置、いつでも再ドラッグ可」という
+// issueの意図を満たす。
+function resolvePosition(
+  positionKey: string,
+  fallbackX: number,
+  fallbackY: number,
+  savedPositions: Record<string, NodePositionDto>,
+): { x: number; y: number } {
+  const saved = savedPositions[positionKey];
+  return saved ? { x: saved.x, y: saved.y } : { x: fallbackX, y: fallbackY };
+}
+
 // このマシン上で開いているウィンドウ・全プロファイル・そのセッション一覧から
 // PC → profile → 作業ディレクトリ → ブランチ → session の階層グラフ
 // (d3.network 用ノード・エッジ)を組み立てる。座標は左→右の5列固定レイアウト
@@ -132,16 +176,23 @@ type SessionsByProfile = Record<string, ProfileSession[]>;
 // x/y が必須)。「このPC」ノードは `move: "freeze"` で固定、profile・作業
 // ディレクトリ・ブランチのノードは `move: "support"` で初期位置に留めつつ
 // ユーザーがドラッグで動かせるようにし、sessionノードは `move: "will"` で
-// forceシミュレーションに委ねる。
+// forceシミュレーションに委ねる。`move: "support"` のノードはユーザーが
+// ドラッグ固定した位置を `hub-layout.json` に永続化する(issue #121。
+// sessionノードは force シミュレーションに委ねる性質上、対象外)。
 function buildGraphData(
   windowStates: WindowStateDto[],
   profiles: ProfileSummaryDto[],
   sessionsByProfile: SessionsByProfile,
   profileDetails: ProfileDetails,
   effectiveProjectsDir: string,
+  savedPositions: Record<string, NodePositionDto>,
 ) {
   const nodes: Record<string, unknown>[] = [];
   const edges: Record<string, unknown>[] = [];
+  // 現在のグラフに実在する positionKey の集合(issue #121)。保存時、既に
+  // 存在しないノードの位置情報をここで自然に除外する(呼び出し側が保存前に
+  // この集合でフィルタする)。
+  const positionKeys = new Set<string>();
   let edgeSeq = 0;
   let row = 0;
 
@@ -242,10 +293,18 @@ function buildGraphData(
         });
         row += branchGroup.items.length;
 
+        const branchPositionKey = branchNodeId;
+        positionKeys.add(branchPositionKey);
+        const branchPosition = resolvePosition(
+          branchPositionKey,
+          COL_X.branch,
+          ROW_START_Y + branchRowStart * ROW_HEIGHT,
+          savedPositions,
+        );
         nodes.push({
           id: branchNodeId,
-          x: COL_X.branch,
-          y: ROW_START_Y + branchRowStart * ROW_HEIGHT,
+          x: branchPosition.x,
+          y: branchPosition.y,
           move: "support",
           label: { text: branchGroup.key, fill: COLOR_SUMI, font: { size: 12 }, y: labelYBelowCircle(20) },
           circle: { r: 20, fill: COLOR_PEARL, stroke: { color: COLOR_KUSAIRO, width: 2 } },
@@ -253,6 +312,7 @@ function buildGraphData(
           kind: "branch",
           windowLabel,
           profileId,
+          positionKey: branchPositionKey,
           branchName: branchGroup.key,
           sessionCount: branchGroup.items.length,
         });
@@ -264,10 +324,18 @@ function buildGraphData(
         });
       }
 
+      const cwdPositionKey = cwdNodeId;
+      positionKeys.add(cwdPositionKey);
+      const cwdPosition = resolvePosition(
+        cwdPositionKey,
+        COL_X.cwd,
+        ROW_START_Y + cwdRowStart * ROW_HEIGHT,
+        savedPositions,
+      );
       nodes.push({
         id: cwdNodeId,
-        x: COL_X.cwd,
-        y: ROW_START_Y + cwdRowStart * ROW_HEIGHT,
+        x: cwdPosition.x,
+        y: cwdPosition.y,
         move: "support",
         label: { text: cwdTail(cwdGroup.key), fill: COLOR_SUMI, font: { size: 12 }, y: labelYBelowCircle(22) },
         circle: { r: 22, fill: COLOR_PEARL, stroke: { color: COLOR_KINCHA, width: 2 } },
@@ -275,6 +343,7 @@ function buildGraphData(
         kind: "cwd",
         windowLabel,
         profileId,
+        positionKey: cwdPositionKey,
         cwdPath: cwdGroup.key,
         folder: cwdGroup.items[0]?.folder,
       });
@@ -300,10 +369,23 @@ function buildGraphData(
 
       const profileRow = row;
       const profileY = ROW_START_Y + profileRow * ROW_HEIGHT;
+      // `id`(profileNodeId)はウィンドウラベル+タブ番号を含み、ウィンドウの
+      // 開閉のたびに変わり得るため、ドラッグ位置の永続化には使えない。
+      // 代わりに `profileId` だけを使う安定キーを別に持つ(issue #121)。
+      // 未オープン時(profile-unopened)も同じキーを使うことで、開閉に関係
+      // なく同じ保存位置を引き継ぐ。
+      const profilePositionKey = `profile:${tab.profile_id}`;
+      positionKeys.add(profilePositionKey);
+      const profilePosition = resolvePosition(
+        profilePositionKey,
+        COL_X.profile,
+        profileY,
+        savedPositions,
+      );
       nodes.push({
         id: profileNodeId,
-        x: COL_X.profile,
-        y: profileY,
+        x: profilePosition.x,
+        y: profilePosition.y,
         move: "support",
         label: { text: profileName, fill: COLOR_SUMI, font: { size: 13 }, y: labelYBelowCircle(26) },
         circle: {
@@ -315,6 +397,7 @@ function buildGraphData(
         kind: "profile",
         windowLabel: w.label,
         profileId: tab.profile_id,
+        positionKey: profilePositionKey,
         profileName,
         repositoryPath: profileDetails[tab.profile_id]?.repositoryPath ?? null,
         githubProject: profileDetails[tab.profile_id]?.githubProject ?? null,
@@ -340,16 +423,25 @@ function buildGraphData(
     .forEach((p) => {
       const nodeId = `profile-unopened:${p.id}`;
       const profileRow = row;
+      const profilePositionKey = `profile:${p.id}`;
+      positionKeys.add(profilePositionKey);
+      const profilePosition = resolvePosition(
+        profilePositionKey,
+        COL_X.profile,
+        ROW_START_Y + profileRow * ROW_HEIGHT,
+        savedPositions,
+      );
       nodes.push({
         id: nodeId,
-        x: COL_X.profile,
-        y: ROW_START_Y + profileRow * ROW_HEIGHT,
+        x: profilePosition.x,
+        y: profilePosition.y,
         move: "support",
         label: { text: p.name, fill: COLOR_MUTED, font: { size: 13 }, y: labelYBelowCircle(22) },
         circle: { r: 22, fill: COLOR_PEARL, stroke: { color: COLOR_BORDER, width: 2 } },
         icon: { url: HUB_NODE_ICON_URIS.profile },
         kind: "profile-unopened",
         profileId: p.id,
+        positionKey: profilePositionKey,
         profileName: p.name,
         repositoryPath: profileDetails[p.id]?.repositoryPath ?? null,
         githubProject: profileDetails[p.id]?.githubProject ?? null,
@@ -365,7 +457,7 @@ function buildGraphData(
       row += addSessionBranch(nodeId, p.id, undefined, undefined, profileRow);
     });
 
-  return { nodes, edges };
+  return { nodes, edges, positionKeys };
 }
 
 function formatModifiedAt(ms: number): string {
@@ -471,6 +563,9 @@ function HubPage() {
   const [profileDetails, setProfileDetails] = useState<ProfileDetails>({});
   const [effectiveProjectsDir, setEffectiveProjectsDir] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // ノードのドラッグ固定位置(issue #121)。起動時に一度だけ読み込み、以後は
+  // ドラッグのたびに更新する。キーは `positionKey`(`buildGraphData` 参照)。
+  const [savedPositions, setSavedPositions] = useState<Record<string, NodePositionDto>>({});
 
   // `session:changed` ハンドラは購読を1回だけにしたい(プロファイル一覧が
   // 変わるたびに listen/unlisten し直すと無駄なため)一方、判定には最新の
@@ -538,6 +633,16 @@ function HubPage() {
     load();
   }, [load]);
 
+  // ドラッグ固定位置(issue #121)は起動時に一度だけ読み込む。プロファイル・
+  // セッション一覧とは独立したファイル(`hub-layout.json`)のため、
+  // `windows:changed` 等の再取得では読み直さない(このセッション内で保存
+  // した内容は既に `savedPositions` state 側が最新)。
+  useEffect(() => {
+    getHubLayout()
+      .then((layout) => setSavedPositions(layout.positions))
+      .catch((e) => console.error(e));
+  }, []);
+
   useEffect(() => {
     const unlistenPromises = [onWindowsChanged(load), onSettingsUpdated(load)];
     return () => {
@@ -587,6 +692,47 @@ function HubPage() {
     }
   }, []);
 
+  // `buildGraphData` が直近に払い出した positionKey の集合(issue #121)。
+  // 保存時、既に存在しないノードの位置情報をここでフィルタして落とす
+  // (`save_hub_layout` はマージではなく丸ごと置き換えのため、呼び出し側で
+  // 現在有効な分だけに絞る必要がある)。ref にしているのは、保存タイミング
+  // (ドラッグ終了時・デバウンス後)で常に最新の集合を参照したいため。
+  const validPositionKeysRef = useRef<Set<string>>(new Set());
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, []);
+
+  const scheduleSaveHubLayout = useCallback((positions: Record<string, NodePositionDto>) => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      const validKeys = validPositionKeysRef.current;
+      const filtered = Object.fromEntries(
+        Object.entries(positions).filter(([key]) => validKeys.has(key)),
+      );
+      saveHubLayout(filtered).catch((e) => console.error(e));
+    }, HUB_LAYOUT_SAVE_DEBOUNCE_MS);
+  }, []);
+
+  // ノードのドラッグ終了時、位置を `savedPositions` に反映しつつ
+  // デバウンス保存する(issue #121)。`positionKey` が無いノード(pc・
+  // sessionなど永続化対象外)は何もしない。
+  const handleNodeDragEnded = useCallback(
+    (node: NodeDatum) => {
+      const core = node._core as HubNodeCore;
+      const positionKey = core.positionKey;
+      if (!positionKey) return;
+      setSavedPositions((prev) => {
+        const next = { ...prev, [positionKey]: { x: node.x, y: node.y } };
+        scheduleSaveHubLayout(next);
+        return next;
+      });
+    },
+    [scheduleSaveHubLayout],
+  );
+
   // Rectum(命令的API)は初回に一度だけ生成し、以後は同じインスタンスを
   // 使い続ける。`@yanqirenshi/assh0le` の `Colon.data()` は、`selector()`
   // (`Asshole` がマウント時に一度だけ呼ぶ)が設定済みであれば、以後の
@@ -595,9 +741,9 @@ function HubPage() {
   // データが変わるたびにRectumを作り直し、`<D3Network key={dataKey}>` で
   // コンポーネントごと強制再マウントしていたため、ウィンドウを開く操作
   // (`windows:changed` → 再取得 → データ更新)のたびに視点・ズームが
-  // 初期状態にリセットされる不具合があった。`handleNodeClick` は
-  // 空配列依存で安定しているため、このRectumは `HubPage` のマウント中
-  // ずっと同一インスタンスのままになる。
+  // 初期状態にリセットされる不具合があった。`handleNodeClick`/
+  // `handleNodeDragEnded` は空配列依存で安定しているため、このRectumは
+  // `HubPage` のマウント中ずっと同一インスタンスのままになる。
   //
   // NOTE: 現状 @yanqirenshi/d3.network 側の既知の問題により、ノードの
   // `<g>` に無条件で付く d3.drag() がネイティブの click イベントを
@@ -605,24 +751,27 @@ function HubPage() {
   // (issue #84 のPRコメント参照)。ライブラリ本体の修正・バージョンアップ
   // 待ち。ここは修正後にそのまま動くよう、素直な形にしてある。
   const rectum = useMemo(() => {
-    return new Rectum({ callbacks: { node: { click: handleNodeClick } } });
-  }, [handleNodeClick]);
+    return new Rectum({
+      callbacks: { node: { click: handleNodeClick, dragEnded: handleNodeDragEnded } },
+    });
+  }, [handleNodeClick, handleNodeDragEnded]);
 
   // データが変わるたびに同じRectumインスタンスへ `.data()` を呼んで更新
   // する。`move: "support"`(profile・作業ディレクトリ・ブランチ)の
-  // ノードは `buildGraphData` が毎回座標を計算し直すため、ユーザーが
-  // ドラッグした位置は更新のたびにリセットされる(これはRectumを作り
-  // 直すかどうかに関係ない、`move: "support"` の既知の仕様。カメラ=
-  // パン/ズームとは別の話)。`Asshole` の `rectum.selector()` 呼び出し
-  // より先にこのeffectが走った場合でも、`Colon.data()` は selector 未設定
-  // なら描画せず値を保持するだけなので、後から selector が設定された時点で
-  // 自動的に初回描画される。
+  // ノードは `buildGraphData` が毎回座標を計算し直すため、`savedPositions`
+  // (issue #121)を渡さない限りユーザーがドラッグした位置は更新のたびに
+  // リセットされる(これはRectumを作り直すかどうかに関係ない、`move:
+  // "support"` の既知の仕様。カメラ=パン/ズームとは別の話)。`Asshole` の
+  // `rectum.selector()` 呼び出しより先にこのeffectが走った場合でも、
+  // `Colon.data()` は selector 未設定なら描画せず値を保持するだけなので、
+  // 後から selector が設定された時点で自動的に初回描画される。
   const dataKey = JSON.stringify({
     windowStates,
     profiles,
     sessionsByProfile,
     profileDetails,
     effectiveProjectsDir,
+    savedPositions,
   });
   useEffect(() => {
     // NOTE: `@yanqirenshi/d3.network` の `Edges.js`(`draw()`)には、IDが
@@ -637,9 +786,16 @@ function HubPage() {
     // (辺自体はドラッグ位置等の保持すべき状態を持たないため、毎回作り
     // 直しても実害はない)。
     hubPageRef.current?.querySelectorAll("path.ng-edge").forEach((el) => el.remove());
-    rectum.data(
-      buildGraphData(windowStates, profiles, sessionsByProfile, profileDetails, effectiveProjectsDir),
+    const { nodes, edges, positionKeys } = buildGraphData(
+      windowStates,
+      profiles,
+      sessionsByProfile,
+      profileDetails,
+      effectiveProjectsDir,
+      savedPositions,
     );
+    validPositionKeysRef.current = positionKeys;
+    rectum.data({ nodes, edges });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rectum, dataKey]);
 
@@ -734,6 +890,14 @@ function HubPage() {
     window.addEventListener("mouseup", handleMouseUp);
   }, []);
 
+  // ドラッグ固定位置を全て破棄し、自動レイアウトへ戻す(issue #121)。
+  // 元に戻せない操作のため確認を挟む。
+  const handleResetLayout = useCallback(() => {
+    if (!window.confirm("ノードの配置をリセットしますか?")) return;
+    setSavedPositions({});
+    saveHubLayout({}).catch((e) => console.error(e));
+  }, []);
+
   const dockItems = useMemo(
     () => [
       {
@@ -742,8 +906,14 @@ function HubPage() {
         title: "再読み込み",
         onClick: load,
       },
+      {
+        id: "hub-reset-layout",
+        label: LAYOUT_RESET_ICON,
+        title: "配置をリセット",
+        onClick: handleResetLayout,
+      },
     ],
-    [load],
+    [load, handleResetLayout],
   );
   usePageDockItems(dockItems);
 

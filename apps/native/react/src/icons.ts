@@ -77,3 +77,15 @@ export const PROFILE_ICON = `
   <circle cx="10" cy="7" r="3" />
   <path d="M4 17c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5" />
 </svg>`;
+
+// ハブグラフのノード配置リセット用アイコン(issue #121)。グリッド(固定配置)
+// に戻す操作であることを示す。
+export const LAYOUT_RESET_ICON = `
+<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor"
+     stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
+     xmlns="http://www.w3.org/2000/svg">
+  <rect x="3" y="3" width="6" height="6" rx="1" />
+  <rect x="11" y="3" width="6" height="6" rx="1" />
+  <rect x="3" y="11" width="6" height="6" rx="1" />
+  <rect x="11" y="11" width="6" height="6" rx="1" />
+</svg>`;

@@ -579,3 +579,44 @@ impl From<domain::WindowState> for WindowStateDto {
         }
     }
 }
+
+/// ハブグラフのノード1件分の座標(issue #121)。`save_hub_layout` の入力にも
+/// `get_hub_layout` の出力にも使う。
+#[derive(Serialize, Deserialize, Clone, Copy)]
+pub struct NodePositionDto {
+    pub x: f64,
+    pub y: f64,
+}
+
+impl From<domain::NodePosition> for NodePositionDto {
+    fn from(position: domain::NodePosition) -> Self {
+        Self {
+            x: position.x,
+            y: position.y,
+        }
+    }
+}
+
+impl From<NodePositionDto> for domain::NodePosition {
+    fn from(dto: NodePositionDto) -> Self {
+        Self { x: dto.x, y: dto.y }
+    }
+}
+
+/// `get_hub_layout` の戻り値。`version` はフロントで使わないため含めない。
+#[derive(Serialize, Clone)]
+pub struct HubLayoutDto {
+    pub positions: std::collections::HashMap<String, NodePositionDto>,
+}
+
+impl From<domain::HubLayout> for HubLayoutDto {
+    fn from(layout: domain::HubLayout) -> Self {
+        Self {
+            positions: layout
+                .positions
+                .into_iter()
+                .map(|(key, position)| (key, NodePositionDto::from(position)))
+                .collect(),
+        }
+    }
+}
