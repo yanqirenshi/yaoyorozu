@@ -1,4 +1,5 @@
 mod dto;
+mod local_api;
 mod state;
 
 use app::{SessionSource, SettingsStore, TokenStore};
@@ -1264,6 +1265,7 @@ pub fn run() {
             app.manage(WatcherSlot::new(None));
             start_session_watcher(app.handle(), root);
             start_github_session_check(app);
+            local_api::start(app)?;
             Ok(())
         })
         .run(tauri::generate_context!())
