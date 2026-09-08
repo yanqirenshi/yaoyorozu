@@ -15,10 +15,12 @@ import {
   applyLayoutOverrides,
   applyPortOverrides,
   buildLayoutFile,
+  loadCameraTransform,
   loadLayoutOverrides,
   loadPortOverrides,
   migrateLegacyLayoutIfNeeded,
   portOverrideKey,
+  type CameraTransform,
   type LayoutOverrides,
   type PortOverrides,
 } from "@/data/tmLayoutStorage";
@@ -41,6 +43,38 @@ type Position = { x: number; y: number };
 
 /** インスペクタの幅(px)。マウスで伸縮できる。 */
 const INSPECTOR_WIDTH = { initial: 444, min: 222, max: 888 } as const;
+
+// --- 視点(パン/ズーム)の保存 ---
+// d3.svg の zoom は g.layer の transform 属性を書き換えるだけで、変更を知らせる
+// コールバックが配線されていない(D3Svg.zoomed は _callbacks.zoom を呼ばない)。
+// そのため transform 属性の変化を MutationObserver で監視して保存する。
+// また svg が作り直されるたび(初回マウント・インスペクタ「適用」での再構築)に
+// ライブラリが transform を初期値へ戻すため、「直近に svg 上のユーザー入力が
+// あったか」でユーザー操作とライブラリ初期化を見分け、後者は保存済みの視点へ戻す。
+
+/** この時間内に svg 上の入力があった transform 変化だけをユーザー操作とみなす。 */
+const CAMERA_INPUT_WINDOW_MS = 500;
+/** 視点は連続的に変わるため、落ち着いてから保存する。 */
+const CAMERA_SAVE_DEBOUNCE_MS = 800;
+
+/** d3-zoom が書く "translate(x,y) scale(k)" を読み取る。 */
+function parseLayerTransform(el: Element): CameraTransform | null {
+  const attr = el.getAttribute("transform");
+  if (!attr) return null;
+  const m = attr.match(
+    /translate\(([-\d.eE+]+)[,\s]+([-\d.eE+]+)\)\s*scale\(([-\d.eE+]+)/,
+  );
+  if (!m) return null;
+  return { x: Number(m[1]), y: Number(m[2]), k: Number(m[3]) };
+}
+
+function sameCamera(a: CameraTransform, b: CameraTransform): boolean {
+  return (
+    Math.abs(a.k - b.k) < 1e-6 &&
+    Math.abs(a.x - b.x) < 1e-6 &&
+    Math.abs(a.y - b.y) < 1e-6
+  );
+}
 
 function clampWidth(value: number) {
   return Math.min(INSPECTOR_WIDTH.max, Math.max(INSPECTOR_WIDTH.min, value));
@@ -104,6 +138,10 @@ export default function TmTab() {
   useEffect(() => {
     portOverridesRef.current = portOverrides;
   }, [portOverrides]);
+  // 視点(パン/ズーム)の現在値。描画はライブラリ側が持つので state にはしない。
+  const cameraRef = useRef<CameraTransform>(
+    loadCameraTransform() ?? { k: 1, x: 0, y: 0 },
+  );
   const [version, setVersion] = useState(0);
   const [selected, setSelected] = useState<TmInspectorTarget | null>(null);
   const [inspectorWidth, setInspectorWidth] = useState<number>(
@@ -182,9 +220,9 @@ export default function TmTab() {
 
       if (!changed) return;
       overridesRef.current = next;
-      // 同じ tm.json にポート角度も入るため、保存済みの角度を必ず一緒に書く
-      // (エンティティ位置だけを書くと角度が消える)。
-      save(buildLayoutFile(next, portOverridesRef.current));
+      // 同じ tm.json にポート角度・視点も入るため、保存済みの値を必ず一緒に書く
+      // (エンティティ位置だけを書くと他が消える)。
+      save(buildLayoutFile(next, portOverridesRef.current, cameraRef.current));
     };
 
     // 右クリックでインスペクタを開く(issue #109 と同じ流儀)。d3.ter に
@@ -235,6 +273,118 @@ export default function TmTab() {
     };
   }, [save]);
 
+  // 視点(パン/ズーム)の監視と保存・復元。冒頭のコメント(CAMERA_* 定数)を参照。
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    // 「svg 上の入力があったか」の判定材料。ズーム(ホイール)とパン
+    // (svg 上でのドラッグ)だけを数え、インスペクタ等の操作は含めない。
+    let lastInputAt = 0;
+    const noteInputIfOnSvg = (event: Event) => {
+      if ((event.target as Element).closest?.("svg")) lastInputAt = Date.now();
+    };
+    const handleMouseMove = (event: MouseEvent) => {
+      // パン中(左ボタン押下でのドラッグ)だけ延長する。
+      if (event.buttons & 1) noteInputIfOnSvg(event);
+    };
+
+    let saveTimer: number | null = null;
+    const scheduleSave = () => {
+      if (saveTimer !== null) window.clearTimeout(saveTimer);
+      saveTimer = window.setTimeout(() => {
+        saveTimer = null;
+        save(
+          buildLayoutFile(
+            overridesRef.current,
+            portOverridesRef.current,
+            cameraRef.current,
+          ),
+        );
+      }, CAMERA_SAVE_DEBOUNCE_MS);
+    };
+
+    // 保存済みの視点をライブラリの管理下ごと書き戻す。属性だけ変えると次の
+    // ズーム操作が初期値から始まってしまうため、d3-zoom が svg 要素に持たせて
+    // いる現在値(__zoom)も差し替える。ZoomTransform クラスは export されて
+    // いないので、既存インスタンスの constructor から作り直す。
+    const applyCamera = (svg: SVGSVGElement) => {
+      const camera = cameraRef.current;
+      const holder = svg as unknown as { __zoom?: object };
+      if (holder.__zoom) {
+        const Ctor = holder.__zoom.constructor as new (
+          k: number,
+          x: number,
+          y: number,
+        ) => object;
+        holder.__zoom = new Ctor(camera.k, camera.x, camera.y);
+      }
+      svg.querySelectorAll("g.layer").forEach((layer) => {
+        layer.setAttribute(
+          "transform",
+          `translate(${camera.x},${camera.y}) scale(${camera.k})`,
+        );
+      });
+    };
+
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        const target = mutation.target;
+        if (!(target instanceof SVGGElement) || !target.matches("g.layer"))
+          continue;
+
+        const parsed = parseLayerTransform(target);
+        if (!parsed || sameCamera(parsed, cameraRef.current)) continue;
+
+        if (Date.now() - lastInputAt < CAMERA_INPUT_WINDOW_MS) {
+          cameraRef.current = parsed;
+          scheduleSave();
+        } else if (target.ownerSVGElement) {
+          // ライブラリによる初期化(svg 作り直し等)。保存済みの視点へ戻す。
+          // この書き戻しも mutation を起こすが、次回は parsed が一致して
+          // 素通りするためループしない。
+          applyCamera(target.ownerSVGElement);
+        }
+        // 複数レイヤは同時に同じ値へ動くので、1バッチにつき先頭だけ見ればよい。
+        break;
+      }
+    });
+    observer.observe(container, {
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["transform"],
+    });
+
+    container.addEventListener("wheel", noteInputIfOnSvg, { capture: true });
+    container.addEventListener("mousedown", noteInputIfOnSvg, {
+      capture: true,
+    });
+    container.addEventListener("mousemove", handleMouseMove, { capture: true });
+    return () => {
+      observer.disconnect();
+      container.removeEventListener("wheel", noteInputIfOnSvg, {
+        capture: true,
+      });
+      container.removeEventListener("mousedown", noteInputIfOnSvg, {
+        capture: true,
+      });
+      container.removeEventListener("mousemove", handleMouseMove, {
+        capture: true,
+      });
+      if (saveTimer !== null) {
+        // 保存待ちのままアンマウントしない(最後の視点を書き切る)。
+        window.clearTimeout(saveTimer);
+        save(
+          buildLayoutFile(
+            overridesRef.current,
+            portOverridesRef.current,
+            cameraRef.current,
+          ),
+        );
+      }
+    };
+  }, [save]);
+
   // インスペクタ幅の伸縮。ハンドルを掴んでいるあいだ window で追う。
   useEffect(() => {
     if (!resizing) return;
@@ -275,8 +425,8 @@ export default function TmTab() {
 
       overridesRef.current = nextLayout;
       portOverridesRef.current = nextPorts;
-      // 位置と角度は同じ tm.json に入るので、1回の保存でまとめて書く。
-      save(buildLayoutFile(nextLayout, nextPorts));
+      // 位置・角度・視点は同じ tm.json に入るので、1回の保存でまとめて書く。
+      save(buildLayoutFile(nextLayout, nextPorts, cameraRef.current));
       setOverrides(nextLayout);
       setPortOverrides(nextPorts);
 

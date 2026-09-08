@@ -34,10 +34,14 @@ export type PortEnd = "from" | "to";
 /** `<リレーションシップキー>:<from|to>` → 角度。 */
 export type PortOverrides = Record<string, number>;
 
+/** 視点(パン/ズーム)。d3-zoom の transform と同じ {k, x, y}。 */
+export type CameraTransform = { k: number; x: number; y: number };
+
 /** `tm.json` の中身。 */
 export type TmLayoutFile = {
   entities?: LayoutOverrides;
   ports?: PortOverrides;
+  camera?: CameraTransform;
 };
 
 /**
@@ -48,14 +52,16 @@ export type TmLayoutFile = {
 function readLayoutFile(): TmLayoutFile {
   const raw = layoutFile as TmLayoutFile | LayoutOverrides | null;
   if (!raw || typeof raw !== "object") return {};
-  if ("entities" in raw || "ports" in raw) return raw as TmLayoutFile;
+  if ("entities" in raw || "ports" in raw || "camera" in raw)
+    return raw as TmLayoutFile;
   return { entities: raw as LayoutOverrides };
 }
 
 const fileLayout = readLayoutFile();
 const hasFileOverrides =
   Object.keys(fileLayout.entities ?? {}).length > 0 ||
-  Object.keys(fileLayout.ports ?? {}).length > 0;
+  Object.keys(fileLayout.ports ?? {}).length > 0 ||
+  fileLayout.camera !== undefined;
 
 function readLegacyOverrides(): LayoutOverrides | null {
   if (typeof window === "undefined") return null;
@@ -76,12 +82,17 @@ export function loadPortOverrides(): PortOverrides {
   return fileLayout.ports ?? {};
 }
 
+export function loadCameraTransform(): CameraTransform | null {
+  return fileLayout.camera ?? null;
+}
+
 /** 保存APIへ渡す1つのオブジェクトにまとめる。 */
 export function buildLayoutFile(
   entities: LayoutOverrides,
   ports: PortOverrides,
+  camera?: CameraTransform,
 ): TmLayoutFile {
-  return { entities, ports };
+  return camera ? { entities, ports, camera } : { entities, ports };
 }
 
 /**
