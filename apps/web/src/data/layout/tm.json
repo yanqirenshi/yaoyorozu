@@ -1,8 +1,8 @@
 {
   "camera": {
-    "k": 0.43527528164806334,
-    "x": 182.62109365182243,
-    "y": 228.2015778509235
+    "k": 0.6597539553864491,
+    "x": 235.40456553461252,
+    "y": 18.731045204094016
   },
   "entities": {
     "AssistantLine": {
@@ -26,8 +26,8 @@
       "y": -807.716139775468
     },
     "GitBranchWorktree": {
-      "x": 1024.698329925537,
-      "y": -1129.61960875988
+      "x": 1016.781322479248,
+      "y": -886.8300632238388
     },
     "GitRepository": {
       "x": -313.6024703979492,
@@ -42,8 +42,8 @@
       "y": -1102.2811461687088
     },
     "PcGitRepository": {
-      "x": -643.0407266616821,
-      "y": -1216.420395642519
+      "x": -626.9589776992798,
+      "y": -1191.1490238010883
     },
     "PcUser": {
       "x": -1023.4605615735054,
@@ -102,8 +102,8 @@
       "y": 67.04214161634445
     },
     "UserSession": {
-      "x": -568.8853302001953,
-      "y": 1050.0949754714966
+      "x": -561.3068389892578,
+      "y": 956.1203837394714
     }
   },
   "ports": {
@@ -111,13 +111,29 @@
     "ChainLine->ChainLineRecursion#子:to": 90,
     "ChainLine->ChainLineRecursion#親:from": 270,
     "ChainLine->ChainLineRecursion#親:to": 90,
+    "GitBranch->GitBranchWorktree:to": 0,
+    "GitRepository->PcGitRepository:from": 90,
     "GitRepository->RepoClaudeMd:from": 10,
     "GitRepository->RepoSettingsLocal:from": 350,
+    "GitWorktree->GitBranchWorktree:from": 90,
+    "GitWorktree->GitBranchWorktree:to": 0,
+    "Pc->PcGitRepository:from": 270,
+    "Pc->PcGitRepository:to": 0,
+    "Pc->PcUser:to": 270,
     "ProjectFolder->ChainLine:from": 180,
+    "ProjectFolder->ProjectFolderFile:from": 90,
+    "ProjectFolder->ProjectFolderFile:to": 0,
     "Session->ChainLine:from": 180,
+    "Session->SessionFileMap:from": 270,
     "Session->SessionInputQueue:from": 290,
     "Session->SessionInputQueue:to": 90,
+    "Session->UserSession:to": 180,
     "SessionFile->ChainLine:from": 180,
-    "User->UserClaudeMd:from": 0
+    "SessionFile->ProjectFolderFile:from": 270,
+    "SessionFile->SessionFileMap:from": 90,
+    "SessionFile->SessionFileMap:to": 0,
+    "User->PcUser:to": 270,
+    "User->UserClaudeMd:from": 0,
+    "User->UserSession:from": 270
   }
 }
