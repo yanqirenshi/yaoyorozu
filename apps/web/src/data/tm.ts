@@ -44,8 +44,9 @@
  * セットへの展開、エージェントID、meta.json(agentType / name / toolUseId)は第3弾で扱う。
  *
  * 【関係の検証(モノ × モノ の網羅性)】
- * 25エンティティの全300ペアを確認した。関係があるのは28ペア(29本)。
- * 残る272ペアのうち、以下5ペアは「語彙は存在するが今は関係を構成していない」ものであり、
+ * 25エンティティの全300ペアを確認した。直接の結線があるのは22ペア(23本)で、
+ * 対照表・対応表とその親の12ペアは垂下(mapping)でつながる。
+ * 残る266ペアのうち、以下5ペアは「語彙は存在するが今は関係を構成していない」ものであり、
  * 見落としではなく判断の記録として残す。
  *
  * - ログ行 × 入力キュー / 入力キュー × ユーザー行
@@ -63,12 +64,14 @@
  *   リポジトリパスではないため(cwd は node_modules 配下も含む)、どのリポジトリの
  *   どのブランチかを個体指定子で決められない。
  *
- * 他の267ペアは直接の関係を構成しないのが正しい。内訳は、サブセットが親(ログ行)から
- * 行UUIDを継承しており親で張った関係がそのまま効くもの16ペア、対照表・対応表を経由する
- * もの7ペア(PC × ユーザー / PC × Gitリポジトリ / ユーザー × セッション / Gitブランチ
- * × ワーキングツリー / 作業ディレクトリ × セッションファイル / 作業ディレクトリ ×
- * セッション / セッションファイル × セッション)、対応する語彙がそもそも存在しない
- * もの244ペア。
+ * 他の261ペアは直接の関係を構成しないのが正しい。内訳は、サブセットが親(ログ行)から
+ * 行UUIDを継承しており親で張った関係がそのまま効くもの16ペア、表を2段経由するもの
+ * 1ペア(作業ディレクトリ × セッション — どちらもセッションファイルとの対照表を
+ * 経由する)、対応する語彙がそもそも存在しないもの244ペア。
+ *
+ * R-R・E-E は対照表・対応表で構成するが、図の上では親どうしを1本の線で結び、その
+ * 中点の○から表をぶら下げる(垂下。d3.ter 0.1.24 の `relationship.mapping`)。
+ * 線が親どうしを直結しているように見えても、TM としては表を経由している。
  *
  * 【オブジェクトモデル(/class-diagram)との違い】
  * Classes は `.jsonl` の「型の構造」(serde でどうデシリアライズするか)を描く。
@@ -85,16 +88,14 @@ import type { TerData, TerEntityType } from "@yanqirenshi/d3.ter";
  *
  *  0.1.22 から型定義が同梱されたため、原則そちら(Ter*)に合わせる。
  *  `TmDataCheck` で TerData への代入可能性をコンパイル時に検証している。
- *  ただし同梱の型と実装で食い違う点が3つあり、いずれも実装側に合わせている
- *  (Foolsgolds/Assholes へ別途起票する)。
- *   1. エンティティの `name` は `string` 宣言。実装(utils/Name.js の set)は
- *      `{ physical, logical }` も受け付けるが、宣言に従って論理名の文字列を渡し、
- *      物理名は ENTITY_DEFS 側に保持する。
- *   2. 識別子・属性インスタンスの `name`(マスタ名の上書き)が宣言されていないが、
- *      実装は `data.name ? data.name : master.name` で受け付ける。
- *      TM の `(R)` 表記をマスタを重複させずに実現するために使う。
- *   3. `optionality` の説明が「0=必須, 1=任意」と書かれているが、実装は逆。
- *      (Port.js の positionOptionality が 0 で丸、1 で横棒を描く)
+ *
+ *  0.1.22 では同梱の型と実装が3点食い違っており実装側に合わせていたが、
+ *  0.1.24 でいずれも解消した。
+ *   1. エンティティの `name` が `string | TerName` になった。ただし本ファイルは
+ *      論理名の文字列を渡し、物理名は ENTITY_DEFS 側に保持する方式を続ける。
+ *   2. 識別子・属性インスタンスの `name`(マスタ名の上書き)が宣言された。
+ *      TM の `(R)` 表記をマスタを重複させずに実現するために使っている。
+ *   3. `optionality` の説明が実装どおり(0=任意 / 1=必須)に修正された。
  * ------------------------------------------------------------------ */
 
 /** 物理名(JSON のフィールド名)と論理名(日本語)。図には論理名が表示される。 */
@@ -157,6 +158,12 @@ export type TmRelationship = {
   label?: string;
   /** サブセットへの結線に `=区分コード` / `×区分コード` を出す。label より優先される。 */
   subset?: TmSubset;
+  /**
+   * 対照表・対応表の垂下(0.1.24 で追加)。この結線の中点に○を置き、そこから
+   * 指定した表へ線でぶら下げる(PDF §2「対応表(onto-mapping)」の書き方)。
+   * 指定できるのは COMPARATIVE / CORRESPONDENCE のみ。
+   */
+  mapping?: { entity: number };
 };
 
 export type TmData = {
@@ -625,6 +632,8 @@ type RelationshipDef = {
   to: RelationshipPortDef;
   label?: string;
   subset?: TmSubset;
+  /** 中点からぶら下げる対照表・対応表の物理名。 */
+  mapping?: string;
 };
 
 /**
@@ -638,35 +647,27 @@ const LINE_TYPE_SUBSET: TmSubset = { kind: "different", code: "行種別" };
 
 const RELATIONSHIP_DEFS: RelationshipDef[] = [
   // ---- 実行環境(PC / ユーザー / Gitリポジトリ)----
-  // PC 1 : 対照表 1以上(マシンには少なくとも1人のユーザーがいる)。
+  // R-R(PC × ユーザー)。1台に1人以上のユーザーがいて、同じユーザー名が
+  // 複数マシンにありうる。
   {
-    from: { entity: "Pc", position: 0, cardinality: 1, optionality: 1 },
-    to: { entity: "PcUser", position: 180, cardinality: 3, optionality: 1 },
+    from: { entity: "Pc", position: 0, cardinality: 3, optionality: 1 },
+    to: { entity: "User", position: 180, cardinality: 3, optionality: 1 },
+    mapping: "PcUser",
   },
-  // ユーザー 1 : 対照表 1以上(同じユーザー名が複数マシンにありうる)。
+  // R-R(PC × Gitリポジトリ)。1台にリポジトリは複数または値なし、
+  // 1つのリポジトリはどこかのマシンには置かれている。
   {
-    from: { entity: "User", position: 180, cardinality: 1, optionality: 1 },
-    to: { entity: "PcUser", position: 0, cardinality: 3, optionality: 1 },
+    from: { entity: "Pc", position: 270, cardinality: 3, optionality: 1 },
+    to: { entity: "GitRepository", position: 90, cardinality: 3, optionality: 0 },
+    mapping: "PcGitRepository",
   },
-  // PC 1 : 対照表 複数または値なし(リポジトリが1つも無いマシンもある)。
+  // R-R(ユーザー × セッション)。
+  // 1人のユーザーに会話は複数または値なし(まだ始めていないこともある)。
+  // 1つの会話は必ず1人のもの。
   {
-    from: { entity: "Pc", position: 300, cardinality: 1, optionality: 1 },
-    to: { entity: "PcGitRepository", position: 180, cardinality: 3, optionality: 0 },
-  },
-  // Gitリポジトリ 1 : 対照表 1以上(どこかのマシンには置かれている)。
-  {
-    from: { entity: "GitRepository", position: 180, cardinality: 1, optionality: 1 },
-    to: { entity: "PcGitRepository", position: 0, cardinality: 3, optionality: 1 },
-  },
-  // ユーザー 1 : 対照表 複数または値なし(会話をまだ始めていないこともある)。
-  {
-    from: { entity: "User", position: 0, cardinality: 1, optionality: 1 },
-    to: { entity: "UserSession", position: 180, cardinality: 3, optionality: 0 },
-  },
-  // セッション 1 : 対照表 必ず1件(会話は必ず誰かのもの)。
-  {
-    from: { entity: "Session", position: 90, cardinality: 1, optionality: 1 },
-    to: { entity: "UserSession", position: 270, cardinality: 1, optionality: 1 },
+    from: { entity: "User", position: 270, cardinality: 1, optionality: 1 },
+    to: { entity: "Session", position: 90, cardinality: 3, optionality: 0 },
+    mapping: "UserSession",
   },
   // Gitリポジトリ 1 : 設定ファイルの手配 各1件または値なし(まだ作っていない
   // リポジトリもある)。E-R。
@@ -694,15 +695,12 @@ const RELATIONSHIP_DEFS: RelationshipDef[] = [
     to: { entity: "GitWorktree", position: 160, cardinality: 3, optionality: 1 },
   },
   // E-E は対応表で構成する。ブランチ 1 に対し、それを開いているワーキングツリーは
-  // 1つまで(同じブランチを2箇所で開けない)。
+  // 1つまで(同じブランチを2箇所で開けない)。逆にワーキングツリーが開いている
+  // ブランチも1つまで(detached HEAD なら 0)。
   {
     from: { entity: "GitBranch", position: 270, cardinality: 1, optionality: 0 },
-    to: { entity: "GitBranchWorktree", position: 90, cardinality: 1, optionality: 0 },
-  },
-  // ワーキングツリー 1 が開いているブランチも1つまで(detached HEAD なら 0)。
-  {
-    from: { entity: "GitWorktree", position: 270, cardinality: 1, optionality: 0 },
-    to: { entity: "GitBranchWorktree", position: 100, cardinality: 1, optionality: 0 },
+    to: { entity: "GitWorktree", position: 90, cardinality: 1, optionality: 0 },
+    mapping: "GitBranchWorktree",
   },
   // ユーザー 1 : CLAUDE.md(ユーザー)の手配 1件または値なし。E-R。
   {
@@ -710,27 +708,19 @@ const RELATIONSHIP_DEFS: RelationshipDef[] = [
     to: { entity: "UserClaudeMd", position: 180, cardinality: 1, optionality: 0 },
   },
 
-  // R-R(作業ディレクトリ × ファイル)は対照表で構成する。
-  // 作業ディレクトリ 1 に対し対照表の行は 1以上。
+  // R-R(作業ディレクトリ × ファイル)。作業ディレクトリ 1 にファイルは 1以上、
+  // ファイル 1 の置き場所は必ず1つ。
   {
-    from: { entity: "ProjectFolder", position: 0, cardinality: 1, optionality: 1 },
-    to: { entity: "ProjectFolderFile", position: 180, cardinality: 3, optionality: 1 },
+    from: { entity: "ProjectFolder", position: 90, cardinality: 1, optionality: 1 },
+    to: { entity: "SessionFile", position: 270, cardinality: 3, optionality: 1 },
+    mapping: "ProjectFolderFile",
   },
-  // ファイル 1 に対し対照表の行は必ず1件(置き場所は1つ)。
+  // R-R(セッション × ファイル)。セッション 1 にファイルは会話ファイル1件 +
+  // サブエージェント0件以上なので 1以上。ファイル 1 は必ず1つの会話に属する。
   {
-    from: { entity: "SessionFile", position: 180, cardinality: 1, optionality: 1 },
-    to: { entity: "ProjectFolderFile", position: 0, cardinality: 1, optionality: 1 },
-  },
-  // R-R(セッション × ファイル)も対照表で構成する。
-  // ファイル 1 は必ず1つの会話に属する。
-  {
-    from: { entity: "SessionFile", position: 0, cardinality: 1, optionality: 1 },
-    to: { entity: "SessionFileMap", position: 180, cardinality: 1, optionality: 1 },
-  },
-  // セッション 1 に対しファイルは会話ファイル1件 + サブエージェント0件以上なので 1以上。
-  {
-    from: { entity: "Session", position: 180, cardinality: 1, optionality: 1 },
-    to: { entity: "SessionFileMap", position: 0, cardinality: 3, optionality: 1 },
+    from: { entity: "Session", position: 270, cardinality: 1, optionality: 1 },
+    to: { entity: "SessionFile", position: 90, cardinality: 3, optionality: 1 },
+    mapping: "SessionFileMap",
   },
   // 作業ディレクトリ 1 : ログ行 複数(1以上)。E-R。
   // ファイル経由の関係とは別に張る。行の cwd はファイルの置き場所と一致しないことが
@@ -826,6 +816,7 @@ const RELATIONSHIPS: TmRelationship[] = RELATIONSHIP_DEFS.map((def, i) => ({
   },
   ...(def.label ? { label: def.label } : {}),
   ...(def.subset ? { subset: def.subset } : {}),
+  ...(def.mapping ? { mapping: { entity: entityId(def.mapping) } } : {}),
 }));
 
 /**
