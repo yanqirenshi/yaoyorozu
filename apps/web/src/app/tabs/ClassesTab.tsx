@@ -16,8 +16,7 @@ import {
 } from "./layout/LayoutSaveStatus";
 
 type SelectedClass = {
-  id: string; // ClassDiagram 内部の "class-N"(getClass で引くためだけに使う)
-  physical: string;
+  physical: string; // クラスの id を兼ねる(getClass・DOM の data-id と一致する)
   description: string;
   stereotype: string;
   position: { x: number; y: number };
@@ -50,6 +49,9 @@ export default function ClassesTab() {
       overridesRef.current,
     );
 
+    // クラスの id は物理名(classes-session-line.ts で付与)。DOM の data-id もこれになる。
+    const classById = new Map(classes.map((c) => [c.name.physical, c]));
+
     const diagram = new ClassDiagram(container);
     diagramRef.current = diagram;
     diagram
@@ -68,13 +70,9 @@ export default function ClassesTab() {
         const dataId = el.getAttribute("data-id");
         const transform = el.getAttribute("transform") || "";
         const match = transform.match(/translate\(([-\d.]+)[,\s]+([-\d.]+)\)/);
-        if (!dataId || !match) return;
+        if (!dataId || !match || !classById.has(dataId)) return;
 
-        const index = Number(dataId.replace("class-", "")) - 1;
-        const physical = classes[index]?.name.physical;
-        if (!physical) return;
-
-        map.set(physical, { x: parseFloat(match[1]), y: parseFloat(match[2]) });
+        map.set(dataId, { x: parseFloat(match[1]), y: parseFloat(match[2]) });
       });
       return map;
     };
@@ -122,12 +120,10 @@ export default function ClassesTab() {
       const dataId = target?.getAttribute("data-id");
       if (!dataId) return;
 
-      const index = Number(dataId.replace("class-", "")) - 1;
-      const cls = classes[index];
+      const cls = classById.get(dataId);
       if (!cls) return;
 
       setSelected({
-        id: dataId,
         physical: cls.name.physical,
         description: cls.name.description,
         stereotype: cls.stereotype ?? "",
@@ -155,7 +151,7 @@ export default function ClassesTab() {
     const x = toNumber(values["position.x"], selected.position.x);
     const y = toNumber(values["position.y"], selected.position.y);
 
-    diagramRef.current?.getClass(selected.id)?.moveTo(x, y);
+    diagramRef.current?.getClass(selected.physical)?.moveTo(x, y);
 
     const next: LayoutOverrides = {
       ...overridesRef.current,
