@@ -298,6 +298,9 @@ const rel = (
   fromPoint: Side = "bottom",
   toPoint: Side = "top",
 ): RelationshipInput => ({
+  // `<起点>-><終点>`。接続辺の手調整(layout/classes.json)のキーに使う。
+  // 同じ組に2本張ると id が重複し、d3.classes が例外を出す(黙って上書きしない)。
+  id: `${from}->${to}`,
   type,
   from: { classId: ref(from), point: fromPoint },
   to: { classId: ref(to), point: toPoint },

@@ -1,37 +1,80 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { ClassDiagram } from "@yanqirenshi/d3.classes";
-import Colonoscope from "@yanqirenshi/colonoscope";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ClassDiagram, type RelationshipInput } from "@yanqirenshi/d3.classes";
 import { SESSION_LINE_CLASS_DATA } from "@/data/classes-session-line";
 import {
   applyLayoutOverrides,
+  applyPortOverrides,
+  buildLayoutFile,
   loadLayoutOverrides,
+  loadPortOverrides,
   migrateLegacyLayoutIfNeeded,
+  portOverrideKey,
   type LayoutOverrides,
+  type PortOverrides,
+  type PortSide,
 } from "@/data/classesLayoutStorage";
+import ClassesInspector, {
+  type ClassesInspectorPort,
+  type ClassesInspectorTarget,
+} from "./classes/ClassesInspector";
 import {
   useLayoutSaveStatus,
   LayoutSaveStatusSnackbar,
 } from "./layout/LayoutSaveStatus";
 
-type SelectedClass = {
-  physical: string; // クラスの id を兼ねる(getClass・DOM の data-id と一致する)
-  description: string;
-  stereotype: string;
-  position: { x: number; y: number };
-};
+/** インスペクタの幅(px)。マウスで伸縮できる。TM(TmTab)と同じ値に揃える。 */
+const INSPECTOR_WIDTH = { initial: 444, min: 222, max: 888 } as const;
 
-function toNumber(value: string, fallback: number) {
-  const parsed = Number(value);
-  return Number.isNaN(parsed) ? fallback : parsed;
+function clampWidth(value: number) {
+  return Math.min(INSPECTOR_WIDTH.max, Math.max(INSPECTOR_WIDTH.min, value));
+}
+
+/** 保存キー(`<関係線 id>:<from|to>`)から関係線 id を取り出す。 */
+function relationshipIdOf(portKey: string) {
+  return portKey.slice(0, portKey.lastIndexOf(":"));
+}
+
+/**
+ * 選択中クラスに繋がる関係線の端点を集める。起点・終点の両方を見るので、
+ * 同じクラスどうしの関係線(自己参照)は2行になる。
+ */
+function buildPorts(
+  physical: string,
+  relationships: RelationshipInput[],
+): ClassesInspectorPort[] {
+  const ports: ClassesInspectorPort[] = [];
+  for (const rel of relationships) {
+    if (!rel.id) continue;
+    for (const end of ["from", "to"] as const) {
+      const self = rel[end];
+      const other = end === "from" ? rel.to : rel.from;
+      if (!("classId" in self) || self.classId !== physical) continue;
+      ports.push({
+        key: portOverrideKey(rel.id, end),
+        counterpart: "classId" in other ? other.classId : "(座標)",
+        label: rel.label,
+        outgoing: end === "from",
+        side: self.point,
+      });
+    }
+  }
+  return ports;
 }
 
 export default function ClassesTab() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const diagramRef = useRef<ClassDiagram | null>(null);
   const overridesRef = useRef<LayoutOverrides>(loadLayoutOverrides());
-  const [selected, setSelected] = useState<SelectedClass | null>(null);
+  const portOverridesRef = useRef<PortOverrides>(loadPortOverrides());
+  // 描画中の関係線(接続辺の手調整を反映済み)。インスペクタの結線一覧はここから作る。
+  const relationshipsRef = useRef<RelationshipInput[]>([]);
+  const [selected, setSelected] = useState<ClassesInspectorTarget | null>(null);
+  const [inspectorWidth, setInspectorWidth] = useState<number>(
+    INSPECTOR_WIDTH.initial,
+  );
+  const [resizing, setResizing] = useState(false);
   const { state: saveState, save, close: closeSaveStatus } =
     useLayoutSaveStatus("classes");
 
@@ -48,15 +91,18 @@ export default function ClassesTab() {
       SESSION_LINE_CLASS_DATA.classes,
       overridesRef.current,
     );
+    const relationships = applyPortOverrides(
+      SESSION_LINE_CLASS_DATA.relationships,
+      portOverridesRef.current,
+    );
+    relationshipsRef.current = relationships;
 
     // クラスの id は物理名(classes-session-line.ts で付与)。DOM の data-id もこれになる。
     const classById = new Map(classes.map((c) => [c.name.physical, c]));
 
     const diagram = new ClassDiagram(container);
     diagramRef.current = diagram;
-    diagram
-      .loadFromData({ classes, relationships: SESSION_LINE_CLASS_DATA.relationships })
-      .render();
+    diagram.loadFromData({ classes, relationships }).render();
 
     // d3.classes の ClassBox はクリック/ドラッグ移動をライブラリ内部で完結させており、
     // 通知コールバック(click/dragend相当)が無い。SitemapTab と同じ方式で、
@@ -102,7 +148,7 @@ export default function ClassesTab() {
 
       if (!changed) return;
       overridesRef.current = next;
-      save(next);
+      save(buildLayoutFile(next, portOverridesRef.current));
       // 移動を伴った操作の直後に発生する click でインスペクタが開かないようにする
       // (d3-sitemap の Rectum が「静止クリックだけ届ける」のと同じ意図)。
       suppressNextClick = true;
@@ -128,16 +174,23 @@ export default function ClassesTab() {
         description: cls.name.description,
         stereotype: cls.stereotype ?? "",
         position: { ...cls.position },
+        ports: buildPorts(cls.name.physical, relationshipsRef.current),
       });
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSelected(null);
     };
 
     window.addEventListener("mousedown", handleMouseDown, { capture: true });
     window.addEventListener("mouseup", handleMouseUp, { capture: true });
+    window.addEventListener("keydown", handleKeyDown);
     container.addEventListener("click", handleClick);
 
     return () => {
       window.removeEventListener("mousedown", handleMouseDown, { capture: true });
       window.removeEventListener("mouseup", handleMouseUp, { capture: true });
+      window.removeEventListener("keydown", handleKeyDown);
       container.removeEventListener("click", handleClick);
       diagram.clear();
       container.innerHTML = "";
@@ -145,39 +198,103 @@ export default function ClassesTab() {
     };
   }, [save]);
 
-  const handleApply = (values: Record<string, string>) => {
-    if (!selected) return;
+  // インスペクタ幅の伸縮。ハンドルを掴んでいるあいだ window で追う。
+  useEffect(() => {
+    if (!resizing) return;
 
-    const x = toNumber(values["position.x"], selected.position.x);
-    const y = toNumber(values["position.y"], selected.position.y);
-
-    diagramRef.current?.getClass(selected.physical)?.moveTo(x, y);
-
-    const next: LayoutOverrides = {
-      ...overridesRef.current,
-      [selected.physical]: { x, y },
+    const handleMouseMove = (event: MouseEvent) => {
+      const container = containerRef.current;
+      if (!container) return;
+      // パネルは右端に貼り付くので、図の右端からの距離がそのまま幅になる。
+      const right = container.getBoundingClientRect().right;
+      setInspectorWidth(clampWidth(right - event.clientX));
     };
-    overridesRef.current = next;
-    save(next);
-    setSelected(null);
-  };
+    const stop = () => setResizing(false);
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", stop);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", stop);
+    };
+  }, [resizing]);
+
+  const handleApply = useCallback(
+    (values: {
+      position: { x: number; y: number };
+      ports: Record<string, PortSide>;
+    }) => {
+      if (!selected) return;
+      const diagram = diagramRef.current;
+
+      // 位置は変えたときだけ上書きに加える(接続辺だけ変えたときに、同じ座標の
+      // 行を classes.json に増やさないため)。ドラッグで保存済みの分を落とさないよう、
+      // 常に ref を土台にする。
+      let nextLayout = overridesRef.current;
+      const { x, y } = values.position;
+      if (x !== selected.position.x || y !== selected.position.y) {
+        diagram?.getClass(selected.physical)?.moveTo(x, y);
+        nextLayout = { ...nextLayout, [selected.physical]: { x, y } };
+      }
+
+      const nextPorts: PortOverrides = {
+        ...portOverridesRef.current,
+        ...values.ports,
+      };
+      const nextRelationships = applyPortOverrides(
+        SESSION_LINE_CLASS_DATA.relationships,
+        nextPorts,
+      );
+      // 接続辺を変えた関係線だけ付け替える(setConnection はその場で描き直す)。
+      const changedIds = new Set(Object.keys(values.ports).map(relationshipIdOf));
+      for (const rel of nextRelationships) {
+        if (rel.id && changedIds.has(rel.id)) {
+          diagram?.getRelationship(rel.id)?.setConnection(rel.from, rel.to);
+        }
+      }
+
+      overridesRef.current = nextLayout;
+      portOverridesRef.current = nextPorts;
+      relationshipsRef.current = nextRelationships;
+      // 位置と接続辺は同じ classes.json に入るので、1回の保存でまとめて書く。
+      save(buildLayoutFile(nextLayout, nextPorts));
+      setSelected(null);
+    },
+    [selected, save],
+  );
 
   return (
-    <div className="relative flex min-h-0 w-full flex-1">
+    <div
+      className="relative flex min-h-0 w-full flex-1"
+      style={{
+        // 伸縮中はテキスト選択で掴んだ感触が濁るため止める。
+        userSelect: resizing ? "none" : undefined,
+      }}
+    >
       <div ref={containerRef} className="min-h-0 w-full flex-1" />
 
-      <Colonoscope
-        target={selected}
-        title={(t: SelectedClass) => t.physical}
-        subtitle={(t: SelectedClass) => t.stereotype}
-        fields={[
-          { path: "description", label: "説明", type: "readonly" },
-          { path: "position.x", label: "X", type: "number" },
-          { path: "position.y", label: "Y", type: "number" },
-        ]}
-        onApply={handleApply}
-        onClose={() => setSelected(null)}
-      />
+      {selected && (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="インスペクタの幅を変更"
+          onMouseDown={(event) => {
+            event.preventDefault();
+            setResizing(true);
+          }}
+          className="absolute top-0 bottom-0 z-20 w-1.5 cursor-col-resize hover:bg-[var(--border-default)]"
+          style={{ right: inspectorWidth - 3 }}
+        />
+      )}
+
+      {selected && (
+        <ClassesInspector
+          target={selected}
+          width={inspectorWidth}
+          onApply={handleApply}
+          onClose={() => setSelected(null)}
+        />
+      )}
 
       <LayoutSaveStatusSnackbar state={saveState} onClose={closeSaveStatus} />
     </div>
