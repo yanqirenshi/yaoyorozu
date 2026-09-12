@@ -51,6 +51,9 @@ const INSPECTOR_WIDTH = { initial: 444, min: 222, max: 888 } as const;
 // また svg が作り直されるたび(初回マウント・インスペクタ「適用」での再構築)に
 // ライブラリが transform を初期値へ戻すため、「直近に svg 上のユーザー入力が
 // あったか」でユーザー操作とライブラリ初期化を見分け、後者は保存済みの視点へ戻す。
+// 保存はパン中(svg 上で左ボタンを押している間)には行わず、離したときに書く。
+// 開発時は保存でレイアウトファイルが書き換わるたびに再コンパイルと Fast Refresh が
+// 走り、それが操作の途中にかかると視点移動が途切れるため。
 
 /** この時間内に svg 上の入力があった transform 変化だけをユーザー操作とみなす。 */
 const CAMERA_INPUT_WINDOW_MS = 500;
@@ -142,6 +145,17 @@ export default function TmTab() {
   const cameraRef = useRef<CameraTransform>(
     loadCameraTransform() ?? { k: 1, x: 0, y: 0 },
   );
+  // 視点の保存判定に使う入力の状態。開発時は保存のたびに Fast Refresh がかかり、
+  // useEffect が作り直される。effect の中の変数に置くとそのたびに初期値へ戻り、
+  // パン途中の動きをライブラリの初期化と取り違えるため、ref に置いて持ち越す。
+  const cameraInputRef = useRef({
+    /** 最後に svg 上の入力(ホイール・押下・押したままの移動)があった時刻 */
+    lastInputAt: 0,
+    /** svg 上で左ボタンを押している間(パン中)は true */
+    pointerDown: false,
+    /** パン中に保存の時機が来たため、ボタンを離すまで保存を待っている */
+    savePending: false,
+  });
   const [version, setVersion] = useState(0);
   const [selected, setSelected] = useState<TmInspectorTarget | null>(null);
   const [inspectorWidth, setInspectorWidth] = useState<number>(
@@ -278,15 +292,40 @@ export default function TmTab() {
     const container = containerRef.current;
     if (!container) return;
 
+    const input = cameraInputRef.current;
+
+    const saveCamera = () =>
+      save(
+        buildLayoutFile(
+          overridesRef.current,
+          portOverridesRef.current,
+          cameraRef.current,
+        ),
+      );
+
+    // 保存するとレイアウトファイルが書き換わり、開発サーバが再コンパイルして
+    // Fast Refresh がかかる。パン中にそれが起きると操作が途切れるため、
+    // ボタンを押している間は保存せず、離したときに書く。
+    const saveOrDefer = () => {
+      if (input.pointerDown) {
+        input.savePending = true;
+        return;
+      }
+      input.savePending = false;
+      saveCamera();
+    };
+
     // 「svg 上の入力があったか」の判定材料。ズーム(ホイール)とパン
     // (svg 上でのドラッグ)だけを数え、インスペクタ等の操作は含めない。
-    let lastInputAt = 0;
-    const noteInputIfOnSvg = (event: Event) => {
-      if ((event.target as Element).closest?.("svg")) lastInputAt = Date.now();
+    const isOnSvg = (event: Event) =>
+      Boolean((event.target as Element).closest?.("svg"));
+    const handleWheel = (event: WheelEvent) => {
+      if (isOnSvg(event)) input.lastInputAt = Date.now();
     };
-    const handleMouseMove = (event: MouseEvent) => {
-      // パン中(左ボタン押下でのドラッグ)だけ延長する。
-      if (event.buttons & 1) noteInputIfOnSvg(event);
+    const handleMouseDown = (event: MouseEvent) => {
+      if (!isOnSvg(event)) return;
+      input.lastInputAt = Date.now();
+      if (event.button === 0) input.pointerDown = true;
     };
 
     let saveTimer: number | null = null;
@@ -294,14 +333,30 @@ export default function TmTab() {
       if (saveTimer !== null) window.clearTimeout(saveTimer);
       saveTimer = window.setTimeout(() => {
         saveTimer = null;
-        save(
-          buildLayoutFile(
-            overridesRef.current,
-            portOverridesRef.current,
-            cameraRef.current,
-          ),
-        );
+        saveOrDefer();
       }, CAMERA_SAVE_DEBOUNCE_MS);
+    };
+
+    const handleMouseUp = () => {
+      if (!input.pointerDown) return;
+      input.pointerDown = false;
+      // パンが終わったので、待っていた保存も待ち時間中の保存もここで1回だけ書く
+      // (タイマーを残すと離した直後にもう一度保存が走り、再コンパイルが重なる)。
+      if (saveTimer !== null) {
+        window.clearTimeout(saveTimer);
+        saveTimer = null;
+        input.savePending = true;
+      }
+      if (input.savePending) saveOrDefer();
+    };
+    const handleMouseMove = (event: MouseEvent) => {
+      if (event.buttons & 1) {
+        // パン中(左ボタン押下でのドラッグ)だけ延長する。
+        if (isOnSvg(event)) input.lastInputAt = Date.now();
+      } else if (input.pointerDown) {
+        // ウィンドウの外で離して mouseup を取り逃がした場合の後始末。
+        handleMouseUp();
+      }
     };
 
     // 保存済みの視点をライブラリの管理下ごと書き戻す。属性だけ変えると次の
@@ -336,7 +391,13 @@ export default function TmTab() {
         const parsed = parseLayerTransform(target);
         if (!parsed || sameCamera(parsed, cameraRef.current)) continue;
 
-        if (Date.now() - lastInputAt < CAMERA_INPUT_WINDOW_MS) {
+        // ボタンを押している間(パン中)は、押したまま止まっていた時間に
+        // 関係なくユーザー操作とみなす。d3-zoom は window の capture で動きを
+        // 受けるため、ここへの通知は lastInputAt の更新より先に届くことがある。
+        const byUser =
+          input.pointerDown ||
+          Date.now() - input.lastInputAt < CAMERA_INPUT_WINDOW_MS;
+        if (byUser) {
           cameraRef.current = parsed;
           scheduleSave();
         } else if (target.ownerSVGElement) {
@@ -355,32 +416,27 @@ export default function TmTab() {
       attributeFilter: ["transform"],
     });
 
-    container.addEventListener("wheel", noteInputIfOnSvg, { capture: true });
-    container.addEventListener("mousedown", noteInputIfOnSvg, {
-      capture: true,
-    });
+    container.addEventListener("wheel", handleWheel, { capture: true });
+    container.addEventListener("mousedown", handleMouseDown, { capture: true });
     container.addEventListener("mousemove", handleMouseMove, { capture: true });
+    // 図の外で離すこともあるので window で拾う。
+    window.addEventListener("mouseup", handleMouseUp, { capture: true });
     return () => {
       observer.disconnect();
-      container.removeEventListener("wheel", noteInputIfOnSvg, {
-        capture: true,
-      });
-      container.removeEventListener("mousedown", noteInputIfOnSvg, {
+      container.removeEventListener("wheel", handleWheel, { capture: true });
+      container.removeEventListener("mousedown", handleMouseDown, {
         capture: true,
       });
       container.removeEventListener("mousemove", handleMouseMove, {
         capture: true,
       });
+      window.removeEventListener("mouseup", handleMouseUp, { capture: true });
       if (saveTimer !== null) {
-        // 保存待ちのままアンマウントしない(最後の視点を書き切る)。
+        // 保存待ちのまま作り直し・アンマウントしない(最後の視点を書き切る)。
+        // Fast Refresh による作り直しがパン中に起きた場合は、savePending として
+        // 次の effect へ持ち越し、ボタンを離したときに書く。
         window.clearTimeout(saveTimer);
-        save(
-          buildLayoutFile(
-            overridesRef.current,
-            portOverridesRef.current,
-            cameraRef.current,
-          ),
-        );
+        saveOrDefer();
       }
     };
   }, [save]);
