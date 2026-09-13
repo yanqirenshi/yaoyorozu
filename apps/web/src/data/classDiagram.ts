@@ -20,11 +20,14 @@ export type ClassDef = Omit<ClassInput, "id">;
 
 export type Side = "top" | "bottom" | "left" | "right";
 
-/** 多重度。起点側・終点側それぞれの端に表示される(例: `"1..*"`)。 */
+/**
+ * 多重度(起点側・終点側それぞれの端に表示される。例: `"1..*"`)と、同じ組に複数の
+ * 関係線を張るときの識別子 `key`。
+ */
 export type RelationshipOptions = Pick<
   RelationshipInput,
   "fromMultiplicity" | "toMultiplicity"
->;
+> & { key?: string };
 
 // フィールド。名前と型を分けて渡す。名前に `+ ` を書くと、ライブラリが補う
 // 可視性記号と二重になる。
@@ -43,7 +46,8 @@ export const label = (physical: string): AttributeInput => ({
 /**
  * クラス定義に id を付け、それを参照する関係線の作り方を返す。
  * 関係線の id は `<起点>-><終点>`。接続辺の手調整(layout/classes.json)のキーに使う。
- * 同じ組に2本張ると id が重複し、d3.classes が例外を出す(黙って上書きしない)。
+ * 同じ組に2本以上張るときは `options.key` を渡し、`<起点>-><終点>#<key>` にする。
+ * 渡し忘れると id が重複し、d3.classes が例外を出す(黙って上書きしない)。
  */
 export function defineDiagram(defs: ClassDef[]) {
   const classes: ClassInput[] = defs.map((c) => ({ ...c, id: c.name.physical }));
@@ -63,14 +67,14 @@ export function defineDiagram(defs: ClassDef[]) {
     label?: string,
     fromPoint: Side = "bottom",
     toPoint: Side = "top",
-    options: RelationshipOptions = {},
+    { key, ...multiplicity }: RelationshipOptions = {},
   ): RelationshipInput => ({
-    id: `${from}->${to}`,
+    id: key ? `${from}->${to}#${key}` : `${from}->${to}`,
     type,
     from: { classId: ref(from), point: fromPoint },
     to: { classId: ref(to), point: toPoint },
     ...(label ? { label } : {}),
-    ...options,
+    ...multiplicity,
   });
 
   return { classes, rel };
