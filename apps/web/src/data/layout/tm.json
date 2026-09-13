@@ -1,73 +1,72 @@
 {
-  "camera": {
-    "k": 0.6597539553864491,
-    "x": 235.40456553461252,
-    "y": 18.731045204094016
-  },
   "entities": {
     "AssistantLine": {
-      "x": 2675.812362641096,
-      "y": 32.21982675790787
+      "x": 1995.7828492820263,
+      "y": 2173.393374502659
     },
     "AttachmentLine": {
-      "x": 3213.132949948311,
-      "y": 70.52414071559906
+      "x": 2657.1634155511856,
+      "y": 2211.6975353956223
     },
     "ChainLine": {
-      "x": 2394.587103307247,
-      "y": -553.2465126514435
+      "x": 1990.2454208731651,
+      "y": 1656.84903216362
     },
     "ChainLineRecursion": {
-      "x": 2999.5144233703613,
-      "y": -480.5374460220337
+      "x": 2503.276491165161,
+      "y": 1738.7475047111511
     },
     "GitBranch": {
-      "x": 718.2070007324219,
-      "y": -807.716139775468
+      "x": 1100.5208129882812,
+      "y": 255.5909624279011
     },
     "GitBranchWorktree": {
-      "x": 1016.781322479248,
-      "y": -886.8300632238388
+      "x": 1434.6876029968262,
+      "y": 174.62281572818756
     },
     "GitRepository": {
-      "x": -313.6024703979492,
-      "y": -1106.7726616859436
+      "x": -301.4767608642578,
+      "y": -194.31139516830444
     },
     "GitWorktree": {
-      "x": 1519.9611129760742,
-      "y": -836.6092560458055
+      "x": 1915.4014129638672,
+      "y": 230.12174199344008
     },
     "Pc": {
-      "x": -867.2836108207703,
-      "y": -1102.2811461687088
+      "x": -864.3475317955017,
+      "y": -195.23986612260344
     },
     "PcGitRepository": {
-      "x": -626.9589776992798,
-      "y": -1191.1490238010883
+      "x": -620.8961305618286,
+      "y": -272.62497502565384
     },
     "PcUser": {
-      "x": -1023.4605615735054,
-      "y": -56.24821072816849
+      "x": -1166.0619657635689,
+      "y": 329.7709581255913
     },
     "ProjectFolder": {
       "x": 1595.0785331726074,
       "y": 879.0527132749557
     },
-    "ProjectFolderFile": {
-      "x": 1050.2896461486816,
-      "y": 771.5140228271484
-    },
     "RepoClaudeMd": {
-      "x": -613.0221176147461,
-      "y": -536.2500681877136
+      "x": -364.4445571899414,
+      "y": 254.95385694503784
     },
     "RepoSettings": {
-      "x": -202.17657852172852,
-      "y": -534.5341542959213
+      "x": 64.58951950073242,
+      "y": 253.63837444782257
     },
     "RepoSettingsLocal": {
-      "x": 231.8022499084473,
-      "y": -522.8924663066864
+      "x": 534.044002532959,
+      "y": 253.0923607349396
+    },
+    "RunningSession": {
+      "x": -187.4754409790039,
+      "y": 1624.342609599233
+    },
+    "RunningSessionPeerFeature": {
+      "x": 331.43319426476955,
+      "y": 1759.0854249447584
     },
     "Session": {
       "x": -200.3791127204895,
@@ -78,16 +77,16 @@
       "y": 880.4410442113876
     },
     "SessionFileMap": {
-      "x": 155.2010498046875,
-      "y": 775.0394815504551
+      "x": 148.30886840820312,
+      "y": 761.2551175653934
     },
     "SessionInputQueue": {
-      "x": 185.6099624633789,
-      "y": 982.0083799958228
+      "x": 198.80506134033203,
+      "y": 1018.954672396183
     },
     "SystemLine": {
-      "x": 2954.919363975525,
-      "y": 42.66635847091675
+      "x": 2330.0272550582886,
+      "y": 2206.8140518665314
     },
     "User": {
       "x": -894.9679312705994,
@@ -98,12 +97,12 @@
       "y": 1360.9334800243378
     },
     "UserLine": {
-      "x": 2330.6345497965813,
-      "y": 67.04214161634445
+      "x": 1673.5791530013084,
+      "y": 2185.2417654395103
     },
     "UserSession": {
-      "x": -561.3068389892578,
-      "y": 956.1203837394714
+      "x": -565.9016418457031,
+      "y": 753.949450135231
     }
   },
   "ports": {
@@ -111,29 +110,18 @@
     "ChainLine->ChainLineRecursion#子:to": 90,
     "ChainLine->ChainLineRecursion#親:from": 270,
     "ChainLine->ChainLineRecursion#親:to": 90,
-    "GitBranch->GitBranchWorktree:to": 0,
-    "GitRepository->PcGitRepository:from": 90,
     "GitRepository->RepoClaudeMd:from": 10,
     "GitRepository->RepoSettingsLocal:from": 350,
-    "GitWorktree->GitBranchWorktree:from": 90,
-    "GitWorktree->GitBranchWorktree:to": 0,
-    "Pc->PcGitRepository:from": 270,
-    "Pc->PcGitRepository:to": 0,
-    "Pc->PcUser:to": 270,
-    "ProjectFolder->ChainLine:from": 180,
-    "ProjectFolder->ProjectFolderFile:from": 90,
-    "ProjectFolder->ProjectFolderFile:to": 0,
-    "Session->ChainLine:from": 180,
-    "Session->SessionFileMap:from": 270,
+    "ProjectFolder->ChainLine:from": 340,
+    "Session->ChainLine:from": 280,
     "Session->SessionInputQueue:from": 290,
     "Session->SessionInputQueue:to": 90,
-    "Session->UserSession:to": 180,
-    "SessionFile->ChainLine:from": 180,
-    "SessionFile->ProjectFolderFile:from": 270,
-    "SessionFile->SessionFileMap:from": 90,
-    "SessionFile->SessionFileMap:to": 0,
-    "User->PcUser:to": 270,
-    "User->UserClaudeMd:from": 0,
-    "User->UserSession:from": 270
+    "SessionFile->ChainLine:from": 0,
+    "User->UserClaudeMd:from": 0
+  },
+  "camera": {
+    "x": 452.71278976474605,
+    "y": 89.72577502259674,
+    "k": 0.43527528164806334
   }
 }
