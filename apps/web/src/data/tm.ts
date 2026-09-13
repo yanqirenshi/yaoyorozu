@@ -43,10 +43,21 @@
  * ファイルを識別しないことが判明したためモノとして先に立てた。ファイル種別によるサブ
  * セットへの展開、エージェントID、meta.json(agentType / name / toolUseId)は第3弾で扱う。
  *
+ * 【実行中セッション(~/.claude/sessions/)】
+ * 実行中の Claude Code プロセスごとに <pid>.json と <pid>.<ハッシュ>.key が置かれ、
+ * プロセスが終わると消える。語彙はこのフォルダの実測による(報告書は未作成)。
+ * 個体指定子は pidDomain + pid + procStart の組。pid は OS が使い回すため単独では
+ * 個体を指定できない。実行中かどうかは、ファイルの有無に加えて、同じ pid の
+ * プロセスの開始時刻が procStart と一致するかで判定する。
+ * .key の peerToken はセッション間メッセージの認証値で、値は秘匿する
+ * (本ファイルにも画面にも書かない。語彙として名前だけを置く)。
+ * 未確認: /clear や /resume で、同じプロセスのまま sessionId が切り替わるか。
+ * 切り替わっても個体指定子はプロセス側なので、モデルは変わらない。
+ *
  * 【関係の検証(モノ × モノ の網羅性)】
- * 25エンティティの全300ペアを確認した。直接の結線があるのは22ペア(23本)で、
+ * 27エンティティの全351ペアを確認した。直接の結線があるのは25ペア(26本)で、
  * 対照表・対応表とその親の12ペアは垂下(mapping)でつながる。
- * 残る266ペアのうち、以下5ペアは「語彙は存在するが今は関係を構成していない」ものであり、
+ * 残る314ペアのうち、以下8ペアは「語彙は存在するが今は関係を構成していない」ものであり、
  * 見落としではなく判断の記録として残す。
  *
  * - ログ行 × 入力キュー / 入力キュー × ユーザー行
@@ -63,11 +74,20 @@
  *   ログに記録されるのは名前だけで新設した GitブランチID は無く、行が持つのは cwd で
  *   リポジトリパスではないため(cwd は node_modules 配下も含む)、どのリポジトリの
  *   どのブランチかを個体指定子で決められない。
+ * - 実行中セッション × PC
+ *   pidDomain(`<OS>:<ホスト名>`)にホスト名が入っているが、PC の個体指定子は
+ *   systemUuid で、ホスト名は属性(PC名)にすぎない。個体指定子で結べない。
+ * - 実行中セッション × ユーザー
+ *   ファイルはユーザーのホーム配下(~/.claude/sessions/)に置かれるが、userId を
+ *   持たない。セッション → ユーザー．セッション を経由してたどれる。
+ * - 実行中セッション × ワーキングツリー
+ *   cwd がワーキングツリーのフォルダであることはあるが、作業ディレクトリと
+ *   ワーキングツリーの重複の整理が未決のため、今は作業ディレクトリへの (R) だけを持つ。
  *
- * 他の261ペアは直接の関係を構成しないのが正しい。内訳は、サブセットが親(ログ行)から
+ * 他の306ペアは直接の関係を構成しないのが正しい。内訳は、サブセットが親(ログ行)から
  * 行UUIDを継承しており親で張った関係がそのまま効くもの16ペア、表を2段経由するもの
  * 1ペア(作業ディレクトリ × セッション — どちらもセッションファイルとの対照表を
- * 経由する)、対応する語彙がそもそも存在しないもの244ペア。
+ * 経由する)、対応する語彙がそもそも存在しないもの289ペア。
  *
  * R-R・E-E は対照表・対応表で構成するが、図の上では親どうしを1本の線で結び、その
  * 中点の○から表をぶら下げる(垂下。d3.ter 0.1.24 の `relationship.mapping`)。
@@ -200,6 +220,13 @@ const IDENTIFIER_DEFS: TmName[] = [
   { physical: "cwd", logical: "作業ディレクトリパス" },
   { physical: "filePath", logical: "ファイルパス" },
   { physical: "sessionId", logical: "セッションID" },
+  // 実行中セッション(~/.claude/sessions/<pid>.json)の個体指定子。OS は pid を
+  // 使い回すため、pid だけでは個体を指定できない。procStart(OS のプロセス作成時刻。
+  // Windows では FILETIME)と pidDomain(pid が有効な範囲。`<OS>:<ホスト名>`)を
+  // 組にする。いずれもファイルに実在する値で、発明した ID ではない。
+  { physical: "pidDomain", logical: "PIDドメイン" },
+  { physical: "pid", logical: "プロセスID" },
+  { physical: "procStart", logical: "プロセス開始日時" },
   { physical: "uuid", logical: "行UUID" },
   // 再帰表が継承する行UUID。0.1.22 で結線にラベルを出せるようになったため
   // (Foolsgolds/Assholes#16)、親子の別は線のラベルで示し、箱の中は TM の
@@ -264,6 +291,24 @@ const ATTRIBUTE_DEFS: TmName[] = [
   { physical: "linkKind", logical: "チェーン種別" },
   { physical: "enqueuedAt", logical: "投入日時" },
   { physical: "content", logical: "入力テキスト" },
+  // 実行中セッション(~/.claude/sessions/<pid>.json と <pid>.<ハッシュ>.key)の語彙。
+  { physical: "startedAt", logical: "起動日時" },
+  { physical: "kind", logical: "種別" },
+  // 他のセッションからメッセージを送るときの宛先名。
+  { physical: "name", logical: "名前" },
+  { physical: "nameSource", logical: "名前の由来" },
+  { physical: "nameSince", logical: "名前の設定日時" },
+  // 設定ファイルの `updatedAt`(手配の更新日)とは意味が違うため別の属性に分ける。
+  { physical: "updatedAtTime", logical: "更新日時" },
+  { physical: "peerProtocol", logical: "ピアプロトコル" },
+  { physical: "messagingSocketPath", logical: "メッセージング経路" },
+  // claude.ai 側のセッションID。個体指定子ではあるが、ほかの語彙が無いため今は属性に
+  // 置く(ログ行の gitBranch と同じ扱い)。関連する語彙がそろう段でモノとして立てる。
+  { physical: "bridgeSessionId", logical: "ブリッジセッションID" },
+  // <pid>.<ハッシュ>.key にある、セッション間メッセージの認証値。値は秘匿であり、
+  // 画面・ログ・リポジトリに書かない(native.md §4)。ここに置くのは語彙だけ。
+  { physical: "peerToken", logical: "ピアトークン(秘匿)" },
+  { physical: "peerFeature", logical: "機能名" },
 ];
 
 const IDENTIFIER_BASE_ID = 1;
@@ -561,6 +606,42 @@ const ENTITY_DEFS: EntityDef[] = [
     attributes: ["enqueuedAt", "content"],
   },
 
+  // ============ 実行中セッション(~/.claude/sessions/)============
+  {
+    name: { physical: "RunningSession", logical: "実行中セッション" },
+    type: "EVENT",
+    description:
+      "いま動いている Claude Code のプロセス1つ。~/.claude/sessions/ に <pid>.json(本体)と <pid>.<ハッシュ>.key(認証値)が置かれ、プロセスが終わると消える(実測: セッションログ49件に対してファイルは4件で、4件ともプロセスが生きていた)。ファイル名は pid だが OS は pid を使い回すため、pidDomain + pid + procStart の組を個体指定子にする。.key も同じ3つの値(procStartFt = procStart)で特定されるので、別の箱にせず同じモノとして扱う。起動日時(startedAt)という過去の出来事の日付が帰属するためイベント。procStart は OS のプロセス作成時刻(実測で OS の値と100ナノ秒単位まで一致)、startedAt は Claude Code がセッションを始めた時刻で、約1秒遅い。会話(セッション)はこのプロセスの中で動くものなので、sessionId は個体指定子にせず (R) として持つ。実行中かどうかは、ファイルがあり、かつ OS に同じ pid のプロセスがあって開始時刻が procStart と一致することで判定する(pid だけで判定すると、終了後に同じ pid が別のプロセスに使われたとき誤判定する)。peerToken の値は秘匿で、画面・ログ・リポジトリに書かない。",
+    position: { x: 650, y: 1250 },
+    identifiers: ["pidDomain", "pid", "procStart", "sessionId(R)", "cwd(R)"],
+    attributes: [
+      "startedAt",
+      "version",
+      "kind",
+      "entrypoint",
+      "name",
+      "nameSource",
+      "nameSince",
+      "updatedAtTime",
+      "peerProtocol",
+      "messagingSocketPath",
+      "bridgeSessionId",
+      "peerToken",
+    ],
+  },
+  {
+    name: {
+      physical: "RunningSessionPeerFeature",
+      logical: "実行中セッション．ピア機能",
+    },
+    type: "MANY-VALUED-OR",
+    description:
+      "peerFeatures(配列。例: notify_idle / artifact_yield)。セッション間メッセージで使える機能の一覧で、1プロセスに複数あるため多値(MO)として分ける。個体指定子は親の3つの値(R)。",
+    position: { x: 1350, y: 1300 },
+    identifiers: ["pidDomain(R)", "pid(R)", "procStart(R)"],
+    attributes: ["peerFeature"],
+  },
+
   // ============ 再帰 ============
   {
     name: { physical: "ChainLineRecursion", logical: "ログ行．ログ行" },
@@ -750,6 +831,27 @@ const RELATIONSHIP_DEFS: RelationshipDef[] = [
   {
     from: { entity: "Session", position: 0, cardinality: 1, optionality: 1 },
     to: { entity: "SessionInputQueue", position: 180, cardinality: 3, optionality: 0 },
+  },
+  // セッション 1 : 実行中セッション 複数または値なし。E-R。
+  // 終わった会話は動いていない(0件)。同じ会話を後で再開すると別のプロセスになる。
+  {
+    from: { entity: "Session", position: 350, cardinality: 1, optionality: 1 },
+    to: { entity: "RunningSession", position: 170, cardinality: 3, optionality: 0 },
+  },
+  // 作業ディレクトリ 1 : 実行中セッション 複数または値なし。E-R。
+  {
+    from: { entity: "ProjectFolder", position: 0, cardinality: 1, optionality: 1 },
+    to: { entity: "RunningSession", position: 190, cardinality: 3, optionality: 0 },
+  },
+  // 実行中セッション 1 : ピア機能 複数または値なし(多値)。
+  {
+    from: { entity: "RunningSession", position: 270, cardinality: 1, optionality: 1 },
+    to: {
+      entity: "RunningSessionPeerFeature",
+      position: 90,
+      cardinality: 3,
+      optionality: 0,
+    },
   },
 
   // ログ行のサブセット。属性構成が異なるので相違のサブセット(×行種別)。
