@@ -15,9 +15,17 @@
  * キーはいずれも**物理名から組み立てる**。図から読めるのは配列順で採番された
  * `_id` だけだが、`tm.ts` の定義を並べ替えると `_id` がずれてしまうため、
  * `TM_ENTITY_KEY_BY_ID` / `TM_RELATIONSHIP_KEY_BY_ID` で変換してから保存する。
+ *
+ * 保存のたびに、今の `tm.ts` に存在しないエンティティ・結線の項目を落とす
+ * (`buildLayoutFile`)。開いたままのページは読み込んだ時点の配置を丸ごと持ち、
+ * 保存のたびにファイル全体として書き戻すため、定義から消したものが何度でも
+ * 戻ってくるからである(作業中に何度も戻った)。`tm.ts` が変わると開発サーバの
+ * 差し込み更新でこのモジュールも最新の定義を読み直すので、リロードしていない
+ * ページからの保存でも無効な項目は書き込まれない。
  */
 import layoutFile from "./layout/tm.json";
 import { saveLayoutToApi } from "./layoutSaveApi";
+import { TM_ENTITY_KEY_BY_ID, TM_RELATIONSHIP_KEY_BY_ID } from "./tm";
 
 // 旧方式(localStorage)からの一時的な移行処理で使うキー。
 // 全環境の移行が済んだら READ_LEGACY 関連ごと削除してよい。
@@ -86,13 +94,37 @@ export function loadCameraTransform(): CameraTransform | null {
   return fileLayout.camera ?? null;
 }
 
-/** 保存APIへ渡す1つのオブジェクトにまとめる。 */
+/**
+ * 保存APIへ渡す1つのオブジェクトにまとめる。今の `tm.ts` に存在しない
+ * エンティティの位置と結線のポート角度はここで落とす(冒頭のコメントを参照)。
+ * 視点(camera)はエンティティに依らないのでそのまま残す。
+ */
 export function buildLayoutFile(
   entities: LayoutOverrides,
   ports: PortOverrides,
   camera?: CameraTransform,
 ): TmLayoutFile {
-  return camera ? { entities, ports, camera } : { entities, ports };
+  const knownEntities = new Set(Object.values(TM_ENTITY_KEY_BY_ID));
+  const knownPorts = new Set(
+    Object.values(TM_RELATIONSHIP_KEY_BY_ID).flatMap((key) => [
+      portOverrideKey(key, "from"),
+      portOverrideKey(key, "to"),
+    ]),
+  );
+  const file = {
+    entities: pickKnown(entities, knownEntities),
+    ports: pickKnown(ports, knownPorts),
+  };
+  return camera ? { ...file, camera } : file;
+}
+
+function pickKnown<T>(
+  record: Record<string, T>,
+  known: ReadonlySet<string>,
+): Record<string, T> {
+  return Object.fromEntries(
+    Object.entries(record).filter(([key]) => known.has(key)),
+  );
 }
 
 /**
