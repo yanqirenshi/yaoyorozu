@@ -118,11 +118,84 @@ fn latest_session_file(project_dir: &Path) -> Option<PathBuf> {
     session_files_by_recency(project_dir).into_iter().next()
 }
 
-/// 最新セッションファイルに記録されている、セッション開始時点の作業ディレクトリ(cwd)を返す。
-/// `claude` はカレントディレクトリ配下のプロジェクトとしてセッションを保存するため、
-/// 元の会話と同じプロジェクトに新規セッションを作るには同じ cwd で起動する必要がある。
-/// セッション途中で(Bash の cd 等により)cwd が変わることがあるため、
-/// 最後の値ではなく最初に記録された値(＝プロジェクトのルート)を使う。
+/// 作業ディレクトリのパスを、Claude Code が `~/.claude/projects/` 直下に作る
+/// フォルダ名へ変換する。英数字以外を1文字ずつ `-` に置き換えたものになる
+/// (実データで確認。2026-09-13)。非ASCII文字は、Claude Code(JavaScript)の
+/// 文字列置換と同じく UTF-16 のコード単位ごとに数える想定(外れていても
+/// 呼び出し側が最初の cwd にフォールバックするため、致命的にはならない)。
+fn project_dir_name_for(cwd: &str) -> String {
+    let mut name = String::with_capacity(cwd.len());
+    for c in cwd.chars() {
+        if c.is_ascii_alphanumeric() {
+            name.push(c);
+        } else {
+            for _ in 0..c.len_utf16() {
+                name.push('-');
+            }
+        }
+    }
+    name
+}
+
+/// セッションファイルに記録された cwd を記録順に1つずつ受け取り、そのファイルが
+/// 置かれたプロジェクトフォルダに対応するものを選ぶ。
+///
+/// cwd はセッション途中で(Bash の cd、worktree への移動等により)変わる。
+/// 通常は最初に記録された値がプロジェクトのルートだが、メインのフォルダで
+/// 始めて途中で worktree に移ったセッションは、ファイルが worktree 側の
+/// フォルダに置かれる一方で最初の cwd はメインのフォルダになる。そのため、
+/// フォルダ名と一致する最初の cwd を選ぶ。一致するものがなければ(フォルダ名の
+/// 変換規則が想定と違う場合等)最初の cwd を選ぶ。
+struct SessionCwdSelector<'a> {
+    project_dir_name: Option<&'a str>,
+    first: Option<String>,
+    matched: Option<String>,
+}
+
+impl<'a> SessionCwdSelector<'a> {
+    /// `session_file` の親フォルダ名を、一致させるプロジェクトフォルダ名とする。
+    fn for_session_file(session_file: &'a Path) -> Self {
+        Self {
+            project_dir_name: session_file
+                .parent()
+                .and_then(|dir| dir.file_name())
+                .and_then(|name| name.to_str()),
+            first: None,
+            matched: None,
+        }
+    }
+
+    fn push(&mut self, cwd: String) {
+        if self.is_settled() {
+            return;
+        }
+        if self.project_dir_name == Some(project_dir_name_for(&cwd).as_str()) {
+            self.matched = Some(cwd);
+        } else if self.first.is_none() {
+            self.first = Some(cwd);
+        }
+    }
+
+    /// フォルダ名と一致する cwd が決まったか。決まった後の cwd は結果に影響
+    /// しないため、呼び出し側は cwd を読むのをやめてよい(通常のセッションは
+    /// 1件目で決まる)。
+    fn is_settled(&self) -> bool {
+        self.matched.is_some()
+    }
+
+    fn finish(self) -> Option<String> {
+        self.matched.or(self.first)
+    }
+}
+
+/// 最新セッションファイルに記録されている作業ディレクトリ(cwd)のうち、
+/// そのファイルが置かれたプロジェクトフォルダに対応するもの
+/// ([`SessionCwdSelector`])を返す。
+/// `claude --continue` はカレントディレクトリに対応するプロジェクトフォルダの
+/// 最新の会話を継続するため、同じフォルダに対応する cwd で起動する必要がある。
+/// 最初の cwd をそのまま使うと、worktree に移ったセッションではメインの
+/// フォルダの別の会話へ送ってしまい、しかも送信前後のセッションID検証
+/// (worktree 側のフォルダを見る)では検出できない。
 fn resolve_session_cwd(project_dir: &Path) -> Result<PathBuf, AppError> {
     let path = latest_session_file(project_dir)
         .ok_or_else(|| AppError::NotFound("セッションが見つかりません".to_string()))?;
@@ -130,14 +203,21 @@ fn resolve_session_cwd(project_dir: &Path) -> Result<PathBuf, AppError> {
     let file = fs::File::open(&path)
         .map_err(|e| AppError::Io(format!("{} を開けませんでした: {}", path.display(), e)))?;
 
-    let cwd = BufReader::new(file)
+    let mut selector = SessionCwdSelector::for_session_file(&path);
+    for cwd in BufReader::new(file)
         .lines()
         .map_while(Result::ok)
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
-        .find_map(|value| extract_cwd(&value))
-        .ok_or_else(|| {
-            AppError::Io("セッションの作業ディレクトリを取得できませんでした".to_string())
-        })?;
+        .filter_map(|value| extract_cwd(&value))
+    {
+        selector.push(cwd);
+        if selector.is_settled() {
+            break;
+        }
+    }
+    let cwd = selector.finish().ok_or_else(|| {
+        AppError::Io("セッションの作業ディレクトリを取得できませんでした".to_string())
+    })?;
 
     Ok(PathBuf::from(cwd))
 }
@@ -301,9 +381,10 @@ fn cached_or_scanned_summary(
 /// セッションファイルを1行ずつ走査し、ID・表示用タイトル・作業ディレクトリ
 /// (cwd)・ブランチ(git_branch)を求める(issue #104でcwd/git_branchを追加)。
 /// `custom-title`/`gitBranch` はファイルのどこにでも出現しうる(リネーム・
-/// checkoutのたびに追記)ため、早期終了せず全行を読む。`cwd` は最初に記録
-/// された値(プロジェクトルート)、`git_branch` は最後に記録された値
-/// (checkoutの最終状態)を採用する。
+/// checkoutのたびに追記)ため、早期終了せず全行を読む。`cwd` はファイルが
+/// 置かれたプロジェクトフォルダに対応する値([`SessionCwdSelector`]。送信時の
+/// cwd と揃える)、`git_branch` は最後に記録された値(checkoutの最終状態)を
+/// 採用する。
 fn scan_session_summary(path: &Path) -> Result<CachedSessionSummary, AppError> {
     let file = fs::File::open(path)
         .map_err(|e| AppError::Io(format!("{} を開けませんでした: {}", path.display(), e)))?;
@@ -311,7 +392,7 @@ fn scan_session_summary(path: &Path) -> Result<CachedSessionSummary, AppError> {
     let mut id: Option<String> = None;
     let mut last_custom_title: Option<String> = None;
     let mut first_user_message: Option<String> = None;
-    let mut cwd: Option<String> = None;
+    let mut cwd_selector = SessionCwdSelector::for_session_file(path);
     let mut git_branch: Option<String> = None;
 
     for value in BufReader::new(file)
@@ -332,8 +413,10 @@ fn scan_session_summary(path: &Path) -> Result<CachedSessionSummary, AppError> {
                 }
             }
         }
-        if cwd.is_none() {
-            cwd = extract_cwd(&value);
+        if !cwd_selector.is_settled() {
+            if let Some(cwd) = extract_cwd(&value) {
+                cwd_selector.push(cwd);
+            }
         }
         if let Some(branch) = extract_git_branch(&value) {
             git_branch = Some(branch);
@@ -352,7 +435,7 @@ fn scan_session_summary(path: &Path) -> Result<CachedSessionSummary, AppError> {
         modified_at_ms: 0,
         id,
         title,
-        cwd,
+        cwd: cwd_selector.finish(),
         git_branch,
     })
 }
@@ -439,6 +522,88 @@ mod tests {
     }
 
     #[test]
+    fn project_dir_name_for_replaces_each_non_alphanumeric_char_with_hyphen() {
+        // 実データのフォルダ名(~/.claude/projects/ 直下)と同じ変換になること。
+        assert_eq!(
+            project_dir_name_for(r"C:\Users\yanqi\prj\yaoyorozu\.claude\worktrees\domain-data-2"),
+            "C--Users-yanqi-prj-yaoyorozu--claude-worktrees-domain-data-2"
+        );
+        assert_eq!(project_dir_name_for("/home/me/proj_1"), "-home-me-proj-1");
+    }
+
+    /// `write_session_moved_into_worktree` が書き出すプロジェクトフォルダ名と、
+    /// そのフォルダに対応する cwd。
+    const WORKTREE_PROJECT: &str = "C--repo--claude-worktrees-wt";
+    const WORKTREE_CWD: &str = r"C:\repo\.claude\worktrees\wt";
+
+    /// メインのフォルダで始めて途中で worktree に移ったセッション(実データで
+    /// 確認した形)を `projects_dir/WORKTREE_PROJECT/` に書き出す。ファイルは
+    /// worktree 側のフォルダに置かれるが、最初の cwd はメインのフォルダになる。
+    fn write_session_moved_into_worktree(projects_dir: &Path) {
+        let project_dir = projects_dir.join(WORKTREE_PROJECT);
+        fs::create_dir_all(&project_dir).unwrap();
+        fs::write(
+            project_dir.join("s1.jsonl"),
+            [
+                r#"{"type":"user","sessionId":"s1","cwd":"C:\\repo","message":{"content":"hello"}}"#,
+                r#"{"type":"user","sessionId":"s1","cwd":"C:\\repo\\.claude\\worktrees\\wt","message":{"content":"moved"}}"#,
+                r#"{"type":"user","sessionId":"s1","cwd":"C:\\repo\\.claude\\worktrees\\wt\\sub","message":{"content":"cd"}}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn latest_session_cwd_prefers_the_cwd_matching_the_project_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        write_session_moved_into_worktree(dir.path());
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let cwd = repo
+            .latest_session_cwd(WORKTREE_PROJECT)
+            .expect("should get cwd");
+
+        assert_eq!(cwd, PathBuf::from(WORKTREE_CWD));
+    }
+
+    #[test]
+    fn list_sessions_prefers_the_cwd_matching_the_project_dir() {
+        // ハブの cwd 表示も送信時の cwd と揃える。
+        let dir = tempfile::tempdir().unwrap();
+        write_session_moved_into_worktree(dir.path());
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let sessions = repo
+            .list_sessions(WORKTREE_PROJECT)
+            .expect("should list sessions");
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].cwd.as_deref(), Some(WORKTREE_CWD));
+    }
+
+    #[test]
+    fn latest_session_cwd_falls_back_to_the_first_cwd_when_none_match_the_project_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        fs::write(
+            project_dir.join("s1.jsonl"),
+            [
+                r#"{"type":"user","sessionId":"s1","cwd":"/repo","message":{"content":"hello"}}"#,
+                r#"{"type":"user","sessionId":"s1","cwd":"/repo/sub","message":{"content":"world"}}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let cwd = repo.latest_session_cwd("proj").expect("should get cwd");
+
+        assert_eq!(cwd, PathBuf::from("/repo"));
+    }
+
+    #[test]
     fn watch_projects_notifies_project_name_on_new_session_file() {
         let dir = tempfile::tempdir().unwrap();
         let project_dir = dir.path().join("some-project");
@@ -486,8 +651,8 @@ mod tests {
 
     #[test]
     fn list_sessions_uses_the_first_cwd_and_the_last_git_branch() {
-        // cwdは最初の値(プロジェクトルート)、git_branchは最後の値
-        // (checkoutの最終状態)を採用する(issue #104)。
+        // cwdはフォルダ名と一致する値がなければ最初の値(プロジェクトルート)、
+        // git_branchは最後の値(checkoutの最終状態)を採用する(issue #104)。
         let dir = tempfile::tempdir().unwrap();
         let project_dir = dir.path().join("proj");
         fs::create_dir_all(&project_dir).unwrap();
