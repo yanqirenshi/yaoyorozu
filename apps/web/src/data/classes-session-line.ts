@@ -1,31 +1,11 @@
 // apps/native/crates/domain/src/session_line.rs のクラス図データ(Labo試作)
 // 実装: PR #40 / スキーマ根拠: reports/claude-session-jsonl-format.md §5
 //
-// クラスの id は物理名から機械的に付ける(d3.classes 0.6.0 以降は明示 id を受け付ける)。
-// 関係線の classId、DOM の data-id、レイアウト保存のキーがすべて物理名で揃うため、
-// 配列の並べ替えで参照がずれることがない。
-import type {
-  AttributeInput,
-  ClassInput,
-  DiagramInput,
-  RelationshipInput,
-} from "@yanqirenshi/d3.classes";
+// 書き方の道具(attr / label / defineDiagram)は classDiagram.ts にある。
+import type { DiagramInput } from "@yanqirenshi/d3.classes";
+import { attr, defineDiagram, label, type ClassDef } from "./classDiagram";
 
-// フィールド。名前と型を分けて渡す。名前に `+ ` を書くと、ライブラリが補う
-// 可視性記号と二重になる。
-const attr = (physical: string, type: string): AttributeInput => ({
-  name: { physical, logical: physical, description: "" },
-  type,
-  visibility: "public",
-});
-
-// 列挙のバリアント(serde の tag 値)。可視性も型も持たないため名前だけを描く。
-const label = (physical: string): AttributeInput => ({
-  name: { physical, logical: physical, description: "" },
-  kind: "label",
-});
-
-const DEFS: Omit<ClassInput, "id">[] = [
+const DEFS: ClassDef[] = [
   // ============ 合併型(行の入口) ============
   {
     name: { physical: "SessionLine", logical: "SessionLine", description: "jsonl 1行。serde(tag=type)" }, // 論理名: セッションログ行
@@ -279,35 +259,9 @@ const DEFS: Omit<ClassInput, "id">[] = [
   },
 ];
 
-const CLASSES: ClassInput[] = DEFS.map((c) => ({ ...c, id: c.name.physical }));
+const { classes, rel } = defineDiagram(DEFS);
 
-// 関係線はクラスの id(= 物理名)で参照する。綴り違いはここで落とす。
-const ref = (physical: string): string => {
-  if (!DEFS.some((c) => c.name.physical === physical)) {
-    throw new Error(`unknown class: ${physical}`);
-  }
-  return physical;
-};
-
-type Side = "top" | "bottom" | "left" | "right";
-const rel = (
-  type: RelationshipInput["type"],
-  from: string,
-  to: string,
-  label?: string,
-  fromPoint: Side = "bottom",
-  toPoint: Side = "top",
-): RelationshipInput => ({
-  // `<起点>-><終点>`。接続辺の手調整(layout/classes.json)のキーに使う。
-  // 同じ組に2本張ると id が重複し、d3.classes が例外を出す(黙って上書きしない)。
-  id: `${from}->${to}`,
-  type,
-  from: { classId: ref(from), point: fromPoint },
-  to: { classId: ref(to), point: toPoint },
-  ...(label ? { label } : {}),
-});
-
-const RELATIONSHIPS: RelationshipInput[] = [
+const RELATIONSHIPS = [
   // SessionLine(tag=type) → 各バリアント
   rel("dependency", "SessionLine", "UserLine", "user", "left", "top"),
   rel("dependency", "SessionLine", "AssistantLine", "assistant", "left", "top"),
@@ -355,6 +309,6 @@ const RELATIONSHIPS: RelationshipInput[] = [
 ];
 
 export const SESSION_LINE_CLASS_DATA: DiagramInput = {
-  classes: CLASSES,
+  classes,
   relationships: RELATIONSHIPS,
 };
