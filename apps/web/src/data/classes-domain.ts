@@ -9,16 +9,21 @@
  *
  * 【TM からの写し方】
  * - リソース・イベントはクラスにする。個体指定子もフィールドとして持つ
- *   (オブジェクトの同一性の根拠になるため)。
- * - 対照表(R-R)は、それ自身の属性が無ければクラスにせず、多重度付きの関連にする。
- *   属性が付いた段階で関連クラスに格上げする。
+ *   (オブジェクトの同一性の根拠になるため)。ただし他のモノから継承した個体指定子
+ *   (`(R)` 付き)はフィールドにせず、関連で表す(TM の `(R)` は「関係がある」の意味で
+ *   参照キーではないため)。
+ * - 対照表(R-R)・対応表(E-E)は、それ自身の属性が無ければクラスにせず、多重度付きの
+ *   関連にする。属性が付いた段階で関連クラスに格上げする。
+ * - 日時は domain クレートに合わせて UNIX エポックからのミリ秒(`u64`)で持つ
+ *   (domain は chrono 等に依存しておらず、既存の `*_ms` も同じ単位)。まだ起きていない
+ *   出来事の日時(削除日時など)は `Option` にする。
  * - 多重度は TM の結線記号を写す。記号は「そのエンティティが相手1件に対して何件か」を
  *   表すので、UML で同じ側の端に置く多重度とそのまま対応する
  *   (鳥足+横棒 = `1..*`、鳥足+丸 = `0..*`、横棒+横棒 = `1`、横棒+丸 = `0..1`)。
  *
- * 【スコープ】TM の「実行環境」のうち PC・ユーザー(第1弾)と Gitリポジトリ(第2弾)。
- * ユーザー．セッション、Gitブランチ・ワーキングツリー、設定ファイル類は次段以降。
- * Gitリポジトリとそれらの関係も、相手のクラスを書く段階で足す。
+ * 【スコープ】TM の「実行環境」のうち PC・ユーザー(第1弾)、Gitリポジトリ(第2弾)、
+ * Gitブランチ・ワーキングツリー(第3弾)。ユーザー．セッション、設定ファイル類は次段以降。
+ * Gitリポジトリと設定ファイルの関係も、設定ファイルのクラスを書く段階で足す。
  *
  * 【TM との違い・未決】
  * - `home_directory` は TM どおりユーザーに置いている。ただし TM の「PC．ユーザー」の
@@ -63,6 +68,30 @@ const DEFS: ClassDef[] = [
     ],
     position: { x: 800, y: 40 },
   },
+  {
+    name: { physical: "GitBranch", logical: "GitBranch", description: "ブランチの作成・削除。git 自体はブランチに ID を持たないため、管理対象にするために ID を新設する。TM: Gitブランチ(イベント)" }, // 論理名: Gitブランチ
+    attributes: [
+      attr("branch_id", "String"), // 個体指定子。アプリが新設する GitブランチID
+      attr("branch_name", "String"),
+      attr("description", "String"),
+      attr("created_at_time", "u64"),
+      attr("deleted_at_time", "Option<u64>"),
+    ],
+    position: { x: 1180, y: 40 },
+  },
+  {
+    name: { physical: "GitWorktree", logical: "GitWorktree", description: "ワーキングツリーの作成・削除。git の識別子は台帳のディレクトリ名(パス由来)だけなので、ID を新設する。TM: ワーキングツリー(イベント)" }, // 論理名: ワーキングツリー
+    attributes: [
+      attr("worktree_id", "String"), // 個体指定子。アプリが新設する ワーキングツリーID
+      attr("worktree_name", "String"),
+      attr("description", "String"),
+      attr("worktree_folder_path", "PathBuf"), // TM: フォルダパス(Claude)。実物のディレクトリ
+      attr("worktree_git_file_path", "PathBuf"), // TM: ファイルパス(git)。直下の .git ファイル
+      attr("created_at_time", "u64"),
+      attr("deleted_at_time", "Option<u64>"),
+    ],
+    position: { x: 1560, y: 360 },
+  },
 ];
 
 const { classes, rel } = defineDiagram(DEFS);
@@ -81,6 +110,24 @@ const RELATIONSHIPS = [
   rel("association", "Pc", "GitRepository", "保持する", "right", "left", {
     fromMultiplicity: "1..*",
     toMultiplicity: "0..*",
+  }),
+  // TM: Gitリポジトリ 1 : Gitブランチ 0..*(E-R。ブランチ側の repositoryPath(R))。
+  rel("association", "GitRepository", "GitBranch", "持つ", "right", "left", {
+    fromMultiplicity: "1",
+    toMultiplicity: "0..*",
+  }),
+  // TM: Gitリポジトリ 1 : ワーキングツリー 1..*(E-R。リポジトリ本体が常に1つ目)。
+  // ブランチの右下に置き、ブランチの箱の下を通す。
+  rel("association", "GitRepository", "GitWorktree", "持つ", "right", "left", {
+    fromMultiplicity: "1",
+    toMultiplicity: "1..*",
+  }),
+  // TM: Gitブランチ．ワーキングツリー(対応表、属性なし)。ブランチを開けるワーキング
+  // ツリーは1つまで、ワーキングツリーが開くブランチも1つまで(detached HEAD なら無し)。
+  // 多重度を見せるため、起点を右辺・終点を上辺にする。
+  rel("association", "GitBranch", "GitWorktree", "チェックアウト先", "right", "top", {
+    fromMultiplicity: "0..1",
+    toMultiplicity: "0..1",
   }),
 ];
 
