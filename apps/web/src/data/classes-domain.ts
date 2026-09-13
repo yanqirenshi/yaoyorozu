@@ -108,7 +108,7 @@ const DEFS: ClassDef[] = [
       attr("slug", "Option<String>"), // TM: セッション別名
       attr("/last_prompt", "Option<String>"), // TM: 直近入力テキスト(D)。ログから導出する
     ],
-    position: { x: 240, y: -300 },
+    position: { x: 51, y: 823 },
   },
   {
     name: { physical: "SessionFile", logical: "SessionFile", description: "セッションログの .jsonl ファイル1件。会話ファイル(<フォルダ名>/<セッションID>.jsonl)とサブエージェントのファイル(<フォルダ名>/<セッションID>/subagents/agent-<エージェントID>.jsonl)がある。TM: セッションファイル(jsonl)(リソース)" }, // 論理名: セッションファイル(jsonl)
@@ -118,7 +118,7 @@ const DEFS: ClassDef[] = [
       // enum かサブクラスにする(TM ではその展開を後の段階の課題にしている)。
       attr("file_kind", "String"),
     ],
-    position: { x: 620, y: -300 },
+    position: { x: 417, y: 863 },
   },
 ];
 
@@ -160,16 +160,16 @@ const RELATIONSHIPS = [
     toMultiplicity: "0..1",
   }),
   // TM: ユーザー．セッション(対照表、属性なし)。1人に会話は 0 件以上、1つの会話は
-  // 必ず1人のもの。User の右辺は Pc への線で使っているため、上辺から出して Session の
-  // 左辺につなぐ(多重度の文字を隠さない向きがこれしか無い)。そのため Session は
-  // User の右上に置く。
-  rel("association", "User", "Session", "持つ", "top", "left", {
+  // 必ず1人のもの。Session は User の下に置き、User の下辺から Session の上辺へつなぐ
+  // (画面上での手調整で決めた配置)。この向きだと起点側の多重度 1 は User の箱の下に
+  // 隠れる(d3.classes の制約。User → Pc の説明を参照)。
+  rel("association", "User", "Session", "持つ", "bottom", "top", {
     fromMultiplicity: "1",
     toMultiplicity: "0..*",
   }),
   // TM: セッション．セッションファイル(対照表、属性なし)。1つの会話にファイルは
   // 会話ファイル1件 + サブエージェント0件以上なので 1..*、ファイルは必ず1つの会話に属する。
-  // Session の左辺は User からの線で使っているため、右辺から横につなぐ。
+  // SessionFile は Session の右隣に置き、右辺から横につなぐ(多重度が隠れない向き)。
   rel("association", "Session", "SessionFile", "持つ", "right", "left", {
     fromMultiplicity: "1",
     toMultiplicity: "1..*",
