@@ -17,13 +17,16 @@
  * - 日時は domain クレートに合わせて UNIX エポックからのミリ秒(`u64`)で持つ
  *   (domain は chrono 等に依存しておらず、既存の `*_ms` も同じ単位)。まだ起きていない
  *   出来事の日時(削除日時など)は `Option` にする。
+ * - 導出できる値(TM の `(D)`)は、UML の派生属性にならって名前の前に `/` を付ける
+ *   (例: `/last_prompt`)。実装ではフィールドにせず、計算するメソッドにしてよい。
  * - 多重度は TM の結線記号を写す。記号は「そのエンティティが相手1件に対して何件か」を
  *   表すので、UML で同じ側の端に置く多重度とそのまま対応する
  *   (鳥足+横棒 = `1..*`、鳥足+丸 = `0..*`、横棒+横棒 = `1`、横棒+丸 = `0..1`)。
  *
  * 【スコープ】TM の「実行環境」のうち PC・ユーザー(第1弾)、Gitリポジトリ(第2弾)、
- * Gitブランチ・ワーキングツリー(第3弾)。ユーザー．セッション、設定ファイル類は次段以降。
- * Gitリポジトリと設定ファイルの関係も、設定ファイルのクラスを書く段階で足す。
+ * Gitブランチ・ワーキングツリー(第3弾)と、セッション(第4弾)。設定ファイル類と、
+ * セッションまわり(セッションファイル・ログ行・入力キュー・作業ディレクトリ・実行中
+ * セッション)は次段以降。既存のクラスとそれらの関係も、相手のクラスを書く段階で足す。
  *
  * 【TM との違い・未決】
  * - `home_directory` は TM どおりユーザーに置いている。ただし TM の「PC．ユーザー」の
@@ -92,6 +95,19 @@ const DEFS: ClassDef[] = [
     ],
     position: { x: 1195, y: 396 },
   },
+  // ============ 会話 ============
+  {
+    name: { physical: "Session", logical: "Session", description: "1つの会話。セッションIDは会話開始時に発番される UUID v4 で、.jsonl のファイル名にもなる(ただしファイルは識別しない)。TM: セッション(リソース)" }, // 論理名: セッション
+    attributes: [
+      attr("session_id", "String"), // 個体指定子。UUID v4
+      attr("custom_title", "Option<String>"), // custom-title 行(最後の行が有効)
+      attr("ai_title", "Option<String>"),
+      attr("mode", "Option<String>"),
+      attr("slug", "Option<String>"), // TM: セッション別名
+      attr("/last_prompt", "Option<String>"), // TM: 直近入力テキスト(D)。ログから導出する
+    ],
+    position: { x: 240, y: -300 },
+  },
 ];
 
 const { classes, rel } = defineDiagram(DEFS);
@@ -130,6 +146,14 @@ const RELATIONSHIPS = [
   rel("association", "GitBranch", "GitWorktree", "チェックアウト先", "bottom", "top", {
     fromMultiplicity: "0..1",
     toMultiplicity: "0..1",
+  }),
+  // TM: ユーザー．セッション(対照表、属性なし)。1人に会話は 0 件以上、1つの会話は
+  // 必ず1人のもの。User の右辺は Pc への線で使っているため、上辺から出して Session の
+  // 左辺につなぐ(多重度の文字を隠さない向きがこれしか無い)。そのため Session は
+  // User の右上に置く。
+  rel("association", "User", "Session", "持つ", "top", "left", {
+    fromMultiplicity: "1",
+    toMultiplicity: "0..*",
   }),
 ];
 
