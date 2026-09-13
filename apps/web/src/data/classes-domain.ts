@@ -16,14 +16,20 @@
  *   表すので、UML で同じ側の端に置く多重度とそのまま対応する
  *   (鳥足+横棒 = `1..*`、鳥足+丸 = `0..*`、横棒+横棒 = `1`、横棒+丸 = `0..1`)。
  *
- * 【第1弾のスコープ】TM の「実行環境」のうち PC とユーザー。
- * Gitリポジトリ、PC．Gitリポジトリ、ユーザー．セッション、設定ファイル類は次段以降。
+ * 【スコープ】TM の「実行環境」のうち PC・ユーザー(第1弾)と Gitリポジトリ(第2弾)。
+ * ユーザー．セッション、Gitブランチ・ワーキングツリー、設定ファイル類は次段以降。
+ * Gitリポジトリとそれらの関係も、相手のクラスを書く段階で足す。
  *
  * 【TM との違い・未決】
  * - `home_directory` は TM どおりユーザーに置いている。ただし TM の「PC．ユーザー」の
  *   説明にあるとおり同じユーザー名が複数の PC にありうるので、実際のパスは PC ごとに
  *   違いうる。そうなら PC × ユーザー の組(関連クラス)の属性にすべきで、TM 側の
  *   判断を仰いでから直す。
+ * - `repository_path` を Gitリポジトリの個体指定子にしている(TM どおり)。ただし TM の
+ *   「PC．Gitリポジトリ」の説明にあるとおり同じリポジトリを複数の PC にクローンしうるので、
+ *   置き場所のパスは PC ごとに違いうる。パスでは PC をまたいで同じリポジトリだと言えない
+ *   ため、`home_directory` と同じく TM 側と相談する(パスを PC × Gitリポジトリ の組の
+ *   属性にし、別の個体指定子を立てる、など)。
  */
 import type { DiagramInput } from "@yanqirenshi/d3.classes";
 import { attr, defineDiagram, type ClassDef } from "./classDiagram";
@@ -48,6 +54,15 @@ const DEFS: ClassDef[] = [
     ],
     position: { x: 40, y: 40 },
   },
+  {
+    name: { physical: "GitRepository", logical: "GitRepository", description: "プロダクト開発の対象として登録したリポジトリ。TM: Gitリポジトリ(リソース)" }, // 論理名: Gitリポジトリ
+    attributes: [
+      attr("repository_path", "PathBuf"), // 個体指定子。リポジトリのパス
+      attr("repository_name", "String"),
+      attr("description", "String"),
+    ],
+    position: { x: 800, y: 40 },
+  },
 ];
 
 const { classes, rel } = defineDiagram(DEFS);
@@ -60,6 +75,12 @@ const RELATIONSHIPS = [
   rel("association", "User", "Pc", "利用する", "right", "left", {
     fromMultiplicity: "1..*",
     toMultiplicity: "1..*",
+  }),
+  // TM: PC．Gitリポジトリ(対照表、属性なし)。1台にリポジトリは 0 件以上、
+  // 1つのリポジトリは 1 台以上の PC に置かれる。多重度を見せるため同じく横向きにする。
+  rel("association", "Pc", "GitRepository", "保持する", "right", "left", {
+    fromMultiplicity: "1..*",
+    toMultiplicity: "0..*",
   }),
 ];
 
