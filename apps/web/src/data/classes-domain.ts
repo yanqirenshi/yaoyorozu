@@ -77,7 +77,7 @@ const DEFS: ClassDef[] = [
       attr("created_at_time", "u64"),
       attr("deleted_at_time", "Option<u64>"),
     ],
-    position: { x: 1180, y: 40 },
+    position: { x: 1198, y: 25 },
   },
   {
     name: { physical: "GitWorktree", logical: "GitWorktree", description: "ワーキングツリーの作成・削除。git の識別子は台帳のディレクトリ名(パス由来)だけなので、ID を新設する。TM: ワーキングツリー(イベント)" }, // 論理名: ワーキングツリー
@@ -90,7 +90,7 @@ const DEFS: ClassDef[] = [
       attr("created_at_time", "u64"),
       attr("deleted_at_time", "Option<u64>"),
     ],
-    position: { x: 1560, y: 360 },
+    position: { x: 1195, y: 396 },
   },
 ];
 
@@ -117,15 +117,17 @@ const RELATIONSHIPS = [
     toMultiplicity: "0..*",
   }),
   // TM: Gitリポジトリ 1 : ワーキングツリー 1..*(E-R。リポジトリ本体が常に1つ目)。
-  // ブランチの右下に置き、ブランチの箱の下を通す。
+  // ワーキングツリーはブランチの真下に置く(画面上での手調整で決めた配置)。
   rel("association", "GitRepository", "GitWorktree", "持つ", "right", "left", {
     fromMultiplicity: "1",
     toMultiplicity: "1..*",
   }),
   // TM: Gitブランチ．ワーキングツリー(対応表、属性なし)。ブランチを開けるワーキング
   // ツリーは1つまで、ワーキングツリーが開くブランチも1つまで(detached HEAD なら無し)。
-  // 多重度を見せるため、起点を右辺・終点を上辺にする。
-  rel("association", "GitBranch", "GitWorktree", "チェックアウト先", "right", "top", {
+  // 起点はブランチの下辺、終点はワーキングツリーの上辺(手調整で決めた接続辺)。
+  // この向きだと起点側の多重度 0..1 はブランチの箱の下に隠れる(d3.classes の制約。
+  // User → Pc の説明を参照)。
+  rel("association", "GitBranch", "GitWorktree", "チェックアウト先", "bottom", "top", {
     fromMultiplicity: "0..1",
     toMultiplicity: "0..1",
   }),
