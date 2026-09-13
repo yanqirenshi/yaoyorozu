@@ -54,10 +54,18 @@
  * 未確認: /clear や /resume で、同じプロセスのまま sessionId が切り替わるか。
  * 切り替わっても個体指定子はプロセス側なので、モデルは変わらない。
  *
+ * 【作業ディレクトリを立てない】
+ * 作業ディレクトリ(行や実行中セッションの cwd)はモノとして立てず、ログ行・実行中
+ * セッションの右側の属性(作業ディレクトリパス)に置く。このアプリが管理するディレクトリは
+ * Gitリポジトリとワーキングツリーで足りており、作業ディレクトリを別に管理する必要がない。
+ * ~/.claude/projects/ のフォルダ名も、アプリはプロファイルの対象フォルダ
+ * (selected_project_folders)としてフォルダ名のまま持つため、パスから導出する項目
+ * (フォルダ名(D))は置かない。
+ *
  * 【関係の検証(モノ × モノ の網羅性)】
- * 26エンティティの全325ペアを確認した。直接の結線があるのは24ペア(25本)で、
+ * 25エンティティの全300ペアを確認した。直接の結線があるのは22ペア(23本)で、
  * 対照表・対応表とその親の10ペアは垂下(mapping)でつながる。
- * 残る291ペアのうち、以下9ペアは「語彙は存在するが今は関係を構成していない」ものであり、
+ * 残る268ペアのうち、以下11ペアは「語彙は存在するが今は関係を構成していない」ものであり、
  * 見落としではなく判断の記録として残す。
  *
  * - ログ行 × 入力キュー / 入力キュー × ユーザー行
@@ -80,20 +88,20 @@
  * - 実行中セッション × ユーザー
  *   ファイルはユーザーのホーム配下(~/.claude/sessions/)に置かれるが、userId を
  *   持たない。セッション → ユーザー．セッション を経由してたどれる。
- * - 実行中セッション × ワーキングツリー
- *   cwd がワーキングツリーのフォルダであることはあるが、作業ディレクトリと
- *   ワーキングツリーの重複の整理が未決のため、今は作業ディレクトリへの (R) だけを持つ。
- * - セッションファイル × 作業ディレクトリ
- *   ファイル自体は作業ディレクトリを持たない。置き場所のフォルダ名はあるパスを変換した
- *   ものだが、どのパスかは記録されず(最初の行の cwd と合わないファイルが136件中15件)、
- *   変換も元に戻せないため個体指定子で結べない。以前は対照表として立てていたが、
- *   データに無い関係だったため外した。両者はログ行(filePath(R) と cwd(R) を持つ)を
- *   経由してたどれる。
+ * - ログ行 × ワーキングツリー / 実行中セッション × ワーキングツリー
+ *   cwd(作業ディレクトリパス)がワーキングツリーのフォルダパス(Claude)と同じか、その
+ *   下にあることはあるが、どちらも属性であり、ワーキングツリーの個体指定子は新設した
+ *   ワーキングツリーID のため結べない。
+ * - ログ行 × Gitリポジトリ / 実行中セッション × Gitリポジトリ
+ *   cwd がリポジトリのパス(Gitリポジトリの個体指定子)と一致するのは、cwd を持つ行の
+ *   3分の2にとどまる(サブフォルダ11.4%、worktree 9.1%、今は存在しないフォルダ12.0%)
+ *   ため、個体指定子では結べない。所属リポジトリが必要になれば、登録済みリポジトリの
+ *   うちパスが cwd の先頭に一致するものを求める導出項目として立てられる(実測で
+ *   77,087行の 97.7% が求まった)。
  *
- * 他の282ペアは直接の関係を構成しないのが正しい。内訳は、サブセットが親(ログ行)から
- * 行UUIDを継承しており親で張った関係がそのまま効くもの16ペア、ログ行を経由するもの
- * 1ペア(作業ディレクトリ × セッション — 行が両方への (R) を持つ)、対応する語彙が
- * そもそも存在しないもの265ペア。
+ * 他の257ペアは直接の関係を構成しないのが正しい。内訳は、サブセットが親(ログ行)から
+ * 行UUIDを継承しており親で張った関係がそのまま効くもの12ペア、対応する語彙が
+ * そもそも存在しないもの245ペア。
  *
  * R-R・E-E は対照表・対応表で構成するが、図の上では親どうしを1本の線で結び、その
  * 中点の○から表をぶら下げる(垂下。d3.ter 0.1.24 の `relationship.mapping`)。
@@ -223,7 +231,6 @@ const IDENTIFIER_DEFS: TmName[] = [
   // するため ID を新設する。
   { physical: "branchId", logical: "GitブランチID" },
   { physical: "worktreeId", logical: "ワーキングツリーID" },
-  { physical: "cwd", logical: "作業ディレクトリパス" },
   { physical: "filePath", logical: "ファイルパス" },
   { physical: "sessionId", logical: "セッションID" },
   // 実行中セッション(~/.claude/sessions/<pid>.json)の個体指定子。OS は pid を
@@ -265,9 +272,9 @@ const ATTRIBUTE_DEFS: TmName[] = [
   { physical: "filePathFull", logical: "ファイルパス" },
   { physical: "createdAt", logical: "作成日" },
   { physical: "updatedAt", logical: "更新日" },
-  // フォルダ名は作業ディレクトリパスから機械的に導出される(英数字以外を1文字ずつ `-`
-  // に置換)。置換は不可逆でフォルダ名からパスは復元できないため、個体指定子はパスの側。
-  { physical: "folderName", logical: "フォルダ名(D)" },
+  // 行・実行中セッションが記録する作業ディレクトリ。モノとしては立てず、右側の属性に置く
+  // (冒頭の【作業ディレクトリを立てない】を参照)。
+  { physical: "cwd", logical: "作業ディレクトリパス" },
   // ファイルを切る区分コード。第3弾でサブセットに展開する。
   { physical: "fileKind", logical: "ファイル種別" },
   { physical: "customTitle", logical: "会話タイトル" },
@@ -398,7 +405,7 @@ const ENTITY_DEFS: EntityDef[] = [
     name: { physical: "GitRepository", logical: "Gitリポジトリ" },
     type: "RESOURCE",
     description:
-      "プロダクト開発の対象リポジトリ。個体指定子はリポジトリのパス。配下に CLAUDE.md / .claude/settings.json / .claude/settings.local.json を持つ。作業ディレクトリとは別のモノとして扱う(作業ディレクトリは行の cwd として現れた任意のパスの集合であり、リポジトリは管理対象として登録されたものだけ)。両者の対応が必要になった段階で対照表を立てる。",
+      "プロダクト開発の対象リポジトリ。個体指定子はリポジトリのパス。配下に CLAUDE.md / .claude/settings.json / .claude/settings.local.json を持つ。作業ディレクトリはモノとして立てない(冒頭の【作業ディレクトリを立てない】を参照)。",
     position: { x: 560, y: 400 },
     identifiers: ["repositoryPath"],
     attributes: ["repositoryName", "description"],
@@ -503,15 +510,6 @@ const ENTITY_DEFS: EntityDef[] = [
 
   // ============ リソース ============
   {
-    name: { physical: "ProjectFolder", logical: "作業ディレクトリ" },
-    type: "RESOURCE",
-    description:
-      "作業ディレクトリの絶対パス。~/.claude/projects/<フォルダ名>/ のフォルダ名は、あるパスの英数字以外を1文字ずつ - に置換したもの(報告書 §1)。報告書はセッション開始時のパスとしているが、実測では当たらないファイルがある: 会話のファイル49件中2件は、メインのフォルダで始まって途中で worktree に入ったセッションで、worktree のパスのフォルダに置かれていた。サブエージェントのファイル87件中13件は親の会話のフォルダの下に置かれ、自分の cwd とは合わない。どのパスで決まったかはどこにも記録されず、置換も元に戻せないため、フォルダ名から作業ディレクトリは決められない(フォルダ名(D)は、このパスから求める向きにだけ使える)。日付が帰属しないためリソース。集合にはフォルダを決めたパスだけでなく、行の cwd として現れる全てのパス(サブディレクトリや node_modules 配下を含む)が入る。",
-    position: { x: 1150, y: 0 },
-    identifiers: ["cwd"],
-    attributes: ["folderName"],
-  },
-  {
     name: { physical: "Session", logical: "セッション" },
     type: "RESOURCE",
     description:
@@ -544,11 +542,12 @@ const ENTITY_DEFS: EntityDef[] = [
     name: { physical: "ChainLine", logical: "ログ行" },
     type: "EVENT",
     description:
-      "uuid / parentUuid で親子チェーンを構成する行(user / assistant / system / attachment)。記録日時という過去の出来事の日付が帰属するためイベント。cwd を作業ディレクトリへの (R) として左側に置いているのは、これが行単位のメタデータで、ファイルの置き場所と一致しないことが実際にあるため(報告書 §2.3)。このPCの ~/.claude/projects/ 直下の .jsonl 54件を実測したところ、27件(50%)が1ファイル内に複数の cwd を持ち、同じ27件がフォルダ名にエンコードされないパスを含んでいた。最多の1件は14種類で、別プロジェクトのディレクトリまで含む。作業ディレクトリとファイル・セッションは、この (R) を通じてだけつながる(ファイル自体は作業ディレクトリを持たない)。",
+      "uuid / parentUuid で親子チェーンを構成する行(user / assistant / system / attachment)。記録日時という過去の出来事の日付が帰属するためイベント。cwd(作業ディレクトリパス)は行単位のメタデータで、1ファイルの中でも変わる(報告書 §2.3。このPCの ~/.claude/projects/ 直下の .jsonl 54件を実測したところ、27件(50%)が1ファイル内に複数の cwd を持ち、最多の1件は14種類で別プロジェクトのディレクトリまで含んでいた)。作業ディレクトリはモノとして立てず、右側の属性に置く(冒頭の【作業ディレクトリを立てない】を参照)。",
     position: { x: 1770, y: 200 },
-    identifiers: ["uuid", "filePath(R)", "sessionId(R)", "cwd(R)"],
+    identifiers: ["uuid", "filePath(R)", "sessionId(R)"],
     attributes: [
       "timestamp",
+      "cwd",
       "type",
       "entrypoint",
       "version",
@@ -610,9 +609,10 @@ const ENTITY_DEFS: EntityDef[] = [
     description:
       "いま動いている Claude Code のプロセス1つ。~/.claude/sessions/ に <pid>.json(本体)と <pid>.<ハッシュ>.key(認証値)が置かれ、プロセスが終わると消える(実測: セッションログ49件に対してファイルは4件で、4件ともプロセスが生きていた)。ファイル名は pid だが OS は pid を使い回すため、pidDomain + pid + procStart の組を個体指定子にする。.key も同じ3つの値(procStartFt = procStart)で特定されるので、別の箱にせず同じモノとして扱う。起動日時(startedAt)という過去の出来事の日付が帰属するためイベント。procStart は OS のプロセス作成時刻(実測で OS の値と100ナノ秒単位まで一致)、startedAt は Claude Code がセッションを始めた時刻で、約1秒遅い。会話(セッション)はこのプロセスの中で動くものなので、sessionId は個体指定子にせず (R) として持つ。実行中かどうかは、ファイルがあり、かつ OS に同じ pid のプロセスがあって開始時刻が procStart と一致することで判定する(pid だけで判定すると、終了後に同じ pid が別のプロセスに使われたとき誤判定する)。peerToken の値は秘匿で、画面・ログ・リポジトリに書かない。",
     position: { x: 650, y: 1250 },
-    identifiers: ["pidDomain", "pid", "procStart", "sessionId(R)", "cwd(R)"],
+    identifiers: ["pidDomain", "pid", "procStart", "sessionId(R)"],
     attributes: [
       "startedAt",
+      "cwd",
       "version",
       "kind",
       "entrypoint",
@@ -786,22 +786,12 @@ const RELATIONSHIP_DEFS: RelationshipDef[] = [
     to: { entity: "UserClaudeMd", position: 180, cardinality: 1, optionality: 0 },
   },
 
-  // 作業ディレクトリ × ファイル は関係を構成しない(冒頭の「関係の検証」を参照)。
   // R-R(セッション × ファイル)。セッション 1 にファイルは会話ファイル1件 +
   // サブエージェント0件以上なので 1以上。ファイル 1 は必ず1つの会話に属する。
   {
     from: { entity: "Session", position: 270, cardinality: 1, optionality: 1 },
     to: { entity: "SessionFile", position: 90, cardinality: 3, optionality: 1 },
     mapping: "SessionFileMap",
-  },
-  // 作業ディレクトリ 1 : ログ行 複数(1以上)。E-R。
-  // 作業ディレクトリとファイル・セッションは、この関係(行の cwd)を通じてだけつながる。
-  // ファイル自体は作業ディレクトリを持たず、行の cwd は1ファイルの中でも変わる
-  // (実測で54件中27件が複数の cwd を持つ)。
-  {
-    from: { entity: "ProjectFolder", position: 270, cardinality: 1, optionality: 1 },
-    to: { entity: "ChainLine", position: 110, cardinality: 3, optionality: 1 },
-    label: "記録時の cwd",
   },
   // ファイル 1 : ログ行 複数(1以上)。E-R。
   // どのファイルに書かれた行かは、親の会話とサブエージェントの会話を区別する唯一の
@@ -829,11 +819,6 @@ const RELATIONSHIP_DEFS: RelationshipDef[] = [
   {
     from: { entity: "Session", position: 350, cardinality: 1, optionality: 1 },
     to: { entity: "RunningSession", position: 170, cardinality: 3, optionality: 0 },
-  },
-  // 作業ディレクトリ 1 : 実行中セッション 複数または値なし。E-R。
-  {
-    from: { entity: "ProjectFolder", position: 0, cardinality: 1, optionality: 1 },
-    to: { entity: "RunningSession", position: 190, cardinality: 3, optionality: 0 },
   },
   // 実行中セッション 1 : ピア機能 複数または値なし(多値)。
   {
