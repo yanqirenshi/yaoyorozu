@@ -3,7 +3,7 @@
  *
  * web.md §2 により、開発時専用の保存API経由でリポジトリ内ファイル
  * (`src/data/layout/classes.json`)に保存する。モデルの本体は
- * `classes-session-line.ts` が唯一の真実であり、調整結果が安定したら
+ * 図ごとのデータファイル(`classes-*.ts`)が唯一の真実であり、調整結果が安定したら
  * そちらの `position` や `rel(...)` の接続辺へ反映してリポジトリへ戻すこと。
  *
  * 調整対象は2種類あり、TM(`tmLayoutStorage.ts`)と同じく1ファイルにまとめる
@@ -11,7 +11,7 @@
  *   - クラスの位置(物理名がキー)
  *   - 関係線の接続辺(端点がクラスのどの辺につくか。`<関係線 id>:<from|to>` がキー)
  * クラスの id は物理名、関係線の id は `<起点>-><終点>` で、どちらも物理名から
- * 組み立てている(`classes-session-line.ts`)。配列を並べ替えてもキーはずれない。
+ * 組み立てている(`classDiagram.ts` の `defineDiagram`)。配列を並べ替えてもキーはずれない。
  */
 import type { RelationshipInput } from "@yanqirenshi/d3.classes";
 import layoutFile from "./layout/classes.json";

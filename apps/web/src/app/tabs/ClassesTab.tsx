@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ClassDiagram, type RelationshipInput } from "@yanqirenshi/d3.classes";
-import { SESSION_LINE_CLASS_DATA } from "@/data/classes-session-line";
+import { CLASS_DIAGRAM_DATA } from "@/data/classes";
 import {
   applyLayoutOverrides,
   applyPortOverrides,
@@ -88,16 +88,16 @@ export default function ClassesTab() {
     if (!container) return;
 
     const classes = applyLayoutOverrides(
-      SESSION_LINE_CLASS_DATA.classes,
+      CLASS_DIAGRAM_DATA.classes,
       overridesRef.current,
     );
     const relationships = applyPortOverrides(
-      SESSION_LINE_CLASS_DATA.relationships,
+      CLASS_DIAGRAM_DATA.relationships,
       portOverridesRef.current,
     );
     relationshipsRef.current = relationships;
 
-    // クラスの id は物理名(classes-session-line.ts で付与)。DOM の data-id もこれになる。
+    // クラスの id は物理名(classDiagram.ts の defineDiagram で付与)。DOM の data-id もこれになる。
     const classById = new Map(classes.map((c) => [c.name.physical, c]));
 
     const diagram = new ClassDiagram(container);
@@ -242,7 +242,7 @@ export default function ClassesTab() {
         ...values.ports,
       };
       const nextRelationships = applyPortOverrides(
-        SESSION_LINE_CLASS_DATA.relationships,
+        CLASS_DIAGRAM_DATA.relationships,
         nextPorts,
       );
       // 接続辺を変えた関係線だけ付け替える(setConnection はその場で描き直す)。
