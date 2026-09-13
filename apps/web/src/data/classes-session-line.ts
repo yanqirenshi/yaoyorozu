@@ -35,7 +35,7 @@ const DEFS: Omit<ClassInput, "id">[] = [
       "queue-operation", "last-prompt", "custom-title", "ai-title",
       "mode", "pr-link", "atis-latch", "Unknown(serde other)",
     ].map(label),
-    position: { x: 720, y: 40 },
+    position: { x: -2280, y: 40 },
   },
   // ============ 会話チェーン共通 ============
   {
@@ -53,7 +53,7 @@ const DEFS: Omit<ClassInput, "id">[] = [
       attr("slug", "Option<String>"),
       attr("agent_id", "Option<String>"),
     ],
-    position: { x: 1060, y: 560 },
+    position: { x: -1940, y: 560 },
   },
   // ============ 会話本体: user ============
   {
@@ -65,30 +65,30 @@ const DEFS: Omit<ClassInput, "id">[] = [
       attr("tool_use_result", "Option<Value>"),
       attr("source_tool_assistant_uuid", "Option<String>"),
     ],
-    position: { x: 40, y: 300 },
+    position: { x: -2960, y: 300 },
   },
   {
     name: { physical: "UserMessage", logical: "UserMessage", description: "" }, // 論理名: ユーザーメッセージ
     attributes: [attr("role", "Option<String>"), attr("content", "Option<UserContent>")],
-    position: { x: 40, y: 560 },
+    position: { x: -2960, y: 560 },
   },
   {
     name: { physical: "UserContent", logical: "UserContent", description: "serde(untagged)" }, // 論理名: ユーザー本文
     stereotype: "enumeration",
     attributes: ["Text(String)", "Blocks(Vec<UserContentBlock>)"].map(label),
-    position: { x: 40, y: 800 },
+    position: { x: -2960, y: 800 },
   },
   {
     name: { physical: "UserContentBlock", logical: "UserContentBlock", description: "serde(tag=type)" }, // 論理名: userブロック
     stereotype: "enumeration",
     attributes: ["tool_result", "text", "image", "Unknown"].map(label),
-    position: { x: 40, y: 1040 },
+    position: { x: -2960, y: 1040 },
   },
   // ============ 会話本体: assistant ============
   {
     name: { physical: "AssistantLine", logical: "AssistantLine", description: "" }, // 論理名: AI応答行
     attributes: [attr("request_id", "Option<String>"), attr("message", "AssistantMessage")],
-    position: { x: 380, y: 300 },
+    position: { x: -2620, y: 300 },
   },
   {
     name: { physical: "AssistantMessage", logical: "AssistantMessage", description: "Anthropic API形式" }, // 論理名: AI応答メッセージ
@@ -99,13 +99,13 @@ const DEFS: Omit<ClassInput, "id">[] = [
       attr("stop_reason", "Option<String>"),
       attr("usage", "Option<Usage>"),
     ],
-    position: { x: 380, y: 560 },
+    position: { x: -2620, y: 560 },
   },
   {
     name: { physical: "AssistantContentBlock", logical: "AssistantContentBlock", description: "serde(tag=type)" }, // 論理名: assistantブロック
     stereotype: "enumeration",
     attributes: ["text", "thinking", "tool_use", "Unknown"].map(label),
-    position: { x: 380, y: 830 },
+    position: { x: -2620, y: 830 },
   },
   {
     name: { physical: "Usage", logical: "Usage", description: "" }, // 論理名: トークン使用量
@@ -116,45 +116,45 @@ const DEFS: Omit<ClassInput, "id">[] = [
       attr("cache_read_input_tokens", "u64"),
       attr("cache_creation", "Option<CacheCreation>"),
     ],
-    position: { x: 380, y: 1040 },
+    position: { x: -2620, y: 1040 },
   },
   {
     name: { physical: "CacheCreation", logical: "CacheCreation", description: "" }, // 論理名: キャッシュ作成量
     attributes: [attr("ephemeral_1h_input_tokens", "u64"), attr("ephemeral_5m_input_tokens", "u64")],
-    position: { x: 380, y: 1300 },
+    position: { x: -2620, y: 1300 },
   },
   // ============ content ブロック実体 ============
   {
     name: { physical: "TextBlock", logical: "TextBlock", description: "表示対象はこれのみ" }, // 論理名: 本文
     attributes: [attr("text", "String")],
-    position: { x: 40, y: 1610 },
+    position: { x: -2960, y: 1610 },
   },
   {
     name: { physical: "ThinkingBlock", logical: "ThinkingBlock", description: "非表示" }, // 論理名: 思考
     attributes: [attr("thinking", "String"), attr("signature", "String")],
-    position: { x: 330, y: 1610 },
+    position: { x: -2670, y: 1610 },
   },
   {
     name: { physical: "ToolUseBlock", logical: "ToolUseBlock", description: "非表示" }, // 論理名: ツール呼び出し
     attributes: [attr("id", "String"), attr("name", "String"), attr("input", "Value")],
-    position: { x: 620, y: 1610 },
+    position: { x: -2380, y: 1610 },
   },
   {
     name: { physical: "ToolResultBlock", logical: "ToolResultBlock", description: "非表示" }, // 論理名: ツール結果
     attributes: [attr("tool_use_id", "String"), attr("content", "Value"), attr("is_error", "Option<bool>")],
-    position: { x: 910, y: 1610 },
+    position: { x: -2090, y: 1610 },
   },
   {
     name: { physical: "ImageBlock", logical: "ImageBlock", description: "非表示" }, // 論理名: 画像
     attributes: [attr("source", "Value")],
-    position: { x: 1200, y: 1610 },
+    position: { x: -1800, y: 1610 },
   },
   // ============ 内部イベント: system ============
   {
     name: { physical: "SystemLine", logical: "SystemLine", description: "serde(tag=subtype)" }, // 論理名: システム行
     stereotype: "enumeration",
     attributes: ["stop_hook_summary", "api_error", "compact_boundary", "informational", "Unknown"].map(label),
-    position: { x: 720, y: 380 },
+    position: { x: -2280, y: 380 },
   },
   {
     name: { physical: "StopHookSummaryLine", logical: "StopHookSummaryLine", description: "" }, // 論理名: フック実行結果
@@ -166,18 +166,18 @@ const DEFS: Omit<ClassInput, "id">[] = [
       attr("stop_reason", "Option<String>"),
       attr("tool_use_id", "Option<String>"),
     ],
-    position: { x: 720, y: 640 },
+    position: { x: -2280, y: 640 },
   },
   {
     name: { physical: "HookInfo", logical: "HookInfo", description: "" }, // 論理名: フック情報
     attributes: [attr("command", "Option<String>"), attr("duration_ms", "Option<u64>")],
-    position: { x: 1060, y: 1080 },
+    position: { x: -1940, y: 1080 },
   },
   {
     name: { physical: "SystemLevel", logical: "SystemLevel", description: "" }, // 論理名: 重要度
     stereotype: "enumeration",
     attributes: ["Info", "Warning", "Error", "Suggestion", "Unknown"].map(label),
-    position: { x: 1060, y: 900 },
+    position: { x: -1940, y: 900 },
   },
   {
     name: { physical: "ApiErrorLine", logical: "ApiErrorLine", description: "" }, // 論理名: APIエラー行
@@ -188,7 +188,7 @@ const DEFS: Omit<ClassInput, "id">[] = [
       attr("max_retries", "Option<u64>"),
       attr("source", "Option<String>"),
     ],
-    position: { x: 720, y: 960 },
+    position: { x: -2280, y: 960 },
   },
   {
     name: { physical: "ApiErrorDetail", logical: "ApiErrorDetail", description: "" }, // 論理名: APIエラー詳細
@@ -197,7 +197,7 @@ const DEFS: Omit<ClassInput, "id">[] = [
       attr("formatted", "Option<String>"),
       attr("is_network_down", "Option<bool>"),
     ],
-    position: { x: 1060, y: 1240 },
+    position: { x: -1940, y: 1240 },
   },
   {
     name: { physical: "CompactBoundaryLine", logical: "CompactBoundaryLine", description: "parentUuid=null起点" }, // 論理名: 履歴圧縮境界
@@ -207,7 +207,7 @@ const DEFS: Omit<ClassInput, "id">[] = [
       attr("is_meta", "Option<bool>"),
       attr("compact_metadata", "CompactMetadata"),
     ],
-    position: { x: 720, y: 1220 },
+    position: { x: -2280, y: 1220 },
   },
   {
     name: { physical: "CompactMetadata", logical: "CompactMetadata", description: "" }, // 論理名: 圧縮メタ
@@ -216,18 +216,18 @@ const DEFS: Omit<ClassInput, "id">[] = [
       attr("pre_tokens", "Option<u64>"),
       attr("post_tokens", "Option<u64>"),
     ],
-    position: { x: 1060, y: 1400 },
+    position: { x: -1940, y: 1400 },
   },
   {
     name: { physical: "InformationalLine", logical: "InformationalLine", description: "" }, // 論理名: 情報通知行
     attributes: [attr("content", "Option<String>"), attr("is_meta", "Option<bool>")],
-    position: { x: 720, y: 1460 },
+    position: { x: -2280, y: 1460 },
   },
   // ============ 内部イベント: attachment ============
   {
     name: { physical: "AttachmentLine", logical: "AttachmentLine", description: "attachment.typeで23種(未使用のためValueのまま)" }, // 論理名: 付帯情報行
     attributes: [attr("attachment", "Value")],
-    position: { x: 1060, y: 300 },
+    position: { x: -1940, y: 300 },
   },
   // ============ セッションメタ ============
   {
@@ -237,7 +237,7 @@ const DEFS: Omit<ClassInput, "id">[] = [
       attr("content", "Option<String>"),
       attr("session_id", "Option<String>"),
     ],
-    position: { x: 1400, y: 40 },
+    position: { x: -1600, y: 40 },
   },
   {
     name: { physical: "LastPromptLine", logical: "LastPromptLine", description: "" }, // 論理名: 直近プロンプト
@@ -246,22 +246,22 @@ const DEFS: Omit<ClassInput, "id">[] = [
       attr("leaf_uuid", "Option<String>"),
       attr("session_id", "Option<String>"),
     ],
-    position: { x: 1400, y: 210 },
+    position: { x: -1600, y: 210 },
   },
   {
     name: { physical: "CustomTitleLine", logical: "CustomTitleLine", description: "最後の行が有効" }, // 論理名: 会話タイトル
     attributes: [attr("custom_title", "Option<String>"), attr("session_id", "Option<String>")],
-    position: { x: 1400, y: 380 },
+    position: { x: -1600, y: 380 },
   },
   {
     name: { physical: "AiTitleLine", logical: "AiTitleLine", description: "" }, // 論理名: AI生成タイトル
     attributes: [attr("ai_title", "Option<String>"), attr("session_id", "Option<String>")],
-    position: { x: 1400, y: 530 },
+    position: { x: -1600, y: 530 },
   },
   {
     name: { physical: "ModeLine", logical: "ModeLine", description: "実測はnormalのみ" }, // 論理名: モード
     attributes: [attr("mode", "Option<String>"), attr("session_id", "Option<String>")],
-    position: { x: 1400, y: 680 },
+    position: { x: -1600, y: 680 },
   },
   {
     name: { physical: "PrLinkLine", logical: "PrLinkLine", description: "" }, // 論理名: GitHub PRリンク
@@ -270,12 +270,12 @@ const DEFS: Omit<ClassInput, "id">[] = [
       attr("pr_url", "Option<String>"),
       attr("pr_repository", "Option<String>"),
     ],
-    position: { x: 1400, y: 830 },
+    position: { x: -1600, y: 830 },
   },
   {
     name: { physical: "AtisLatchLine", logical: "AtisLatchLine", description: "atisは全件空文字列" }, // 論理名: 用途不明
     attributes: [attr("atis", "Option<String>"), attr("session_id", "Option<String>")],
-    position: { x: 1400, y: 1000 },
+    position: { x: -1600, y: 1000 },
   },
 ];
 
