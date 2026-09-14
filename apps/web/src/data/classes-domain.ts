@@ -51,11 +51,15 @@
  *   対照表「PC．ユーザー」をやめる形になる。
  *   これにより、以前ここで未決にしていた「`home_directory` は PC ごとに違いうる」問題は
  *   解消する(User が PC ごとのアカウントなので、User の属性でよい)。
- * - `repository_path` を Gitリポジトリの個体指定子にしている(TM どおり)。ただし TM の
- *   「PC．Gitリポジトリ」の説明にあるとおり同じリポジトリを複数の PC にクローンしうるので、
- *   置き場所のパスは PC ごとに違いうる。パスでは PC をまたいで同じリポジトリだと言えない
- *   ため、TM 側と相談する(パスを PC × Gitリポジトリ の組の属性にし、別の個体指定子を
- *   立てる、など)。
+ * - Gitリポジトリは PC ではなく User が所有するコンポジションにしている(User は PC 上の
+ *   アカウント)。TM では Gitリポジトリを PC と対照表「PC．Gitリポジトリ」で多対多に
+ *   しているので、ここは TM と違う。同じリポジトリを別の PC(別のアカウント)にクローン
+ *   すれば、それぞれが別の GitRepository になる。TM 側に合わせてもらうなら、Gitリポジトリ
+ *   をユーザーに属させ(個体指定子に システムUUID(R) + ユーザーID(R) を含める)、対照表
+ *   「PC．Gitリポジトリ」をやめる形になる。
+ *   これにより、以前ここで未決にしていた「同じリポジトリでも置き場所のパスが PC ごとに
+ *   違いうるので、`repository_path` では PC をまたいで同じリポジトリだと言えない」問題は
+ *   解消する(クローンごとに別の GitRepository なので、パスで区別してよい)。
  */
 import type { DiagramInput } from "@yanqirenshi/d3.classes";
 import { attr, defineDiagram, type ClassDef } from "./classDiagram";
@@ -81,13 +85,14 @@ const DEFS: ClassDef[] = [
     position: { x: 40, y: 40 },
   },
   {
-    name: { physical: "GitRepository", logical: "GitRepository", description: "プロダクト開発の対象として登録したリポジトリ。TM: Gitリポジトリ(リソース)" }, // 論理名: Gitリポジトリ
+    name: { physical: "GitRepository", logical: "GitRepository", description: "プロダクト開発の対象として登録したリポジトリ(クローン1つ)。User に所有される(コンポジション)。TM: Gitリポジトリ(リソース)" }, // 論理名: Gitリポジトリ
     attributes: [
-      attr("repository_path", "PathBuf"), // 個体指定子。リポジトリのパス
+      attr("repository_path", "PathBuf"), // 個体指定子。リポジトリのパス(User の中で一意)
       attr("repository_name", "String"),
       attr("description", "String"),
     ],
-    position: { x: 800, y: 40 },
+    // User への線が Pc の箱を横切らないよう、Pc の下に置く。
+    position: { x: 420, y: 300 },
   },
   {
     name: { physical: "GitBranch", logical: "GitBranch", description: "ブランチの作成・削除。git 自体はブランチに ID を持たないため、管理対象にするために ID を新設する。TM: Gitブランチ(イベント)" }, // 論理名: Gitブランチ
@@ -149,22 +154,24 @@ const RELATIONSHIPS = [
   rel("composition", "User", "Pc", "users", "right", "left", {
     fromMultiplicity: "1..*",
   }),
-  // TM: PC．Gitリポジトリ(対照表、属性なし)。1台にリポジトリは 0 件以上、
-  // 1つのリポジトリは 1 台以上の PC に置かれる。同じく横向きにつなぐ。
-  rel("association", "Pc", "GitRepository", "保持する", "right", "left", {
-    fromMultiplicity: "1..*",
-    toMultiplicity: "0..*",
+  // TM: PC．Gitリポジトリ(対照表、属性なし)。オブジェクトモデルでは PC ではなく User が
+  // GitRepository を所有するコンポジションにする(TM との違いは冒頭の【TM との違い・未決】)。
+  // 1人に 0 件以上。GitRepository の左辺から User の右下(315°)へつなぐ(User の右辺の
+  // 中央は Pc への線、下辺の中央は Session からの線で使っている)。
+  rel("composition", "GitRepository", "User", "repositories", "left", 315, {
+    fromMultiplicity: "0..*",
   }),
   // TM: Gitリポジトリ 1 : Gitブランチ 0..*(E-R。ブランチ側の repositoryPath(R))。
-  rel("association", "GitRepository", "GitBranch", "持つ", "right", "left", {
-    fromMultiplicity: "1",
-    toMultiplicity: "0..*",
+  // GitRepository が所有するのでコンポジション。GitRepository の右辺はワーキングツリーと
+  // 分け合うので、上寄り(250°)で受ける。
+  rel("composition", "GitBranch", "GitRepository", "branches", "left", 250, {
+    fromMultiplicity: "0..*",
   }),
   // TM: Gitリポジトリ 1 : ワーキングツリー 1..*(E-R。リポジトリ本体が常に1つ目)。
+  // GitRepository が所有するのでコンポジション。右辺の下寄り(290°)で受ける。
   // ワーキングツリーはブランチの真下に置く(画面上での手調整で決めた配置)。
-  rel("association", "GitRepository", "GitWorktree", "持つ", "right", "left", {
-    fromMultiplicity: "1",
-    toMultiplicity: "1..*",
+  rel("composition", "GitWorktree", "GitRepository", "worktrees", "left", 290, {
+    fromMultiplicity: "1..*",
   }),
   // TM: Gitブランチ．ワーキングツリー(対応表、属性なし)。ブランチを開けるワーキング
   // ツリーは1つまで、ワーキングツリーが開くブランチも1つまで(detached HEAD なら無し)。
