@@ -14,7 +14,11 @@
  *   参照キーではないため)。
  * - 対照表(R-R)・対応表(E-E)・再帰表(RC)は、それ自身の属性が無ければクラスにせず、
  *   多重度付きの関連にする。属性があるときは関連クラスにしたいが、d3.classes に関連クラスの
- *   記法は無いので、ふつうのクラスとして描き、両側のクラスと線で結ぶ(例: LogLineLink)。
+ *   記法は無いので、ふつうのクラスとして描き、両側のクラスと線で結ぶ。
+ * - ただし再帰表(自分自身を指す関係)は、クラスにも線にもせず、ID のフィールドとして持つ。
+ *   d3.classes では自己参照の線を描けない(同じ箱の縁の2点を直線で結ぶと箱の内側を通る)ため。
+ *   種別の属性があるときは、種別ごとにフィールドを分けて種別の属性を無くす
+ *   (例: LogLine の `parent_uuid` / `logical_parent_uuid`)。
  * - サブセット(区分コードによる切断)は継承(汎化)にする。区分コードはフィールドにしない
  *   (どのサブクラスかで決まる)。サブセットに分け尽くされる全体側は抽象クラス(«abstract»)
  *   にする。d3.classes は継承の三角も線の終点側に描くので、線は「サブクラス → 親」の向きに
@@ -51,9 +55,10 @@
  * 【TM との違い・未決】
  * - ログ行まわりのクラス名は TM の物理名から変えている(ChainLine → LogLine、UserLine →
  *   UserLogLine、AssistantLine → AssistantLogLine、SystemLine → SystemLogLine、
- *   AttachmentLine → AttachmentLogLine、ChainLineRecursion → LogLineLink)。同じ図に載せている
- *   SessionLine の図(Labo。native の session_line.rs の型を写したもの)と、native の domain
- *   クレートの既存の型に同じ名前があり、図でも実装でも名前がぶつかるため。
+ *   AttachmentLine → AttachmentLogLine)。同じ図に載せている SessionLine の図(Labo。native の
+ *   session_line.rs の型を写したもの)と、native の domain クレートの既存の型に同じ名前があり、
+ *   図でも実装でも名前がぶつかるため。再帰表 ChainLineRecursion(ログ行．ログ行)はクラスに
+ *   せず、LogLine のフィールド(`parent_uuid` / `logical_parent_uuid`)に含めている。
  * - TM の「セッション 1 : ログ行」(所属)は線を描かない。ログ行は SessionFile が所有し、
  *   SessionFile は Session が所有するので、行のセッションは所有の木でたどれる(持ち主は
  *   1つだけ)。サブエージェントのファイルの行も、親のセッションが所有するファイルに属する
@@ -164,6 +169,11 @@ const DEFS: ClassDef[] = [
     stereotype: "abstract",
     attributes: [
       attr("uuid", "String"), // 個体指定子。行UUID
+      // TM: 再帰表「ログ行．ログ行」。親の行を行UUIDで指す(自己参照は線にできないので ID で持つ)。
+      // チェーン種別(TM の linkKind)は、どちらのフィールドに入っているかで決まる。
+      // 1つの行を親とする行は 0..*(--fork-session で分岐しうる)、起点の行は親を持たない。
+      attr("parent_uuid", "Option<String>"), // 物理チェーンの親
+      attr("logical_parent_uuid", "Option<String>"), // 論理チェーンの親(compact_boundary で圧縮前の末尾)
       attr("timestamp", "u64"), // TM: 記録日時
       attr("cwd", "Option<PathBuf>"), // TM: 作業ディレクトリパス。1ファイルの中でも行ごとに変わりうる
       attr("entrypoint", "Option<String>"),
@@ -174,11 +184,16 @@ const DEFS: ClassDef[] = [
       // 行種別(TM の type)は持たない。どのサブクラスかで決まる。
     ],
     position: { x: 450, y: 1350 },
+    // d3.classes は箱の幅を中身から計算せず、指定が無ければ 200 で固定する。
+    // logical_parent_uuid と型の列が重なるので広げる(h は無視され、中身から計算される)。
+    size: { w: 250, h: 0 },
   },
   {
     name: { physical: "UserLogLine", logical: "UserLogLine", description: "人間の入力とツール実行結果の行(type = user)。実測では約9割がツール実行結果。TM: ユーザー行(イベントのサブセット)" }, // 論理名: ユーザー行
     attributes: [attr("prompt_id", "Option<String>"), attr("permission_mode", "Option<String>")],
     position: { x: 60, y: 1700 },
+    // permission_mode と型の列が重なるので広げる(LogLine の size の説明を参照)。
+    size: { w: 230, h: 0 },
   },
   {
     name: { physical: "AssistantLogLine", logical: "AssistantLogLine", description: "AI の応答の行(type = assistant)。1回の API 応答が複数ブロックなら行が分かれ、同じ message_id を共有する。TM: AI応答行(イベントのサブセット)" }, // 論理名: AI応答行
@@ -207,13 +222,6 @@ const DEFS: ClassDef[] = [
       attr("attachment_type", "String"),
     ],
     position: { x: 1030, y: 1700 },
-  },
-  {
-    name: { physical: "LogLineLink", logical: "LogLineLink", description: "ログ行どうしの親子のつながり1本(子の行から親の行への参照)。物理チェーン(parentUuid)と論理チェーン(logicalParentUuid。compact_boundary で圧縮前の末尾を指す)の2種がある。TM: ログ行．ログ行(再帰表)" }, // 論理名: ログ行．ログ行
-    attributes: [
-      attr("link_kind", "String"), // TM: チェーン種別(物理 / 論理)
-    ],
-    position: { x: 950, y: 1350 },
   },
 ];
 
@@ -300,20 +308,7 @@ const RELATIONSHIPS = [
   rel("inheritance", "AssistantLogLine", "LogLine", undefined, "top", 10),
   rel("inheritance", "SystemLogLine", "LogLine", undefined, "top", 350),
   rel("inheritance", "AttachmentLogLine", "LogLine", undefined, "top", 330),
-  // TM: 再帰表「ログ行．ログ行」(属性: チェーン種別)。属性があるのでクラス LogLineLink にする。
-  // 子の行が所有する(子の行1つに、親へのつながりは 0..1。起点の行は親を持たない)。
-  // 親の行はすでに SessionFile が所有しているので、所有せず ID で参照する(親1つを指す
-  // つながりは 0..*。--fork-session で分岐しうる)。LogLineLink の左辺を上寄り(110)と
-  // 下寄り(70)に分け、LogLine の右辺の上寄り(250)と下寄り(290)で受ける。
-  rel("composition", "LogLineLink", "LogLine", "parent_link", 110, 250, {
-    key: "parent_link",
-    fromMultiplicity: "0..1",
-  }),
-  rel("association", "LogLineLink", "LogLine", "parent", 70, 290, {
-    key: "parent",
-    fromMultiplicity: "0..*",
-    toMultiplicity: "1",
-  }),
+  // TM の再帰表「ログ行．ログ行」は線にしない(LogLine の parent_uuid / logical_parent_uuid)。
   // TM: AI応答行 → ユーザー行(ツール発行元。E-E の先行・後続で、どちらも 0..1)。ユーザー行が
   // sourceToolAssistantUUID で tool_use を発行した AI応答行を指すので、UserLogLine →
   // AssistantLogLine の関連にし、実装では ID で参照する。ラベルが箱に重ならないよう、
