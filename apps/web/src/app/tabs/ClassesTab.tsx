@@ -7,6 +7,7 @@ import {
   applyLayoutOverrides,
   applyPortOverrides,
   buildLayoutFile,
+  loadCameraTransform,
   loadLayoutOverrides,
   loadPortOverrides,
   migrateLegacyLayoutIfNeeded,
@@ -23,6 +24,7 @@ import {
   useLayoutSaveStatus,
   LayoutSaveStatusSnackbar,
 } from "./layout/LayoutSaveStatus";
+import { useCameraPersistence } from "./layout/useCameraPersistence";
 
 /** インスペクタの幅(px)。マウスで伸縮できる。TM(TmTab)と同じ値に揃える。 */
 const INSPECTOR_WIDTH = { initial: 444, min: 222, max: 888 } as const;
@@ -78,6 +80,16 @@ export default function ClassesTab() {
   const [resizing, setResizing] = useState(false);
   const { state: saveState, save, close: closeSaveStatus } =
     useLayoutSaveStatus("classes");
+  // 視点(パン/ズーム)。変わるたびに、クラスの位置・接続辺と一緒に classes.json へ
+  // 保存する。d3.classes はズームで g.viewport の transform を書き換える。
+  // 図を描くより前に呼び、transform の監視を先に始めておく。
+  const { cameraRef, applyCamera } = useCameraPersistence({
+    containerRef,
+    layerSelector: "g.viewport",
+    initial: loadCameraTransform(),
+    onSave: (camera) =>
+      save(buildLayoutFile(overridesRef.current, portOverridesRef.current, camera)),
+  });
 
   // 旧方式(localStorage)からの一時的な自己移行。全環境の移行が済んだら削除してよい。
   useEffect(() => {
@@ -104,6 +116,10 @@ export default function ClassesTab() {
     const diagram = new ClassDiagram(container);
     diagramRef.current = diagram;
     diagram.loadFromData({ classes, relationships }).render();
+    // d3.classes は視点を等倍・原点で作り、そのとき transform を書かない(監視では
+    // 気づけない)ので、描いた直後に保存済みの視点へ戻す。
+    const svg = container.querySelector("svg");
+    if (svg) applyCamera(svg);
 
     // d3.classes の ClassBox はクリック/ドラッグ移動をライブラリ内部で完結させており、
     // 通知コールバック(click/dragend相当)が無い。SitemapTab と同じ方式で、
@@ -149,7 +165,9 @@ export default function ClassesTab() {
 
       if (!changed) return;
       overridesRef.current = next;
-      save(buildLayoutFile(next, portOverridesRef.current));
+      // 同じ classes.json に接続辺・視点も入るため、保存済みの値を必ず一緒に書く
+      // (クラスの位置だけを書くとほかが消える)。
+      save(buildLayoutFile(next, portOverridesRef.current, cameraRef.current));
       // 移動を伴った操作の直後に発生する click でインスペクタが開かないようにする
       // (d3-sitemap の Rectum が「静止クリックだけ届ける」のと同じ意図)。
       suppressNextClick = true;
@@ -197,7 +215,7 @@ export default function ClassesTab() {
       container.innerHTML = "";
       diagramRef.current = null;
     };
-  }, [save]);
+  }, [save, applyCamera, cameraRef]);
 
   // インスペクタ幅の伸縮。ハンドルを掴んでいるあいだ window で追う。
   useEffect(() => {
@@ -257,11 +275,11 @@ export default function ClassesTab() {
       overridesRef.current = nextLayout;
       portOverridesRef.current = nextPorts;
       relationshipsRef.current = nextRelationships;
-      // 位置と接続辺は同じ classes.json に入るので、1回の保存でまとめて書く。
-      save(buildLayoutFile(nextLayout, nextPorts));
+      // 位置・接続辺・視点は同じ classes.json に入るので、1回の保存でまとめて書く。
+      save(buildLayoutFile(nextLayout, nextPorts, cameraRef.current));
       setSelected(null);
     },
-    [selected, save],
+    [selected, save, cameraRef],
   );
 
   return (

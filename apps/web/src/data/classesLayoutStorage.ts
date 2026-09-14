@@ -6,16 +6,17 @@
  * 図ごとのデータファイル(`classes-*.ts`)が唯一の真実であり、調整結果が安定したら
  * そちらの `position` や `rel(...)` の接続辺へ反映してリポジトリへ戻すこと。
  *
- * 調整対象は2種類あり、TM(`tmLayoutStorage.ts`)と同じく1ファイルにまとめる
- * (`{ classes, ports }`)。
+ * 調整対象は3種類あり、TM(`tmLayoutStorage.ts`)と同じく1ファイルにまとめる
+ * (`{ classes, ports, camera }`)。
  *   - クラスの位置(物理名がキー)
  *   - 関係線の接続辺(端点がクラスのどの辺につくか。`<関係線 id>:<from|to>` がキー)
+ *   - 視点(パン/ズーム)。表示のための値なので、データファイルへは書き写さない
  * クラスの id は物理名、関係線の id は `<起点>-><終点>` で、どちらも物理名から
  * 組み立てている(`classDiagram.ts` の `defineDiagram`)。配列を並べ替えてもキーはずれない。
  */
 import type { RelationshipInput } from "@yanqirenshi/d3.classes";
 import layoutFile from "./layout/classes.json";
-import { saveLayoutToApi } from "./layoutSaveApi";
+import { saveLayoutToApi, type CameraTransform } from "./layoutSaveApi";
 
 // 旧方式(localStorage)からの一時的な移行処理で使うキー。
 // 全環境の移行が済んだら READ_LEGACY 関連ごと削除してよい。
@@ -63,6 +64,7 @@ export type PortOverrides = Record<string, PortPoint>;
 export type ClassesLayoutFile = {
   classes?: LayoutOverrides;
   ports?: PortOverrides;
+  camera?: CameraTransform;
 };
 
 function isPortPoint(value: unknown): value is PortPoint {
@@ -75,19 +77,21 @@ function isPortPoint(value: unknown): value is PortPoint {
 /**
  * ファイルを読む。接続辺を入れる前は素の `LayoutOverrides`(クラス位置だけの
  * 平らな形)で保存していたため、そちらも読めるようにしておく。
- * クラスの物理名に `classes` / `ports` は無いので、キーの有無で判別できる。
+ * クラスの物理名に `classes` / `ports` / `camera` は無いので、キーの有無で判別できる。
  */
 function readLayoutFile(): ClassesLayoutFile {
   const raw = layoutFile as ClassesLayoutFile | LayoutOverrides | null;
   if (!raw || typeof raw !== "object") return {};
-  if ("classes" in raw || "ports" in raw) return raw as ClassesLayoutFile;
+  if ("classes" in raw || "ports" in raw || "camera" in raw)
+    return raw as ClassesLayoutFile;
   return { classes: raw as LayoutOverrides };
 }
 
 const fileLayout = readLayoutFile();
 const hasFileOverrides =
   Object.keys(fileLayout.classes ?? {}).length > 0 ||
-  Object.keys(fileLayout.ports ?? {}).length > 0;
+  Object.keys(fileLayout.ports ?? {}).length > 0 ||
+  fileLayout.camera !== undefined;
 
 function readLegacyOverrides(): LayoutOverrides | null {
   if (typeof window === "undefined") return null;
@@ -114,12 +118,27 @@ export function loadPortOverrides(): PortOverrides {
   );
 }
 
-/** 保存APIへ渡す1つのオブジェクトにまとめる。 */
+/**
+ * 保存済みの視点。ファイルを手で書き換えて、数でない値や 0 以下の倍率が入っていたら
+ * 使わない(等倍・原点から始める)。
+ */
+export function loadCameraTransform(): CameraTransform | null {
+  const camera = fileLayout.camera;
+  if (!camera) return null;
+  const { k, x, y } = camera;
+  return [k, x, y].every(Number.isFinite) && k > 0 ? { k, x, y } : null;
+}
+
+/**
+ * 保存APIへ渡す1つのオブジェクトにまとめる。サーバはファイルを丸ごと置き換えるので、
+ * どの手調整を保存するときも、保存済みのほかの値(視点を含む)を一緒に渡すこと。
+ */
 export function buildLayoutFile(
   classes: LayoutOverrides,
   ports: PortOverrides,
+  camera?: CameraTransform,
 ): ClassesLayoutFile {
-  return { classes, ports };
+  return camera ? { classes, ports, camera } : { classes, ports };
 }
 
 /**
