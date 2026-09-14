@@ -166,28 +166,3 @@ export const SITEMAP_DATA = {
     ),
   ],
 };
-
-// d3.sitemap はズーム/パンを持たずコンテナのサイズそのままに描画するため、
-// 全ノード(children を含む。position は親からの相対座標なので絶対座標に
-// 変換しながら)が収まる最小サイズを算出し、SitemapTab 側でコンテナに
-// 反映する(ブラウザの標準スクロールで全体を見られるようにするため)。
-function extentOf(
-  nodes: SitemapNode[],
-  offsetX: number,
-  offsetY: number,
-): { w: number; h: number } {
-  return nodes.reduce(
-    (size, n) => {
-      const absX = offsetX + n.position.x;
-      const absY = offsetY + n.position.y;
-      const childSize = extentOf(n.children, absX, absY);
-      return {
-        w: Math.max(size.w, absX + n.size.w, childSize.w),
-        h: Math.max(size.h, absY + n.size.h, childSize.h),
-      };
-    },
-    { w: 0, h: 0 },
-  );
-}
-
-export const SITEMAP_CANVAS_SIZE = extentOf(SITEMAP_DATA.nodes, 0, 0);

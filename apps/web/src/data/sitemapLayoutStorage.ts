@@ -1,8 +1,12 @@
-// サイトマップの手調整(ノードのドラッグ移動・インスペクタでの数値指定)の
-// 保存先。web.md §2 により、開発時専用の保存API経由でリポジトリ内ファイル
-// (`src/data/layout/sitemap.json`)に保存する。
+// サイトマップの手調整の保存先。web.md §2 により、開発時専用の保存API経由で
+// リポジトリ内ファイル(`src/data/layout/sitemap.json`)に保存する。
+//
+// 調整対象は2種類あり、TM(`tmLayoutStorage.ts`)・Classes と同じく1ファイルに
+// まとめる(`{ nodes, camera }`)。
+//   - ノードの位置・サイズ(ドラッグ移動・インスペクタでの数値指定。ノード id がキー)
+//   - 視点(パン/ズーム)。表示のための値なので、sitemap.ts へは書き写さない
 import layoutFile from "./layout/sitemap.json";
-import { saveLayoutToApi } from "./layoutSaveApi";
+import { saveLayoutToApi, type CameraTransform } from "./layoutSaveApi";
 
 // 旧方式(localStorage)からの一時的な移行処理で使うキーとバージョン。
 // 全環境の移行が済んだら READ_LEGACY 関連ごと削除してよい。
@@ -26,8 +30,28 @@ type LegacyStoredLayout = {
   nodes: LayoutOverrides;
 };
 
-const fileOverrides = (layoutFile as LayoutOverrides) ?? {};
-const hasFileOverrides = Object.keys(fileOverrides).length > 0;
+/** `sitemap.json` の中身。 */
+export type SitemapLayoutFile = {
+  nodes?: LayoutOverrides;
+  camera?: CameraTransform;
+};
+
+/**
+ * ファイルを読む。視点を入れる前は素の `LayoutOverrides`(ノード id がキーの
+ * 平らな形)で保存していたため、そちらも読めるようにしておく。
+ * ノード id は数値なので、`nodes` / `camera` キーの有無で判別できる。
+ */
+function readLayoutFile(): SitemapLayoutFile {
+  const raw = layoutFile as SitemapLayoutFile | LayoutOverrides | null;
+  if (!raw || typeof raw !== "object") return {};
+  if ("nodes" in raw || "camera" in raw) return raw as SitemapLayoutFile;
+  return { nodes: raw as LayoutOverrides };
+}
+
+const fileLayout = readLayoutFile();
+const hasFileOverrides =
+  Object.keys(fileLayout.nodes ?? {}).length > 0 ||
+  fileLayout.camera !== undefined;
 
 function readLegacyOverrides(): LayoutOverrides | null {
   if (typeof window === "undefined") return null;
@@ -43,8 +67,30 @@ function readLegacyOverrides(): LayoutOverrides | null {
 }
 
 export function loadLayoutOverrides(): LayoutOverrides {
-  if (hasFileOverrides) return fileOverrides;
+  if (hasFileOverrides) return fileLayout.nodes ?? {};
   return readLegacyOverrides() ?? {};
+}
+
+/**
+ * 保存済みの視点。ファイルを手で書き換えて、数でない値や 0 以下の倍率が入っていたら
+ * 使わない(等倍・原点から始める)。
+ */
+export function loadCameraTransform(): CameraTransform | null {
+  const camera = fileLayout.camera;
+  if (!camera) return null;
+  const { k, x, y } = camera;
+  return [k, x, y].every(Number.isFinite) && k > 0 ? { k, x, y } : null;
+}
+
+/**
+ * 保存APIへ渡す1つのオブジェクトにまとめる。サーバはファイルを丸ごと置き換えるので、
+ * どの手調整を保存するときも、保存済みのほかの値(視点を含む)を一緒に渡すこと。
+ */
+export function buildLayoutFile(
+  nodes: LayoutOverrides,
+  camera?: CameraTransform,
+): SitemapLayoutFile {
+  return camera ? { nodes, camera } : { nodes };
 }
 
 /**
@@ -58,7 +104,7 @@ export function migrateLegacyLayoutIfNeeded(): void {
   const legacy = readLegacyOverrides();
   if (!legacy || Object.keys(legacy).length === 0) return;
 
-  saveLayoutToApi("sitemap", legacy).then(({ ok }) => {
+  saveLayoutToApi("sitemap", buildLayoutFile(legacy)).then(({ ok }) => {
     if (ok) window.localStorage.removeItem(LEGACY_STORAGE_KEY);
   });
 }

@@ -3,10 +3,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import D3Sitemap, { Rectum } from "@yanqirenshi/d3.sitemap";
 import Colonoscope from "@yanqirenshi/colonoscope";
-import { SITEMAP_DATA, SITEMAP_CANVAS_SIZE } from "@/data/sitemap";
+import { SITEMAP_DATA } from "@/data/sitemap";
 import {
   applyLayoutOverrides,
+  buildLayoutFile,
   buildParentIdMap,
+  loadCameraTransform,
   loadLayoutOverrides,
   migrateLegacyLayoutIfNeeded,
   type LayoutOverrides,
@@ -15,6 +17,7 @@ import {
   useLayoutSaveStatus,
   LayoutSaveStatusSnackbar,
 } from "./layout/LayoutSaveStatus";
+import { useCameraPersistence } from "./layout/useCameraPersistence";
 
 const PARENT_ID_BY_NODE_ID = buildParentIdMap(SITEMAP_DATA.nodes);
 
@@ -50,6 +53,20 @@ export default function SitemapTab() {
   const overridesRef = useRef(overrides);
   const { state: saveState, save, close: closeSaveStatus } =
     useLayoutSaveStatus("sitemap");
+  // 視点(パン/ズーム)。変わるたびに、ノードの手調整と一緒に sitemap.json へ保存する。
+  // d3.sitemap は d3.svg の zoom を使い、ズーム・パンで g.layer(background /
+  // foreground)の transform を書き換える(TM と同じ)。図の再構築(初回描画・
+  // インスペクタの「適用」)でライブラリが等倍・原点へ戻すと、フックが保存済みの
+  // 視点へ戻す。
+  // d3.svg には初期視点を渡す口(options.transform)もあるが、
+  // zoomIdentity.scale(k).translate(x, y) の順で組み立てるため x・y が k 倍に
+  // ずれる。使わずにフックの書き戻しに任せる。
+  const { cameraRef } = useCameraPersistence({
+    containerRef,
+    layerSelector: "g.layer",
+    initial: loadCameraTransform(),
+    onSave: (camera) => save(buildLayoutFile(overridesRef.current, camera)),
+  });
 
   useEffect(() => {
     overridesRef.current = overrides;
@@ -130,8 +147,12 @@ export default function SitemapTab() {
       });
 
       if (!changed) return;
+      // 視点の保存はこの ref を読むので、再描画を待たずに先に更新しておく。
+      overridesRef.current = next;
       setOverrides(next);
-      save(next);
+      // 同じ sitemap.json に視点も入るため、保存済みの値を必ず一緒に書く
+      // (ノードの手調整だけを書くと視点が消える)。
+      save(buildLayoutFile(next, cameraRef.current));
     };
 
     window.addEventListener("mousedown", handleMouseDown, { capture: true });
@@ -144,7 +165,7 @@ export default function SitemapTab() {
         capture: true,
       });
     };
-  }, [save]);
+  }, [save, cameraRef]);
 
   const rectum = useMemo(() => {
     const instance = new Rectum({
@@ -179,21 +200,20 @@ export default function SitemapTab() {
       },
     };
 
+    overridesRef.current = next;
     setOverrides(next);
-    save(next);
+    // ノードの手調整と視点は同じ sitemap.json に入るので、1回の保存でまとめて書く。
+    save(buildLayoutFile(next, cameraRef.current));
     setSelected(null);
     setVersion((v) => v + 1);
   };
 
   return (
-    <div
-      ref={containerRef}
-      className="relative flex w-full flex-1"
-      style={{
-        minWidth: SITEMAP_CANVAS_SIZE.w,
-        minHeight: SITEMAP_CANVAS_SIZE.h,
-      }}
-    >
+    // 全体はパン/ズームで見る(TM と同じ)。以前は全ノードが収まる大きさを
+    // コンテナに与えてブラウザのスクロールでも見られるようにしていたが、
+    // d3.svg のズームと二重になり、視点(スクロール量 + パン)が一意に
+    // 決まらないためやめた。
+    <div ref={containerRef} className="relative flex min-h-0 w-full flex-1">
       <D3Sitemap key={version} rectum={rectum} />
 
       <Colonoscope
