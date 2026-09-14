@@ -12,8 +12,13 @@
  *   (オブジェクトの同一性の根拠になるため)。ただし他のモノから継承した個体指定子
  *   (`(R)` 付き)はフィールドにせず、関連で表す(TM の `(R)` は「関係がある」の意味で
  *   参照キーではないため)。
- * - 対照表(R-R)・対応表(E-E)は、それ自身の属性が無ければクラスにせず、多重度付きの
- *   関連にする。属性が付いた段階で関連クラスに格上げする。
+ * - 対照表(R-R)・対応表(E-E)・再帰表(RC)は、それ自身の属性が無ければクラスにせず、
+ *   多重度付きの関連にする。属性があるときは関連クラスにしたいが、d3.classes に関連クラスの
+ *   記法は無いので、ふつうのクラスとして描き、両側のクラスと線で結ぶ(例: LogLineLink)。
+ * - サブセット(区分コードによる切断)は継承(汎化)にする。区分コードはフィールドにしない
+ *   (どのサブクラスかで決まる)。サブセットに分け尽くされる全体側は抽象クラス(«abstract»)
+ *   にする。d3.classes は継承の三角も線の終点側に描くので、線は「サブクラス → 親」の向きに
+ *   書く。
  * - 日時は domain クレートに合わせて UNIX エポックからのミリ秒(`u64`)で持つ
  *   (domain は chrono 等に依存しておらず、既存の `*_ms` も同じ単位)。まだ起きていない
  *   出来事の日時(削除日時など)は `Option` にする。
@@ -36,12 +41,23 @@
  *
  * 【スコープ】TM の「実行環境」のうち PC・ユーザー(第1弾)、Gitリポジトリ(第2弾)、
  * Gitブランチ・ワーキングツリー(第3弾)と、セッション(第4弾)、セッションファイル
- * (第5弾)。設定ファイル類と、セッションまわり(ログ行・入力キュー・実行中セッション)は
- * 次段以降。既存のクラスとそれらの関係も、相手のクラスを書く段階で足す。
+ * (第5弾)、ログ行(第6弾。行種別のサブセット4種と、親子のつながりを含む)。設定ファイル類、
+ * セッションまわりの残り(入力キュー・実行中セッション)、システム行・付帯情報行の細分
+ * (TM でサブセットに分ける段階)は次段以降。既存のクラスとそれらの関係も、相手のクラスを
+ * 書く段階で足す。
  * 作業ディレクトリは、TM でモノとして立てないことになった(cwd はログ行・実行中セッションの
  * 属性。tm.ts 冒頭の【作業ディレクトリを立てない】)ため、クラスにしない。
  *
  * 【TM との違い・未決】
+ * - ログ行まわりのクラス名は TM の物理名から変えている(ChainLine → LogLine、UserLine →
+ *   UserLogLine、AssistantLine → AssistantLogLine、SystemLine → SystemLogLine、
+ *   AttachmentLine → AttachmentLogLine、ChainLineRecursion → LogLineLink)。同じ図に載せている
+ *   SessionLine の図(Labo。native の session_line.rs の型を写したもの)と、native の domain
+ *   クレートの既存の型に同じ名前があり、図でも実装でも名前がぶつかるため。
+ * - TM の「セッション 1 : ログ行」(所属)は線を描かない。ログ行は SessionFile が所有し、
+ *   SessionFile は Session が所有するので、行のセッションは所有の木でたどれる(持ち主は
+ *   1つだけ)。サブエージェントのファイルの行も、親のセッションが所有するファイルに属する
+ *   ので、行に記録される sessionId(親と同じ値)と食い違わない。
  * - TM の `fileKind`(ファイル種別)は SessionFile のフィールドにしない。Session が
  *   会話ファイル(`conversation_file`、1件)とサブエージェントのファイル(`subagent_files`、
  *   0件以上)を別の役割で持ち、どちらに入っているかで種別が決まるため。1件の枠を分ける
@@ -142,6 +158,63 @@ const DEFS: ClassDef[] = [
     ],
     position: { x: -200, y: 1150 },
   },
+  // ============ ログ行 ============
+  {
+    name: { physical: "LogLine", logical: "LogLine", description: "uuid / parentUuid で親子チェーンを構成する行。行種別(user / assistant / system / attachment)ごとのサブクラスに分け尽くされるので抽象クラスにする。TM: ログ行(イベント)" }, // 論理名: ログ行
+    stereotype: "abstract",
+    attributes: [
+      attr("uuid", "String"), // 個体指定子。行UUID
+      attr("timestamp", "u64"), // TM: 記録日時
+      attr("cwd", "Option<PathBuf>"), // TM: 作業ディレクトリパス。1ファイルの中でも行ごとに変わりうる
+      attr("entrypoint", "Option<String>"),
+      attr("version", "Option<String>"),
+      attr("git_branch", "Option<String>"),
+      attr("is_sidechain", "Option<bool>"), // TM: サブエージェント区分
+      attr("user_type", "Option<String>"),
+      // 行種別(TM の type)は持たない。どのサブクラスかで決まる。
+    ],
+    position: { x: 450, y: 1350 },
+  },
+  {
+    name: { physical: "UserLogLine", logical: "UserLogLine", description: "人間の入力とツール実行結果の行(type = user)。実測では約9割がツール実行結果。TM: ユーザー行(イベントのサブセット)" }, // 論理名: ユーザー行
+    attributes: [attr("prompt_id", "Option<String>"), attr("permission_mode", "Option<String>")],
+    position: { x: 60, y: 1700 },
+  },
+  {
+    name: { physical: "AssistantLogLine", logical: "AssistantLogLine", description: "AI の応答の行(type = assistant)。1回の API 応答が複数ブロックなら行が分かれ、同じ message_id を共有する。TM: AI応答行(イベントのサブセット)" }, // 論理名: AI応答行
+    attributes: [
+      attr("request_id", "Option<String>"),
+      attr("message_id", "Option<String>"),
+      attr("model", "Option<String>"),
+      attr("stop_reason", "Option<String>"),
+    ],
+    position: { x: 430, y: 1700 },
+  },
+  {
+    name: { physical: "SystemLogLine", logical: "SystemLogLine", description: "内部イベントの行(type = system)。TM: システム行(イベントのサブセット)" }, // 論理名: システム行
+    attributes: [
+      // TM: システム副種別(stop_hook_summary / api_error / compact_boundary / informational)。
+      // 区分コードだが TM はまだサブセットに分けていないので、分けた段階でサブクラスにする。
+      attr("subtype", "String"),
+      attr("level", "Option<String>"),
+    ],
+    position: { x: 730, y: 1700 },
+  },
+  {
+    name: { physical: "AttachmentLogLine", logical: "AttachmentLogLine", description: "実行環境が会話に注入した情報の行(type = attachment)。TM: 付帯情報行(イベントのサブセット)" }, // 論理名: 付帯情報行
+    attributes: [
+      // TM: 付帯情報種別(23種)。SystemLogLine の subtype と同じく、TM で分けた段階でサブクラスにする。
+      attr("attachment_type", "String"),
+    ],
+    position: { x: 1030, y: 1700 },
+  },
+  {
+    name: { physical: "LogLineLink", logical: "LogLineLink", description: "ログ行どうしの親子のつながり1本(子の行から親の行への参照)。物理チェーン(parentUuid)と論理チェーン(logicalParentUuid。compact_boundary で圧縮前の末尾を指す)の2種がある。TM: ログ行．ログ行(再帰表)" }, // 論理名: ログ行．ログ行
+    attributes: [
+      attr("link_kind", "String"), // TM: チェーン種別(物理 / 論理)
+    ],
+    position: { x: 950, y: 1350 },
+  },
 ];
 
 const { classes, rel } = defineDiagram(DEFS);
@@ -212,6 +285,42 @@ const RELATIONSHIPS = [
   rel("composition", "SessionFile", "Session", "subagent_files", "right", "bottom", {
     key: "subagent_files",
     fromMultiplicity: "0..*",
+  }),
+  // TM: セッションファイル 1 : ログ行 1..*(書かれた先)。行はファイルに書かれるので、
+  // SessionFile が LogLine を所有するコンポジションにする。TM の「セッション 1 : ログ行」
+  // は線を描かない(冒頭の【TM との違い・未決】)。LogLine の上辺から SessionFile の下辺へ
+  // つなぐ(SessionFile を手調整で動かしても、線が箱を横切りにくい向き)。
+  rel("composition", "LogLine", "SessionFile", "lines", "top", "bottom", {
+    fromMultiplicity: "1..*",
+  }),
+  // TM: ログ行のサブセット(×行種別。区分コードによる切断)。継承(汎化)で描く。線は
+  // 「サブクラス → 親」の向き(三角が LogLine 側に付く)。LogLine の下辺を角度で分けて
+  // 受ける(左から 30, 10, 350, 330。線どうしが交差しない順)。
+  rel("inheritance", "UserLogLine", "LogLine", undefined, "top", 30),
+  rel("inheritance", "AssistantLogLine", "LogLine", undefined, "top", 10),
+  rel("inheritance", "SystemLogLine", "LogLine", undefined, "top", 350),
+  rel("inheritance", "AttachmentLogLine", "LogLine", undefined, "top", 330),
+  // TM: 再帰表「ログ行．ログ行」(属性: チェーン種別)。属性があるのでクラス LogLineLink にする。
+  // 子の行が所有する(子の行1つに、親へのつながりは 0..1。起点の行は親を持たない)。
+  // 親の行はすでに SessionFile が所有しているので、所有せず ID で参照する(親1つを指す
+  // つながりは 0..*。--fork-session で分岐しうる)。LogLineLink の左辺を上寄り(110)と
+  // 下寄り(70)に分け、LogLine の右辺の上寄り(250)と下寄り(290)で受ける。
+  rel("composition", "LogLineLink", "LogLine", "parent_link", 110, 250, {
+    key: "parent_link",
+    fromMultiplicity: "0..1",
+  }),
+  rel("association", "LogLineLink", "LogLine", "parent", 70, 290, {
+    key: "parent",
+    fromMultiplicity: "0..*",
+    toMultiplicity: "1",
+  }),
+  // TM: AI応答行 → ユーザー行(ツール発行元。E-E の先行・後続で、どちらも 0..1)。ユーザー行が
+  // sourceToolAssistantUUID で tool_use を発行した AI応答行を指すので、UserLogLine →
+  // AssistantLogLine の関連にし、実装では ID で参照する。ラベルが箱に重ならないよう、
+  // 2つのクラスの間を広めに空けている。
+  rel("association", "UserLogLine", "AssistantLogLine", "source_tool_assistant", "right", "left", {
+    fromMultiplicity: "0..1",
+    toMultiplicity: "0..1",
   }),
 ];
 
