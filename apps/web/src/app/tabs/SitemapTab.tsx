@@ -6,18 +6,28 @@ import Colonoscope from "@yanqirenshi/colonoscope";
 import { SITEMAP_DATA } from "@/data/sitemap";
 import {
   applyLayoutOverrides,
+  applyPortOverrides,
   buildLayoutFile,
   buildParentIdMap,
   loadCameraTransform,
   loadLayoutOverrides,
+  loadPortOverrides,
   migrateLegacyLayoutIfNeeded,
   type LayoutOverrides,
+  type PortOverrides,
 } from "@/data/sitemapLayoutStorage";
 import {
   useLayoutSaveStatus,
   LayoutSaveStatusSnackbar,
 } from "./layout/LayoutSaveStatus";
 import { useCameraPersistence } from "./layout/useCameraPersistence";
+import {
+  buildInspectorTabs,
+  buildInspectorTarget,
+  hasBasicValues,
+  readChangedPorts,
+  type SitemapInspectorTarget,
+} from "./sitemap/sitemapInspector";
 
 const PARENT_ID_BY_NODE_ID = buildParentIdMap(SITEMAP_DATA.nodes);
 
@@ -33,9 +43,12 @@ type SitemapNodeCore = {
 // ドラッグ完了位置をホスト側で保存するための move/dragend 相当のコールバックが無いため、
 // d3 の data-join で各 <g class="node"> に紐づく __data__(d3 標準の挙動)を
 // ドラッグ終了時に読み取ってオーバーライドとして保存する。
+// 右クリックでインスペクタを開くときも、同じ __data__ の `_core`(入力データその
+// もの。node.click コールバックに渡されるのと同じもの)を使う。
 type SitemapDatum = {
   _id: number;
   position: { x: number; y: number };
+  _core?: SitemapNodeCore;
 };
 
 function toNumber(value: string, fallback: number) {
@@ -45,19 +58,27 @@ function toNumber(value: string, fallback: number) {
 
 export default function SitemapTab() {
   const [version, setVersion] = useState(0);
-  const [selected, setSelected] = useState<SitemapNodeCore | null>(null);
+  const [selected, setSelected] = useState<SitemapInspectorTarget | null>(
+    null,
+  );
   const [overrides, setOverrides] = useState<LayoutOverrides>(() =>
     loadLayoutOverrides(),
   );
+  // 結線の端点の角度。ドラッグでは変わらず、インスペクタの「適用」でだけ変わる。
+  const [portOverrides, setPortOverrides] =
+    useState<PortOverrides>(loadPortOverrides);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const overridesRef = useRef(overrides);
+  // ドラッグ・視点の保存と右クリックでのインスペクタ表示は effect の中から
+  // 呼ばれるため、最新の角度を ref でも持つ。
+  const portOverridesRef = useRef(portOverrides);
   const { state: saveState, save, close: closeSaveStatus } =
     useLayoutSaveStatus("sitemap");
-  // 視点(パン/ズーム)。変わるたびに、ノードの手調整と一緒に sitemap.json へ保存する。
-  // d3.sitemap は d3.svg の zoom を使い、ズーム・パンで g.layer(background /
-  // foreground)の transform を書き換える(TM と同じ)。図の再構築(初回描画・
-  // インスペクタの「適用」)でライブラリが等倍・原点へ戻すと、フックが保存済みの
-  // 視点へ戻す。
+  // 視点(パン/ズーム)。変わるたびに、ノードの手調整・角度と一緒に sitemap.json へ
+  // 保存する。d3.sitemap は d3.svg の zoom を使い、ズーム・パンで g.layer
+  // (background / foreground)の transform を書き換える(TM と同じ)。図の再構築
+  // (初回描画・インスペクタの「適用」)でライブラリが等倍・原点へ戻すと、フックが
+  // 保存済みの視点へ戻す。
   // d3.svg には初期視点を渡す口(options.transform)もあるが、
   // zoomIdentity.scale(k).translate(x, y) の順で組み立てるため x・y が k 倍に
   // ずれる。使わずにフックの書き戻しに任せる。
@@ -65,7 +86,10 @@ export default function SitemapTab() {
     containerRef,
     layerSelector: "g.layer",
     initial: loadCameraTransform(),
-    onSave: (camera) => save(buildLayoutFile(overridesRef.current, camera)),
+    onSave: (camera) =>
+      save(
+        buildLayoutFile(overridesRef.current, portOverridesRef.current, camera),
+      ),
   });
 
   useEffect(() => {
@@ -150,9 +174,9 @@ export default function SitemapTab() {
       // 視点の保存はこの ref を読むので、再描画を待たずに先に更新しておく。
       overridesRef.current = next;
       setOverrides(next);
-      // 同じ sitemap.json に視点も入るため、保存済みの値を必ず一緒に書く
-      // (ノードの手調整だけを書くと視点が消える)。
-      save(buildLayoutFile(next, cameraRef.current));
+      // 同じ sitemap.json に角度・視点も入るため、保存済みの値を必ず一緒に書く
+      // (ノードの手調整だけを書くとほかが消える)。
+      save(buildLayoutFile(next, portOverridesRef.current, cameraRef.current));
     };
 
     window.addEventListener("mousedown", handleMouseDown, { capture: true });
@@ -167,44 +191,88 @@ export default function SitemapTab() {
     };
   }, [save, cameraRef]);
 
+  // 右クリックでインスペクタを開く(TM・ハブと同じ流儀)。d3.sitemap には
+  // contextmenu のコールバックが無いため、コンテナへの委譲で拾う。空白部の
+  // 右クリックと Esc は閉じる操作にあてる。
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handleContextMenu = (event: MouseEvent) => {
+      event.preventDefault();
+
+      const target = (event.target as Element).closest?.("g.node");
+      const core = target
+        ? (target as unknown as { __data__?: SitemapDatum }).__data__?._core
+        : undefined;
+      setSelected(
+        core ? buildInspectorTarget(core, portOverridesRef.current) : null,
+      );
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSelected(null);
+    };
+
+    container.addEventListener("contextmenu", handleContextMenu);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      container.removeEventListener("contextmenu", handleContextMenu);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
+
   const rectum = useMemo(() => {
-    const instance = new Rectum({
-      callbacks: {
-        node: {
-          click: (core: SitemapNodeCore) => setSelected(core),
-        },
-      },
-    });
+    // インスペクタは右クリックで開くので、node.click コールバックは渡さない。
+    const instance = new Rectum({ callbacks: {} });
     instance.data({
       nodes: applyLayoutOverrides(SITEMAP_DATA.nodes, overrides),
-      edges: SITEMAP_DATA.edges,
+      edges: applyPortOverrides(SITEMAP_DATA.edges, portOverrides),
     });
     return instance;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [overrides, version]);
+  }, [overrides, portOverrides, version]);
+
+  const inspectorTabs = useMemo(
+    () => (selected ? buildInspectorTabs(selected.id) : []),
+    [selected],
+  );
 
   const handleApply = (values: Record<string, string>) => {
     if (!selected) return;
 
-    const next: LayoutOverrides = {
-      ...overrides,
-      [selected.id]: {
-        position: {
-          x: toNumber(values["position.x"], selected.position.x),
-          y: toNumber(values["position.y"], selected.position.y),
+    // Colonoscope のタブモードは表示中のタブの値だけを通知するので、
+    // 基本タブの値が来たときだけノードの位置・サイズを書き換える
+    // (結線タブの「適用」で、ノードに不要なオーバーライドを書かないため)。
+    let nextNodes = overridesRef.current;
+    if (hasBasicValues(values)) {
+      nextNodes = {
+        ...nextNodes,
+        [selected.id]: {
+          position: {
+            x: toNumber(values["position.x"], selected.position.x),
+            y: toNumber(values["position.y"], selected.position.y),
+          },
+          size: {
+            w: toNumber(values["size.w"], selected.size.w),
+            h: toNumber(values["size.h"], selected.size.h),
+          },
         },
-        size: {
-          w: toNumber(values["size.w"], selected.size.w),
-          h: toNumber(values["size.h"], selected.size.h),
-        },
-      },
+      };
+    }
+    const nextPorts: PortOverrides = {
+      ...portOverridesRef.current,
+      ...readChangedPorts(values, selected),
     };
 
-    overridesRef.current = next;
-    setOverrides(next);
-    // ノードの手調整と視点は同じ sitemap.json に入るので、1回の保存でまとめて書く。
-    save(buildLayoutFile(next, cameraRef.current));
+    overridesRef.current = nextNodes;
+    portOverridesRef.current = nextPorts;
+    setOverrides(nextNodes);
+    setPortOverrides(nextPorts);
+    // ノードの手調整・角度・視点は同じ sitemap.json に入るので、1回の保存でまとめて書く。
+    save(buildLayoutFile(nextNodes, nextPorts, cameraRef.current));
     setSelected(null);
+    // rectum を作り直しただけでは再描画されないため、D3Sitemap を貼り替える。
     setVersion((v) => v + 1);
   };
 
@@ -218,13 +286,8 @@ export default function SitemapTab() {
 
       <Colonoscope
         target={selected}
-        title={(t: SitemapNodeCore) => t.label?.contents}
-        fields={[
-          { path: "position.x", label: "X", type: "number" },
-          { path: "position.y", label: "Y", type: "number" },
-          { path: "size.w", label: "幅", type: "number" },
-          { path: "size.h", label: "高さ", type: "number" },
-        ]}
+        title={(t: SitemapInspectorTarget) => t.label?.contents}
+        tabs={inspectorTabs}
         onApply={handleApply}
         onClose={() => setSelected(null)}
       />
