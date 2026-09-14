@@ -43,15 +43,19 @@
  *   会話ファイル(`conversation_file`、1件)とサブエージェントのファイル(`subagent_files`、
  *   0件以上)を別の役割で持ち、どちらに入っているかで種別が決まるため。1件の枠を分ける
  *   ことで、ファイルが0件のセッション(TM の 1..* に反する)を型で作れなくもしている。
- * - `home_directory` は TM どおりユーザーに置いている。ただし TM の「PC．ユーザー」の
- *   説明にあるとおり同じユーザー名が複数の PC にありうるので、実際のパスは PC ごとに
- *   違いうる。そうなら PC × ユーザー の組(関連クラス)の属性にすべきで、TM 側の
- *   判断を仰いでから直す。
+ * - PC とユーザーはコンポジションにしている(PC が全体で User を所有する)。User は
+ *   「その PC 上の OS のユーザーアカウント」で、1台の PC にしか属さない。同じ人が2台の
+ *   PC を使えば User は2つになる。TM ではユーザーを PC から独立したリソースとし、対照表
+ *   「PC．ユーザー」で多対多にしているので、ここは TM と違う。TM 側(Data セッション)に
+ *   合わせてもらうなら、ユーザーの個体指定子を システムUUID(R) + ユーザーID にし、
+ *   対照表「PC．ユーザー」をやめる形になる。
+ *   これにより、以前ここで未決にしていた「`home_directory` は PC ごとに違いうる」問題は
+ *   解消する(User が PC ごとのアカウントなので、User の属性でよい)。
  * - `repository_path` を Gitリポジトリの個体指定子にしている(TM どおり)。ただし TM の
  *   「PC．Gitリポジトリ」の説明にあるとおり同じリポジトリを複数の PC にクローンしうるので、
  *   置き場所のパスは PC ごとに違いうる。パスでは PC をまたいで同じリポジトリだと言えない
- *   ため、`home_directory` と同じく TM 側と相談する(パスを PC × Gitリポジトリ の組の
- *   属性にし、別の個体指定子を立てる、など)。
+ *   ため、TM 側と相談する(パスを PC × Gitリポジトリ の組の属性にし、別の個体指定子を
+ *   立てる、など)。
  */
 import type { DiagramInput } from "@yanqirenshi/d3.classes";
 import { attr, defineDiagram, type ClassDef } from "./classDiagram";
@@ -68,9 +72,9 @@ const DEFS: ClassDef[] = [
     position: { x: 420, y: 40 },
   },
   {
-    name: { physical: "User", logical: "User", description: "マシンを使う人。TM: ユーザー(リソース)" }, // 論理名: ユーザー
+    name: { physical: "User", logical: "User", description: "PC 上の OS のユーザーアカウント。PC に所有される(コンポジション)。TM: ユーザー(リソース)" }, // 論理名: ユーザー
     attributes: [
-      attr("user_id", "String"), // 個体指定子。OS のユーザー名
+      attr("user_id", "String"), // 個体指定子。OS のユーザー名(PC の中で一意)
       attr("user_name", "String"),
       attr("home_directory", "PathBuf"),
     ],
@@ -135,13 +139,15 @@ const DEFS: ClassDef[] = [
 const { classes, rel } = defineDiagram(DEFS);
 
 const RELATIONSHIPS = [
-  // TM: PC．ユーザー(対照表、属性なし)。1台に1人以上、1人が1台以上。
+  // TM: PC．ユーザー(対照表、属性なし)。1台に1人以上。
+  // PC が User(その PC 上のアカウント)を所有するのでコンポジションにする(TM は多対多。
+  // 冒頭の【TM との違い・未決】を参照)。線は「部分 → 全体」の向き(◆が Pc 側に付く)で、
+  // ラベルは全体側のフィールド名、多重度は部分側だけ書く。
   // 横向き(User の右辺 → Pc の左辺)につなぐ。(d3.classes 0.7.0 までは多重度の文字が
   // 接続辺によっては箱に隠れたため横向きにそろえていた。0.8.0 以降は線に沿って置かれ、
   // どの辺につないでも隠れない。)
-  rel("association", "User", "Pc", "利用する", "right", "left", {
+  rel("composition", "User", "Pc", "users", "right", "left", {
     fromMultiplicity: "1..*",
-    toMultiplicity: "1..*",
   }),
   // TM: PC．Gitリポジトリ(対照表、属性なし)。1台にリポジトリは 0 件以上、
   // 1つのリポジトリは 1 台以上の PC に置かれる。同じく横向きにつなぐ。
