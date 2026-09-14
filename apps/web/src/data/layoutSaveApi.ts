@@ -11,6 +11,9 @@
 export const LAYOUT_DIAGRAMS = ["sitemap", "classes", "tm"] as const;
 export type LayoutDiagram = (typeof LAYOUT_DIAGRAMS)[number];
 
+/** 図の視点(パン/ズーム)。d3-zoom の transform と同じ {k, x, y}。 */
+export type CameraTransform = { k: number; x: number; y: number };
+
 export type LayoutSaveResult = {
   ok: boolean;
   status: number;

@@ -31,7 +31,7 @@ export const GUIDE_FILES: GuideFile[] = [
   },
   {
     path: "src/data/layout/classes.json",
-    role: "画面での手調整(位置・端点の角度)。データより優先して使われる。",
+    role: "画面での手調整(位置・端点の角度)と視点(ズーム倍率・位置)。位置と端点はデータより優先して使われる。",
   },
   {
     path: "src/data/classDiagramGuide.ts",
@@ -296,7 +296,7 @@ export const GUIDE_POINTS: GuidePoint[] = [
 export const GUIDE_LAYOUT_RULES: GuideRule[] = [
   {
     title: "画面で動かす",
-    body: "箱をドラッグすると、位置が src/data/layout/classes.json に保存される。箱をクリックするとインスペクタが開き、位置と、つながる線の端点の角度を数値で変えられる。",
+    body: "箱をドラッグすると、位置が src/data/layout/classes.json に保存される。箱をクリックするとインスペクタが開き、位置と、つながる線の端点の角度を数値で変えられる。ホイールでのズームや空き地のドラッグで変えた視点(ズーム倍率と位置)も同じファイルに保存され、次に開いたときに戻る。",
   },
   {
     title: "手調整はデータより優先される",
@@ -311,8 +311,8 @@ export const GUIDE_LAYOUT_RULES: GuideRule[] = [
     body: "位置や端点を変えたら、どこに置き、どの辺でつなぐかを説明するコメントも合わせて直す。",
   },
   {
-    title: "マージの後に classes.json を戻す",
-    body: "書き写した PR がマージされたら、classes.json を {} に戻す。戻さないと、古い手調整がデータより優先され続ける。",
+    title: "マージの後に書き写した手調整を消す",
+    body: "書き写した PR がマージされたら、classes.json から位置と端点(classes と ports)を消す。消さないと、古い手調整がデータより優先され続ける。視点(camera)は表示のための値でデータには書き写さないので、残してよい。",
   },
 ];
 
