@@ -97,7 +97,7 @@ const DEFS: ClassDef[] = [
       attr("pc_name", "String"),
       attr("description", "String"),
     ],
-    position: { x: 420, y: 40 },
+    position: { x: 55, y: -38 },
   },
   {
     name: { physical: "User", logical: "User", description: "PC 上の OS のユーザーアカウント。PC に所有される(コンポジション)。TM: ユーザー(リソース)" }, // 論理名: ユーザー
@@ -106,7 +106,8 @@ const DEFS: ClassDef[] = [
       attr("user_name", "String"),
       attr("home_directory", "PathBuf"),
     ],
-    position: { x: 40, y: 40 },
+    // Pc の真下に置く(Pc と Session にはさまれた列)。
+    position: { x: 55, y: 217 },
   },
   {
     name: { physical: "GitRepository", logical: "GitRepository", description: "プロダクト開発の対象として登録したリポジトリ(クローン1つ)。User に所有される(コンポジション)。TM: Gitリポジトリ(リソース)" }, // 論理名: Gitリポジトリ
@@ -115,8 +116,8 @@ const DEFS: ClassDef[] = [
       attr("repository_name", "String"),
       attr("description", "String"),
     ],
-    // User への線が Pc の箱を横切らないよう、Pc の下に置く。
-    position: { x: 420, y: 300 },
+    // User の右に並べる(User の右辺と横につなぐ)。
+    position: { x: 468, y: 217 },
   },
   {
     name: { physical: "GitBranch", logical: "GitBranch", description: "ブランチの作成・削除。git 自体はブランチに ID を持たないため、管理対象にするために ID を新設する。TM: Gitブランチ(イベント)" }, // 論理名: Gitブランチ
@@ -127,7 +128,7 @@ const DEFS: ClassDef[] = [
       attr("created_at_time", "u64"),
       attr("deleted_at_time", "Option<u64>"),
     ],
-    position: { x: 1198, y: 25 },
+    position: { x: 951, y: 161 },
   },
   {
     name: { physical: "GitWorktree", logical: "GitWorktree", description: "ワーキングツリーの作成・削除。git の識別子は台帳のディレクトリ名(パス由来)だけなので、ID を新設する。TM: ワーキングツリー(イベント)" }, // 論理名: ワーキングツリー
@@ -140,7 +141,7 @@ const DEFS: ClassDef[] = [
       attr("created_at_time", "u64"),
       attr("deleted_at_time", "Option<u64>"),
     ],
-    position: { x: 1195, y: 396 },
+    position: { x: 951, y: 470 },
   },
   // ============ 会話 ============
   {
@@ -153,7 +154,7 @@ const DEFS: ClassDef[] = [
       attr("slug", "Option<String>"), // TM: セッション別名
       attr("/last_prompt", "Option<String>"), // TM: 直近入力テキスト(D)。ログから導出する
     ],
-    position: { x: 51, y: 823 },
+    position: { x: 55, y: 824 },
   },
   {
     name: { physical: "SessionFile", logical: "SessionFile", description: "セッションログの .jsonl ファイル1件。会話ファイル(<フォルダ名>/<セッションID>.jsonl)とサブエージェントのファイル(<フォルダ名>/<セッションID>/subagents/agent-<エージェントID>.jsonl)がある。TM: セッションファイル(jsonl)(リソース)" }, // 論理名: セッションファイル(jsonl)
@@ -161,7 +162,8 @@ const DEFS: ClassDef[] = [
       attr("file_path", "PathBuf"), // 個体指定子。ファイルパス
       // 種別(TM の fileKind)は持たない。冒頭の【TM との違い・未決】を参照。
     ],
-    position: { x: -200, y: 1150 },
+    // Session の右に置く(Session の右辺と横に2本並べてつなぐ)。
+    position: { x: 489, y: 875 },
   },
   // ============ ログ行 ============
   {
@@ -183,7 +185,8 @@ const DEFS: ClassDef[] = [
       attr("user_type", "Option<String>"),
       // 行種別(TM の type)は持たない。どのサブクラスかで決まる。
     ],
-    position: { x: 450, y: 1350 },
+    // SessionFile の右に置く。サブクラス4つはその下の横一列(y = 1248)。
+    position: { x: 943, y: 773 },
     // d3.classes は箱の幅を中身から計算せず、指定が無ければ 200 で固定する。
     // logical_parent_uuid と型の列が重なるので広げる(h は無視され、中身から計算される)。
     size: { w: 250, h: 0 },
@@ -191,7 +194,9 @@ const DEFS: ClassDef[] = [
   {
     name: { physical: "UserLogLine", logical: "UserLogLine", description: "人間の入力とツール実行結果の行(type = user)。実測では約9割がツール実行結果。TM: ユーザー行(イベントのサブセット)" }, // 論理名: ユーザー行
     attributes: [attr("prompt_id", "Option<String>"), attr("permission_mode", "Option<String>")],
-    position: { x: 60, y: 1700 },
+    // AssistantLogLine との間は、関連のラベル source_tool_assistant と多重度が箱に
+    // 隠れないよう 150px ほど空ける。
+    position: { x: 440, y: 1248 },
     // permission_mode と型の列が重なるので広げる(LogLine の size の説明を参照)。
     size: { w: 230, h: 0 },
   },
@@ -203,7 +208,7 @@ const DEFS: ClassDef[] = [
       attr("model", "Option<String>"),
       attr("stop_reason", "Option<String>"),
     ],
-    position: { x: 430, y: 1700 },
+    position: { x: 821, y: 1248 },
   },
   {
     name: { physical: "SystemLogLine", logical: "SystemLogLine", description: "内部イベントの行(type = system)。TM: システム行(イベントのサブセット)" }, // 論理名: システム行
@@ -213,7 +218,7 @@ const DEFS: ClassDef[] = [
       attr("subtype", "String"),
       attr("level", "Option<String>"),
     ],
-    position: { x: 730, y: 1700 },
+    position: { x: 1063, y: 1248 },
   },
   {
     name: { physical: "AttachmentLogLine", logical: "AttachmentLogLine", description: "実行環境が会話に注入した情報の行(type = attachment)。TM: 付帯情報行(イベントのサブセット)" }, // 論理名: 付帯情報行
@@ -221,7 +226,7 @@ const DEFS: ClassDef[] = [
       // TM: 付帯情報種別(23種)。SystemLogLine の subtype と同じく、TM で分けた段階でサブクラスにする。
       attr("attachment_type", "String"),
     ],
-    position: { x: 1030, y: 1700 },
+    position: { x: 1317, y: 1248 },
   },
 ];
 
@@ -232,17 +237,15 @@ const RELATIONSHIPS = [
   // PC が User(その PC 上のアカウント)を所有するのでコンポジションにする(TM は多対多。
   // 冒頭の【TM との違い・未決】を参照)。線は「部分 → 全体」の向き(◆が Pc 側に付く)で、
   // ラベルは全体側のフィールド名、多重度は部分側だけ書く。
-  // 横向き(User の右辺 → Pc の左辺)につなぐ。(d3.classes 0.7.0 までは多重度の文字が
-  // 接続辺によっては箱に隠れたため横向きにそろえていた。0.8.0 以降は線に沿って置かれ、
-  // どの辺につないでも隠れない。)
-  rel("composition", "User", "Pc", "users", "right", "left", {
+  // Pc を User の真上に置き、縦向き(User の上辺 → Pc の下辺)につなぐ。
+  rel("composition", "User", "Pc", "users", "top", "bottom", {
     fromMultiplicity: "1..*",
   }),
   // TM: PC．Gitリポジトリ(対照表、属性なし)。オブジェクトモデルでは PC ではなく User が
   // GitRepository を所有するコンポジションにする(TM との違いは冒頭の【TM との違い・未決】)。
-  // 1人に 0 件以上。GitRepository の左辺から User の右下(315°)へつなぐ(User の右辺の
-  // 中央は Pc への線、下辺の中央は Session からの線で使っている)。
-  rel("composition", "GitRepository", "User", "repositories", "left", 315, {
+  // 1人に 0 件以上。GitRepository の左辺から User の右辺へ横につなぐ(User の上辺は
+  // Pc への線、下辺は Session からの線で使っている)。
+  rel("composition", "GitRepository", "User", "repositories", "left", "right", {
     fromMultiplicity: "0..*",
   }),
   // TM: Gitリポジトリ 1 : Gitブランチ 0..*(E-R。ブランチ側の repositoryPath(R))。
@@ -282,23 +285,23 @@ const RELATIONSHIPS = [
   // 会話ファイル1件 + サブエージェント0件以上、ファイルは必ず1つの会話に属する。
   // Session が SessionFile を所有するのでコンポジションにし、役割(会話ファイル /
   // サブエージェントのファイル)ごとに線を分ける。1つのファイルはどちらか一方にだけ入る。
-  // 線は「部分 → 全体」の向き(◆が Session 側に付く)。SessionFile の上辺と右辺から出し、
-  // Session の上辺は User からの線で使っているので左辺と下辺で受ける。どちらの線も箱を
-  // 横切らず2本が交差しないよう、SessionFile は Session の左下に置く(右下に置くと、
-  // 右辺から左へ向かう線が自分の箱を横切る)。
-  rel("composition", "SessionFile", "Session", "conversation_file", "top", "left", {
+  // 線は「部分 → 全体」の向き(◆が Session 側に付く)。SessionFile を Session の右に置き、
+  // SessionFile の左辺から Session の右辺へ、2本を上下に並べてつなぐ。conversation_file は
+  // 上寄り(左辺 100° → 右辺 260°)、subagent_files は下寄り(左辺 80° → 右辺 280°)で、
+  // 2本は交差しない。
+  rel("composition", "SessionFile", "Session", "conversation_file", 100, 260, {
     key: "conversation_file",
     fromMultiplicity: "1",
   }),
-  rel("composition", "SessionFile", "Session", "subagent_files", "right", "bottom", {
+  rel("composition", "SessionFile", "Session", "subagent_files", 80, 280, {
     key: "subagent_files",
     fromMultiplicity: "0..*",
   }),
   // TM: セッションファイル 1 : ログ行 1..*(書かれた先)。行はファイルに書かれるので、
   // SessionFile が LogLine を所有するコンポジションにする。TM の「セッション 1 : ログ行」
-  // は線を描かない(冒頭の【TM との違い・未決】)。LogLine の上辺から SessionFile の下辺へ
-  // つなぐ(SessionFile を手調整で動かしても、線が箱を横切りにくい向き)。
-  rel("composition", "LogLine", "SessionFile", "lines", "top", "bottom", {
+  // は線を描かない(冒頭の【TM との違い・未決】)。LogLine の左辺から SessionFile の右辺へ
+  // 横につなぐ。
+  rel("composition", "LogLine", "SessionFile", "lines", "left", "right", {
     fromMultiplicity: "1..*",
   }),
   // TM: ログ行のサブセット(×行種別。区分コードによる切断)。継承(汎化)で描く。線は
@@ -311,8 +314,8 @@ const RELATIONSHIPS = [
   // TM の再帰表「ログ行．ログ行」は線にしない(LogLine の parent_uuid / logical_parent_uuid)。
   // TM: AI応答行 → ユーザー行(ツール発行元。E-E の先行・後続で、どちらも 0..1)。ユーザー行が
   // sourceToolAssistantUUID で tool_use を発行した AI応答行を指すので、UserLogLine →
-  // AssistantLogLine の関連にし、実装では ID で参照する。ラベルが箱に重ならないよう、
-  // 2つのクラスの間を広めに空けている。
+  // AssistantLogLine の関連にし、実装では ID で参照する。ラベルが箱に隠れないよう、
+  // 2つのクラスの間を広めに空けている(UserLogLine の position の説明を参照)。
   rel("association", "UserLogLine", "AssistantLogLine", "source_tool_assistant", "right", "left", {
     fromMultiplicity: "0..1",
     toMultiplicity: "0..1",
