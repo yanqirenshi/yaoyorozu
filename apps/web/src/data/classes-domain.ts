@@ -194,9 +194,10 @@ const DEFS: ClassDef[] = [
   {
     name: { physical: "UserLogLine", logical: "UserLogLine", description: "人間の入力とツール実行結果の行(type = user)。実測では約9割がツール実行結果。TM: ユーザー行(イベントのサブセット)" }, // 論理名: ユーザー行
     attributes: [attr("prompt_id", "Option<String>"), attr("permission_mode", "Option<String>")],
-    // AssistantLogLine との間は、関連のラベル source_tool_assistant と多重度が箱に
-    // 隠れないよう 150px ほど空ける。
-    position: { x: 440, y: 1248 },
+    // AssistantLogLine との間は 180px ほど空ける。関連のラベル source_tool_assistant
+    // (幅 約112px)は線の中央に置かれるので、間が狭いと箱に隠れたり、線の両端の記号
+    // (起点の ×、終点の矢印)に重なったりする。
+    position: { x: 410, y: 1248 },
     // permission_mode と型の列が重なるので広げる(LogLine の size の説明を参照)。
     size: { w: 230, h: 0 },
   },
