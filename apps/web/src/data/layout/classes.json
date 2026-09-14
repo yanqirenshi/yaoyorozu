@@ -1,1 +1,76 @@
-{}
+{
+  "classes": {
+    "SessionFile": {
+      "x": 489.0724334716797,
+      "y": 875.1710205078125
+    },
+    "Session": {
+      "x": 53.57435607910156,
+      "y": 824
+    },
+    "GitBranch": {
+      "x": 953.9081420898438,
+      "y": 161.39928424358368
+    },
+    "GitWorktree": {
+      "x": 951,
+      "y": 470
+    },
+    "Pc": {
+      "x": 57.000030517578125,
+      "y": -38
+    },
+    "LogLineLink": {
+      "x": 1374.4086303710938,
+      "y": 872.3771362304688
+    },
+    "LogLine": {
+      "x": 943.2268676757812,
+      "y": 773.4633178710938
+    },
+    "AttachmentLogLine": {
+      "x": 1317.28173828125,
+      "y": 1245.5726318359375
+    },
+    "SystemLogLine": {
+      "x": 1063.4208984375,
+      "y": 1248.184326171875
+    },
+    "AssistantLogLine": {
+      "x": 821,
+      "y": 1248
+    },
+    "UserLogLine": {
+      "x": 397.1012573242187,
+      "y": 1268.73583984375
+    },
+    "GitRepository": {
+      "x": 468.17584228515625,
+      "y": 216.84392547607425
+    },
+    "User": {
+      "x": 54.51458740234375,
+      "y": 216.81404876708984
+    }
+  },
+  "ports": {
+    "SessionFile->Session#conversation_file:to": 260,
+    "SessionFile->Session#subagent_files:to": 280,
+    "SessionFile->Session#conversation_file:from": 100,
+    "SessionFile->Session#subagent_files:from": 80,
+    "User->Pc:to": 0,
+    "User->Pc:from": 180,
+    "LogLine->SessionFile:to": 270,
+    "LogLine->SessionFile:from": 90,
+    "GitRepository->User:to": 270,
+    "LogLineLink->LogLine#parent_link:from": 100,
+    "LogLineLink->LogLine#parent:from": 80,
+    "LogLineLink->LogLine#parent_link:to": 260,
+    "LogLineLink->LogLine#parent:to": 280
+  },
+  "camera": {
+    "x": 190.1883520901613,
+    "y": 217.36920059705005,
+    "k": 0.5743491774985174
+  }
+}
