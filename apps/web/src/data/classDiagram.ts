@@ -11,6 +11,7 @@
 import type {
   AttributeInput,
   ClassInput,
+  ConnectionPoint,
   DiagramInput,
   RelationshipInput,
 } from "@yanqirenshi/d3.classes";
@@ -18,7 +19,11 @@ import type {
 /** クラス定義。id は物理名から付けるので書かない。 */
 export type ClassDef = Omit<ClassInput, "id">;
 
-export type Side = "top" | "bottom" | "left" | "right";
+/**
+ * 端点の取り付け位置。辺のキーワード(`"top"` など。その辺の中央)か、取り付け角度
+ * (度。ボックス中心から 0=真下・時計回りに 90=左、180=真上、270=右)。
+ */
+export type Point = ConnectionPoint;
 
 /**
  * 多重度(起点側・終点側それぞれの端に表示される。例: `"1..*"`)と、同じ組に複数の
@@ -65,8 +70,8 @@ export function defineDiagram(defs: ClassDef[]) {
     from: string,
     to: string,
     label?: string,
-    fromPoint: Side = "bottom",
-    toPoint: Side = "top",
+    fromPoint: Point = "bottom",
+    toPoint: Point = "top",
     { key, ...multiplicity }: RelationshipOptions = {},
   ): RelationshipInput => ({
     id: key ? `${from}->${to}#${key}` : `${from}->${to}`,

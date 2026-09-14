@@ -11,9 +11,9 @@ import {
   loadPortOverrides,
   migrateLegacyLayoutIfNeeded,
   portOverrideKey,
+  toAngle,
   type LayoutOverrides,
   type PortOverrides,
-  type PortSide,
 } from "@/data/classesLayoutStorage";
 import ClassesInspector, {
   type ClassesInspectorPort,
@@ -51,15 +51,13 @@ function buildPorts(
       const self = rel[end];
       const other = end === "from" ? rel.to : rel.from;
       if (!("classId" in self) || self.classId !== physical) continue;
-      // d3.classes 0.8.0 以降は取り付け位置を角度(数値)でも指定できるが、インスペクタの
-      // 選択肢は4辺だけなので、辺のキーワードでつないだ端だけを一覧に出す。
-      if (typeof self.point !== "string") continue;
       ports.push({
         key: portOverrideKey(rel.id, end),
         counterpart: "classId" in other ? other.classId : "(座標)",
         label: rel.label,
         outgoing: end === "from",
-        side: self.point,
+        // 辺のキーワードで書いた端点も、その辺の中央に当たる角度に読み替えて見せる。
+        angle: toAngle(self.point),
       });
     }
   }
@@ -225,7 +223,7 @@ export default function ClassesTab() {
   const handleApply = useCallback(
     (values: {
       position: { x: number; y: number };
-      ports: Record<string, PortSide>;
+      ports: Record<string, number>;
     }) => {
       if (!selected) return;
       const diagram = diagramRef.current;

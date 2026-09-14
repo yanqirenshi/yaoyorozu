@@ -4,23 +4,23 @@ import { useState } from "react";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import IconButton from "@mui/material/IconButton";
-import MenuItem from "@mui/material/MenuItem";
 import Tab from "@mui/material/Tab";
 import Tabs from "@mui/material/Tabs";
 import TextField from "@mui/material/TextField";
-import { PORT_SIDES, type PortSide } from "@/data/classesLayoutStorage";
+import { normalizeAngle } from "@/data/classesLayoutStorage";
 
 /**
  * Classes 図のインスペクタ。クラスのクリックで開く右端の詳細パネル。
  *
- * 以前は `@yanqirenshi/colonoscope` を使っていたが、接続辺を選ぶ入力欄(選択肢)が
- * 無く、結線の一覧も置けないため MUI で作り直した。作りは TM のインスペクタ
- * (`tabs/tm/TmInspector.tsx`)に揃えている(基本 / 説明の2タブ、結線一覧、幅の伸縮)。
- * TM は結線の端点を角度で、Classes は辺で持つため、部品は共通化していない。
+ * 以前は `@yanqirenshi/colonoscope` を使っていたが、結線の一覧を置く手段が無いため
+ * MUI で作り直した。作りは TM のインスペクタ(`tabs/tm/TmInspector.tsx`)に揃えている
+ * (基本 / 説明の2タブ、結線一覧、幅の伸縮)。
+ * 結線の端点は、d3.classes 0.8.0 以降、TM と同じく角度で持てるようになった。
+ * 部品を TM と共通化する余地はあるが、TM のインスペクタは TM の担当範囲なので分けたままにする。
  */
 
 /**
- * 選択中クラスに繋がる関係線1本。`side` はこのクラス側の端点の接続辺で、
+ * 選択中クラスに繋がる関係線1本。`angle` はこのクラス側の端点の取り付け角度で、
  * 相手側は編集しない(相手のクラスを選べばそちらから編集できる)。
  */
 export type ClassesInspectorPort = {
@@ -32,7 +32,8 @@ export type ClassesInspectorPort = {
   label?: string;
   /** このクラスが関係線の起点側か終点側か。表示の向きに使う。 */
   outgoing: boolean;
-  side: PortSide;
+  /** 0〜359。0=下 / 90=左 / 180=上 / 270=右。 */
+  angle: number;
 };
 
 export type ClassesInspectorTarget = {
@@ -50,28 +51,30 @@ type ClassesInspectorProps = {
   width: number;
   onApply: (values: {
     position: { x: number; y: number };
-    /** 変更のあった端点だけ(保存キー → 接続辺)。 */
-    ports: Record<string, PortSide>;
+    /** 変更のあった端点だけ(保存キー → 角度)。 */
+    ports: Record<string, number>;
   }) => void;
   onClose: () => void;
 };
 
 type TabValue = "basic" | "description";
 
-const SIDE_LABEL: Record<PortSide, string> = {
-  top: "上",
-  bottom: "下",
-  left: "左",
-  right: "右",
-};
-
 function toNumber(value: string, fallback: number) {
   const parsed = Number(value);
   return Number.isNaN(parsed) ? fallback : parsed;
 }
 
-function initialSides(ports: ClassesInspectorPort[]): Record<string, PortSide> {
-  return Object.fromEntries(ports.map((port) => [port.key, port.side]));
+/** 辺の中央に当たる角度なら、その辺の名前を添える。中間の角度もそのまま使える。 */
+function angleHint(angle: number) {
+  if (angle === 0) return "下";
+  if (angle === 90) return "左";
+  if (angle === 180) return "上";
+  if (angle === 270) return "右";
+  return "";
+}
+
+function initialAngles(ports: ClassesInspectorPort[]): Record<string, string> {
+  return Object.fromEntries(ports.map((port) => [port.key, String(port.angle)]));
 }
 
 export default function ClassesInspector({
@@ -84,8 +87,8 @@ export default function ClassesInspector({
   const [shownPhysical, setShownPhysical] = useState(target.physical);
   const [x, setX] = useState(String(target.position.x));
   const [y, setY] = useState(String(target.position.y));
-  const [sides, setSides] = useState<Record<string, PortSide>>(() =>
-    initialSides(target.ports),
+  const [angles, setAngles] = useState<Record<string, string>>(() =>
+    initialAngles(target.ports),
   );
 
   // 対象が変わったら入力欄を差し替える。レンダー中の setState で書く
@@ -95,16 +98,16 @@ export default function ClassesInspector({
     setShownPhysical(target.physical);
     setX(String(target.position.x));
     setY(String(target.position.y));
-    setSides(initialSides(target.ports));
+    setAngles(initialAngles(target.ports));
   }
 
   const nextX = toNumber(x, target.position.x);
   const nextY = toNumber(y, target.position.y);
 
-  const changedPorts: Record<string, PortSide> = {};
+  const changedPorts: Record<string, number> = {};
   for (const port of target.ports) {
-    const next = sides[port.key] ?? port.side;
-    if (next !== port.side) changedPorts[port.key] = next;
+    const next = normalizeAngle(toNumber(angles[port.key] ?? "", port.angle));
+    if (next !== port.angle) changedPorts[port.key] = next;
   }
 
   const changed =
@@ -188,7 +191,8 @@ export default function ClassesInspector({
               className="text-xs"
               style={{ color: "var(--text-secondary)" }}
             >
-              結線({target.ports.length}) — このクラス側の接続辺
+              結線({target.ports.length}) — このクラス側の角度
+              <span className="ml-1">0=下 / 90=左 / 180=上 / 270=右</span>
             </div>
 
             {target.ports.length === 0 ? (
@@ -199,51 +203,58 @@ export default function ClassesInspector({
                 (結線なし)
               </div>
             ) : (
-              target.ports.map((port) => (
-                <div
-                  key={port.key}
-                  className="flex items-center gap-2 rounded border px-2 py-1.5"
-                  style={{ borderColor: "var(--border-default)" }}
-                >
-                  <div className="min-w-0 flex-1">
-                    <div
-                      className="truncate text-sm"
-                      style={{ color: "var(--text-primary)" }}
-                      title={port.counterpart}
-                    >
-                      {port.outgoing ? "→ " : "← "}
-                      {port.counterpart}
-                    </div>
-                    {port.label && (
-                      <div
-                        className="truncate text-xs"
-                        style={{ color: "var(--text-secondary)" }}
-                      >
-                        {port.label}
-                      </div>
-                    )}
-                  </div>
-                  <TextField
-                    select
-                    label="辺"
-                    value={sides[port.key] ?? port.side}
-                    size="small"
-                    sx={{ width: 96 }}
-                    onChange={(event) =>
-                      setSides((prev) => ({
-                        ...prev,
-                        [port.key]: event.target.value as PortSide,
-                      }))
-                    }
+              target.ports.map((port) => {
+                const value = angles[port.key] ?? String(port.angle);
+                const hint = angleHint(
+                  normalizeAngle(toNumber(value, port.angle)),
+                );
+                return (
+                  <div
+                    key={port.key}
+                    className="flex items-center gap-2 rounded border px-2 py-1.5"
+                    style={{ borderColor: "var(--border-default)" }}
                   >
-                    {PORT_SIDES.map((side) => (
-                      <MenuItem key={side} value={side}>
-                        {SIDE_LABEL[side]}
-                      </MenuItem>
-                    ))}
-                  </TextField>
-                </div>
-              ))
+                    <div className="min-w-0 flex-1">
+                      <div
+                        className="truncate text-sm"
+                        style={{ color: "var(--text-primary)" }}
+                        title={port.counterpart}
+                      >
+                        {port.outgoing ? "→ " : "← "}
+                        {port.counterpart}
+                      </div>
+                      {port.label && (
+                        <div
+                          className="truncate text-xs"
+                          style={{ color: "var(--text-secondary)" }}
+                        >
+                          {port.label}
+                        </div>
+                      )}
+                    </div>
+                    <TextField
+                      type="number"
+                      value={value}
+                      size="small"
+                      slotProps={{
+                        htmlInput: {
+                          "aria-label": `${port.counterpart}${
+                            port.label ? `(${port.label})` : ""
+                          } への結線の角度`,
+                        },
+                      }}
+                      sx={{ width: 96 }}
+                      helperText={hint}
+                      onChange={(event) =>
+                        setAngles((prev) => ({
+                          ...prev,
+                          [port.key]: event.target.value,
+                        }))
+                      }
+                    />
+                  </div>
+                );
+              })
             )}
           </div>
         </div>

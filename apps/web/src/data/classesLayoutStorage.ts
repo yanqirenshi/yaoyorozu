@@ -28,13 +28,36 @@ export type LayoutOverrides = Record<string, NodePosition>;
 
 /** 関係線の端点がつくクラスの辺(d3.classes の `ConnectionSide` と同じ値)。 */
 export type PortSide = "top" | "bottom" | "left" | "right";
-export const PORT_SIDES: readonly PortSide[] = ["top", "bottom", "left", "right"];
+const PORT_SIDES: readonly PortSide[] = ["top", "bottom", "left", "right"];
+
+/**
+ * 端点の取り付け位置。辺のキーワードか、取り付け角度(度)。角度はボックス中心から
+ * 0=真下・時計回り(90=左、180=真上、270=右)で、d3.classes 0.8.0 以降の
+ * `ConnectionPoint` と同じ(TM の d3.ter とも同じ決め方)。
+ */
+export type PortPoint = PortSide | number;
+
+/** 辺のキーワードを、その辺の中央に当たる角度に読み替える。 */
+const SIDE_ANGLE: Record<PortSide, number> = { bottom: 0, left: 90, top: 180, right: 270 };
+
+/** 角度を 0〜359 の整数に丸める(負の値や 360 以上も受け付ける)。 */
+export function normalizeAngle(value: number): number {
+  return ((Math.round(value) % 360) + 360) % 360;
+}
+
+/** 取り付け位置を角度で返す。 */
+export function toAngle(point: PortPoint): number {
+  return typeof point === "number" ? normalizeAngle(point) : SIDE_ANGLE[point];
+}
 
 /** 関係線のどちら側の端点か。 */
 export type PortEnd = "from" | "to";
 
-/** `<関係線 id>:<from|to>` → 接続辺。 */
-export type PortOverrides = Record<string, PortSide>;
+/**
+ * `<関係線 id>:<from|to>` → 取り付け位置。インスペクタで変えた端点は角度で保存する。
+ * 角度で編集できるようにする前は辺のキーワードで保存していたので、そちらも読める。
+ */
+export type PortOverrides = Record<string, PortPoint>;
 
 /** `classes.json` の中身。 */
 export type ClassesLayoutFile = {
@@ -42,8 +65,11 @@ export type ClassesLayoutFile = {
   ports?: PortOverrides;
 };
 
-function isPortSide(value: unknown): value is PortSide {
-  return (PORT_SIDES as readonly unknown[]).includes(value);
+function isPortPoint(value: unknown): value is PortPoint {
+  return (
+    (PORT_SIDES as readonly unknown[]).includes(value) ||
+    (typeof value === "number" && Number.isFinite(value))
+  );
 }
 
 /**
@@ -78,10 +104,13 @@ export function loadLayoutOverrides(): LayoutOverrides {
   return readLegacyOverrides() ?? {};
 }
 
-/** 接続辺の手調整。ファイルを手で書き換えて4辺以外の値が入っていたら無視する。 */
+/**
+ * 取り付け位置の手調整。ファイルを手で書き換えて、4辺のキーワードでも数値でもない
+ * 値が入っていたら無視する。
+ */
 export function loadPortOverrides(): PortOverrides {
   return Object.fromEntries(
-    Object.entries(fileLayout.ports ?? {}).filter(([, side]) => isPortSide(side)),
+    Object.entries(fileLayout.ports ?? {}).filter(([, point]) => isPortPoint(point)),
   );
 }
 
@@ -134,8 +163,8 @@ export function portOverrideKey(relationshipId: string, end: PortEnd): string {
 }
 
 /**
- * 接続辺の手調整を反映した関係線の配列を返す。座標で指定した端点(クラスに
- * つかない端点)には接続辺が無いので、そのままにする。
+ * 取り付け位置の手調整を反映した関係線の配列を返す。座標で指定した端点(クラスに
+ * つかない端点)には取り付け位置が無いので、そのままにする。
  * 端点は常に複製し、d3.classes に渡しても元データを汚さないようにする。
  */
 export function applyPortOverrides(
@@ -143,20 +172,20 @@ export function applyPortOverrides(
   overrides: PortOverrides,
 ): RelationshipInput[] {
   return relationships.map((rel) => {
-    const sideOf = (end: PortEnd) =>
+    const pointOf = (end: PortEnd) =>
       rel.id ? overrides[portOverrideKey(rel.id, end)] : undefined;
-    const withSide = (
+    const withPoint = (
       connection: RelationshipInput["from"],
-      side: PortSide | undefined,
+      point: PortPoint | undefined,
     ): RelationshipInput["from"] =>
       "classId" in connection
-        ? { ...connection, point: side ?? connection.point }
+        ? { ...connection, point: point ?? connection.point }
         : { ...connection };
 
     return {
       ...rel,
-      from: withSide(rel.from, sideOf("from")),
-      to: withSide(rel.to, sideOf("to")),
+      from: withPoint(rel.from, pointOf("from")),
+      to: withPoint(rel.to, pointOf("to")),
     };
   });
 }
