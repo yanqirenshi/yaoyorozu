@@ -174,11 +174,13 @@ const RELATIONSHIPS = [
     toMultiplicity: "0..1",
   }),
   // TM: ユーザー．セッション(対照表、属性なし)。1人に会話は 0 件以上、1つの会話は
-  // 必ず1人のもの。Session は User の下に置き、User の下辺から Session の上辺へつなぐ
-  // (画面上での手調整で決めた配置)。
-  rel("association", "User", "Session", "持つ", "bottom", "top", {
-    fromMultiplicity: "1",
-    toMultiplicity: "0..*",
+  // 必ず1人のもの。User が Session を所有するのでコンポジションにする(「1つの会話は
+  // 必ず1人のもの」はコンポジションの全体側の多重度 1 と一致し、TM と矛盾しない)。
+  // 線は「部分 → 全体」の向き(◆が User 側に付く)で、ラベルは全体側のフィールド名、
+  // 多重度は部分側だけ書く。Session は User の下に置き、Session の上辺から User の
+  // 下辺へつなぐ(画面上での手調整で決めた配置)。
+  rel("composition", "Session", "User", "sessions", "top", "bottom", {
+    fromMultiplicity: "0..*",
   }),
   // TM: セッション．セッションファイル(対照表、属性なし)。1つの会話にファイルは
   // 会話ファイル1件 + サブエージェント0件以上、ファイルは必ず1つの会話に属する。
