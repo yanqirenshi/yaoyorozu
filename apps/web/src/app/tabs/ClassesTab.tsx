@@ -51,6 +51,9 @@ function buildPorts(
       const self = rel[end];
       const other = end === "from" ? rel.to : rel.from;
       if (!("classId" in self) || self.classId !== physical) continue;
+      // d3.classes 0.8.0 以降は取り付け位置を角度(数値)でも指定できるが、インスペクタの
+      // 選択肢は4辺だけなので、辺のキーワードでつないだ端だけを一覧に出す。
+      if (typeof self.point !== "string") continue;
       ports.push({
         key: portOverrideKey(rel.id, end),
         counterpart: "classId" in other ? other.classId : "(座標)",
