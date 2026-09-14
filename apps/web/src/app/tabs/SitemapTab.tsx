@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import D3Sitemap, { Rectum } from "@yanqirenshi/d3.sitemap";
 import Colonoscope from "@yanqirenshi/colonoscope";
+import Box from "@mui/material/Box";
 import { SITEMAP_DATA } from "@/data/sitemap";
 import {
   applyLayoutOverrides,
@@ -21,6 +22,9 @@ import {
   LayoutSaveStatusSnackbar,
 } from "./layout/LayoutSaveStatus";
 import { useCameraPersistence } from "./layout/useCameraPersistence";
+import SiteLink, { siteHref } from "./sitemap/SiteLink";
+// 文字の大きさ・太さは基本デザインのテキストスタイルから引く(規約 §4)。
+import { textStyle } from "./UiDesign/tokens";
 import {
   buildInspectorTabs,
   buildInspectorTarget,
@@ -284,13 +288,43 @@ export default function SitemapTab() {
     <div ref={containerRef} className="relative flex min-h-0 w-full flex-1">
       <D3Sitemap key={version} rectum={rectum} />
 
+      {/* 見出しの右に余白をとり、長い名前が詳細ページへのリンク(下)に潜らないようにする。
+          Tailwind は [] の中の _ を空白として読むため、クラス名の __ は \_ で逃がす
+          (逃がさないと `.colonoscope title` という別のセレクタになる)。JSX の属性の
+          文字列ではバックスラッシュが特別な意味を持たないので、そのまま書ける。 */}
       <Colonoscope
         target={selected}
         title={(t: SitemapInspectorTarget) => t.label?.contents}
         tabs={inspectorTabs}
         onApply={handleApply}
         onClose={() => setSelected(null)}
+        className="[&_.colonoscope\_\_title]:pr-10"
       />
+
+      {/* サイトの詳細ページへのリンク。Colonoscope 0.4.0 の見出しには要素を置く口が
+          無い(title / subtitle は文字列のみ)ため、同じコンテナの右上に重ねる。
+          パネルは top:0 / right:0 に貼り付くので、右端からの距離で ✕ の左隣に
+          揃えられる(パネルの幅をドラッグで変えてもずれない)。top・right・行の
+          高さは Colonoscope の見出しの余白(上 14px・右 16px)と ✕(幅 約 21px・
+          高さ 28px。実測)に合わせた値。見出しに差し込み口ができたらそちらへ移す。 */}
+      {selected && (
+        <Box
+          className="absolute z-10"
+          sx={{
+            ...textStyle("UI-14M-100"),
+            top: "14px",
+            right: "48px",
+            lineHeight: "28px",
+          }}
+        >
+          <SiteLink
+            href={siteHref(selected.id)}
+            ariaLabel={`${selected.label.contents} の詳細ページを開く`}
+          >
+            詳細
+          </SiteLink>
+        </Box>
+      )}
 
       <LayoutSaveStatusSnackbar state={saveState} onClose={closeSaveStatus} />
     </div>

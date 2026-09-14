@@ -50,7 +50,11 @@ export default function AppShell({
               key={item.path}
               component={Link}
               href={item.path}
-              selected={pathname === item.path}
+              // 配下のページ(例: /sitemap/sites/:id)でもメニューを選択中にする。
+              selected={
+                pathname === item.path ||
+                pathname.startsWith(`${item.path}/`)
+              }
             >
               <ListItemText>{item.label}</ListItemText>
             </MenuItem>

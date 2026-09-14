@@ -166,3 +166,51 @@ export const SITEMAP_DATA = {
     ),
   ],
 };
+
+/**
+ * サイトマップ上の1サイト(アプリ・ページ・タブのノード)の位置づけ。
+ * サイトの詳細ページ(/sitemap/sites/:id)で使う。SITEMAP_DATA から導出するだけで、
+ * ここに新しい情報は足さない。
+ */
+export type SitemapSite = {
+  id: number;
+  label: string;
+  /** このノードを children に持つノード(タブなら、それを含むページ)。 */
+  parentId: number | null;
+  /** children(ページ内のタブ)。 */
+  childIds: number[];
+  /** 結線でこのノードへ入ってくる元。 */
+  fromIds: number[];
+  /** このノードから結線で出ていく先。 */
+  toIds: number[];
+};
+
+function flattenSites(
+  nodes: SitemapNode[],
+  parentId: number | null,
+): SitemapSite[] {
+  return nodes.flatMap((n) => [
+    {
+      id: n.id,
+      label: n.label.contents,
+      parentId,
+      childIds: n.children.map((child) => child.id),
+      fromIds: SITEMAP_DATA.edges
+        .filter((e) => e.to.id === n.id)
+        .map((e) => e.from.id),
+      toIds: SITEMAP_DATA.edges
+        .filter((e) => e.from.id === n.id)
+        .map((e) => e.to.id),
+    },
+    ...flattenSites(n.children, n.id),
+  ]);
+}
+
+/** children を含む全ノード。 */
+export const SITEMAP_SITES: SitemapSite[] = flattenSites(SITEMAP_DATA.nodes, null);
+
+const SITE_BY_ID = new Map(SITEMAP_SITES.map((site) => [site.id, site]));
+
+export function findSitemapSite(id: number): SitemapSite | undefined {
+  return SITE_BY_ID.get(id);
+}
