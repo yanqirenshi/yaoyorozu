@@ -3,7 +3,11 @@ import type {
   ColonoscopeTab,
   ColonoscopeValues,
 } from "@yanqirenshi/colonoscope";
-import { SITEMAP_DATA } from "@/data/sitemap";
+import {
+  SITEMAP_DATA,
+  findSitemapSite,
+  parentPaddingOf,
+} from "@/data/sitemap";
 import {
   portOverrideKey,
   type PortOverrides,
@@ -98,10 +102,14 @@ export function buildInspectorTarget(
   core: NodeCore,
   portOverrides: PortOverrides,
 ): SitemapInspectorTarget {
+  // core は描画用に整えた値(renderNodes.ts の toRenderNodes)。名前には別タブの
+  // 印(↗)が付き、children の位置は親の余白の内側が起点になっているため、名前は
+  // サイトの情報から引き、位置は保存値と同じ「親の左上」起点へ戻して見せる。
+  const padding = parentPaddingOf(core.id);
   return {
     id: core.id,
-    label: core.label,
-    position: { ...core.position },
+    label: { contents: findSitemapSite(core.id)?.label ?? core.label.contents },
+    position: { x: core.position.x + padding, y: core.position.y + padding },
     size: { ...core.size },
     ports: Object.fromEntries(
       portEntries(core.id).map((entry) => [
