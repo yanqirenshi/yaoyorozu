@@ -31,10 +31,30 @@ Claude Code で以下のセッションに役割を分けて対応する。
 - **運用:リリース**: apps/native のリリース作業の実施。`/release <バージョン>` スキル(`.claude/skills/release/`)を実行し、バージョン更新 → タグ push → MSI ビルド確認 → GitHub Releases での公開までを行う
 - **管理**: このプロジェクト自体の管理、Claude Codeの利用方法の整理・実装
 
-### 並行作業のルール
+## 並行作業のルール
 
-- 複数の実装セッションが並行して作業する場合は、**セッションごとに別ブランチ(または git worktree)で作業し、PR でマージする**。同一ブランチ・同一ワーキングツリーを複数セッションで同時に変更しない。
+- **セッションごとに固定のブランチを持ち、使い続ける**(タスクごとにブランチを作り直さない)。ブランチ名は下表のとおり。
+- 作業の流れ: タスク着手前に `git merge origin/main` で固定ブランチを最新化 → 作業・コミット → PR → マージ。**マージ後もブランチは削除しない**(次のタスクで同じブランチを使う)。
+- 同一ブランチ・同一ワーキングツリーを複数セッションで同時に変更しない。
 - イシューには「対象画面」と「共有層(`crates/`、`tauri/`、`react/src/api/`、dock・共通コンポーネント等)に触るか」を明示する。共有層に触る変更は画面別セッションではなく **実装:APP(共通)** が担当する。
+- 例外: CLAUDE.md・`.claude/rules/`・`.claude/skills/` などドキュメントのみの小変更は main へ直接コミットしてよい(現行運用のまま)。運用:リリース は main 上で作業する(`/release` スキルの前提)。
+
+### セッション固定ブランチ
+
+| セッション | ブランチ |
+|---|---|
+| デザイン (UI) | `session/design-ui` |
+| デザイン (ドメイン:Data) | `session/design-domain-data` |
+| デザイン (ドメイン:オブジェクト) | `session/design-domain-object` |
+| デザイン (画面構成) | `session/design-sitemap` |
+| 実装:APP | `session/impl-app` |
+| 実装:APP (画面:/) | `session/impl-app-hub` |
+| 実装:APP (画面:/settings) | `session/impl-app-settings` |
+| 実装:APP (画面:/claude) | `session/impl-app-claude` |
+| 実装:Web | `session/impl-web` |
+| Lab | `session/lab` |
+
+※ デザイン (全体)・管理 はドキュメント中心のため main 直接(上記の例外)。既存の `feature/*` ブランチは進行中のタスク完了(PR マージ)までそのまま使い、以後は固定ブランチへ移行する。
 
 ## 構成
 
