@@ -624,6 +624,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
                 reloadKey={projectParam}
                 mode={claudeMdMode}
                 onDirtyChange={setClaudeMdDirty}
+                onCreate={() => setClaudeMdMode("split")}
               />
             </div>
           ) : (
