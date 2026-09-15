@@ -36,7 +36,8 @@ declare module "@yanqirenshi/d3.wireframe" {
 
   export class Rectum {
     constructor(params: Record<string, unknown>);
-    data(value: Record<string, unknown>): unknown;
+    /** 要素(frame / image / button / modal / dialog)の木を配列で受け取る。 */
+    data(value: unknown[]): unknown;
     selector(value: string): void;
   }
 
