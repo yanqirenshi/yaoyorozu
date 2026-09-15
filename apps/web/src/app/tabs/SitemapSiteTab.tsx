@@ -6,6 +6,8 @@ import { findSitemapSite, type SitemapSite } from "@/data/sitemap";
 // 文字の大きさ・太さは基本デザインのテキストスタイルから引く(規約 §4)。
 import { textStyle } from "./UiDesign/tokens";
 import SiteLink, { siteHref } from "./sitemap/SiteLink";
+import SiteWireframe from "./sitemap/SiteWireframe";
+import { findWireframe } from "@/data/wireframes";
 
 type Relation = {
   title: string;
@@ -134,6 +136,19 @@ function DescriptionSection({ site }: { site: SitemapSite }) {
   );
 }
 
+function WireframeSection({ site }: { site: SitemapSite }) {
+  const wireframe = findWireframe(site.id);
+  const note = wireframe
+    ? `${wireframe.source.path} を ${wireframe.source.viewport.w}×${wireframe.source.viewport.h} で開いて取り出した、画面の大きな区切り(${wireframe.source.capturedAt})`
+    : "画面の大きな区切りを d3.wireframe で描いたもの";
+
+  return (
+    <Section title="ワイヤーフレーム" note={note}>
+      {wireframe ? <SiteWireframe wireframe={wireframe} /> : <Empty />}
+    </Section>
+  );
+}
+
 function WbsSection({ site }: { site: SitemapSite }) {
   return (
     <Section
@@ -228,6 +243,7 @@ export default function SitemapSiteTab({ siteId }: { siteId: number }) {
           </Box>
 
           <DescriptionSection site={site} />
+          <WireframeSection site={site} />
           <WbsSection site={site} />
           {RELATIONS.map((relation) => (
             <RelationSection

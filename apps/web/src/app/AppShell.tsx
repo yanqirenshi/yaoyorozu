@@ -22,7 +22,15 @@ export default function AppShell({
 
   return (
     <Box className="flex min-h-0 flex-1 font-sans" sx={{ border }}>
-      <Box className="w-64 shrink-0 overflow-auto" sx={{ borderRight: border }}>
+      {/* 左ペインはナビゲーション、右側は各画面の本体。ランドマーク(nav / main)に
+          しておくと、支援技術で移動できるうえ、画面のワイヤーフレームを取り出す
+          ときの大きな区切りにもなる(scripts/wireframe/extract-web.js)。 */}
+      <Box
+        component="nav"
+        aria-label="メインメニュー"
+        className="w-64 shrink-0 overflow-auto"
+        sx={{ borderRight: border }}
+      >
         <div className="px-4 pt-4 pb-3">
           <h1
             className="text-xl font-bold tracking-wide"
@@ -61,7 +69,7 @@ export default function AppShell({
           ))}
         </MenuList>
       </Box>
-      <div className="flex min-h-0 flex-1 overflow-auto">{children}</div>
+      <main className="flex min-h-0 flex-1 overflow-auto">{children}</main>
     </Box>
   );
 }
