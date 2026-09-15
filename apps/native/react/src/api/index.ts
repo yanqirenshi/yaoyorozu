@@ -4,6 +4,7 @@ import type {
   AgentModeDto,
   AppErrorDto,
   AppWarningEvent,
+  ClaudeDirPageDto,
   ClaudeMdDto,
   ClaudeSettingsDto,
   DeviceCodeDto,
@@ -36,6 +37,9 @@ export type {
   AgentModeDto,
   AppErrorDto,
   AppWarningEvent,
+  ClaudeDirEntryDto,
+  ClaudeDirEntryKindDto,
+  ClaudeDirPageDto,
   ClaudeMdDto,
   ClaudeSettingsDto,
   DeviceCodeDto,
@@ -205,22 +209,6 @@ export function onSettingsUpdated(callback: () => void): Promise<() => void> {
   return unlisten.then((fn) => fn);
 }
 
-export function getRepositoryClaudeMd(profileId?: string | null): Promise<ClaudeMdDto> {
-  return invoke<ClaudeMdDto>("get_repository_claude_md", { profileId: profileId ?? null });
-}
-
-export function saveRepositoryClaudeMd(
-  content: string,
-  expectedModifiedAtMs: number | null,
-  profileId?: string | null,
-): Promise<void> {
-  return invoke<void>("save_repository_claude_md", {
-    content,
-    expectedModifiedAtMs,
-    profileId: profileId ?? null,
-  });
-}
-
 export function getProjectClaudeMd(project: string): Promise<ClaudeMdDto> {
   return invoke<ClaudeMdDto>("get_project_claude_md", { project });
 }
@@ -265,6 +253,29 @@ export function saveClaudeSettingsFile(
     content,
     expectedModifiedAtMs,
   });
+}
+
+// `~/.claude/CLAUDE.md`(ユーザーレベル)。対象パスはRust側で固定解決する。
+export function getUserClaudeMd(): Promise<ClaudeMdDto> {
+  return invoke<ClaudeMdDto>("get_user_claude_md");
+}
+
+export function saveUserClaudeMd(
+  content: string,
+  expectedModifiedAtMs: number | null,
+): Promise<void> {
+  return invoke<void>("save_user_claude_md", { content, expectedModifiedAtMs });
+}
+
+// `~/.claude` 配下の `path`(`~/.claude` からの相対パス。区切りは `/`、
+// ルートは空文字列)直下を一覧する。子を開くときは各エントリの `path` を
+// そのまま渡す。
+export function listClaudeDir(
+  path: string,
+  offset: number,
+  limit: number,
+): Promise<ClaudeDirPageDto> {
+  return invoke<ClaudeDirPageDto>("list_claude_dir", { path, offset, limit });
 }
 
 export function getProjectSettingsFile(

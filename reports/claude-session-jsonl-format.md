@@ -1,9 +1,10 @@
 # Claude Code セッションログ(`.jsonl`)のフォーマット調査
 
 - 作成日: 2026-08-16
-- 担当セッション: Labo
-- 調査対象: このPCの `~/.claude/projects/` 配下の全 `.jsonl`(146ファイル、60,941行、パース失敗0)
-- 記録されていた Claude Code のバージョン: 2.1.150 〜 2.1.222(CLI版・Desktop版が混在)
+- 更新日: 2026-09-12(§8「セッションの再開とフォーク」と `file-history-snapshot` 行を追記。v2.1.260 時点の実測)
+- 担当セッション: Lab
+- 調査対象: このPCの `~/.claude/projects/` 配下の全 `.jsonl`(146ファイル、60,941行、パース失敗0。2026-08-16 時点)
+- 記録されていた Claude Code のバージョン: 2.1.150 〜 2.1.222(CLI版・Desktop版が混在。9/12 追記分は 2.1.260)
 
 > **注意**: 本書の内容は**実ファイルからの実測**であり、公式に文書化されたスキーマではない。
 > バージョンによって `type` やフィールドは増減しうるため、読み取り側(apps/native 等)は
@@ -80,7 +81,7 @@ user(uuid=A, parent=null)
 
 | 階層 | 場所 | 種類数 | 例 |
 |---|---|---|---|
-| 行 | 最上位の `type` | 11 | `user` / `assistant` / `attachment` / `system` … |
+| 行 | 最上位の `type` | 12 | `user` / `assistant` / `attachment` / `system` … |
 | 付帯情報 | `attachment.type` | 23 | `deferred_tools_delta` / `task_reminder` … |
 | APIメッセージ | `message.type` | 1 | `message`(Anthropic API の型表記) |
 | コンテンツブロック | `message.content[].type` | 5 | `text` / `thinking` / `tool_use` / `tool_result` / `image` |
@@ -100,6 +101,7 @@ user(uuid=A, parent=null)
 | `pr-link` | 373 | 5/146 | セッションメタ | `PrLinkLine` | 紐づく GitHub PR |
 | `ai-title` | 48 | 1/146 | セッションメタ | `AiTitleLine` | AI生成タイトル |
 | `atis-latch` | 31 | 5/146 | セッションメタ | `AtisLatchLine` | 用途不明(値は全件空文字列) |
+| `file-history-snapshot` | ※ | ※ | 内部イベント | `FileHistorySnapshotLine` | ファイル変更のバックアップ台帳(`/rewind` 用とみられる。※2026-09-12 に v2.1.260 のログで出現を確認。8/16 の全数調査には含まれない) |
 
 - **会話本体**: `uuid`/`parentUuid` チェーンを構成し、人間に見せる内容を含む
 - **セッションメタ**: `parentUuid` を持たず `sessionId` のみで紐づく「セッションへの付箋」
@@ -508,6 +510,32 @@ Claude Code の実行環境(ハーネス)が、会話のコンテキストとし
 { "type": "task_reminder", "content": [], "itemCount": 0 }
 ```
 
+### 4.11 `file-history-snapshot` — ファイル変更のバックアップ台帳(v2.1.260 で追加確認)
+
+2026-09-12 の追記時に v2.1.260 のログで出現を確認した新しい行タイプ。
+名前と構造から、`/rewind`(チェックポイント巻き戻し)用に「そのメッセージ時点のファイルバックアップ」を記録する台帳とみられる。
+
+```json
+{
+  "type": "file-history-snapshot",
+  "messageId": "13be3766-842a-4a96-b925-529a35b350bb",
+  "snapshot": {
+    "messageId": "13be3766-842a-4a96-b925-529a35b350bb",
+    "trackedFileBackups": {},
+    "timestamp": "2026-09-11T23:51:59.191Z"
+  },
+  "isSnapshotUpdate": false
+}
+```
+
+| フィールド | 説明 |
+|---|---|
+| `messageId` | 対応するメッセージのID |
+| `snapshot.trackedFileBackups` | 追跡中ファイルのバックアップ参照(観測例では空) |
+| `isSnapshotUpdate` | 既存スナップショットの更新かどうか |
+
+このように行タイプはバージョンで増える。**未知の `type` を読み飛ばす**実装方針(冒頭の注意)が正しいことの実例でもある。
+
 ## 5. `type` 毎の型定義(TypeScript)
 
 実測データから起こした各行の型定義(クラス)。
@@ -533,7 +561,7 @@ interface ChainLineBase {
   agentId?: string;            // サブエージェント(subagents/ 配下)のみ
 }
 
-/** 全11種の行の合併型 */
+/** 全12種の行の合併型 */
 type SessionLine =
   // 会話本体
   | UserLine
@@ -541,6 +569,7 @@ type SessionLine =
   // 内部イベント
   | SystemLine
   | AttachmentLine
+  | FileHistorySnapshotLine
   // セッションメタ(parentUuid を持たない)
   | QueueOperationLine
   | LastPromptLine
@@ -549,6 +578,18 @@ type SessionLine =
   | ModeLine
   | PrLinkLine
   | AtisLatchLine;
+
+/** ファイル変更のバックアップ台帳(/rewind 用とみられる。v2.1.260 で追加確認) */
+interface FileHistorySnapshotLine {
+  type: "file-history-snapshot";
+  messageId: string;
+  snapshot: {
+    messageId: string;
+    trackedFileBackups: Record<string, unknown>;
+    timestamp: string;
+  };
+  isSnapshotUpdate: boolean;
+}
 
 // ============ message.content のブロック(§6) ============
 
@@ -827,7 +868,44 @@ interface AtisLatchLine {
 | `toolUseId` | 親セッション側の `Agent` ツール呼び出しの `tool_use.id` |
 | `spawnDepth` | ネストの深さ(親直下なら1) |
 
-## 8. apps/native への示唆
+## 8. セッションの再開とフォーク — 1つの会話に複数の `.jsonl` ができる理由
+
+### 8.1 実測(2026-09-12、v2.1.260)
+
+Claude Desktop の1つの会話タブ(Lab セッション)に対し、`.jsonl` が2つ存在する状態を確認した。
+
+| ファイル | 期間 | 行数 | 中身 |
+|---|---|---|---|
+| `75ac92e9-….jsonl` | 8/16〜8/28 | 463 | 会話の前半 |
+| `89412813-….jsonl` | 8/29〜 | 706+ | **前半の完全コピー + それ以降の続き** |
+
+新ファイルの中身を検証した結果:
+
+- 旧ファイルの `uuid` 付き行 **334行中330行が新ファイルにそのまま含まれる**(会話履歴の完全コピー)
+- ただしコピーされた行の **`sessionId` フィールドはすべて新IDに書き換え**られている(新ファイル内の `sessionId` は1種類のみ)
+- `summary` 行や `compact_boundary` 行は存在しない(要約・圧縮ではない)
+- コピー部分の末尾は 8/28 23:45(UTC)の `assistant` 行で、直後から新規の行が始まる
+- Desktop 側の台帳(`%APPDATA%\Claude\claude-code-sessions\**\local_*.json`)の `cliSessionId` は旧IDから新IDに更新されており、**タブとしては同じ1つの会話**のまま
+
+### 8.2 仕組み
+
+アプリ再起動後の会話再開時に、Claude Code が**新しいセッションIDを発行してフォーク**することがある。
+その際、旧ファイルの履歴を新ファイルに複写し(`sessionId` は書き換え)、**旧ファイルは削除せずそのまま残す**。
+これが「1つのセッション(会話)に複数の `.jsonl`」ができる主な理由で、旧ファイルは実質的に「フォーク時点までのスナップショット」である。
+CLI の `--resume` / `--continue` に `--fork-session` を付けたときと同じ挙動を、Desktop が再開時に自動で行った形になる。
+
+なお**再起動のたびに起きるわけではない**。
+観測では 8/29 の再開時のみフォークし、その後の再起動(9/1、9/11、9/12)では同じIDのファイルへ追記が続いた。
+フォークの発生条件は非公開である(旧セッションを別プロセスが保持していた、バージョン更新をまたいだ、等が考えられるが未確認)。
+
+### 8.3 複数 `.jsonl` ができる経路の整理
+
+1. **再開時の自動フォーク**(§8.1 で実証。最も普通に起きる)
+2. `--resume` / `--continue` + **`--fork-session`** による明示フォーク(8/16 に実験で確認: 履歴を引き継いだ別IDのファイルができ、元ファイルは無傷)
+3. 対話モードの会話**分岐**機能(`/fork` 等)
+4. `/compact`(履歴圧縮)は**同一ファイル内**の `compact_boundary` 行で表現され、ファイルは分かれない
+
+## 9. apps/native への示唆
 
 現行実装(`domain::extract_message`)は `user` / `assistant` の `text` だけを抽出しており、本調査の結果と整合している。
 加えて以下の活用余地がある。
@@ -837,7 +915,8 @@ interface AtisLatchLine {
 - **`system.subtype == "api_error"`**: 送信失敗の履歴を検出できる
 - **`system.subtype == "compact_boundary"`**: 履歴圧縮の境界を表示に反映できる
 - **`subagents/`**: エージェントの作業ログを表示したい場合はここを読む。現行の「ディレクトリ直下の `.jsonl` のみ走査」は、サブエージェントのログが混入しないという点で正しい
-- **未知の `type` を読み飛ばす**現行方針は維持すること(バージョンで増減する)
+- **フォーク(§8)への対応**: フォークは履歴を複製するため、「mtime が最新の `.jsonl` を表示」する現行設計でも会話全体は欠けない。一方、セッション一覧には「同じ会話の旧スナップショット」が重複して並ぶ。重複を畳むなら、(a) 旧ファイルの `uuid` 集合が新ファイルに包含されていたら旧を隠す、(b) Desktop 台帳の `cliSessionId` を参照する、の2案がある
+- **未知の `type` を読み飛ばす**現行方針は維持すること(バージョンで増減する。§4.11 の `file-history-snapshot` が実例)
 
 ## 付録: 集計に使ったスクリプト
 

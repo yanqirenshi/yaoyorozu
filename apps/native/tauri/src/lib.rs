@@ -4,17 +4,18 @@ mod state;
 
 use app::{SessionSource, SettingsStore, TokenStore};
 use dto::{
-    AgentKindDto, AgentModeDto, AppErrorDto, AppWarningDto, ClaudeMdDto, ClaudeSettingsDto,
-    DeviceCodeDto, GithubAuthFailedEventDto, GithubAuthStatusDto, GithubAuthenticatedEventDto,
-    GithubProjectDto, GithubProjectSummaryDto, HubLayoutDto, NodePositionDto, ProfileSummaryDto,
-    ProjectDto, ProjectItemsPageDto, ProjectSettingsFileDto, RuleDto, RuleSummaryDto,
-    SessionChangedEventDto, SessionDto, SessionSummaryDto, SettingsCorruptedEventDto, SettingsDto,
-    SettingsInputDto, SkillDto, SkillSummaryDto, WindowStateDto, WindowTabDto,
+    AgentKindDto, AgentModeDto, AppErrorDto, AppWarningDto, ClaudeDirPageDto, ClaudeMdDto,
+    ClaudeSettingsDto, DeviceCodeDto, GithubAuthFailedEventDto, GithubAuthStatusDto,
+    GithubAuthenticatedEventDto, GithubProjectDto, GithubProjectSummaryDto, HubLayoutDto,
+    NodePositionDto, ProfileSummaryDto, ProjectDto, ProjectItemsPageDto, ProjectSettingsFileDto,
+    RuleDto, RuleSummaryDto, SessionChangedEventDto, SessionDto, SessionSummaryDto,
+    SettingsCorruptedEventDto, SettingsDto, SettingsInputDto, SkillDto, SkillSummaryDto,
+    WindowStateDto, WindowTabDto,
 };
 use infra::{
-    ClaudeCliAgent, FileClaudeMdStore, FileClaudeSettingsStore, FileHubLayoutStore,
-    FileProjectSettingsStore, FileRulesStore, FileSettingsStore, FileSkillsStore,
-    FileSystemRepository, GithubApiClient, KeyringTokenStore,
+    ClaudeCliAgent, FileClaudeDirStore, FileClaudeMdStore, FileClaudeSettingsStore,
+    FileHubLayoutStore, FileProjectSettingsStore, FileRulesStore, FileSettingsStore,
+    FileSkillsStore, FileSystemRepository, GithubApiClient, KeyringTokenStore,
 };
 use state::AppState;
 use std::path::PathBuf;
@@ -439,7 +440,7 @@ fn hub_layout_path(app: &tauri::AppHandle) -> Result<PathBuf, AppErrorDto> {
 }
 
 /// ハブグラフのノード位置(ドラッグ固定)を返す(issue #121)。プロファイル
-/// 非依存のためステートレスに解決する(`get_repository_claude_md` と同じ
+/// 非依存のためステートレスに解決する(`get_claude_settings_file` と同じ
 /// パターン)。
 #[tauri::command]
 async fn get_hub_layout(app: tauri::AppHandle) -> Result<HubLayoutDto, AppErrorDto> {
@@ -474,61 +475,6 @@ async fn save_hub_layout(
             .map(|(key, position)| (key, position.into()))
             .collect();
         app::save_hub_layout(&store, positions)
-    })
-    .await
-    .unwrap_or_else(|_| {
-        Err(app::AppError::Io(
-            "バックグラウンド処理に失敗しました".to_string(),
-        ))
-    })
-    .map_err(Into::into)
-}
-
-/// `AppState` から対象リポジトリのパスを取り出す。未設定なら
-/// `InvalidInput` を返す(設定画面のCLAUDE.md編集はリポジトリ設定が前提)。
-/// `profile_id` が `None` ならアクティブプロファイルを対象にする(issue #76)。
-async fn repository_path_from_state(
-    state: &tauri::State<'_, Mutex<AppState>>,
-    profile_id: Option<&str>,
-) -> Result<PathBuf, app::AppError> {
-    let guard = state.lock().await;
-    let profile = app::resolve_profile(&guard.settings, profile_id)?;
-    profile.repository_path.clone().ok_or_else(|| {
-        app::AppError::InvalidInput("対象リポジトリが設定されていません".to_string())
-    })
-}
-
-#[tauri::command]
-async fn get_repository_claude_md(
-    state: tauri::State<'_, Mutex<AppState>>,
-    profile_id: Option<String>,
-) -> Result<ClaudeMdDto, AppErrorDto> {
-    let repo_dir = repository_path_from_state(&state, profile_id.as_deref()).await?;
-    tauri::async_runtime::spawn_blocking(move || -> Result<ClaudeMdDto, app::AppError> {
-        let store = FileClaudeMdStore::new();
-        let file = app::read_claude_md(&store, &repo_dir)?;
-        Ok(file.into())
-    })
-    .await
-    .unwrap_or_else(|_| {
-        Err(app::AppError::Io(
-            "バックグラウンド処理に失敗しました".to_string(),
-        ))
-    })
-    .map_err(Into::into)
-}
-
-#[tauri::command]
-async fn save_repository_claude_md(
-    state: tauri::State<'_, Mutex<AppState>>,
-    content: String,
-    expected_modified_at_ms: Option<u64>,
-    profile_id: Option<String>,
-) -> Result<(), AppErrorDto> {
-    let repo_dir = repository_path_from_state(&state, profile_id.as_deref()).await?;
-    tauri::async_runtime::spawn_blocking(move || -> Result<(), app::AppError> {
-        let store = FileClaudeMdStore::new();
-        app::save_claude_md(&store, &repo_dir, &content, expected_modified_at_ms)
     })
     .await
     .unwrap_or_else(|_| {
@@ -769,6 +715,70 @@ async fn save_claude_settings_file(
     tauri::async_runtime::spawn_blocking(move || -> Result<(), app::AppError> {
         let store = FileClaudeSettingsStore::new();
         app::save_claude_settings(&store, &content, expected_modified_at_ms)
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
+}
+
+/// `~/.claude/CLAUDE.md`(ユーザーレベルのメモリ)を読む(/claude 画面の
+/// CLAUDE.mdタブ)。対象ディレクトリはRust側で `~/.claude` に固定解決し、
+/// フロントからパスは受け取らない(native.md §4)。読み書きはリポジトリ直下の
+/// CLAUDE.mdと同じ `FileClaudeMdStore`・楽観ロック(`app::save_claude_md`)を使う。
+#[tauri::command]
+async fn get_user_claude_md() -> Result<ClaudeMdDto, AppErrorDto> {
+    tauri::async_runtime::spawn_blocking(|| -> Result<ClaudeMdDto, app::AppError> {
+        let claude_dir = infra::claude_home_dir()?;
+        let store = FileClaudeMdStore::new();
+        let file = app::read_claude_md(&store, &claude_dir)?;
+        Ok(file.into())
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
+}
+
+#[tauri::command]
+async fn save_user_claude_md(
+    content: String,
+    expected_modified_at_ms: Option<u64>,
+) -> Result<(), AppErrorDto> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), app::AppError> {
+        let claude_dir = infra::claude_home_dir()?;
+        let store = FileClaudeMdStore::new();
+        app::save_claude_md(&store, &claude_dir, &content, expected_modified_at_ms)
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
+}
+
+/// `~/.claude` 配下の `path`(`~/.claude` からの相対パス。区切りは `/`、
+/// 空文字列はルート)直下のエントリを一覧する(/claude 画面のExplorerタブ。
+/// 表示専用)。パス形式の検証は `app::list_claude_dir`、リンク経由での
+/// `~/.claude` 外への逸脱の検出は `FileClaudeDirStore` が行う(native.md §4)。
+#[tauri::command]
+async fn list_claude_dir(
+    path: String,
+    offset: usize,
+    limit: usize,
+) -> Result<ClaudeDirPageDto, AppErrorDto> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<ClaudeDirPageDto, app::AppError> {
+        let store = FileClaudeDirStore::new(infra::claude_home_dir()?);
+        let page = app::list_claude_dir(&store, &path, offset, limit)?;
+        Ok(page.into())
     })
     .await
     .unwrap_or_else(|_| {
@@ -1241,8 +1251,6 @@ pub fn run() {
             focus_window,
             get_hub_layout,
             save_hub_layout,
-            get_repository_claude_md,
-            save_repository_claude_md,
             get_project_claude_md,
             save_project_claude_md,
             list_rules,
@@ -1253,6 +1261,9 @@ pub fn run() {
             save_project_settings_file,
             get_claude_settings_file,
             save_claude_settings_file,
+            get_user_claude_md,
+            save_user_claude_md,
+            list_claude_dir,
             get_github_auth_status,
             github_login_start,
             github_logout,

@@ -27,6 +27,10 @@ type ClaudeMdEditorProps = {
   // (issue #59)。未指定時は "preview"(/claude のようにdockから制御しない
   // 呼び出し元向けの既定値)。
   mode?: ViewMode;
+  // 「作成」が押されたときの通知。表示モードは呼び出し元が制御するため、
+  // 既定の "preview" のままだと作成直後に入力欄が出ない。呼び出し元はここで
+  // 入力欄のあるモードへ切り替える。
+  onCreate?: () => void;
 };
 
 // 保存/再読み込みボタンを内部に持たず、呼び出し元(ページのdockアイテム)が
@@ -47,6 +51,7 @@ const ClaudeMdEditor = forwardRef<ClaudeMdEditorHandle, ClaudeMdEditorProps>(
       createLabel = "作成",
       initialContent = "",
       mode = "preview",
+      onCreate,
     },
     ref,
   ) {
@@ -140,7 +145,13 @@ const ClaudeMdEditor = forwardRef<ClaudeMdEditorHandle, ClaudeMdEditorProps>(
       return (
         <div className="claude-md-editor">
           <p>{emptyMessage}</p>
-          <button type="button" onClick={() => setCreating(true)}>
+          <button
+            type="button"
+            onClick={() => {
+              setCreating(true);
+              onCreate?.();
+            }}
+          >
             {createLabel}
           </button>
           {error && <p className="error">{error}</p>}
