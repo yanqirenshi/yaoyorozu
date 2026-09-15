@@ -620,3 +620,67 @@ impl From<domain::HubLayout> for HubLayoutDto {
         }
     }
 }
+
+/// `~/.claude` 配下のエントリ種別(/claude 画面のExplorerタブ)。
+#[derive(Serialize, Clone, Copy)]
+#[serde(rename_all = "kebab-case")]
+pub enum ClaudeDirEntryKindDto {
+    Directory,
+    File,
+    Symlink,
+}
+
+impl From<domain::ClaudeDirEntryKind> for ClaudeDirEntryKindDto {
+    fn from(kind: domain::ClaudeDirEntryKind) -> Self {
+        match kind {
+            domain::ClaudeDirEntryKind::Directory => ClaudeDirEntryKindDto::Directory,
+            domain::ClaudeDirEntryKind::File => ClaudeDirEntryKindDto::File,
+            domain::ClaudeDirEntryKind::Symlink => ClaudeDirEntryKindDto::Symlink,
+        }
+    }
+}
+
+/// `list_claude_dir` の1件分。`path` は `~/.claude` からの相対パス(区切りは
+/// `/`)で、ディレクトリを展開する際にそのまま `list_claude_dir` の `path`
+/// 引数として送り返す。
+#[derive(Serialize, Clone)]
+pub struct ClaudeDirEntryDto {
+    pub name: String,
+    pub path: String,
+    pub kind: ClaudeDirEntryKindDto,
+    pub size_bytes: Option<u64>,
+    pub modified_at_ms: u64,
+}
+
+impl From<domain::ClaudeDirEntry> for ClaudeDirEntryDto {
+    fn from(entry: domain::ClaudeDirEntry) -> Self {
+        Self {
+            name: entry.name,
+            path: entry.path,
+            kind: entry.kind.into(),
+            size_bytes: entry.size_bytes,
+            modified_at_ms: entry.modified_at_ms,
+        }
+    }
+}
+
+/// `list_claude_dir` の戻り値。`total` はページング前の件数(フロントの
+/// 「さらに表示」の判定に使う)。
+#[derive(Serialize, Clone)]
+pub struct ClaudeDirPageDto {
+    pub entries: Vec<ClaudeDirEntryDto>,
+    pub total: usize,
+}
+
+impl From<domain::ClaudeDirPage> for ClaudeDirPageDto {
+    fn from(page: domain::ClaudeDirPage) -> Self {
+        Self {
+            entries: page
+                .entries
+                .into_iter()
+                .map(ClaudeDirEntryDto::from)
+                .collect(),
+            total: page.total,
+        }
+    }
+}

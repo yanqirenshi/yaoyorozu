@@ -1,4 +1,5 @@
 mod claude_cli_agent;
+mod claude_dir_store;
 mod claude_md_store;
 mod claude_settings_store;
 mod git_worktree_lister;
@@ -14,6 +15,7 @@ mod settings_store;
 mod skills_store;
 
 pub use claude_cli_agent::ClaudeCliAgent;
+pub use claude_dir_store::{claude_home_dir, FileClaudeDirStore};
 pub use claude_md_store::FileClaudeMdStore;
 pub use claude_settings_store::FileClaudeSettingsStore;
 pub use git_worktree_lister::SystemGitWorktreeLister;
