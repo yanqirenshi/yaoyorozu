@@ -440,7 +440,7 @@ fn hub_layout_path(app: &tauri::AppHandle) -> Result<PathBuf, AppErrorDto> {
 }
 
 /// ハブグラフのノード位置(ドラッグ固定)を返す(issue #121)。プロファイル
-/// 非依存のためステートレスに解決する(`get_repository_claude_md` と同じ
+/// 非依存のためステートレスに解決する(`get_claude_settings_file` と同じ
 /// パターン)。
 #[tauri::command]
 async fn get_hub_layout(app: tauri::AppHandle) -> Result<HubLayoutDto, AppErrorDto> {
@@ -475,61 +475,6 @@ async fn save_hub_layout(
             .map(|(key, position)| (key, position.into()))
             .collect();
         app::save_hub_layout(&store, positions)
-    })
-    .await
-    .unwrap_or_else(|_| {
-        Err(app::AppError::Io(
-            "バックグラウンド処理に失敗しました".to_string(),
-        ))
-    })
-    .map_err(Into::into)
-}
-
-/// `AppState` から対象リポジトリのパスを取り出す。未設定なら
-/// `InvalidInput` を返す(設定画面のCLAUDE.md編集はリポジトリ設定が前提)。
-/// `profile_id` が `None` ならアクティブプロファイルを対象にする(issue #76)。
-async fn repository_path_from_state(
-    state: &tauri::State<'_, Mutex<AppState>>,
-    profile_id: Option<&str>,
-) -> Result<PathBuf, app::AppError> {
-    let guard = state.lock().await;
-    let profile = app::resolve_profile(&guard.settings, profile_id)?;
-    profile.repository_path.clone().ok_or_else(|| {
-        app::AppError::InvalidInput("対象リポジトリが設定されていません".to_string())
-    })
-}
-
-#[tauri::command]
-async fn get_repository_claude_md(
-    state: tauri::State<'_, Mutex<AppState>>,
-    profile_id: Option<String>,
-) -> Result<ClaudeMdDto, AppErrorDto> {
-    let repo_dir = repository_path_from_state(&state, profile_id.as_deref()).await?;
-    tauri::async_runtime::spawn_blocking(move || -> Result<ClaudeMdDto, app::AppError> {
-        let store = FileClaudeMdStore::new();
-        let file = app::read_claude_md(&store, &repo_dir)?;
-        Ok(file.into())
-    })
-    .await
-    .unwrap_or_else(|_| {
-        Err(app::AppError::Io(
-            "バックグラウンド処理に失敗しました".to_string(),
-        ))
-    })
-    .map_err(Into::into)
-}
-
-#[tauri::command]
-async fn save_repository_claude_md(
-    state: tauri::State<'_, Mutex<AppState>>,
-    content: String,
-    expected_modified_at_ms: Option<u64>,
-    profile_id: Option<String>,
-) -> Result<(), AppErrorDto> {
-    let repo_dir = repository_path_from_state(&state, profile_id.as_deref()).await?;
-    tauri::async_runtime::spawn_blocking(move || -> Result<(), app::AppError> {
-        let store = FileClaudeMdStore::new();
-        app::save_claude_md(&store, &repo_dir, &content, expected_modified_at_ms)
     })
     .await
     .unwrap_or_else(|_| {
@@ -1306,8 +1251,6 @@ pub fn run() {
             focus_window,
             get_hub_layout,
             save_hub_layout,
-            get_repository_claude_md,
-            save_repository_claude_md,
             get_project_claude_md,
             save_project_claude_md,
             list_rules,
