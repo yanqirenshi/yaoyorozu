@@ -248,7 +248,7 @@ pub struct SettingsInputDto {
     pub claude_projects_dir: Option<String>,
 }
 
-/// `get_repository_claude_md`/`get_project_claude_md` の戻り値。両方
+/// `get_project_claude_md`/`get_user_claude_md` の戻り値。両方
 /// `null` はファイルが存在しないことを意味する。`modified_at_ms` は保存時に
 /// `expected_modified_at_ms` として送り返し、アプリ外での変更との競合検出
 /// (楽観ロック)に使う(issue #27)。

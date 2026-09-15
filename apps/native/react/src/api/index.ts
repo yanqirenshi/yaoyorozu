@@ -209,22 +209,6 @@ export function onSettingsUpdated(callback: () => void): Promise<() => void> {
   return unlisten.then((fn) => fn);
 }
 
-export function getRepositoryClaudeMd(profileId?: string | null): Promise<ClaudeMdDto> {
-  return invoke<ClaudeMdDto>("get_repository_claude_md", { profileId: profileId ?? null });
-}
-
-export function saveRepositoryClaudeMd(
-  content: string,
-  expectedModifiedAtMs: number | null,
-  profileId?: string | null,
-): Promise<void> {
-  return invoke<void>("save_repository_claude_md", {
-    content,
-    expectedModifiedAtMs,
-    profileId: profileId ?? null,
-  });
-}
-
 export function getProjectClaudeMd(project: string): Promise<ClaudeMdDto> {
   return invoke<ClaudeMdDto>("get_project_claude_md", { project });
 }
