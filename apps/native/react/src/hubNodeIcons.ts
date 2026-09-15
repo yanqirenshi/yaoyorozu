@@ -18,6 +18,9 @@ const SVG_CLOSE = `</svg>`;
 // PC(モニタ)。
 const PC_ICON_SVG = `${SVG_OPEN}<rect x="3" y="4" width="14" height="9" rx="1.2"/><line x1="7" y1="16.5" x2="13" y2="16.5"/><line x1="10" y1="13" x2="10" y2="16.5"/>${SVG_CLOSE}`;
 
+// user(人物)。オブジェクトモデル実装 第1弾。issue #182。
+const USER_ICON_SVG = `${SVG_OPEN}<circle cx="10" cy="7" r="3.2"/><path d="M4 16.5c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/>${SVG_CLOSE}`;
+
 // profile(リポジトリの箱)。
 const PROFILE_ICON_SVG = `${SVG_OPEN}<path d="M3 6.5 10 3l7 3.5-7 3.5-7-3.5Z"/><path d="M3 6.5v7l7 3.5 7-3.5v-7"/><line x1="10" y1="10" x2="10" y2="17"/>${SVG_CLOSE}`;
 
@@ -32,6 +35,7 @@ const SESSION_ICON_SVG = `${SVG_OPEN}<rect x="3" y="4" width="14" height="9" rx=
 
 export const HUB_NODE_ICON_URIS = {
   pc: toDataUri(PC_ICON_SVG),
+  user: toDataUri(USER_ICON_SVG),
   profile: toDataUri(PROFILE_ICON_SVG),
   cwd: toDataUri(CWD_ICON_SVG),
   branch: toDataUri(BRANCH_ICON_SVG),

@@ -7,10 +7,10 @@ use dto::{
     AgentKindDto, AgentModeDto, AppErrorDto, AppWarningDto, ClaudeDirPageDto, ClaudeMdDto,
     ClaudeSettingsDto, DeviceCodeDto, GithubAuthFailedEventDto, GithubAuthStatusDto,
     GithubAuthenticatedEventDto, GithubProjectDto, GithubProjectSummaryDto, HubLayoutDto,
-    NodePositionDto, ProfileSummaryDto, ProjectDto, ProjectItemsPageDto, ProjectSettingsFileDto,
-    RuleDto, RuleSummaryDto, SessionChangedEventDto, SessionDto, SessionSummaryDto,
-    SettingsCorruptedEventDto, SettingsDto, SettingsInputDto, SkillDto, SkillSummaryDto,
-    WindowStateDto, WindowTabDto,
+    NodePositionDto, PcDto, ProfileSummaryDto, ProjectDto, ProjectItemsPageDto,
+    ProjectSettingsFileDto, RuleDto, RuleSummaryDto, SessionChangedEventDto, SessionDto,
+    SessionSummaryDto, SettingsCorruptedEventDto, SettingsDto, SettingsInputDto, SkillDto,
+    SkillSummaryDto, WindowStateDto, WindowTabDto,
 };
 use infra::{
     ClaudeCliAgent, FileClaudeDirStore, FileClaudeMdStore, FileClaudeSettingsStore,
@@ -410,6 +410,15 @@ async fn list_window_states(
         .into_iter()
         .map(WindowStateDto::from)
         .collect())
+}
+
+/// 現在のPC・ログインユーザー情報を返す(オブジェクトモデル実装 第1弾。
+/// issue #182)。起動時に一度組み立てて `AppState` に保持したものをそのまま
+/// 返すだけで、リクエストのたびにOSへ問い合わせ直すことはしない。
+#[tauri::command]
+async fn get_pc(state: tauri::State<'_, Mutex<AppState>>) -> Result<PcDto, AppErrorDto> {
+    let guard = state.lock().await;
+    Ok(PcDto::from(guard.pc.clone()))
 }
 
 /// 指定ラベルのウィンドウを前面化する(最小化されていれば復元してから)。
@@ -1249,6 +1258,7 @@ pub fn run() {
             report_window_state,
             list_window_states,
             focus_window,
+            get_pc,
             get_hub_layout,
             save_hub_layout,
             get_project_claude_md,

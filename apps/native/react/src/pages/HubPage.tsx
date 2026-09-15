@@ -5,6 +5,7 @@ import type { NodeDatum } from "@yanqirenshi/d3.network";
 import {
   focusWindow,
   getHubLayout,
+  getPc,
   getSettings,
   isAppError,
   listSessions,
@@ -18,6 +19,7 @@ import {
 import type {
   GithubProjectDto,
   NodePositionDto,
+  PcDto,
   ProfileSummaryDto,
   SessionSummaryDto,
   WindowStateDto,
@@ -37,8 +39,9 @@ const COLOR_SUMI = "#373737"; // 墨
 const COLOR_BORDER = "#a1a1aa";
 const COLOR_MUTED = "#737373";
 
-// PC → profile → 作業ディレクトリ → ブランチ → セッション(issue #104)。
-const COL_X = { pc: 70, profile: 260, cwd: 460, branch: 660, session: 880 };
+// PC → User → profile → 作業ディレクトリ → ブランチ → セッション
+// (issue #104・#182)。
+const COL_X = { pc: 70, user: 200, profile: 380, cwd: 580, branch: 780, session: 1000 };
 const ROW_HEIGHT = 76;
 const ROW_START_Y = 70;
 
@@ -95,15 +98,22 @@ const HUB_LAYOUT_SAVE_DEBOUNCE_MS = 500;
 // それ以外のフィールドはインスペクタ(issue #109)の表示専用で、ノード種別に
 // よってどれが埋まっているかが変わる。
 type HubNodeCore = {
-  kind: "pc" | "profile" | "cwd" | "branch" | "session" | "profile-unopened";
+  kind: "pc" | "user" | "profile" | "cwd" | "branch" | "session" | "profile-unopened";
   windowLabel?: string;
   profileId?: string;
   // ドラッグ位置の永続化(issue #121)に使う安定キー。`id` はウィンドウ起動の
   // たびに変わるラベルを含む場合がある(profile系)ため別に持つ。`move:
   // "support"` のノード(profile・cwd・branch)にのみ設定する。
   positionKey?: string;
-  // pc
+  // pc(オブジェクトモデル実装 第1弾。issue #182)
+  pcName?: string;
+  systemUuid?: string;
+  description?: string;
   effectiveProjectsDir?: string;
+  // user(issue #182)
+  userId?: string;
+  userName?: string;
+  homeDirectory?: string;
   // profile / profile-unopened
   profileName?: string;
   repositoryPath?: string | null;
@@ -186,6 +196,7 @@ function buildGraphData(
   profileDetails: ProfileDetails,
   effectiveProjectsDir: string,
   savedPositions: Record<string, NodePositionDto>,
+  pc: PcDto | null,
 ) {
   const nodes: Record<string, unknown>[] = [];
   const edges: Record<string, unknown>[] = [];
@@ -196,18 +207,59 @@ function buildGraphData(
   let edgeSeq = 0;
   let row = 0;
 
+  // クラス図のオブジェクトモデル実装 第1弾(issue #182)。`Pc` インスタンス
+  // 由来のラベル・インスペクタ表示に置き換える。`pc` が未取得(初回読み込み
+  // 中)の間は "このPC" のプレースホルダで描画し、Userノードは省略する
+  // (取得後の再描画で自然に補われる)。
   const pcId = "pc";
+  const pcName = pc?.pc_name ?? "このPC";
   nodes.push({
     id: pcId,
     x: COL_X.pc,
     y: ROW_START_Y,
     move: "freeze",
-    label: { text: "このPC", fill: COLOR_SUMI, font: { size: 16 }, y: labelYBelowCircle(34) },
+    label: { text: pcName, fill: COLOR_SUMI, font: { size: 16 }, y: labelYBelowCircle(34) },
     circle: { r: 34, fill: COLOR_PEARL, stroke: { color: COLOR_SUMI, width: 3 } },
     icon: { url: HUB_NODE_ICON_URIS.pc },
     kind: "pc",
+    pcName,
+    systemUuid: pc?.system_uuid,
+    description: pc?.description,
     effectiveProjectsDir,
   });
+
+  // 現在のユーザー1人を PC の右隣に配置し、以降 profile はこのノードの下に
+  // ぶら下げる(Pc → User → profile。issue #182)。複数ユーザーは型上は
+  // 許容するが、今回のスコープでは先頭の1人だけを表示する(仕様上も現在の
+  // スコープ外)。`pc` 未取得時は `pcId` へ直接ぶら下げてグラフを壊さない。
+  const primaryUser = pc?.users[0];
+  const userAnchorId = primaryUser ? `user:${primaryUser.user_id}` : pcId;
+  if (primaryUser) {
+    nodes.push({
+      id: userAnchorId,
+      x: COL_X.user,
+      y: ROW_START_Y,
+      move: "freeze",
+      label: {
+        text: primaryUser.user_name,
+        fill: COLOR_SUMI,
+        font: { size: 14 },
+        y: labelYBelowCircle(28),
+      },
+      circle: { r: 28, fill: COLOR_PEARL, stroke: { color: COLOR_SUMI, width: 2 } },
+      icon: { url: HUB_NODE_ICON_URIS.user },
+      kind: "user",
+      userId: primaryUser.user_id,
+      userName: primaryUser.user_name,
+      homeDirectory: primaryUser.home_directory,
+    });
+    edges.push({
+      id: `e${edgeSeq++}`,
+      source: pcId,
+      target: userAnchorId,
+      line: { width: 2, color: COLOR_BORDER },
+    });
+  }
 
   // 同じキーを持つセッションをグループにまとめる(出現順=新しい順を保つ)。
   // 作業ディレクトリ・ブランチのグループ化(issue #104)に使う汎用ヘルパー。
@@ -406,7 +458,7 @@ function buildGraphData(
       });
       edges.push({
         id: `e${edgeSeq++}`,
-        source: pcId,
+        source: userAnchorId,
         target: profileNodeId,
         line: { width: 2, color: COLOR_BORDER },
       });
@@ -449,7 +501,7 @@ function buildGraphData(
       });
       edges.push({
         id: `e${edgeSeq++}`,
-        source: pcId,
+        source: userAnchorId,
         target: nodeId,
         line: { width: 1, color: COLOR_BORDER },
       });
@@ -487,9 +539,20 @@ function buildInspectorContent(
   switch (core.kind) {
     case "pc":
       return {
-        title: "このPC",
+        title: core.pcName ?? "このPC",
         fields: [
+          { label: "システムUUID", value: core.systemUuid ?? "" },
+          { label: "説明", value: core.description || "(未設定)" },
           { label: "セッションルートディレクトリ", value: core.effectiveProjectsDir ?? "" },
+        ],
+        action: null,
+      };
+    case "user":
+      return {
+        title: core.userName ?? "ユーザー",
+        fields: [
+          { label: "ユーザーID", value: core.userId ?? "" },
+          { label: "ホームディレクトリ", value: core.homeDirectory ?? "" },
         ],
         action: null,
       };
@@ -563,6 +626,10 @@ function HubPage() {
   const [profileDetails, setProfileDetails] = useState<ProfileDetails>({});
   const [effectiveProjectsDir, setEffectiveProjectsDir] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // このPC・ログインユーザー情報(オブジェクトモデル実装 第1弾。issue #182)。
+  // `window_states`/設定とは独立して起動時に一度だけ読み込む(値がOS由来で
+  // アプリの実行中に変わらないため、再取得の必要が無い)。
+  const [pc, setPc] = useState<PcDto | null>(null);
   // ノードのドラッグ固定位置(issue #121)。起動時に一度だけ読み込み、以後は
   // ドラッグのたびに更新する。キーは `positionKey`(`buildGraphData` 参照)。
   const [savedPositions, setSavedPositions] = useState<Record<string, NodePositionDto>>({});
@@ -640,6 +707,13 @@ function HubPage() {
   useEffect(() => {
     getHubLayout()
       .then((layout) => setSavedPositions(layout.positions))
+      .catch((e) => console.error(e));
+  }, []);
+
+  // このPC・ログインユーザー情報も起動時に一度だけ読み込む(issue #182)。
+  useEffect(() => {
+    getPc()
+      .then(setPc)
       .catch((e) => console.error(e));
   }, []);
 
@@ -772,6 +846,7 @@ function HubPage() {
     profileDetails,
     effectiveProjectsDir,
     savedPositions,
+    pc,
   });
   useEffect(() => {
     // NOTE: `@yanqirenshi/d3.network` の `Edges.js`(`draw()`)には、IDが
@@ -793,6 +868,7 @@ function HubPage() {
       profileDetails,
       effectiveProjectsDir,
       savedPositions,
+      pc,
     );
     validPositionKeysRef.current = positionKeys;
     rectum.data({ nodes, edges });
