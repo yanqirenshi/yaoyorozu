@@ -23,6 +23,7 @@ import {
 } from "./layout/LayoutSaveStatus";
 import { useCameraPersistence } from "./layout/useCameraPersistence";
 import SiteLink, { siteHref } from "./sitemap/SiteLink";
+import { toRenderNodes } from "./sitemap/renderNodes";
 // 文字の大きさ・太さは基本デザインのテキストスタイルから引く(規約 §4)。
 import { textStyle } from "./UiDesign/tokens";
 import {
@@ -230,7 +231,9 @@ export default function SitemapTab() {
     // インスペクタは右クリックで開くので、node.click コールバックは渡さない。
     const instance = new Rectum({ callbacks: {} });
     instance.data({
-      nodes: applyLayoutOverrides(SITEMAP_DATA.nodes, overrides),
+      // 保存値は「親の左上」起点のまま重ね、d3.sitemap へ渡す直前に描画用へ整える
+      // (親の余白の分を引く・ノード名とパスのリンク化。renderNodes.ts)。
+      nodes: toRenderNodes(applyLayoutOverrides(SITEMAP_DATA.nodes, overrides)),
       edges: applyPortOverrides(SITEMAP_DATA.edges, portOverrides),
     });
     return instance;
