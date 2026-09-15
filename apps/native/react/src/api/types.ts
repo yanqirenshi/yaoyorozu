@@ -190,6 +190,21 @@ export type HubLayoutDto = {
   positions: Record<string, NodePositionDto>;
 };
 
+// `getPc` の1ユーザー分(オブジェクトモデル実装 第1弾。issue #182)。
+export type UserDto = {
+  user_id: string;
+  user_name: string;
+  home_directory: string;
+};
+
+// `getPc` の戻り値。
+export type PcDto = {
+  system_uuid: string;
+  pc_name: string;
+  description: string;
+  users: UserDto[];
+};
+
 // `~/.claude` 配下のエントリ種別(/claude のExplorerタブ)。リンクは辿らない。
 export type ClaudeDirEntryKindDto = "directory" | "file" | "symlink";
 

@@ -180,6 +180,12 @@ pub trait HubLayoutStore {
     fn save(&self, layout: &HubLayout) -> Result<(), AppError>;
 }
 
+/// 実行環境(このPC・ログインユーザー)の取得(port)。実体(レジストリ・
+/// 環境変数の読み取り)は infra に閉じ込める(issue #182)。
+pub trait ExecutionEnvironmentSource {
+    fn current_pc(&self) -> Result<domain::Pc, AppError>;
+}
+
 /// GitHub OAuth(デバイスフロー)+ Projects(v2) 取得(port)。実体(HTTP通信)は
 /// infra に閉じ込める。将来 GitHub 以外の連携を足す可能性は現状ないため、
 /// `AgentGateway` のような抽象化はせず GitHub 固有の port として定義する。
@@ -398,6 +404,14 @@ pub fn load_settings(store: &dyn SettingsStore) -> Result<LoadedSettings, AppErr
 /// (infra)側の責務(issue #121)。
 pub fn load_hub_layout(store: &dyn HubLayoutStore) -> Result<HubLayout, AppError> {
     store.load()
+}
+
+/// 起動時、実行環境から現在のPC情報(system_uuid・pc_name・ログイン
+/// ユーザー)を取得する。個々の項目の取得失敗時のプレースホルダへの
+/// フォールバックは `ExecutionEnvironmentSource` 実装(infra)側の責務で、
+/// この関数自体はアプリを止めるようなエラーを返さない(issue #182)。
+pub fn current_pc(source: &dyn ExecutionEnvironmentSource) -> Result<domain::Pc, AppError> {
+    source.current_pc()
 }
 
 /// ハブグラフのノード位置を丸ごと置き換えて保存する。マージではなく置き換え
@@ -2883,5 +2897,53 @@ mod tests {
             assert!(matches!(error, AppError::InvalidInput(_)), "{limit}");
         }
         assert!(store.listed.borrow().is_empty());
+    }
+
+    struct FakeExecutionEnvironmentSource {
+        pc: domain::Pc,
+    }
+
+    impl ExecutionEnvironmentSource for FakeExecutionEnvironmentSource {
+        fn current_pc(&self) -> Result<domain::Pc, AppError> {
+            Ok(self.pc.clone())
+        }
+    }
+
+    #[test]
+    fn current_pc_returns_source_result_unchanged_on_success() {
+        let pc = domain::Pc {
+            system_uuid: "11111111-2222-3333-4444-555555555555".to_string(),
+            pc_name: "MY-PC".to_string(),
+            description: String::new(),
+            users: vec![domain::User {
+                user_id: "yanqi".to_string(),
+                user_name: "yanqi".to_string(),
+                home_directory: PathBuf::from(r"C:\Users\yanqi"),
+            }],
+        };
+        let source = FakeExecutionEnvironmentSource { pc: pc.clone() };
+
+        let result = current_pc(&source).expect("should return pc");
+
+        assert_eq!(result, pc);
+    }
+
+    #[test]
+    fn current_pc_returns_placeholder_pc_produced_by_source_without_erroring() {
+        // 個々の項目の取得失敗時、infra実装はエラーではなくプレースホルダ入りの
+        // Pcを返す(issue #182)。app層はそれをそのまま透過するだけでよい。
+        let placeholder_pc = domain::Pc {
+            system_uuid: "unknown".to_string(),
+            pc_name: "unknown".to_string(),
+            description: String::new(),
+            users: vec![],
+        };
+        let source = FakeExecutionEnvironmentSource {
+            pc: placeholder_pc.clone(),
+        };
+
+        let result = current_pc(&source).expect("should not error even with placeholders");
+
+        assert_eq!(result, placeholder_pc);
     }
 }

@@ -1,6 +1,6 @@
 use app::AppError;
-use domain::Settings;
-use infra::FileSettingsStore;
+use domain::{Pc, Settings};
+use infra::{FileSettingsStore, WindowsExecutionEnvironmentSource};
 use std::path::PathBuf;
 
 /// アプリの唯一の真実(SSoT)。`tauri::State<tokio::sync::Mutex<AppState>>` として
@@ -17,6 +17,10 @@ pub struct AppState {
     /// 保存しないランタイム状態で、起動時は常に空。ウィンドウが閉じられると
     /// `on_window_event` の `Destroyed` で自動的に除去される。
     pub window_states: app::WindowRegistry,
+    /// 現在のPC・ログインユーザー情報(オブジェクトモデル実装 第1弾。
+    /// issue #182)。`window_states` と同様に設定ファイルには保存しない
+    /// ランタイム状態で、真実の源はOSであるため起動のたびに組み立て直す。
+    pub pc: Pc,
 }
 
 /// [`AppState::load`] の結果。設定ファイルの破損から復旧した場合、呼び出し側
@@ -32,12 +36,15 @@ impl AppState {
     pub fn load(save_path: PathBuf) -> Result<LoadResult, AppError> {
         let store = FileSettingsStore::new(save_path.clone());
         let loaded = app::load_settings(&store)?;
+        let environment_source = WindowsExecutionEnvironmentSource::new();
+        let pc = app::current_pc(&environment_source)?;
         Ok(LoadResult {
             state: AppState {
                 settings: loaded.settings,
                 save_path,
                 github_login: None,
                 window_states: app::WindowRegistry::new(),
+                pc,
             },
             recovered_from_corruption: loaded.recovered_from_corruption,
         })

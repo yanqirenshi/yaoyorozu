@@ -684,3 +684,41 @@ impl From<domain::ClaudeDirPage> for ClaudeDirPageDto {
         }
     }
 }
+
+/// `get_pc` の1ユーザー分(オブジェクトモデル実装 第1弾。issue #182)。
+#[derive(Serialize, Clone)]
+pub struct UserDto {
+    pub user_id: String,
+    pub user_name: String,
+    pub home_directory: String,
+}
+
+impl From<domain::User> for UserDto {
+    fn from(user: domain::User) -> Self {
+        Self {
+            user_id: user.user_id,
+            user_name: user.user_name,
+            home_directory: user.home_directory.display().to_string(),
+        }
+    }
+}
+
+/// `get_pc` の戻り値(issue #182)。
+#[derive(Serialize, Clone)]
+pub struct PcDto {
+    pub system_uuid: String,
+    pub pc_name: String,
+    pub description: String,
+    pub users: Vec<UserDto>,
+}
+
+impl From<domain::Pc> for PcDto {
+    fn from(pc: domain::Pc) -> Self {
+        Self {
+            system_uuid: pc.system_uuid,
+            pc_name: pc.pc_name,
+            description: pc.description,
+            users: pc.users.into_iter().map(UserDto::from).collect(),
+        }
+    }
+}

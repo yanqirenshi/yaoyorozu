@@ -14,6 +14,7 @@ import type {
   GithubProjectSummaryDto,
   HubLayoutDto,
   NodePositionDto,
+  PcDto,
   ProfileSummaryDto,
   ProjectDto,
   ProjectItemsPageDto,
@@ -51,6 +52,7 @@ export type {
   HubLayoutDto,
   MessageDto,
   NodePositionDto,
+  PcDto,
   ProfileSummaryDto,
   ProjectDto,
   ProjectItemDto,
@@ -69,6 +71,7 @@ export type {
   SettingsInputDto,
   SkillDto,
   SkillSummaryDto,
+  UserDto,
   WindowStateDto,
   WindowTabDto,
 } from "./types";
@@ -179,6 +182,12 @@ export function listWindowStates(): Promise<WindowStateDto[]> {
 
 export function focusWindow(label: string): Promise<void> {
   return invoke<void>("focus_window", { label });
+}
+
+// このPC・ログインユーザー情報を取得する(オブジェクトモデル実装 第1弾。
+// issue #182)。
+export function getPc(): Promise<PcDto> {
+  return invoke<PcDto>("get_pc");
 }
 
 // ハブグラフのノード位置(ドラッグ固定)を取得する(issue #121)。
