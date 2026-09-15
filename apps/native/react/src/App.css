@@ -956,3 +956,183 @@ body,
   max-width: 77%;
   background-color: var(--state-hover);
 }
+
+/* Claude画面(/claude)。タブ(CLAUDE.md / settings.json / Explorer)・対象
+   パス・表示中タブの内容を縦に並べ、内容側が残りの高さを埋める。 */
+.claude-page {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  padding: 24px 24px 0;
+}
+
+.claude-page .pane-tabs {
+  flex-shrink: 0;
+  padding: 0;
+  margin-bottom: 12px;
+}
+
+.claude-page-path {
+  flex-shrink: 0;
+  margin: 0 0 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+/* dock(画面下部に浮くフローティングツールバー)との重なりは、この
+   コンテナの `padding-bottom` 1箇所だけで避ける(.hub-inspector と同じ値)。 */
+.claude-page-section {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  max-width: 960px;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 96px;
+}
+
+/* Explorerタブ: `~/.claude` 配下のツリー(ClaudeDirExplorer)。 */
+.claude-explorer {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: var(--surface-base);
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+.claude-explorer-header,
+.claude-explorer-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 6rem 9.5rem;
+  gap: 12px;
+  align-items: center;
+  padding-right: 12px;
+}
+
+.claude-explorer-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding-block: 6px;
+  background: var(--surface-sunken);
+  border-bottom: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.claude-explorer-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+}
+
+.claude-explorer-row:hover {
+  background: var(--state-hover);
+}
+
+/* 字下げは階層(`--depth`。ClaudeDirExplorer がインラインで渡す)から計算する。
+   見出し行は `--depth` を持たないため 0 段として扱う。 */
+.claude-explorer-name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding-left: calc(12px + var(--depth, 0) * 16px);
+}
+
+button.claude-explorer-name {
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding-top: 0;
+  padding-bottom: 0;
+  padding-right: 0;
+}
+
+.claude-explorer-chevron {
+  display: inline-block;
+  width: 16px;
+  flex-shrink: 0;
+  text-align: center;
+  color: var(--text-secondary);
+  transition: transform 0.1s;
+}
+
+.claude-explorer-chevron.open {
+  transform: rotate(90deg);
+}
+
+.claude-explorer-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claude-explorer-label.directory {
+  color: var(--color-primary);
+  font-weight: 500;
+}
+
+.claude-explorer-label.symlink {
+  font-style: italic;
+}
+
+.claude-explorer-tag {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+.claude-explorer-size,
+.claude-explorer-modified {
+  text-align: right;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 読み込み中・エラー・空・「さらに表示」の行。名前列(シェブロン幅を含む)に
+   字下げを揃える。 */
+.claude-explorer-status {
+  padding: 2px 12px 2px calc(12px + 20px + var(--depth, 0) * 16px);
+  color: var(--text-secondary);
+}
+
+.claude-explorer-status.error {
+  color: var(--semantic-error-fg);
+}
+
+.claude-explorer-more {
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  font: inherit;
+  color: var(--text-primary);
+  padding: 0 10px;
+  cursor: pointer;
+}
+
+.claude-explorer-more:hover {
+  background: var(--state-hover);
+}
+
+/* ファイルが無いときの「作成」ボタン。共通エディタ(ClaudeMdEditor /
+   JsonFileEditor)は縦並びのflexのため、そのままでは横幅いっぱいに伸びる。
+   共通部品は変えず、この画面でだけ左寄せの通常幅にする。 */
+.claude-page-section > .claude-md-editor > button,
+.claude-page-section > .json-file-editor > button {
+  align-self: flex-start;
+}

@@ -1,8 +1,9 @@
 use domain::{
-    is_valid_json, is_valid_rule_file_name, is_valid_session_id, is_valid_skill_name,
-    order_messages_newest_first, paginate_messages, sort_projects_by_recency,
-    sort_sessions_by_recency, ClaudeMdFile, ClaudeSettingsFile, HubLayout, NodePosition, Project,
-    RuleSummary, Session, SessionSummary, Settings, SkillSummary, CURRENT_HUB_LAYOUT_VERSION,
+    is_valid_claude_dir_path, is_valid_json, is_valid_rule_file_name, is_valid_session_id,
+    is_valid_skill_name, order_messages_newest_first, paginate_messages, sort_claude_dir_entries,
+    sort_projects_by_recency, sort_sessions_by_recency, ClaudeDirEntry, ClaudeDirPage,
+    ClaudeMdFile, ClaudeSettingsFile, HubLayout, NodePosition, Project, RuleSummary, Session,
+    SessionSummary, Settings, SkillSummary, CURRENT_HUB_LAYOUT_VERSION,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -952,6 +953,43 @@ pub fn poll_and_store_token(
             }
         }
     }
+}
+
+/// `~/.claude` 配下のディレクトリ一覧(読み取り専用。port)。`~/.claude`
+/// 自身の解決は infra の責務(`ClaudeSettingsStore` と同じ分担)。/claude
+/// 画面のExplorerタブ用で、ファイルの内容を読む経路は持たない
+/// (`domain::ClaudeDirEntry` 参照)。
+pub trait ClaudeDirStore {
+    /// `relative_path`(`list_claude_dir` で検証済み)直下のエントリを返す。
+    /// 順序は問わない(並べ替えは `list_claude_dir` が行う)。
+    fn list(&self, relative_path: &str) -> Result<Vec<ClaudeDirEntry>, AppError>;
+}
+
+/// `list_claude_dir` の1回あたりの取得件数の上限。
+pub const MAX_CLAUDE_DIR_PAGE_LIMIT: usize = 500;
+
+/// `~/.claude` 配下の `relative_path` 直下の一覧を、表示順(ディレクトリ優先・
+/// 名前順)に並べてページングして返す。`relative_path` はフロントから受け
+/// 取った値のため、`~/.claude` 配下に収まる形式かを先に検証する(native.md §4)。
+pub fn list_claude_dir(
+    store: &dyn ClaudeDirStore,
+    relative_path: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<ClaudeDirPage, AppError> {
+    if !is_valid_claude_dir_path(relative_path) {
+        return Err(AppError::InvalidInput("不正なパスです".to_string()));
+    }
+    if limit == 0 || limit > MAX_CLAUDE_DIR_PAGE_LIMIT {
+        return Err(AppError::InvalidInput(format!(
+            "取得件数は1〜{MAX_CLAUDE_DIR_PAGE_LIMIT}件で指定してください"
+        )));
+    }
+    let mut entries = store.list(relative_path)?;
+    sort_claude_dir_entries(&mut entries);
+    let total = entries.len();
+    let entries = entries.into_iter().skip(offset).take(limit).collect();
+    Ok(ClaudeDirPage { entries, total })
 }
 
 #[cfg(test)]
@@ -2761,5 +2799,89 @@ mod tests {
 
         assert!(matches!(error, AppError::InvalidInput(_)));
         assert!(store.saved.borrow().is_empty());
+    }
+
+    struct FakeClaudeDirStore {
+        entries: Vec<ClaudeDirEntry>,
+        listed: std::cell::RefCell<Vec<String>>,
+    }
+
+    impl FakeClaudeDirStore {
+        fn with_entries(entries: &[(&str, domain::ClaudeDirEntryKind)]) -> Self {
+            Self {
+                entries: entries
+                    .iter()
+                    .map(|(name, kind)| ClaudeDirEntry {
+                        name: name.to_string(),
+                        path: name.to_string(),
+                        kind: *kind,
+                        size_bytes: None,
+                        modified_at_ms: 0,
+                    })
+                    .collect(),
+                listed: std::cell::RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl ClaudeDirStore for FakeClaudeDirStore {
+        fn list(&self, relative_path: &str) -> Result<Vec<ClaudeDirEntry>, AppError> {
+            self.listed.borrow_mut().push(relative_path.to_string());
+            Ok(self.entries.clone())
+        }
+    }
+
+    fn sample_claude_dir_store() -> FakeClaudeDirStore {
+        use domain::ClaudeDirEntryKind::{Directory, File};
+        FakeClaudeDirStore::with_entries(&[
+            ("b.json", File),
+            ("Zeta", Directory),
+            ("a.md", File),
+            ("alpha", Directory),
+        ])
+    }
+
+    #[test]
+    fn list_claude_dir_sorts_directories_first_and_pages() {
+        let store = sample_claude_dir_store();
+
+        let page = list_claude_dir(&store, "projects", 1, 2).expect("should list");
+
+        assert_eq!(page.total, 4);
+        let names: Vec<&str> = page.entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["Zeta", "a.md"]);
+        assert_eq!(*store.listed.borrow(), vec!["projects".to_string()]);
+    }
+
+    #[test]
+    fn list_claude_dir_returns_empty_page_when_offset_exceeds_total() {
+        let store = sample_claude_dir_store();
+
+        let page = list_claude_dir(&store, "", 10, 2).expect("should list");
+
+        assert!(page.entries.is_empty());
+        assert_eq!(page.total, 4);
+    }
+
+    #[test]
+    fn list_claude_dir_rejects_invalid_path_without_touching_store() {
+        let store = sample_claude_dir_store();
+
+        for path in ["..", "../x", "/etc", "C:/Windows", "a\\b"] {
+            let error = list_claude_dir(&store, path, 0, 10).expect_err("should reject");
+            assert!(matches!(error, AppError::InvalidInput(_)), "{path:?}");
+        }
+        assert!(store.listed.borrow().is_empty());
+    }
+
+    #[test]
+    fn list_claude_dir_rejects_zero_or_excessive_limit() {
+        let store = sample_claude_dir_store();
+
+        for limit in [0, MAX_CLAUDE_DIR_PAGE_LIMIT + 1] {
+            let error = list_claude_dir(&store, "", 0, limit).expect_err("should reject");
+            assert!(matches!(error, AppError::InvalidInput(_)), "{limit}");
+        }
+        assert!(store.listed.borrow().is_empty());
     }
 }

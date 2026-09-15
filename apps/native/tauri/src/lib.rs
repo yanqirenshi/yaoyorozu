@@ -4,17 +4,18 @@ mod state;
 
 use app::{SessionSource, SettingsStore, TokenStore};
 use dto::{
-    AgentKindDto, AgentModeDto, AppErrorDto, AppWarningDto, ClaudeMdDto, ClaudeSettingsDto,
-    DeviceCodeDto, GithubAuthFailedEventDto, GithubAuthStatusDto, GithubAuthenticatedEventDto,
-    GithubProjectDto, GithubProjectSummaryDto, HubLayoutDto, NodePositionDto, ProfileSummaryDto,
-    ProjectDto, ProjectItemsPageDto, ProjectSettingsFileDto, RuleDto, RuleSummaryDto,
-    SessionChangedEventDto, SessionDto, SessionSummaryDto, SettingsCorruptedEventDto, SettingsDto,
-    SettingsInputDto, SkillDto, SkillSummaryDto, WindowStateDto, WindowTabDto,
+    AgentKindDto, AgentModeDto, AppErrorDto, AppWarningDto, ClaudeDirPageDto, ClaudeMdDto,
+    ClaudeSettingsDto, DeviceCodeDto, GithubAuthFailedEventDto, GithubAuthStatusDto,
+    GithubAuthenticatedEventDto, GithubProjectDto, GithubProjectSummaryDto, HubLayoutDto,
+    NodePositionDto, ProfileSummaryDto, ProjectDto, ProjectItemsPageDto, ProjectSettingsFileDto,
+    RuleDto, RuleSummaryDto, SessionChangedEventDto, SessionDto, SessionSummaryDto,
+    SettingsCorruptedEventDto, SettingsDto, SettingsInputDto, SkillDto, SkillSummaryDto,
+    WindowStateDto, WindowTabDto,
 };
 use infra::{
-    ClaudeCliAgent, FileClaudeMdStore, FileClaudeSettingsStore, FileHubLayoutStore,
-    FileProjectSettingsStore, FileRulesStore, FileSettingsStore, FileSkillsStore,
-    FileSystemRepository, GithubApiClient, KeyringTokenStore,
+    ClaudeCliAgent, FileClaudeDirStore, FileClaudeMdStore, FileClaudeSettingsStore,
+    FileHubLayoutStore, FileProjectSettingsStore, FileRulesStore, FileSettingsStore,
+    FileSkillsStore, FileSystemRepository, GithubApiClient, KeyringTokenStore,
 };
 use state::AppState;
 use std::path::PathBuf;
@@ -779,6 +780,70 @@ async fn save_claude_settings_file(
     .map_err(Into::into)
 }
 
+/// `~/.claude/CLAUDE.md`(ユーザーレベルのメモリ)を読む(/claude 画面の
+/// CLAUDE.mdタブ)。対象ディレクトリはRust側で `~/.claude` に固定解決し、
+/// フロントからパスは受け取らない(native.md §4)。読み書きはリポジトリ直下の
+/// CLAUDE.mdと同じ `FileClaudeMdStore`・楽観ロック(`app::save_claude_md`)を使う。
+#[tauri::command]
+async fn get_user_claude_md() -> Result<ClaudeMdDto, AppErrorDto> {
+    tauri::async_runtime::spawn_blocking(|| -> Result<ClaudeMdDto, app::AppError> {
+        let claude_dir = infra::claude_home_dir()?;
+        let store = FileClaudeMdStore::new();
+        let file = app::read_claude_md(&store, &claude_dir)?;
+        Ok(file.into())
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
+}
+
+#[tauri::command]
+async fn save_user_claude_md(
+    content: String,
+    expected_modified_at_ms: Option<u64>,
+) -> Result<(), AppErrorDto> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), app::AppError> {
+        let claude_dir = infra::claude_home_dir()?;
+        let store = FileClaudeMdStore::new();
+        app::save_claude_md(&store, &claude_dir, &content, expected_modified_at_ms)
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
+}
+
+/// `~/.claude` 配下の `path`(`~/.claude` からの相対パス。区切りは `/`、
+/// 空文字列はルート)直下のエントリを一覧する(/claude 画面のExplorerタブ。
+/// 表示専用)。パス形式の検証は `app::list_claude_dir`、リンク経由での
+/// `~/.claude` 外への逸脱の検出は `FileClaudeDirStore` が行う(native.md §4)。
+#[tauri::command]
+async fn list_claude_dir(
+    path: String,
+    offset: usize,
+    limit: usize,
+) -> Result<ClaudeDirPageDto, AppErrorDto> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<ClaudeDirPageDto, app::AppError> {
+        let store = FileClaudeDirStore::new(infra::claude_home_dir()?);
+        let page = app::list_claude_dir(&store, &path, offset, limit)?;
+        Ok(page.into())
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
+}
+
 /// 認証状態は「キーチェーンにトークンがあるか」を基準にする(issue #54)。
 /// ログイン名(`AppState.github_login`)が未確定でもトークンさえあれば
 /// `authenticated: true` とし(`login` は `null`)、オフライン起動時などに
@@ -1253,6 +1318,9 @@ pub fn run() {
             save_project_settings_file,
             get_claude_settings_file,
             save_claude_settings_file,
+            get_user_claude_md,
+            save_user_claude_md,
+            list_claude_dir,
             get_github_auth_status,
             github_login_start,
             github_logout,

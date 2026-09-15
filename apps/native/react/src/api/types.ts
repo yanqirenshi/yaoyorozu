@@ -189,3 +189,22 @@ export type NodePositionDto = {
 export type HubLayoutDto = {
   positions: Record<string, NodePositionDto>;
 };
+
+// `~/.claude` 配下のエントリ種別(/claude のExplorerタブ)。リンクは辿らない。
+export type ClaudeDirEntryKindDto = "directory" | "file" | "symlink";
+
+// `listClaudeDir` の1件分。`path` は `~/.claude` からの相対パス(区切りは `/`)。
+// `size_bytes` はファイルのみ(ディレクトリ・リンクは `null`)。
+export type ClaudeDirEntryDto = {
+  name: string;
+  path: string;
+  kind: ClaudeDirEntryKindDto;
+  size_bytes: number | null;
+  modified_at_ms: number;
+};
+
+// `listClaudeDir` の戻り値。`total` はページング前の件数。
+export type ClaudeDirPageDto = {
+  entries: ClaudeDirEntryDto[];
+  total: number;
+};
