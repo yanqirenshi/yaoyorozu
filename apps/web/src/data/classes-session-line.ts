@@ -3,7 +3,13 @@
 //
 // 書き方の道具(attr / label / defineDiagram)は classDiagram.ts にある。
 import type { DiagramInput } from "@yanqirenshi/d3.classes";
-import { attr, defineDiagram, label, type ClassDef } from "./classDiagram";
+import {
+  attr,
+  defineDiagram,
+  label,
+  type ClassDef,
+  type ClassFilePaths,
+} from "./classDiagram";
 
 const DEFS: ClassDef[] = [
   // ============ 合併型(行の入口) ============
@@ -16,6 +22,7 @@ const DEFS: ClassDef[] = [
       "mode", "pr-link", "atis-latch", "Unknown(serde other)",
     ].map(label),
     position: { x: -2280, y: 40 },
+    filePath: "apps/native/crates/domain/src/session_line/session_line.rs",
   },
   // ============ 会話チェーン共通 ============
   {
@@ -34,6 +41,7 @@ const DEFS: ClassDef[] = [
       attr("agent_id", "Option<String>"),
     ],
     position: { x: -1940, y: 560 },
+    filePath: "apps/native/crates/domain/src/session_line/chain_line_base.rs",
   },
   // ============ 会話本体: user ============
   {
@@ -46,29 +54,34 @@ const DEFS: ClassDef[] = [
       attr("source_tool_assistant_uuid", "Option<String>"),
     ],
     position: { x: -2960, y: 300 },
+    filePath: "apps/native/crates/domain/src/session_line/user_line.rs",
   },
   {
     name: { physical: "UserMessage", logical: "UserMessage", description: "" }, // 論理名: ユーザーメッセージ
     attributes: [attr("role", "Option<String>"), attr("content", "Option<UserContent>")],
     position: { x: -2960, y: 560 },
+    filePath: "apps/native/crates/domain/src/session_line/user_message.rs",
   },
   {
     name: { physical: "UserContent", logical: "UserContent", description: "serde(untagged)" }, // 論理名: ユーザー本文
     stereotype: "enumeration",
     attributes: ["Text(String)", "Blocks(Vec<UserContentBlock>)"].map(label),
     position: { x: -2960, y: 800 },
+    filePath: "apps/native/crates/domain/src/session_line/user_content.rs",
   },
   {
     name: { physical: "UserContentBlock", logical: "UserContentBlock", description: "serde(tag=type)" }, // 論理名: userブロック
     stereotype: "enumeration",
     attributes: ["tool_result", "text", "image", "Unknown"].map(label),
     position: { x: -2960, y: 1040 },
+    filePath: "apps/native/crates/domain/src/session_line/user_content_block.rs",
   },
   // ============ 会話本体: assistant ============
   {
     name: { physical: "AssistantLine", logical: "AssistantLine", description: "" }, // 論理名: AI応答行
     attributes: [attr("request_id", "Option<String>"), attr("message", "AssistantMessage")],
     position: { x: -2620, y: 300 },
+    filePath: "apps/native/crates/domain/src/session_line/assistant_line.rs",
   },
   {
     name: { physical: "AssistantMessage", logical: "AssistantMessage", description: "Anthropic API形式" }, // 論理名: AI応答メッセージ
@@ -80,12 +93,14 @@ const DEFS: ClassDef[] = [
       attr("usage", "Option<Usage>"),
     ],
     position: { x: -2620, y: 560 },
+    filePath: "apps/native/crates/domain/src/session_line/assistant_message.rs",
   },
   {
     name: { physical: "AssistantContentBlock", logical: "AssistantContentBlock", description: "serde(tag=type)" }, // 論理名: assistantブロック
     stereotype: "enumeration",
     attributes: ["text", "thinking", "tool_use", "Unknown"].map(label),
     position: { x: -2620, y: 830 },
+    filePath: "apps/native/crates/domain/src/session_line/assistant_content_block.rs",
   },
   {
     name: { physical: "Usage", logical: "Usage", description: "" }, // 論理名: トークン使用量
@@ -97,37 +112,44 @@ const DEFS: ClassDef[] = [
       attr("cache_creation", "Option<CacheCreation>"),
     ],
     position: { x: -2620, y: 1040 },
+    filePath: "apps/native/crates/domain/src/session_line/usage.rs",
   },
   {
     name: { physical: "CacheCreation", logical: "CacheCreation", description: "" }, // 論理名: キャッシュ作成量
     attributes: [attr("ephemeral_1h_input_tokens", "u64"), attr("ephemeral_5m_input_tokens", "u64")],
     position: { x: -2620, y: 1300 },
+    filePath: "apps/native/crates/domain/src/session_line/cache_creation.rs",
   },
   // ============ content ブロック実体 ============
   {
     name: { physical: "TextBlock", logical: "TextBlock", description: "表示対象はこれのみ" }, // 論理名: 本文
     attributes: [attr("text", "String")],
     position: { x: -2960, y: 1610 },
+    filePath: "apps/native/crates/domain/src/session_line/text_block.rs",
   },
   {
     name: { physical: "ThinkingBlock", logical: "ThinkingBlock", description: "非表示" }, // 論理名: 思考
     attributes: [attr("thinking", "String"), attr("signature", "String")],
     position: { x: -2670, y: 1610 },
+    filePath: "apps/native/crates/domain/src/session_line/thinking_block.rs",
   },
   {
     name: { physical: "ToolUseBlock", logical: "ToolUseBlock", description: "非表示" }, // 論理名: ツール呼び出し
     attributes: [attr("id", "String"), attr("name", "String"), attr("input", "Value")],
     position: { x: -2380, y: 1610 },
+    filePath: "apps/native/crates/domain/src/session_line/tool_use_block.rs",
   },
   {
     name: { physical: "ToolResultBlock", logical: "ToolResultBlock", description: "非表示" }, // 論理名: ツール結果
     attributes: [attr("tool_use_id", "String"), attr("content", "Value"), attr("is_error", "Option<bool>")],
     position: { x: -2090, y: 1610 },
+    filePath: "apps/native/crates/domain/src/session_line/tool_result_block.rs",
   },
   {
     name: { physical: "ImageBlock", logical: "ImageBlock", description: "非表示" }, // 論理名: 画像
     attributes: [attr("source", "Value")],
     position: { x: -1800, y: 1610 },
+    filePath: "apps/native/crates/domain/src/session_line/image_block.rs",
   },
   // ============ 内部イベント: system ============
   {
@@ -135,6 +157,7 @@ const DEFS: ClassDef[] = [
     stereotype: "enumeration",
     attributes: ["stop_hook_summary", "api_error", "compact_boundary", "informational", "Unknown"].map(label),
     position: { x: -2280, y: 380 },
+    filePath: "apps/native/crates/domain/src/session_line/system_line.rs",
   },
   {
     name: { physical: "StopHookSummaryLine", logical: "StopHookSummaryLine", description: "" }, // 論理名: フック実行結果
@@ -147,17 +170,20 @@ const DEFS: ClassDef[] = [
       attr("tool_use_id", "Option<String>"),
     ],
     position: { x: -2280, y: 640 },
+    filePath: "apps/native/crates/domain/src/session_line/stop_hook_summary_line.rs",
   },
   {
     name: { physical: "HookInfo", logical: "HookInfo", description: "" }, // 論理名: フック情報
     attributes: [attr("command", "Option<String>"), attr("duration_ms", "Option<u64>")],
     position: { x: -1940, y: 1080 },
+    filePath: "apps/native/crates/domain/src/session_line/hook_info.rs",
   },
   {
     name: { physical: "SystemLevel", logical: "SystemLevel", description: "" }, // 論理名: 重要度
     stereotype: "enumeration",
     attributes: ["Info", "Warning", "Error", "Suggestion", "Unknown"].map(label),
     position: { x: -1940, y: 900 },
+    filePath: "apps/native/crates/domain/src/session_line/system_level.rs",
   },
   {
     name: { physical: "ApiErrorLine", logical: "ApiErrorLine", description: "" }, // 論理名: APIエラー行
@@ -169,6 +195,7 @@ const DEFS: ClassDef[] = [
       attr("source", "Option<String>"),
     ],
     position: { x: -2280, y: 960 },
+    filePath: "apps/native/crates/domain/src/session_line/api_error_line.rs",
   },
   {
     name: { physical: "ApiErrorDetail", logical: "ApiErrorDetail", description: "" }, // 論理名: APIエラー詳細
@@ -178,6 +205,7 @@ const DEFS: ClassDef[] = [
       attr("is_network_down", "Option<bool>"),
     ],
     position: { x: -1940, y: 1240 },
+    filePath: "apps/native/crates/domain/src/session_line/api_error_detail.rs",
   },
   {
     name: { physical: "CompactBoundaryLine", logical: "CompactBoundaryLine", description: "parentUuid=null起点" }, // 論理名: 履歴圧縮境界
@@ -188,6 +216,7 @@ const DEFS: ClassDef[] = [
       attr("compact_metadata", "CompactMetadata"),
     ],
     position: { x: -2280, y: 1220 },
+    filePath: "apps/native/crates/domain/src/session_line/compact_boundary_line.rs",
   },
   {
     name: { physical: "CompactMetadata", logical: "CompactMetadata", description: "" }, // 論理名: 圧縮メタ
@@ -197,17 +226,20 @@ const DEFS: ClassDef[] = [
       attr("post_tokens", "Option<u64>"),
     ],
     position: { x: -1940, y: 1400 },
+    filePath: "apps/native/crates/domain/src/session_line/compact_metadata.rs",
   },
   {
     name: { physical: "InformationalLine", logical: "InformationalLine", description: "" }, // 論理名: 情報通知行
     attributes: [attr("content", "Option<String>"), attr("is_meta", "Option<bool>")],
     position: { x: -2280, y: 1460 },
+    filePath: "apps/native/crates/domain/src/session_line/informational_line.rs",
   },
   // ============ 内部イベント: attachment ============
   {
     name: { physical: "AttachmentLine", logical: "AttachmentLine", description: "attachment.typeで23種(未使用のためValueのまま)" }, // 論理名: 付帯情報行
     attributes: [attr("attachment", "Value")],
     position: { x: -1940, y: 300 },
+    filePath: "apps/native/crates/domain/src/session_line/attachment_line.rs",
   },
   // ============ セッションメタ ============
   {
@@ -218,6 +250,7 @@ const DEFS: ClassDef[] = [
       attr("session_id", "Option<String>"),
     ],
     position: { x: -1600, y: 40 },
+    filePath: "apps/native/crates/domain/src/session_line/queue_operation_line.rs",
   },
   {
     name: { physical: "LastPromptLine", logical: "LastPromptLine", description: "" }, // 論理名: 直近プロンプト
@@ -227,21 +260,25 @@ const DEFS: ClassDef[] = [
       attr("session_id", "Option<String>"),
     ],
     position: { x: -1600, y: 210 },
+    filePath: "apps/native/crates/domain/src/session_line/last_prompt_line.rs",
   },
   {
     name: { physical: "CustomTitleLine", logical: "CustomTitleLine", description: "最後の行が有効" }, // 論理名: 会話タイトル
     attributes: [attr("custom_title", "Option<String>"), attr("session_id", "Option<String>")],
     position: { x: -1600, y: 380 },
+    filePath: "apps/native/crates/domain/src/session_line/custom_title_line.rs",
   },
   {
     name: { physical: "AiTitleLine", logical: "AiTitleLine", description: "" }, // 論理名: AI生成タイトル
     attributes: [attr("ai_title", "Option<String>"), attr("session_id", "Option<String>")],
     position: { x: -1600, y: 530 },
+    filePath: "apps/native/crates/domain/src/session_line/ai_title_line.rs",
   },
   {
     name: { physical: "ModeLine", logical: "ModeLine", description: "実測はnormalのみ" }, // 論理名: モード
     attributes: [attr("mode", "Option<String>"), attr("session_id", "Option<String>")],
     position: { x: -1600, y: 680 },
+    filePath: "apps/native/crates/domain/src/session_line/mode_line.rs",
   },
   {
     name: { physical: "PrLinkLine", logical: "PrLinkLine", description: "" }, // 論理名: GitHub PRリンク
@@ -251,15 +288,17 @@ const DEFS: ClassDef[] = [
       attr("pr_repository", "Option<String>"),
     ],
     position: { x: -1600, y: 830 },
+    filePath: "apps/native/crates/domain/src/session_line/pr_link_line.rs",
   },
   {
     name: { physical: "AtisLatchLine", logical: "AtisLatchLine", description: "atisは全件空文字列" }, // 論理名: 用途不明
     attributes: [attr("atis", "Option<String>"), attr("session_id", "Option<String>")],
     position: { x: -1600, y: 1000 },
+    filePath: "apps/native/crates/domain/src/session_line/atis_latch_line.rs",
   },
 ];
 
-const { classes, rel } = defineDiagram(DEFS);
+const { classes, rel, filePaths } = defineDiagram(DEFS);
 
 const RELATIONSHIPS = [
   // SessionLine(tag=type) → 各バリアント
@@ -312,3 +351,5 @@ export const SESSION_LINE_CLASS_DATA: DiagramInput = {
   classes,
   relationships: RELATIONSHIPS,
 };
+
+export const SESSION_LINE_CLASS_FILE_PATHS: ClassFilePaths = filePaths;

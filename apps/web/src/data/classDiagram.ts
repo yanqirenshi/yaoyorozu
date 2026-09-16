@@ -18,7 +18,18 @@ import type {
 } from "@yanqirenshi/d3.classes";
 
 /** クラス定義。id は物理名から付けるので書かない。 */
-export type ClassDef = Omit<ClassInput, "id">;
+export type ClassDef = Omit<ClassInput, "id"> & {
+  /**
+   * 対応する Rust の実装ファイル(リポジトリルートからの相対パス。例:
+   * `apps/native/crates/domain/src/pc.rs`)。まだ実装されていないクラス
+   * (`classes-domain.ts` の大半)は省略する。d3.classes には渡さない
+   * (`defineDiagram` が取り除く)、インスペクタ表示専用の値。
+   */
+  filePath?: string;
+};
+
+/** 物理名 → 実装ファイルのパス。`filePath` を書いたクラスの分だけ持つ。 */
+export type ClassFilePaths = Record<string, string>;
 
 /**
  * 端点の取り付け位置。辺のキーワード(`"top"` など。その辺の中央)か、取り付け角度
@@ -69,7 +80,18 @@ export const method = (
  * 渡し忘れると id が重複し、d3.classes が例外を出す(黙って上書きしない)。
  */
 export function defineDiagram(defs: ClassDef[]) {
-  const classes: ClassInput[] = defs.map((c) => ({ ...c, id: c.name.physical }));
+  // filePath は d3.classes の ClassInput に無いフィールドなので、渡す前に取り除く。
+  const classes: ClassInput[] = defs.map((c) => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- filePath を捨てるためだけの分割代入
+    const { filePath, ...rest } = c;
+    return { ...rest, id: c.name.physical };
+  });
+
+  const filePaths: ClassFilePaths = Object.fromEntries(
+    defs
+      .filter((c): c is ClassDef & { filePath: string } => c.filePath !== undefined)
+      .map((c) => [c.name.physical, c.filePath]),
+  );
 
   // 綴り違いはここで落とす。
   const ref = (physical: string): string => {
@@ -96,7 +118,7 @@ export function defineDiagram(defs: ClassDef[]) {
     ...multiplicity,
   });
 
-  return { classes, rel };
+  return { classes, rel, filePaths };
 }
 
 /**

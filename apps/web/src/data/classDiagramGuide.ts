@@ -19,15 +19,23 @@ export const GUIDE_FILES: GuideFile[] = [
   },
   {
     path: "src/data/classes-session-line.ts",
-    role: "SessionLine の図(Labo の試作)。native の session_line.rs の型を写したもので、この決まりで書いたものではない。",
+    role: "SessionLine の図(Labo の試作)。native の session_line/ 以下の型を写したもので、この決まりで書いたものではない。",
+  },
+  {
+    path: "src/data/classes-native-prototype.ts",
+    role: "domain クレートに実装済みの、まだオブジェクトモデルへ置き換えられていない型(プロトタイプ期の型)を、コードのまま写した図。",
+  },
+  {
+    path: "src/data/classes-infra.ts",
+    role: "infra クレートの型と、それが実現する app の port(trait)を、コードのまま写した図。",
   },
   {
     path: "src/data/classDiagram.ts",
-    role: "書くための道具(attr / label / defineDiagram / rel / mergeDiagrams)。",
+    role: "書くための道具(attr / label / method / defineDiagram / rel / mergeDiagrams)。",
   },
   {
     path: "src/data/classes.ts",
-    role: "複数の図を1枚に重ねる(mergeDiagrams)。",
+    role: "複数の図を1枚に重ねる(mergeDiagrams)。実装ファイルのパスの一覧(CLASS_FILE_PATHS)もここでまとめる。",
   },
   {
     path: "src/data/layout/classes.json",
@@ -98,6 +106,12 @@ export const GUIDE_CLASS_ITEMS: GuideClassItem[] = [
     howTo:
       "箱の幅は中身から計算されず 200 で固定なので、名前と型の列が重なるときだけ size.w で広げる。高さは中身から計算され、size.h は使われない(0 を書く)。",
     example: "size: { w: 250, h: 0 }",
+  },
+  {
+    item: "実装ファイル",
+    howTo:
+      "対応する Rust の型が実装されていれば、filePath にリポジトリルートからの相対パスを書く。インスペクタのクラス名の下に表示される。まだ実装されていないクラス(classes-domain.ts の大半)は省略してよい(「(未実装)」と出る)。",
+    example: 'filePath: "apps/native/crates/domain/src/pc.rs"',
   },
 ];
 

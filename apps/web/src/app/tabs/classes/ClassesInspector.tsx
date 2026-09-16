@@ -43,6 +43,11 @@ export type ClassesInspectorTarget = {
   description: string;
   position: { x: number; y: number };
   ports: ClassesInspectorPort[];
+  /**
+   * 対応する Rust の実装ファイル(リポジトリルートからの相対パス)。
+   * まだ実装されていないクラス(`classes-domain.ts` の大半)は無い。
+   */
+  filePath?: string;
 };
 
 type ClassesInspectorProps = {
@@ -141,6 +146,17 @@ export default function ClassesInspector({
             title={target.physical}
           >
             {target.physical}
+          </div>
+          <div
+            className="truncate font-mono text-xs"
+            style={{
+              color: target.filePath
+                ? "var(--text-secondary)"
+                : "var(--text-placeholder)",
+            }}
+            title={target.filePath}
+          >
+            {target.filePath ?? "(未実装)"}
           </div>
         </div>
         <IconButton size="small" aria-label="閉じる" onClick={onClose}>

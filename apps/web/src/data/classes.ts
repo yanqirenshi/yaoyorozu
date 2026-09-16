@@ -13,11 +13,17 @@
  * 位置に置く。
  */
 import type { DiagramInput } from "@yanqirenshi/d3.classes";
-import { mergeDiagrams } from "./classDiagram";
-import { DOMAIN_CLASS_DATA } from "./classes-domain";
-import { SESSION_LINE_CLASS_DATA } from "./classes-session-line";
-import { NATIVE_PROTOTYPE_CLASS_DATA } from "./classes-native-prototype";
-import { INFRA_CLASS_DATA } from "./classes-infra";
+import { mergeDiagrams, type ClassFilePaths } from "./classDiagram";
+import { DOMAIN_CLASS_DATA, DOMAIN_CLASS_FILE_PATHS } from "./classes-domain";
+import {
+  SESSION_LINE_CLASS_DATA,
+  SESSION_LINE_CLASS_FILE_PATHS,
+} from "./classes-session-line";
+import {
+  NATIVE_PROTOTYPE_CLASS_DATA,
+  NATIVE_PROTOTYPE_CLASS_FILE_PATHS,
+} from "./classes-native-prototype";
+import { INFRA_CLASS_DATA, INFRA_CLASS_FILE_PATHS } from "./classes-infra";
 
 export const CLASS_DIAGRAM_DATA: DiagramInput = mergeDiagrams(
   DOMAIN_CLASS_DATA,
@@ -25,3 +31,14 @@ export const CLASS_DIAGRAM_DATA: DiagramInput = mergeDiagrams(
   NATIVE_PROTOTYPE_CLASS_DATA,
   INFRA_CLASS_DATA,
 );
+
+/**
+ * 物理名 → 実装ファイルのパス。インスペクタでの表示用(`ClassesTab.tsx`)。
+ * クラスの物理名は図全体で一意(`mergeDiagrams` が保証)なので、単純に重ねてよい。
+ */
+export const CLASS_FILE_PATHS: ClassFilePaths = {
+  ...DOMAIN_CLASS_FILE_PATHS,
+  ...SESSION_LINE_CLASS_FILE_PATHS,
+  ...NATIVE_PROTOTYPE_CLASS_FILE_PATHS,
+  ...INFRA_CLASS_FILE_PATHS,
+};

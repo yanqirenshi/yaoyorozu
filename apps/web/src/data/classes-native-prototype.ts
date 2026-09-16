@@ -41,7 +41,13 @@
  * 実装されるとき、この型は置き換えられて消える見込み。
  */
 import type { DiagramInput } from "@yanqirenshi/d3.classes";
-import { attr, defineDiagram, label, type ClassDef } from "./classDiagram";
+import {
+  attr,
+  defineDiagram,
+  label,
+  type ClassDef,
+  type ClassFilePaths,
+} from "./classDiagram";
 
 const DEFS: ClassDef[] = [
   // ============ セッション閲覧(プロトタイプ) ============
@@ -50,6 +56,7 @@ const DEFS: ClassDef[] = [
     stereotype: "enumeration",
     attributes: ["ClaudeCode"].map(label),
     position: { x: 2100, y: -150 },
+    filePath: "apps/native/crates/domain/src/agent_kind.rs",
   },
   {
     name: { physical: "Project", logical: "Project", description: "プロジェクト(フォルダ)一覧の1件" },
@@ -59,6 +66,7 @@ const DEFS: ClassDef[] = [
       attr("agent", "AgentKind"),
     ],
     position: { x: 2450, y: -150 },
+    filePath: "apps/native/crates/domain/src/project.rs",
   },
   {
     name: { physical: "SessionPrototype", logical: "SessionPrototype", description: "1つのセッション(.jsonl 1ファイル)。Rust の実際の型名は Session(名前の重なりは冒頭コメントを参照)" },
@@ -68,6 +76,7 @@ const DEFS: ClassDef[] = [
       attr("agent", "AgentKind"),
     ],
     position: { x: 2100, y: 150 },
+    filePath: "apps/native/crates/domain/src/session.rs",
   },
   {
     name: { physical: "Message", logical: "Message", description: "1件の会話メッセージ" },
@@ -77,12 +86,14 @@ const DEFS: ClassDef[] = [
       attr("timestamp", "String"),
     ],
     position: { x: 2450, y: 150 },
+    filePath: "apps/native/crates/domain/src/message.rs",
   },
   {
     name: { physical: "Role", logical: "Role", description: "メッセージの発言者種別" },
     stereotype: "enumeration",
     attributes: ["User", "Assistant"].map(label),
     position: { x: 2450, y: 450 },
+    filePath: "apps/native/crates/domain/src/role.rs",
   },
   {
     name: { physical: "SessionSummary", logical: "SessionSummary", description: "セッション一覧(ビューア左ペイン)表示用の1件分。issue #33 / #104" },
@@ -95,6 +106,7 @@ const DEFS: ClassDef[] = [
       attr("git_branch", "Option<String>"),
     ],
     position: { x: 2100, y: 450 },
+    filePath: "apps/native/crates/domain/src/session_summary.rs",
   },
   // ============ 設定・プロファイル ============
   {
@@ -106,6 +118,7 @@ const DEFS: ClassDef[] = [
       attr("claude_projects_dir", "Option<PathBuf>"),
     ],
     position: { x: 2950, y: -150 },
+    filePath: "apps/native/crates/domain/src/settings.rs",
     // 名前と型の列が重なるので広げる(LogLine の size の説明を参照)。
     size: { w: 240, h: 0 },
   },
@@ -119,6 +132,7 @@ const DEFS: ClassDef[] = [
       attr("selected_project_folders", "Vec<String>"),
     ],
     position: { x: 3300, y: -150 },
+    filePath: "apps/native/crates/domain/src/profile.rs",
     // 名前と型の列が重なるので広げる(LogLine の size の説明を参照)。
     size: { w: 250, h: 0 },
   },
@@ -126,6 +140,7 @@ const DEFS: ClassDef[] = [
     name: { physical: "GithubProject", logical: "GithubProject", description: "永続化される GitHub プロジェクトの参照(owner + number)" },
     attributes: [attr("owner", "String"), attr("number", "u32")],
     position: { x: 3300, y: 150 },
+    filePath: "apps/native/crates/domain/src/github_project.rs",
   },
   {
     name: { physical: "GithubProjectSummary", logical: "GithubProjectSummary", description: "GitHub Projects(v2)の一覧表示用サマリ。GithubProject とは別の読み取り専用の値" },
@@ -135,6 +150,7 @@ const DEFS: ClassDef[] = [
       attr("closed", "bool"),
     ],
     position: { x: 2950, y: 150 },
+    filePath: "apps/native/crates/domain/src/github_project_summary.rs",
   },
   // ============ GitHub連携(Projects v2) ============
   {
@@ -147,6 +163,7 @@ const DEFS: ClassDef[] = [
       attr("status_options", "Vec<ProjectStatusOption>"),
     ],
     position: { x: 2100, y: 750 },
+    filePath: "apps/native/crates/domain/src/project_items_page.rs",
     // 名前と型の列が重なるので広げる(LogLine の size の説明を参照)。
     size: { w: 270, h: 0 },
   },
@@ -163,39 +180,46 @@ const DEFS: ClassDef[] = [
       attr("url", "Option<String>"),
     ],
     position: { x: 2450, y: 750 },
+    filePath: "apps/native/crates/domain/src/project_item.rs",
   },
   {
     name: { physical: "ProjectStatusOption", logical: "ProjectStatusOption", description: "GitHub Projects(v2)のStatusフィールドの選択肢。issue #50" },
     attributes: [attr("id", "String"), attr("name", "String")],
     position: { x: 2100, y: 1050 },
+    filePath: "apps/native/crates/domain/src/project_status_option.rs",
   },
   {
     name: { physical: "ProjectItemKind", logical: "ProjectItemKind", description: "GitHub Projects(v2)アイテムの種別。issue #34" },
     stereotype: "enumeration",
     attributes: ["Issue", "PullRequest", "DraftIssue"].map(label),
     position: { x: 2450, y: 1050 },
+    filePath: "apps/native/crates/domain/src/project_item.rs",
   },
   // ============ ファイル編集 ============
   {
     name: { physical: "ClaudeMdFile", logical: "ClaudeMdFile", description: "リポジトリ直下(または作業ディレクトリ直下)の CLAUDE.md の内容。issue #27" },
     attributes: [attr("content", "String"), attr("modified_at_ms", "u64")],
     position: { x: 2950, y: 750 },
+    filePath: "apps/native/crates/domain/src/claude_md_file.rs",
   },
   {
     name: { physical: "ClaudeSettingsFile", logical: "ClaudeSettingsFile", description: "~/.claude/settings.json の内容。issue #53" },
     attributes: [attr("content", "String"), attr("modified_at_ms", "u64")],
     position: { x: 3300, y: 750 },
+    filePath: "apps/native/crates/domain/src/claude_settings_file.rs",
   },
   // ============ Rules / Skills ============
   {
     name: { physical: "RuleSummary", logical: "RuleSummary", description: ".claude/rules/ 配下のルールファイル1件分のサマリ。issue #61" },
     attributes: [attr("file_name", "String"), attr("modified_at_ms", "u64")],
     position: { x: 2950, y: 1050 },
+    filePath: "apps/native/crates/domain/src/rule_summary.rs",
   },
   {
     name: { physical: "SkillSummary", logical: "SkillSummary", description: ".claude/skills/<name>/SKILL.md 1件分のサマリ。issue #65" },
     attributes: [attr("name", "String"), attr("modified_at_ms", "u64")],
     position: { x: 3300, y: 1050 },
+    filePath: "apps/native/crates/domain/src/skill_summary.rs",
   },
   // ============ ウィンドウ・ハブ ============
   {
@@ -206,6 +230,7 @@ const DEFS: ClassDef[] = [
       attr("active_tab_index", "usize"),
     ],
     position: { x: 2100, y: 1350 },
+    filePath: "apps/native/crates/domain/src/window_state.rs",
   },
   {
     name: { physical: "WindowTab", logical: "WindowTab", description: "ウィンドウ内の1タブの表示状態。永続化しない(ランタイム状態)。issue #83" },
@@ -215,6 +240,7 @@ const DEFS: ClassDef[] = [
       attr("session_title", "Option<String>"),
     ],
     position: { x: 2450, y: 1350 },
+    filePath: "apps/native/crates/domain/src/window_tab.rs",
   },
   {
     name: { physical: "HubLayout", logical: "HubLayout", description: "ハブのグラフのノード位置の永続化(hub-layout.json)。issue #121" },
@@ -223,6 +249,7 @@ const DEFS: ClassDef[] = [
       attr("positions", "HashMap<String, NodePosition>"),
     ],
     position: { x: 2100, y: 1650 },
+    filePath: "apps/native/crates/domain/src/hub_layout.rs",
     // 名前と型の列が重なるので広げる(LogLine の size の説明を参照)。
     size: { w: 270, h: 0 },
   },
@@ -230,12 +257,14 @@ const DEFS: ClassDef[] = [
     name: { physical: "NodePosition", logical: "NodePosition", description: "ハブのグラフ上でユーザーがドラッグ固定したノード1件分の座標。issue #121" },
     attributes: [attr("x", "f64"), attr("y", "f64")],
     position: { x: 2450, y: 1650 },
+    filePath: "apps/native/crates/domain/src/node_position.rs",
   },
   // ============ /claude 画面(Explorer) ============
   {
     name: { physical: "ClaudeDirPage", logical: "ClaudeDirPage", description: "~/.claude 配下のディレクトリ一覧の1ページ分(Explorerタブ)" },
     attributes: [attr("entries", "Vec<ClaudeDirEntry>"), attr("total", "usize")],
     position: { x: 2950, y: 1350 },
+    filePath: "apps/native/crates/domain/src/claude_dir_page.rs",
   },
   {
     name: { physical: "ClaudeDirEntry", logical: "ClaudeDirEntry", description: "~/.claude 配下のエントリ1件分(Explorerタブの1行)" },
@@ -247,16 +276,18 @@ const DEFS: ClassDef[] = [
       attr("modified_at_ms", "u64"),
     ],
     position: { x: 3300, y: 1350 },
+    filePath: "apps/native/crates/domain/src/claude_dir_entry.rs",
   },
   {
     name: { physical: "ClaudeDirEntryKind", logical: "ClaudeDirEntryKind", description: "~/.claude 配下のエントリの種別" },
     stereotype: "enumeration",
     attributes: ["Directory", "File", "Symlink"].map(label),
     position: { x: 3300, y: 1650 },
+    filePath: "apps/native/crates/domain/src/claude_dir_entry.rs",
   },
 ];
 
-const { classes, rel } = defineDiagram(DEFS);
+const { classes, rel, filePaths } = defineDiagram(DEFS);
 
 const RELATIONSHIPS = [
   // セッション閲覧(プロトタイプ)
@@ -283,3 +314,5 @@ export const NATIVE_PROTOTYPE_CLASS_DATA: DiagramInput = {
   classes,
   relationships: RELATIONSHIPS,
 };
+
+export const NATIVE_PROTOTYPE_CLASS_FILE_PATHS: ClassFilePaths = filePaths;

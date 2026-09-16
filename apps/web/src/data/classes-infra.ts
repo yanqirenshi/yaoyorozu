@@ -34,7 +34,13 @@
  * `session_source.rs` に同居)。全17型(実装16 + SessionWatcher)を載せた。
  */
 import type { DiagramInput } from "@yanqirenshi/d3.classes";
-import { attr, defineDiagram, method, type ClassDef } from "./classDiagram";
+import {
+  attr,
+  defineDiagram,
+  method,
+  type ClassDef,
+  type ClassFilePaths,
+} from "./classDiagram";
 
 const DEFS: ClassDef[] = [
   // ============ セッション閲覧 ============
@@ -49,6 +55,7 @@ const DEFS: ClassDef[] = [
       method("list_sessions", ["project: &str"], "Result<Vec<SessionSummary>, AppError>"),
     ],
     position: { x: 2100, y: 2050 },
+    filePath: "apps/native/crates/app/src/lib.rs",
     // メソッド名・引数が長く、戻り値型の列と重なるので広げる。
     size: { w: 410, h: 0 },
   },
@@ -56,12 +63,14 @@ const DEFS: ClassDef[] = [
     name: { physical: "FileSystemRepository", logical: "FileSystemRepository", description: "~/.claude/projects/ 配下の .jsonl を読む SessionSource 実装(session_source.rs)" },
     attributes: [attr("projects_dir", "PathBuf")],
     position: { x: 2100, y: 2400 },
+    filePath: "apps/native/crates/infra/src/session_source.rs",
   },
   {
     name: { physical: "SessionWatcher", logical: "SessionWatcher", description: "watch_projects の戻り値の型エイリアス(実装ではない。冒頭コメントを参照)" },
     stereotype: "type alias",
     attributes: [],
     position: { x: 2750, y: 2400 },
+    filePath: "apps/native/crates/infra/src/session_source.rs",
   },
   // ============ 設定・プロファイル ============
   {
@@ -72,12 +81,14 @@ const DEFS: ClassDef[] = [
       method("save", ["settings: &Settings"], "Result<(), AppError>"),
     ],
     position: { x: 3400, y: 2050 },
+    filePath: "apps/native/crates/app/src/lib.rs",
     size: { w: 280, h: 0 },
   },
   {
     name: { physical: "FileSettingsStore", logical: "FileSettingsStore", description: "Settings をJSONファイルとして永続化。アトミック書き込み・破損時退避(settings_store.rs)" },
     attributes: [attr("path", "PathBuf")],
     position: { x: 3400, y: 2400 },
+    filePath: "apps/native/crates/infra/src/settings_store.rs",
   },
   // ============ ファイル編集 ============
   {
@@ -88,12 +99,14 @@ const DEFS: ClassDef[] = [
       method("write", ["repo_dir: &Path", "content: &str"], "Result<(), AppError>"),
     ],
     position: { x: 4050, y: 2050 },
+    filePath: "apps/native/crates/app/src/lib.rs",
     size: { w: 380, h: 0 },
   },
   {
     name: { physical: "FileClaudeMdStore", logical: "FileClaudeMdStore", description: "<repo_dir>/CLAUDE.md を読み書き(claude_md_store.rs)" },
     attributes: [],
     position: { x: 4050, y: 2400 },
+    filePath: "apps/native/crates/infra/src/claude_md_store.rs",
   },
   {
     name: { physical: "ClaudeSettingsStore", logical: "ClaudeSettingsStore", description: "~/.claude/settings.json の読み書き(port)。app::lib.rs" },
@@ -103,12 +116,14 @@ const DEFS: ClassDef[] = [
       method("write", ["content: &str"], "Result<(), AppError>"),
     ],
     position: { x: 4700, y: 2050 },
+    filePath: "apps/native/crates/app/src/lib.rs",
     size: { w: 340, h: 0 },
   },
   {
     name: { physical: "FileClaudeSettingsStore", logical: "FileClaudeSettingsStore", description: "~/.claude/settings.json を読み書き(claude_settings_store.rs)" },
     attributes: [],
     position: { x: 4700, y: 2400 },
+    filePath: "apps/native/crates/infra/src/claude_settings_store.rs",
   },
   // ============ Rules / Skills / プロジェクト設定 ============
   {
@@ -119,12 +134,14 @@ const DEFS: ClassDef[] = [
       method("read", ["repo_dir: &Path", "file_name: &str"], "Result<String, AppError>"),
     ],
     position: { x: 2100, y: 2800 },
+    filePath: "apps/native/crates/app/src/lib.rs",
     size: { w: 380, h: 0 },
   },
   {
     name: { physical: "FileRulesStore", logical: "FileRulesStore", description: "<repo_dir>/.claude/rules/*.md を一覧・読み取り(rules_store.rs)" },
     attributes: [],
     position: { x: 2100, y: 3150 },
+    filePath: "apps/native/crates/infra/src/rules_store.rs",
   },
   {
     name: { physical: "SkillsStore", logical: "SkillsStore", description: ".claude/skills/<name>/SKILL.md の読み取り専用アクセス(port)。app::lib.rs" },
@@ -134,12 +151,14 @@ const DEFS: ClassDef[] = [
       method("read", ["repo_dir: &Path", "name: &str"], "Result<String, AppError>"),
     ],
     position: { x: 2750, y: 2800 },
+    filePath: "apps/native/crates/app/src/lib.rs",
     size: { w: 360, h: 0 },
   },
   {
     name: { physical: "FileSkillsStore", logical: "FileSkillsStore", description: "<repo_dir>/.claude/skills/<name>/SKILL.md を一覧・読み取り(skills_store.rs)" },
     attributes: [],
     position: { x: 2750, y: 3150 },
+    filePath: "apps/native/crates/infra/src/skills_store.rs",
   },
   {
     name: { physical: "ProjectSettingsStore", logical: "ProjectSettingsStore", description: "<repo_dir>/.claude/settings(.local).json の読み書き(port)。app::lib.rs" },
@@ -149,6 +168,7 @@ const DEFS: ClassDef[] = [
       method("write", ["repo_dir: &Path", "which: ProjectSettingsFile", "content: &str"], "Result<(), AppError>"),
     ],
     position: { x: 3400, y: 2800 },
+    filePath: "apps/native/crates/app/src/lib.rs",
     // 引数(which: ProjectSettingsFile)が長いので広げる。
     size: { w: 560, h: 0 },
   },
@@ -156,6 +176,7 @@ const DEFS: ClassDef[] = [
     name: { physical: "FileProjectSettingsStore", logical: "FileProjectSettingsStore", description: "<repo_dir>/.claude/settings(.local).json を読み書き(project_settings_store.rs)" },
     attributes: [],
     position: { x: 3400, y: 3150 },
+    filePath: "apps/native/crates/infra/src/project_settings_store.rs",
   },
   {
     name: { physical: "HubLayoutStore", logical: "HubLayoutStore", description: "ハブグラフのノード位置の永続化(port)。app::lib.rs" },
@@ -165,12 +186,14 @@ const DEFS: ClassDef[] = [
       method("save", ["layout: &HubLayout"], "Result<(), AppError>"),
     ],
     position: { x: 4050, y: 2800 },
+    filePath: "apps/native/crates/app/src/lib.rs",
     size: { w: 300, h: 0 },
   },
   {
     name: { physical: "FileHubLayoutStore", logical: "FileHubLayoutStore", description: "HubLayout をJSONファイルとして永続化(hub_layout_store.rs)" },
     attributes: [attr("path", "PathBuf")],
     position: { x: 4050, y: 3150 },
+    filePath: "apps/native/crates/infra/src/hub_layout_store.rs",
   },
   // ============ 実行環境・GitHub連携・エージェント ============
   {
@@ -178,12 +201,14 @@ const DEFS: ClassDef[] = [
     stereotype: "interface",
     methods: [method("current_pc", [], "Result<domain::Pc, AppError>")],
     position: { x: 2100, y: 3550 },
+    filePath: "apps/native/crates/app/src/lib.rs",
     size: { w: 300, h: 0 },
   },
   {
     name: { physical: "WindowsExecutionEnvironmentSource", logical: "WindowsExecutionEnvironmentSource", description: "Windows実行環境から Pc/User を組み立てる(execution_environment_source.rs)" },
     attributes: [],
     position: { x: 2100, y: 3900 },
+    filePath: "apps/native/crates/infra/src/execution_environment_source.rs",
     // クラス名が長く型の列(無いが箱の最小幅)と名前がはみ出さないよう広げる。
     size: { w: 320, h: 0 },
   },
@@ -199,6 +224,7 @@ const DEFS: ClassDef[] = [
       method("update_item_status", ["token: &str", "project_id: &str", "item_id: &str", "field_id: &str", "option_id: Option<&str>"], "Result<(), AppError>"),
     ],
     position: { x: 2750, y: 3550 },
+    filePath: "apps/native/crates/app/src/lib.rs",
     // メソッド数が多く、引数・戻り値型がどちらも長いので大きく広げる。
     size: { w: 720, h: 0 },
   },
@@ -206,6 +232,7 @@ const DEFS: ClassDef[] = [
     name: { physical: "GithubApiClient", logical: "GithubApiClient", description: "GitHub OAuth(デバイスフロー)+ GraphQL(Projects v2) を叩く GithubGateway 実装(github_api_client.rs)" },
     attributes: [attr("client_id", "String"), attr("http", "Client")],
     position: { x: 2750, y: 4100 },
+    filePath: "apps/native/crates/infra/src/github_api_client.rs",
     size: { w: 250, h: 0 },
   },
   {
@@ -217,24 +244,28 @@ const DEFS: ClassDef[] = [
       method("delete", [], "Result<(), AppError>"),
     ],
     position: { x: 3550, y: 3550 },
+    filePath: "apps/native/crates/app/src/lib.rs",
     size: { w: 280, h: 0 },
   },
   {
     name: { physical: "KeyringTokenStore", logical: "KeyringTokenStore", description: "GitHubアクセストークンをOSキーチェーンに保管(keyring_token_store.rs)" },
     attributes: [attr("service", "String"), attr("username", "String")],
     position: { x: 3550, y: 3900 },
+    filePath: "apps/native/crates/infra/src/keyring_token_store.rs",
   },
   {
     name: { physical: "AgentGateway", logical: "AgentGateway", description: "エージェントへのメッセージ送信(port)。app::lib.rs" },
     stereotype: "interface",
     methods: [method("send", ["req: SendRequest"], "Result<(), AppError>")],
     position: { x: 4150, y: 3550 },
+    filePath: "apps/native/crates/app/src/lib.rs",
     size: { w: 280, h: 0 },
   },
   {
     name: { physical: "ClaudeCliAgent", logical: "ClaudeCliAgent", description: "claude CLI を headless(--print)で起動する AgentGateway 実装(claude_cli_agent.rs)" },
     attributes: [],
     position: { x: 4150, y: 3900 },
+    filePath: "apps/native/crates/infra/src/claude_cli_agent.rs",
     size: { w: 260, h: 0 },
   },
   // ============ レイアウト保存・ローカルAPI・Git・Explorer ============
@@ -243,24 +274,28 @@ const DEFS: ClassDef[] = [
     stereotype: "interface",
     methods: [method("save", ["path: &Path", "content: &serde_json::Value"], "Result<(), AppError>")],
     position: { x: 2100, y: 4300 },
+    filePath: "apps/native/crates/app/src/lib.rs",
     size: { w: 400, h: 0 },
   },
   {
     name: { physical: "FileLayoutStore", logical: "FileLayoutStore", description: "レイアウトJSONへの汎用アトミック書き込み。保存のみ(layout_store.rs)" },
     attributes: [],
     position: { x: 2100, y: 4650 },
+    filePath: "apps/native/crates/infra/src/layout_store.rs",
   },
   {
     name: { physical: "LocalApiTokenStore", logical: "LocalApiTokenStore", description: "ローカルAPIサーバの認証トークンの永続化(port)。app::lib.rs" },
     stereotype: "interface",
     methods: [method("save", ["token: &str"], "Result<(), AppError>")],
     position: { x: 2750, y: 4300 },
+    filePath: "apps/native/crates/app/src/lib.rs",
     size: { w: 280, h: 0 },
   },
   {
     name: { physical: "FileLocalApiTokenStore", logical: "FileLocalApiTokenStore", description: "ローカルAPIトークンを app_data_dir/local-api-token へ保存(local_api_token_store.rs)" },
     attributes: [attr("path", "PathBuf")],
     position: { x: 2750, y: 4650 },
+    filePath: "apps/native/crates/infra/src/local_api_token_store.rs",
     size: { w: 280, h: 0 },
   },
   {
@@ -268,12 +303,14 @@ const DEFS: ClassDef[] = [
     stereotype: "interface",
     methods: [method("list_worktree_paths", ["repo_root: &Path"], "Result<Vec<PathBuf>, AppError>")],
     position: { x: 3550, y: 4300 },
+    filePath: "apps/native/crates/app/src/lib.rs",
     size: { w: 430, h: 0 },
   },
   {
     name: { physical: "SystemGitWorktreeLister", logical: "SystemGitWorktreeLister", description: "git worktree list --porcelain を実行(git_worktree_lister.rs)" },
     attributes: [],
     position: { x: 3550, y: 4650 },
+    filePath: "apps/native/crates/infra/src/git_worktree_lister.rs",
     size: { w: 260, h: 0 },
   },
   {
@@ -281,16 +318,18 @@ const DEFS: ClassDef[] = [
     stereotype: "interface",
     methods: [method("list", ["relative_path: &str"], "Result<Vec<ClaudeDirEntry>, AppError>")],
     position: { x: 4300, y: 4300 },
+    filePath: "apps/native/crates/app/src/lib.rs",
     size: { w: 380, h: 0 },
   },
   {
     name: { physical: "FileClaudeDirStore", logical: "FileClaudeDirStore", description: "~/.claude 配下のディレクトリを一覧(読み取り専用。claude_dir_store.rs)" },
     attributes: [attr("root", "PathBuf")],
     position: { x: 4300, y: 4650 },
+    filePath: "apps/native/crates/infra/src/claude_dir_store.rs",
   },
 ];
 
-const { classes, rel } = defineDiagram(DEFS);
+const { classes, rel, filePaths } = defineDiagram(DEFS);
 
 const RELATIONSHIPS = [
   rel("realization", "FileSystemRepository", "SessionSource", undefined, "top", "bottom"),
@@ -315,3 +354,5 @@ export const INFRA_CLASS_DATA: DiagramInput = {
   classes,
   relationships: RELATIONSHIPS,
 };
+
+export const INFRA_CLASS_FILE_PATHS: ClassFilePaths = filePaths;
