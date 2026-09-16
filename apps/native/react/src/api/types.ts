@@ -191,10 +191,19 @@ export type HubLayoutDto = {
 };
 
 // `getPc` の1ユーザー分(オブジェクトモデル実装 第1弾。issue #182)。
+// `getPc` の1ユーザーが所有するリポジトリ1件分(オブジェクトモデル実装
+// 第2弾。issue #189)。
+export type GitRepositoryDto = {
+  repository_path: string;
+  repository_name: string;
+  description: string;
+};
+
 export type UserDto = {
   user_id: string;
   user_name: string;
   home_directory: string;
+  repositories: GitRepositoryDto[];
 };
 
 // `getPc` の戻り値。

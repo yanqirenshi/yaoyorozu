@@ -413,12 +413,16 @@ async fn list_window_states(
 }
 
 /// 現在のPC・ログインユーザー情報を返す(オブジェクトモデル実装 第1弾。
-/// issue #182)。起動時に一度組み立てて `AppState` に保持したものをそのまま
-/// 返すだけで、リクエストのたびにOSへ問い合わせ直すことはしない。
+/// issue #182)。PC・ユーザー自体は起動時に一度組み立てて `AppState` に
+/// 保持したものを使うが(リクエストのたびにOSへ問い合わせ直すことはしない)、
+/// ユーザーが所有する `GitRepository` 一覧は settings のプロファイルから
+/// クエリのたびに都度組み立てて差し込む(鮮度のため。issue #189。
+/// `app::current_pc_with_repositories` のドキュメントコメント参照)。
 #[tauri::command]
 async fn get_pc(state: tauri::State<'_, Mutex<AppState>>) -> Result<PcDto, AppErrorDto> {
     let guard = state.lock().await;
-    Ok(PcDto::from(guard.pc.clone()))
+    let pc = app::current_pc_with_repositories(guard.pc.clone(), &guard.settings);
+    Ok(PcDto::from(pc))
 }
 
 /// 指定ラベルのウィンドウを前面化する(最小化されていれば復元してから)。

@@ -685,12 +685,32 @@ impl From<domain::ClaudeDirPage> for ClaudeDirPageDto {
     }
 }
 
+/// `get_pc` の1ユーザーが所有するリポジトリ1件分(オブジェクトモデル実装
+/// 第2弾。issue #189)。
+#[derive(Serialize, Clone)]
+pub struct GitRepositoryDto {
+    pub repository_path: String,
+    pub repository_name: String,
+    pub description: String,
+}
+
+impl From<domain::GitRepository> for GitRepositoryDto {
+    fn from(repository: domain::GitRepository) -> Self {
+        Self {
+            repository_path: repository.repository_path.display().to_string(),
+            repository_name: repository.repository_name,
+            description: repository.description,
+        }
+    }
+}
+
 /// `get_pc` の1ユーザー分(オブジェクトモデル実装 第1弾。issue #182)。
 #[derive(Serialize, Clone)]
 pub struct UserDto {
     pub user_id: String,
     pub user_name: String,
     pub home_directory: String,
+    pub repositories: Vec<GitRepositoryDto>,
 }
 
 impl From<domain::User> for UserDto {
@@ -699,6 +719,11 @@ impl From<domain::User> for UserDto {
             user_id: user.user_id,
             user_name: user.user_name,
             home_directory: user.home_directory.display().to_string(),
+            repositories: user
+                .repositories
+                .into_iter()
+                .map(GitRepositoryDto::from)
+                .collect(),
         }
     }
 }

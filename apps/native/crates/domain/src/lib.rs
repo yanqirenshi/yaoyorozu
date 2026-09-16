@@ -8,6 +8,7 @@ mod claude_dir_entry;
 mod claude_dir_page;
 mod claude_md_file;
 mod claude_settings_file;
+mod git_repository;
 mod github_project;
 mod github_project_summary;
 mod hub_layout;
@@ -39,6 +40,7 @@ pub use claude_dir_entry::{
 pub use claude_dir_page::ClaudeDirPage;
 pub use claude_md_file::ClaudeMdFile;
 pub use claude_settings_file::ClaudeSettingsFile;
+pub use git_repository::{repositories_from_profiles, GitRepository};
 pub use github_project::GithubProject;
 pub use github_project_summary::GithubProjectSummary;
 pub use hub_layout::{HubLayout, CURRENT_HUB_LAYOUT_VERSION};
