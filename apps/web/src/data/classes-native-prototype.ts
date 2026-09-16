@@ -1,11 +1,11 @@
 /**
- * apps/native の domain クレート(`crates/domain/src/lib.rs`)に実装済みの、
+ * apps/native の domain クレート(`crates/domain/src/`)に実装済みの、
  * まだオブジェクトモデル(`classes-domain.ts`)へ置き換えられていない型
  * (プロトタイプ期の型)のクラス図。
  *
  * 【目的】`classes-domain.ts` は TM を元にした設計側の図で、まだ実装されて
- * いない型も含む。こちらは逆に、`lib.rs` に現に実装されている型を、コードと
- * 1対1で対応する形でそのまま写した図("as-is" のスナップショット)。
+ * いない型も含む。こちらは逆に、domain クレートに現に実装されている型を、
+ * コードと1対1で対応する形でそのまま写した図("as-is" のスナップショット)。
  * フィールド・型は Rust のソースをそのまま書き写し、意味づけの解釈は加えない。
  *
  * 【書き方】
@@ -20,21 +20,25 @@
  *     フィールドを含む)は関係線を引かない。コードにそのまま対応させるため、
  *     型注釈からは読み取れない関係(IDによる参照など)を図だけの判断で
  *     描き足さない。
- * - `session_line.rs`(`classes-session-line.ts`)と違い、tag 付き enum の
+ * - `session_line/`(`classes-session-line.ts`)と違い、tag 付き enum の
  *   バリアント分岐(依存関係)は無い(該当する型が無いため)。
  *
- * 【対象】`lib.rs` 直下の型のうち、`classes-domain.ts` に掲載済みの Pc・User
- * と、`session_line.rs`(`classes-session-line.ts`)の33型を除いたもの。
- * (issue #184「domain クレートを1型=1ファイルに再構成する」は本図の作成時点
- * では未着手。分割後はファイル名 = クラス名になるので、対応するファイルを
- * 見て書き直すこと)
+ * 【対象・ファイル対応】native.md §1 の「1型(クラス)= 1ファイル」(issue #184、
+ * PR #185)により、domain クレートは各型が型名 snake_case のファイルに分かれて
+ * いる(例: `Profile` → `profile.rs`)。`lib.rs` は `mod` 宣言と `pub use` のみ。
+ * 本図の25クラスのうち、`ProjectItemKind` は `ProjectItem` と同じ `project_item.rs`
+ * に、`ClaudeDirEntryKind` は `ClaudeDirEntry` と同じ `claude_dir_entry.rs` に
+ * 同居する(native.md 曰く「その型専用の小さな補助enum」)。ほかの23クラスは
+ * それぞれ単独のファイル(型名 snake_case)。掲載対象は `classes-domain.ts` に
+ * 掲載済みの Pc・User と、`session_line/`(`classes-session-line.ts`)の33型を
+ * 除いたもの。
  *
- * 【名前の重なり】`lib.rs` の `Session`(セッション閲覧のプロトタイプ実装)は、
- * `classes-domain.ts` が予定しているオブジェクトモデルの `Session`(セッション
- * リソース、まだ未実装)と名前が重なる。図の重複チェック(`mergeDiagrams`)に
- * 引っかかるため、こちらは `SessionPrototype` という名前で描く(Rust の
- * 実際の型名は `Session`)。オブジェクトモデルの Session が実装されるとき、
- * この型は置き換えられて消える見込み。
+ * 【名前の重なり】domain クレートの `Session`(`session.rs`。セッション閲覧の
+ * プロトタイプ実装)は、`classes-domain.ts` が予定しているオブジェクトモデルの
+ * `Session`(セッションリソース、まだ未実装)と名前が重なる。図の重複チェック
+ * (`mergeDiagrams`)に引っかかるため、こちらは `SessionPrototype` という名前で
+ * 描く(Rust の実際の型名は `Session`)。オブジェクトモデルの Session が
+ * 実装されるとき、この型は置き換えられて消える見込み。
  */
 import type { DiagramInput } from "@yanqirenshi/d3.classes";
 import { attr, defineDiagram, label, type ClassDef } from "./classDiagram";
