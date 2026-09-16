@@ -1,4 +1,4 @@
-use crate::Profile;
+use crate::{GitBranch, GitWorktree, Profile};
 use std::path::{Path, PathBuf};
 
 /// クラス図(`classes-domain.ts`)の `GitRepository`(オブジェクトモデル実装
@@ -6,6 +6,16 @@ use std::path::{Path, PathBuf};
 /// (クローン1つ)。`User` にコンポジションで所有される(`User.repositories`)。
 /// フィールド名・構成は `classes-domain.ts` に厳密に合わせる(モデルが正、
 /// 実装が従)。
+///
+/// `branches`/`worktrees` はオブジェクトモデル実装 第3弾(issue #193)で
+/// 追加した。`repository_path`/`repository_name`/`description` と違い、
+/// この2つの真実の源は`AppState`が保持する台帳(`domain::GitLedger`)で
+/// あり、`repositories_from_profiles`(このファイル)は空のまま返す。
+/// 実際の値は`app`層がクエリ時にこの構造体へ差し込む
+/// (`app::current_pc_with_repositories`とは別経路。台帳はgitコマンドの
+/// 実行コストが高いため都度組み立てず、起動時・ハブ再読み込み時に
+/// 突き合わせた結果を使い回す。issue #189との使い分けの理由はそちらの
+/// ドキュメントコメント参照)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitRepository {
     /// 個体指定子。リポジトリのパス(Userの中で一意)。
@@ -13,6 +23,10 @@ pub struct GitRepository {
     pub repository_name: String,
     /// 当面は空文字(編集機能は将来)。
     pub description: String,
+    /// 削除済み(`deleted_at_time.is_some()`)を含む全件。表示側で除外する
+    /// かどうかはDTO変換(`tauri/src/dto.rs`)の責務とする。
+    pub branches: Vec<GitBranch>,
+    pub worktrees: Vec<GitWorktree>,
 }
 
 /// パス末尾のフォルダ名を取り出す。ハブの `cwdTail`(フロント側)と同じ発想
@@ -47,6 +61,8 @@ pub fn repositories_from_profiles(profiles: &[Profile]) -> Vec<GitRepository> {
             repository_path: path.clone(),
             repository_name: repository_name_from_path(path),
             description: String::new(),
+            branches: Vec::new(),
+            worktrees: Vec::new(),
         });
     }
     repositories

@@ -1,10 +1,11 @@
 use domain::{
     is_valid_claude_dir_path, is_valid_json, is_valid_rule_file_name, is_valid_session_id,
-    is_valid_skill_name, order_messages_newest_first, paginate_messages,
-    repositories_from_profiles, sort_claude_dir_entries, sort_projects_by_recency,
-    sort_sessions_by_recency, ClaudeDirEntry, ClaudeDirPage, ClaudeMdFile, ClaudeSettingsFile,
-    HubLayout, NodePosition, Project, RuleSummary, Session, SessionSummary, Settings, SkillSummary,
-    CURRENT_HUB_LAYOUT_VERSION,
+    is_valid_skill_name, order_messages_newest_first, paginate_messages, reconcile_branches,
+    reconcile_worktrees, repositories_from_profiles, sort_claude_dir_entries,
+    sort_projects_by_recency, sort_sessions_by_recency, ClaudeDirEntry, ClaudeDirPage,
+    ClaudeMdFile, ClaudeSettingsFile, GitLedger, GitRepositoryLedger, HubLayout, NodePosition,
+    Project, RuleSummary, Session, SessionSummary, Settings, SkillSummary,
+    CURRENT_GIT_LEDGER_VERSION, CURRENT_HUB_LAYOUT_VERSION,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -185,6 +186,30 @@ pub trait HubLayoutStore {
 /// 環境変数の読み取り)は infra に閉じ込める(issue #182)。
 pub trait ExecutionEnvironmentSource {
     fn current_pc(&self) -> Result<domain::Pc, AppError>;
+}
+
+/// 1リポジトリのGitの現在状態(ブランチ名一覧・worktree一覧)の観測
+/// (port)。実体(`git`コマンドの実行)は infra に閉じ込める
+/// (オブジェクトモデル実装 第3弾。issue #193)。既存の`GitWorktreeLister`
+/// (issue #129。ローカルAPIサーバの書き込み先パス検証専用)とは目的が
+/// 異なる別のportとして新設した — あちらは「このパスはworktreeか」という
+/// 真偽判定だけを必要とする狭い用途であり、こちらはブランチ名・worktreeの
+/// パスとチェックアウト中ブランチという台帳突き合わせに必要な情報一式を
+/// 返す。1つのportに両方の関心を混ぜず分離した(実装時判断)。
+pub trait GitStateSource {
+    /// `repo_root`(登録済みプロファイルの`repository_path`)の現在状態を
+    /// 観測する。gitコマンドの実行失敗やリポジトリ消失などで観測できない
+    /// 場合は`Err`を返し、呼び出し元(`reconcile_git_ledger`)はそのリポジトリ
+    /// の台帳をこの回は変更しない(fail-safe。issue本文の明示的な要求)。
+    fn observe(&self, repo_root: &Path) -> Result<domain::ObservedGitState, AppError>;
+}
+
+/// `GitBranch`/`GitWorktree`台帳(`domain::GitLedger`)の永続化(port)。
+/// `settings.json`・`hub-layout.json`とは別ファイルに保存する
+/// (issue #193)。
+pub trait GitLedgerStore {
+    fn load(&self) -> Result<domain::GitLedger, AppError>;
+    fn save(&self, ledger: &domain::GitLedger) -> Result<(), AppError>;
 }
 
 /// GitHub OAuth(デバイスフロー)+ Projects(v2) 取得(port)。実体(HTTP通信)は
@@ -429,6 +454,110 @@ pub fn current_pc_with_repositories(mut pc: domain::Pc, settings: &Settings) -> 
     let repositories = repositories_from_profiles(&settings.profiles);
     for user in &mut pc.users {
         user.repositories = repositories.clone();
+    }
+    pc
+}
+
+/// `GitBranch`/`GitWorktree`台帳を読み込む。ファイルが存在しない/壊れている
+/// 場合のデフォルト値へのフォールバックは`GitLedgerStore`実装(infra)側の
+/// 責務(issue #193)。
+pub fn load_git_ledger(store: &dyn GitLedgerStore) -> Result<GitLedger, AppError> {
+    store.load()
+}
+
+/// `GitBranch`/`GitWorktree`台帳を保存する(issue #193)。
+pub fn save_git_ledger(store: &dyn GitLedgerStore, ledger: &GitLedger) -> Result<(), AppError> {
+    store.save(ledger)
+}
+
+/// 登録済み全リポジトリについて現在のGit状態を観測し、台帳を突き合わせて
+/// 更新する(オブジェクトモデル実装 第3弾。issue #193)。起動時とハブの
+/// 再読み込み操作時に呼び出し、結果は`AppState`が保持する
+/// (`current_pc_with_repositories`(issue #189)と違いクエリのたびには
+/// 実行しない。理由: あちらはメモリ上のsettingsを読むだけだが、こちらは
+/// `git`サブプロセスの起動を伴い、`get_pc`のような頻繁な呼び出し元で
+/// 毎回実行するには重すぎる)。
+///
+/// リポジトリ単位で観測が失敗した場合(リポジトリが消えた、gitコマンドが
+/// 失敗した等)は、そのリポジトリの台帳をこの回は一切変更せず前回の内容を
+/// そのまま引き継ぐ(fail-safe。誤って大量削除扱いにしないため。
+/// issue本文の明示的な要求)。ここでは呼び出し元(tauri層)にログ出力を
+/// 任せず、失敗したリポジトリパスの一覧を戻り値に含めて呼び出し元が警告を
+/// 出せるようにする。
+pub struct ReconcileGitLedgerResult {
+    pub ledger: GitLedger,
+    pub failed_repository_paths: Vec<PathBuf>,
+}
+
+pub fn reconcile_git_ledger(
+    source: &dyn GitStateSource,
+    previous_ledger: &GitLedger,
+    repository_paths: &[PathBuf],
+    now: u64,
+    mut generate_id: impl FnMut() -> String,
+) -> ReconcileGitLedgerResult {
+    let mut repositories = previous_ledger.repositories.clone();
+    let mut failed_repository_paths = Vec::new();
+
+    for repo_path in repository_paths {
+        let key = repo_path.display().to_string();
+        match source.observe(repo_path) {
+            Ok(observed) => {
+                let existing = repositories.get(&key).cloned().unwrap_or_default();
+                let branches = reconcile_branches(
+                    &existing.branches,
+                    &observed.branch_names,
+                    now,
+                    &mut generate_id,
+                );
+                let branch_id_by_name: HashMap<String, String> = branches
+                    .iter()
+                    .filter(|b| b.deleted_at_time.is_none())
+                    .map(|b| (b.branch_name.clone(), b.branch_id.clone()))
+                    .collect();
+                let worktrees = reconcile_worktrees(
+                    &existing.worktrees,
+                    &observed.worktrees,
+                    &branch_id_by_name,
+                    now,
+                    &mut generate_id,
+                );
+                repositories.insert(
+                    key,
+                    GitRepositoryLedger {
+                        branches,
+                        worktrees,
+                    },
+                );
+            }
+            Err(_) => {
+                failed_repository_paths.push(repo_path.clone());
+            }
+        }
+    }
+
+    ReconcileGitLedgerResult {
+        ledger: GitLedger {
+            version: CURRENT_GIT_LEDGER_VERSION,
+            repositories,
+        },
+        failed_repository_paths,
+    }
+}
+
+/// `pc`の各ユーザーが持つ`GitRepository`へ、台帳(`GitLedger`)から該当分の
+/// `branches`/`worktrees`を差し込む(issue #193)。`current_pc_with_repositories`
+/// (issue #189)の後段として呼ぶ想定。台帳に無いリポジトリ(まだ一度も
+/// 突き合わせていない等)は空のままにする。
+pub fn pc_with_git_ledger(mut pc: domain::Pc, ledger: &GitLedger) -> domain::Pc {
+    for user in &mut pc.users {
+        for repository in &mut user.repositories {
+            let key = repository.repository_path.display().to_string();
+            if let Some(repo_ledger) = ledger.repositories.get(&key) {
+                repository.branches = repo_ledger.branches.clone();
+                repository.worktrees = repo_ledger.worktrees.clone();
+            }
+        }
     }
     pc
 }
@@ -3018,5 +3147,251 @@ mod tests {
         let result = current_pc_with_repositories(pc, &settings);
 
         assert!(result.users[0].repositories.is_empty());
+    }
+
+    struct FakeGitLedgerStore {
+        loaded: GitLedger,
+        saved: std::cell::RefCell<Vec<GitLedger>>,
+    }
+
+    impl FakeGitLedgerStore {
+        fn new(loaded: GitLedger) -> Self {
+            Self {
+                loaded,
+                saved: std::cell::RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl GitLedgerStore for FakeGitLedgerStore {
+        fn load(&self) -> Result<GitLedger, AppError> {
+            Ok(self.loaded.clone())
+        }
+
+        fn save(&self, ledger: &GitLedger) -> Result<(), AppError> {
+            self.saved.borrow_mut().push(ledger.clone());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn load_git_ledger_returns_store_result_unchanged() {
+        let ledger = GitLedger {
+            version: CURRENT_GIT_LEDGER_VERSION,
+            repositories: HashMap::new(),
+        };
+        let store = FakeGitLedgerStore::new(ledger.clone());
+
+        let loaded = load_git_ledger(&store).expect("should load git ledger");
+        assert_eq!(loaded, ledger);
+    }
+
+    #[test]
+    fn save_git_ledger_delegates_to_store() {
+        let store = FakeGitLedgerStore::new(GitLedger::default());
+        let ledger = GitLedger {
+            version: CURRENT_GIT_LEDGER_VERSION,
+            repositories: HashMap::from([(
+                "C:\\repo\\a".to_string(),
+                GitRepositoryLedger::default(),
+            )]),
+        };
+
+        save_git_ledger(&store, &ledger).expect("should save git ledger");
+
+        assert_eq!(store.saved.borrow().as_slice(), &[ledger]);
+    }
+
+    struct FakeGitStateSource {
+        observations: HashMap<PathBuf, Result<domain::ObservedGitState, ()>>,
+    }
+
+    impl FakeGitStateSource {
+        fn new() -> Self {
+            Self {
+                observations: HashMap::new(),
+            }
+        }
+
+        fn with_observation(mut self, repo_root: &str, state: domain::ObservedGitState) -> Self {
+            self.observations
+                .insert(PathBuf::from(repo_root), Ok(state));
+            self
+        }
+
+        fn with_failure(mut self, repo_root: &str) -> Self {
+            self.observations.insert(PathBuf::from(repo_root), Err(()));
+            self
+        }
+    }
+
+    impl GitStateSource for FakeGitStateSource {
+        fn observe(&self, repo_root: &Path) -> Result<domain::ObservedGitState, AppError> {
+            match self.observations.get(repo_root) {
+                Some(Ok(state)) => Ok(state.clone()),
+                Some(Err(())) => Err(AppError::Io("観測に失敗しました".to_string())),
+                None => Ok(domain::ObservedGitState::default()),
+            }
+        }
+    }
+
+    fn sequential_id_generator(prefix: &'static str) -> impl FnMut() -> String {
+        let mut counter = 0u32;
+        move || {
+            counter += 1;
+            format!("{prefix}-{counter}")
+        }
+    }
+
+    #[test]
+    fn reconcile_git_ledger_creates_new_branch_entries_for_a_fresh_repository() {
+        let source = FakeGitStateSource::new().with_observation(
+            r"C:\repo\a",
+            domain::ObservedGitState {
+                branch_names: vec!["main".to_string()],
+                worktrees: Vec::new(),
+            },
+        );
+
+        let result = reconcile_git_ledger(
+            &source,
+            &GitLedger::default(),
+            &[PathBuf::from(r"C:\repo\a")],
+            100,
+            sequential_id_generator("id"),
+        );
+
+        assert!(result.failed_repository_paths.is_empty());
+        let repo_ledger = result
+            .ledger
+            .repositories
+            .get(r"C:\repo\a")
+            .expect("repository should be present");
+        assert_eq!(repo_ledger.branches.len(), 1);
+        assert_eq!(repo_ledger.branches[0].branch_name, "main");
+        assert_eq!(repo_ledger.branches[0].created_at_time, 100);
+    }
+
+    #[test]
+    fn reconcile_git_ledger_resolves_checked_out_branch_id_from_freshly_reconciled_branches() {
+        let source = FakeGitStateSource::new().with_observation(
+            r"C:\repo\a",
+            domain::ObservedGitState {
+                branch_names: vec!["feature-x".to_string()],
+                worktrees: vec![domain::ObservedWorktree {
+                    folder_path: PathBuf::from(r"C:\repo\worktrees\feature-x"),
+                    git_file_path: PathBuf::from(r"C:\repo\worktrees\feature-x\.git"),
+                    checked_out_branch_name: Some("feature-x".to_string()),
+                }],
+            },
+        );
+
+        let result = reconcile_git_ledger(
+            &source,
+            &GitLedger::default(),
+            &[PathBuf::from(r"C:\repo\a")],
+            100,
+            sequential_id_generator("id"),
+        );
+
+        let repo_ledger = &result.ledger.repositories[r"C:\repo\a"];
+        let branch_id = repo_ledger.branches[0].branch_id.clone();
+        assert_eq!(repo_ledger.worktrees.len(), 1);
+        assert_eq!(repo_ledger.worktrees[0].checked_out_branch, Some(branch_id));
+    }
+
+    #[test]
+    fn reconcile_git_ledger_leaves_ledger_of_failed_repository_completely_unchanged() {
+        let mut previous_repositories = HashMap::new();
+        previous_repositories.insert(
+            r"C:\repo\a".to_string(),
+            GitRepositoryLedger {
+                branches: vec![domain::GitBranch {
+                    branch_id: "id-1".to_string(),
+                    branch_name: "main".to_string(),
+                    description: String::new(),
+                    created_at_time: 1,
+                    deleted_at_time: None,
+                }],
+                worktrees: Vec::new(),
+            },
+        );
+        let previous_ledger = GitLedger {
+            version: CURRENT_GIT_LEDGER_VERSION,
+            repositories: previous_repositories,
+        };
+        let source = FakeGitStateSource::new().with_failure(r"C:\repo\a");
+
+        let result = reconcile_git_ledger(
+            &source,
+            &previous_ledger,
+            &[PathBuf::from(r"C:\repo\a")],
+            999,
+            sequential_id_generator("id"),
+        );
+
+        assert_eq!(
+            result.failed_repository_paths,
+            vec![PathBuf::from(r"C:\repo\a")]
+        );
+        assert_eq!(
+            result.ledger.repositories[r"C:\repo\a"],
+            previous_ledger.repositories[r"C:\repo\a"]
+        );
+    }
+
+    #[test]
+    fn pc_with_git_ledger_fills_matching_repository_by_path() {
+        let mut pc = pc_with_one_user("yanqi");
+        pc.users[0].repositories.push(domain::GitRepository {
+            repository_path: PathBuf::from(r"C:\repo\a"),
+            repository_name: "a".to_string(),
+            description: String::new(),
+            branches: Vec::new(),
+            worktrees: Vec::new(),
+        });
+        let mut repositories = HashMap::new();
+        repositories.insert(
+            r"C:\repo\a".to_string(),
+            GitRepositoryLedger {
+                branches: vec![domain::GitBranch {
+                    branch_id: "id-1".to_string(),
+                    branch_name: "main".to_string(),
+                    description: String::new(),
+                    created_at_time: 1,
+                    deleted_at_time: None,
+                }],
+                worktrees: Vec::new(),
+            },
+        );
+        let ledger = GitLedger {
+            version: CURRENT_GIT_LEDGER_VERSION,
+            repositories,
+        };
+
+        let result = pc_with_git_ledger(pc, &ledger);
+
+        assert_eq!(result.users[0].repositories[0].branches.len(), 1);
+        assert_eq!(
+            result.users[0].repositories[0].branches[0].branch_name,
+            "main"
+        );
+    }
+
+    #[test]
+    fn pc_with_git_ledger_leaves_repository_empty_when_not_yet_in_ledger() {
+        let mut pc = pc_with_one_user("yanqi");
+        pc.users[0].repositories.push(domain::GitRepository {
+            repository_path: PathBuf::from(r"C:\repo\unregistered"),
+            repository_name: "unregistered".to_string(),
+            description: String::new(),
+            branches: Vec::new(),
+            worktrees: Vec::new(),
+        });
+
+        let result = pc_with_git_ledger(pc, &GitLedger::default());
+
+        assert!(result.users[0].repositories[0].branches.is_empty());
+        assert!(result.users[0].repositories[0].worktrees.is_empty());
     }
 }
