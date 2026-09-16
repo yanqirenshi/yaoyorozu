@@ -13,6 +13,7 @@ import type {
   ClassInput,
   ConnectionPoint,
   DiagramInput,
+  MethodInput,
   RelationshipInput,
 } from "@yanqirenshi/d3.classes";
 
@@ -46,6 +47,19 @@ export const attr = (physical: string, type: string): AttributeInput => ({
 export const label = (physical: string): AttributeInput => ({
   name: { physical, logical: physical, description: "" },
   kind: "label",
+});
+
+// インターフェース(trait)のメソッド。引数は Rust の宣言どおり `"name: 型"` の
+// 文字列で渡す(`&self` は書かない)。戻り値を書かない(void)メソッドは無い
+// (すべて `Result<T, AppError>` を返す)ので `returnType` は省略しない。
+export const method = (
+  physical: string,
+  params: string[],
+  returnType: string,
+): MethodInput => ({
+  name: { physical, logical: physical, description: "" },
+  parameters: params,
+  returnType,
 });
 
 /**
