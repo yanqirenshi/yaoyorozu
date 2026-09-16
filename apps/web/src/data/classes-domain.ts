@@ -52,7 +52,12 @@
  *   解消する(クローンごとに別の GitRepository なので、パスで区別してよい)。
  */
 import type { DiagramInput } from "@yanqirenshi/d3.classes";
-import { attr, defineDiagram, type ClassDef } from "./classDiagram";
+import {
+  attr,
+  defineDiagram,
+  type ClassDef,
+  type ClassFilePaths,
+} from "./classDiagram";
 
 const DEFS: ClassDef[] = [
   // ============ 実行環境 ============
@@ -64,6 +69,7 @@ const DEFS: ClassDef[] = [
       attr("description", "String"),
     ],
     position: { x: 55, y: -38 },
+    filePath: "apps/native/crates/domain/src/pc.rs",
   },
   {
     name: { physical: "User", logical: "User", description: "PC 上の OS のユーザーアカウント。PC に所有される(コンポジション)。TM: ユーザー(リソース)" }, // 論理名: ユーザー
@@ -74,6 +80,7 @@ const DEFS: ClassDef[] = [
     ],
     // Pc の真下に置く(Pc と Session にはさまれた列)。
     position: { x: 55, y: 217 },
+    filePath: "apps/native/crates/domain/src/user.rs",
   },
   {
     name: { physical: "GitRepository", logical: "GitRepository", description: "プロダクト開発の対象として登録したリポジトリ(クローン1つ)。User に所有される(コンポジション)。TM: Gitリポジトリ(リソース)" }, // 論理名: Gitリポジトリ
@@ -197,7 +204,7 @@ const DEFS: ClassDef[] = [
   },
 ];
 
-const { classes, rel } = defineDiagram(DEFS);
+const { classes, rel, filePaths } = defineDiagram(DEFS);
 
 const RELATIONSHIPS = [
   // TM: PC．ユーザー(対照表、属性なし)。1台に1人以上。
@@ -293,3 +300,7 @@ export const DOMAIN_CLASS_DATA: DiagramInput = {
   classes,
   relationships: RELATIONSHIPS,
 };
+
+// 実装済みなのは Pc・User の2クラスのみ(オブジェクトモデル実装 第1弾)。
+// ほかの10クラスはまだ実装されていないため、filePath を持たない。
+export const DOMAIN_CLASS_FILE_PATHS: ClassFilePaths = filePaths;

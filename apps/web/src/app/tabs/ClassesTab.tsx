@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ClassDiagram, type RelationshipInput } from "@yanqirenshi/d3.classes";
-import { CLASS_DIAGRAM_DATA } from "@/data/classes";
+import { CLASS_DIAGRAM_DATA, CLASS_FILE_PATHS } from "@/data/classes";
 import {
   applyLayoutOverrides,
   applyPortOverrides,
@@ -194,6 +194,7 @@ export default function ClassesTab() {
         stereotype: cls.stereotype ?? "",
         position: { ...cls.position },
         ports: buildPorts(cls.name.physical, relationshipsRef.current),
+        filePath: CLASS_FILE_PATHS[cls.name.physical],
       });
     };
 
