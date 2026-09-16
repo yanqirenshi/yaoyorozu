@@ -24,6 +24,10 @@ const USER_ICON_SVG = `${SVG_OPEN}<circle cx="10" cy="7" r="3.2"/><path d="M4 16
 // profile(リポジトリの箱)。
 const PROFILE_ICON_SVG = `${SVG_OPEN}<path d="M3 6.5 10 3l7 3.5-7 3.5-7-3.5Z"/><path d="M3 6.5v7l7 3.5 7-3.5v-7"/><line x1="10" y1="10" x2="10" y2="17"/>${SVG_CLOSE}`;
 
+// GitRepository(貯蔵庫を表す円筒)。オブジェクトモデル実装 第2弾。issue #189。
+// profile(箱)・branch(分岐点)と見分けやすい形にした。
+const GIT_REPOSITORY_ICON_SVG = `${SVG_OPEN}<ellipse cx="10" cy="5.2" rx="6" ry="2.2"/><path d="M4 5.2v9.6c0 1.2 2.7 2.2 6 2.2s6-1 6-2.2V5.2"/><path d="M4 10c0 1.2 2.7 2.2 6 2.2s6-1 6-2.2"/>${SVG_CLOSE}`;
+
 // 作業ディレクトリ(フォルダ)。
 const CWD_ICON_SVG = `${SVG_OPEN}<path d="M3 6a1 1 0 0 1 1-1h4l1.5 2H16a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6Z"/>${SVG_CLOSE}`;
 
@@ -37,6 +41,7 @@ export const HUB_NODE_ICON_URIS = {
   pc: toDataUri(PC_ICON_SVG),
   user: toDataUri(USER_ICON_SVG),
   profile: toDataUri(PROFILE_ICON_SVG),
+  gitRepository: toDataUri(GIT_REPOSITORY_ICON_SVG),
   cwd: toDataUri(CWD_ICON_SVG),
   branch: toDataUri(BRANCH_ICON_SVG),
   session: toDataUri(SESSION_ICON_SVG),

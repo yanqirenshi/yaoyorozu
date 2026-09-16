@@ -49,6 +49,9 @@ impl ExecutionEnvironmentSource for WindowsExecutionEnvironmentSource {
                 user_name: user_id.clone(),
                 user_id,
                 home_directory,
+                // settingsから都度組み立てる(app::current_pc_with_repositories。
+                // issue #189)ため、ここでは常に空。
+                repositories: Vec::new(),
             }],
         })
     }

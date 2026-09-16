@@ -98,12 +98,20 @@ const HUB_LAYOUT_SAVE_DEBOUNCE_MS = 500;
 // それ以外のフィールドはインスペクタ(issue #109)の表示専用で、ノード種別に
 // よってどれが埋まっているかが変わる。
 type HubNodeCore = {
-  kind: "pc" | "user" | "profile" | "cwd" | "branch" | "session" | "profile-unopened";
+  kind:
+    | "pc"
+    | "user"
+    | "git-repository"
+    | "profile"
+    | "cwd"
+    | "branch"
+    | "session"
+    | "profile-unopened";
   windowLabel?: string;
   profileId?: string;
   // ドラッグ位置の永続化(issue #121)に使う安定キー。`id` はウィンドウ起動の
   // たびに変わるラベルを含む場合がある(profile系)ため別に持つ。`move:
-  // "support"` のノード(profile・cwd・branch)にのみ設定する。
+  // "support"` のノード(git-repository・profile・cwd・branch)にのみ設定する。
   positionKey?: string;
   // pc(オブジェクトモデル実装 第1弾。issue #182)
   pcName?: string;
@@ -114,6 +122,9 @@ type HubNodeCore = {
   userId?: string;
   userName?: string;
   homeDirectory?: string;
+  // git-repository(オブジェクトモデル実装 第2弾。issue #189)
+  repositoryName?: string;
+  referencingProfileNames?: string[];
   // profile / profile-unopened
   profileName?: string;
   repositoryPath?: string | null;
@@ -151,6 +162,38 @@ type ProfileSession = SessionSummaryDto & { folder: string };
 // ディスク上の実体(`selected_project_folders` の各フォルダ)から取得する
 // (issue #100)。
 type SessionsByProfile = Record<string, ProfileSession[]>;
+
+// `addSessionBranch` に渡す、由来プロファイルを保持したセッション
+// (issue #189)。GitRepository配下では複数プロファイルのセッションを合算
+// するため、各セッションが「自分がどのプロファイル・ウィンドウ由来か」を
+// 保持しておき、セッションノード個別のクリック挙動(前面化/起動)に使う
+// (cwd・branchノードのクリック挙動は代表プロファイル1つに決め打ちでよいが、
+// セッション自体は実際の持ち主のプロファイルを開くのが自然なため)。
+type AggregatedSession = ProfileSession & {
+  profileId: string;
+  windowLabel?: string;
+};
+
+// プロファイルIDの列から、セッションをID重複なく合算する(issue #189)。
+// 同じセッションを複数プロファイルが指す状況は通常無いはずだが、念のため
+// 先に出現した方を優先する。
+function collectSessionsForProfiles(
+  profileIds: string[],
+  sessionsByProfile: SessionsByProfile,
+  openTabByProfileId: Map<string, { windowLabel: string; sessionId?: string }>,
+): AggregatedSession[] {
+  const seen = new Set<string>();
+  const result: AggregatedSession[] = [];
+  for (const profileId of profileIds) {
+    const windowLabel = openTabByProfileId.get(profileId)?.windowLabel;
+    for (const session of sessionsByProfile[profileId] ?? []) {
+      if (seen.has(session.id)) continue;
+      seen.add(session.id);
+      result.push({ ...session, profileId, windowLabel });
+    }
+  }
+  return result;
+}
 
 // 保存済み位置(issue #121)があればそれを使い、無ければ自前計算した初期
 // レイアウト位置(fallback)を使う。`move: "support"` のノード(profile・
@@ -277,38 +320,42 @@ function buildGraphData(
     return groups;
   }
 
-  // 指定プロファイルのセッション枝を `profileNodeId` の下に生やす。全セッション
+  // 指定セッション群のセッション枝を `parentNodeId` の下に生やす。全セッション
   // (新しい順)を作業ディレクトリ→ブランチの2段でグループ化して表示する
   // (issue #104)。表示件数の上限は設けない(issue #100で導入した上限+
   // 集約ノードは、実運用でグラフより一覧性の高いビューアで確認したいという
-  // 要望により撤廃した)。ウィンドウが開いているプロファイル(`windowLabel`
-  // あり)・未オープンのプロファイル(`windowLabel` 無し)の両方から呼ぶ
-  // (issue #100でセッションの取得元をウィンドウレジストリからディスク上の
-  // 実体に変えたため、両者の枝の作り方を共通化できる)。消費した行数を返す
-  // (呼び出し側の `row` 更新用)。
+  // 要望により撤廃した)。
+  // `branchNamespace` はcwd/branch/sessionノードのID構築にのみ使う(issue
+  // #189でGitRepository配下は複数プロファイルのセッションを合算するため、
+  // 「プロファイルID」ではなく汎用の名前空間にした)。`defaultProfileId`/
+  // `defaultWindowLabel` はcwd/branchノードのクリック挙動(前面化/起動)に使う
+  // 代表プロファイル(GitRepositoryなら先頭の参照プロファイル。issue #189)。
+  // セッションノード自体は `sessions` の各要素が持つ実際の由来プロファイルを
+  // クリック挙動に使う(そのセッションの実際の持ち主を開くのが自然なため)。
+  // 消費した行数を返す(呼び出し側の `row` 更新用)。
   function addSessionBranch(
-    profileNodeId: string,
-    profileId: string,
-    windowLabel: string | undefined,
+    parentNodeId: string,
+    branchNamespace: string,
+    defaultProfileId: string | undefined,
+    defaultWindowLabel: string | undefined,
+    sessions: AggregatedSession[],
     selectedSessionId: string | undefined,
     startRow: number,
   ): number {
-    const sessions = sessionsByProfile[profileId] ?? [];
-
     let row = startRow;
 
     const cwdGroups = groupBy(sessions, (s) => s.cwd ?? UNKNOWN_CWD);
     for (const cwdGroup of cwdGroups) {
-      const cwdNodeId = `cwd:${profileId}:${cwdGroup.key}`;
+      const cwdNodeId = `cwd:${branchNamespace}:${cwdGroup.key}`;
       const cwdRowStart = row;
 
       const branchGroups = groupBy(cwdGroup.items, (s) => branchLabel(s.git_branch));
       for (const branchGroup of branchGroups) {
-        const branchNodeId = `branch:${profileId}:${cwdGroup.key}:${branchGroup.key}`;
+        const branchNodeId = `branch:${branchNamespace}:${cwdGroup.key}:${branchGroup.key}`;
         const branchRowStart = row;
 
         branchGroup.items.forEach((session, si) => {
-          const sessionNodeId = `session:${profileId}:${session.id}`;
+          const sessionNodeId = `session:${branchNamespace}:${session.id}`;
           const isSelected = session.id === selectedSessionId;
           nodes.push({
             id: sessionNodeId,
@@ -328,8 +375,8 @@ function buildGraphData(
             },
             icon: { url: HUB_NODE_ICON_URIS.session },
             kind: "session",
-            windowLabel,
-            profileId,
+            windowLabel: session.windowLabel,
+            profileId: session.profileId,
             sessionId: session.id,
             sessionTitle: session.title,
             modifiedAt: session.modified_at,
@@ -362,8 +409,8 @@ function buildGraphData(
           circle: { r: 20, fill: COLOR_PEARL, stroke: { color: COLOR_KUSAIRO, width: 2 } },
           icon: { url: HUB_NODE_ICON_URIS.branch },
           kind: "branch",
-          windowLabel,
-          profileId,
+          windowLabel: defaultWindowLabel,
+          profileId: defaultProfileId,
           positionKey: branchPositionKey,
           branchName: branchGroup.key,
           sessionCount: branchGroup.items.length,
@@ -393,15 +440,15 @@ function buildGraphData(
         circle: { r: 22, fill: COLOR_PEARL, stroke: { color: COLOR_KINCHA, width: 2 } },
         icon: { url: HUB_NODE_ICON_URIS.cwd },
         kind: "cwd",
-        windowLabel,
-        profileId,
+        windowLabel: defaultWindowLabel,
+        profileId: defaultProfileId,
         positionKey: cwdPositionKey,
         cwdPath: cwdGroup.key,
         folder: cwdGroup.items[0]?.folder,
       });
       edges.push({
         id: `e${edgeSeq++}`,
-        source: profileNodeId,
+        source: parentNodeId,
         target: cwdNodeId,
         line: { width: 2, color: COLOR_BORDER },
       });
@@ -410,11 +457,115 @@ function buildGraphData(
     return Math.max(row - startRow, 1);
   }
 
+  // プロファイルID → 開いているウィンドウ(issue #189。GitRepositoryノードの
+  // クリック挙動・セッションの由来ウィンドウ判定に使う共通ルックアップ)。
+  // 1ウィンドウ=1プロファイル(native.md §6)のため、複数ウィンドウが同じ
+  // プロファイルを開くことはない前提。
+  const openTabByProfileId = new Map<string, { windowLabel: string; sessionId?: string }>();
+  windowStates.forEach((w) => {
+    w.tabs.forEach((tab) => {
+      openTabByProfileId.set(tab.profile_id, {
+        windowLabel: w.label,
+        sessionId: tab.session_id ?? undefined,
+      });
+    });
+  });
+
+  // プロファイル列をGitRepository列に置き換える(オブジェクトモデル実装
+  // 第2弾。issue #189)。GitRepositoryの一覧はPcインスタンス由来
+  // (`pc.users[0].repositories`。settingsのプロファイルから重複排除して
+  // バックエンドが組み立て済み)。それを参照するプロファイル(`repository_path`
+  // が一致するもの。判定は `profileDetails` を使う。バックエンド側の重複排除
+  // 判定とは別経路だが、どちらもsettingsのプロファイルが真実の源のため
+  // 実質的に一致する)のセッションを合算して配下にぶら下げる。クリック挙動は
+  // 先頭の参照プロファイルを対象にする(issue #189で明示された仕様)。
+  const repositoriesToRender = primaryUser?.repositories ?? [];
+  const profilesWithRepository = new Set<string>();
+
+  repositoriesToRender.forEach((gitRepo) => {
+    const referencingProfiles = profiles.filter(
+      (p) => profileDetails[p.id]?.repositoryPath === gitRepo.repository_path,
+    );
+    referencingProfiles.forEach((p) => profilesWithRepository.add(p.id));
+
+    const targetProfile = referencingProfiles[0];
+    const openTab = targetProfile ? openTabByProfileId.get(targetProfile.id) : undefined;
+
+    const nodeId = `git-repository:${gitRepo.repository_path}`;
+    const positionKey = nodeId;
+    positionKeys.add(positionKey);
+    const nodeRow = row;
+    const position = resolvePosition(
+      positionKey,
+      COL_X.profile,
+      ROW_START_Y + nodeRow * ROW_HEIGHT,
+      savedPositions,
+    );
+
+    nodes.push({
+      id: nodeId,
+      x: position.x,
+      y: position.y,
+      move: "support",
+      label: {
+        text: gitRepo.repository_name,
+        fill: COLOR_SUMI,
+        font: { size: 13 },
+        y: labelYBelowCircle(26),
+      },
+      circle: {
+        // 京紫(伝統色パレット)。旧profileノードと同じ色を使う(issue #189:
+        // GitRepositoryはプロファイル列の後継であり、パレットに未使用色が
+        // 無いため既存色を踏襲する。実装時判断)。
+        r: 26,
+        fill: openTab ? COLOR_KYO_MURASAKI : COLOR_PEARL,
+        stroke: { color: COLOR_KYO_MURASAKI, width: 2 },
+      },
+      icon: { url: HUB_NODE_ICON_URIS.gitRepository },
+      kind: "git-repository",
+      positionKey,
+      repositoryName: gitRepo.repository_name,
+      repositoryPath: gitRepo.repository_path,
+      description: gitRepo.description,
+      referencingProfileNames: referencingProfiles.map((p) => p.name),
+      windowLabel: openTab?.windowLabel,
+      profileId: targetProfile?.id,
+    });
+    edges.push({
+      id: `e${edgeSeq++}`,
+      source: userAnchorId,
+      target: nodeId,
+      line: { width: 2, color: COLOR_BORDER },
+    });
+
+    const aggregatedSessions = collectSessionsForProfiles(
+      referencingProfiles.map((p) => p.id),
+      sessionsByProfile,
+      openTabByProfileId,
+    );
+    const selectedSessionId = referencingProfiles
+      .map((p) => openTabByProfileId.get(p.id)?.sessionId)
+      .find((id): id is string => id != null);
+
+    row += addSessionBranch(
+      nodeId,
+      nodeId,
+      targetProfile?.id,
+      openTab?.windowLabel,
+      aggregatedSessions,
+      selectedSessionId,
+      nodeRow,
+    );
+  });
+
   const openedProfileIds = new Set<string>();
 
   windowStates.forEach((w) => {
     w.tabs.forEach((tab, ti) => {
       openedProfileIds.add(tab.profile_id);
+      // GitRepositoryノードに吸収済み(repository_pathが設定されている)なら
+      // 個別のprofileノードは描かない(issue #189)。
+      if (profilesWithRepository.has(tab.profile_id)) return;
       const profileNodeId = `profile:${w.label}:${ti}`;
       const profileName = profiles.find((p) => p.id === tab.profile_id)?.name ?? tab.profile_id;
       const isActiveTab = ti === w.active_tab_index;
@@ -463,15 +614,25 @@ function buildGraphData(
         line: { width: 2, color: COLOR_BORDER },
       });
 
-      row += addSessionBranch(profileNodeId, tab.profile_id, w.label, tab.session_id ?? undefined, profileRow);
+      row += addSessionBranch(
+        profileNodeId,
+        tab.profile_id,
+        tab.profile_id,
+        w.label,
+        collectSessionsForProfiles([tab.profile_id], sessionsByProfile, openTabByProfileId),
+        tab.session_id ?? undefined,
+        profileRow,
+      );
     });
   });
 
   // 未オープンのプロファイル(どのウィンドウでも開いていない)は、PC直下に
   // 薄い配色で表示する(issue #84)。セッションの取得元がディスク上の実体に
   // なったため(issue #100)、ウィンドウが無くてもセッション枝を描ける。
+  // GitRepositoryノードに吸収済み(repository_pathが設定されている)なら
+  // 個別のprofile-unopenedノードは描かない(issue #189)。
   profiles
-    .filter((p) => !openedProfileIds.has(p.id))
+    .filter((p) => !openedProfileIds.has(p.id) && !profilesWithRepository.has(p.id))
     .forEach((p) => {
       const nodeId = `profile-unopened:${p.id}`;
       const profileRow = row;
@@ -506,7 +667,15 @@ function buildGraphData(
         line: { width: 1, color: COLOR_BORDER },
       });
 
-      row += addSessionBranch(nodeId, p.id, undefined, undefined, profileRow);
+      row += addSessionBranch(
+        nodeId,
+        p.id,
+        p.id,
+        undefined,
+        collectSessionsForProfiles([p.id], sessionsByProfile, openTabByProfileId),
+        undefined,
+        profileRow,
+      );
     });
 
   return { nodes, edges, positionKeys };
@@ -555,6 +724,19 @@ function buildInspectorContent(
           { label: "ホームディレクトリ", value: core.homeDirectory ?? "" },
         ],
         action: null,
+      };
+    case "git-repository":
+      return {
+        title: core.repositoryName ?? "GitRepository",
+        fields: [
+          { label: "パス", value: core.repositoryPath ?? "" },
+          { label: "説明", value: core.description || "(未設定)" },
+          {
+            label: "参照プロファイル",
+            value: (core.referencingProfileNames ?? []).join(", ") || "(なし)",
+          },
+        ],
+        action,
       };
     case "profile":
     case "profile-unopened": {

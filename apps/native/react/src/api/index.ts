@@ -44,6 +44,7 @@ export type {
   ClaudeMdDto,
   ClaudeSettingsDto,
   DeviceCodeDto,
+  GitRepositoryDto,
   GithubAuthFailedEvent,
   GithubAuthStatusDto,
   GithubAuthenticatedEvent,

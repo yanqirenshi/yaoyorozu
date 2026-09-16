@@ -1,9 +1,10 @@
 use domain::{
     is_valid_claude_dir_path, is_valid_json, is_valid_rule_file_name, is_valid_session_id,
-    is_valid_skill_name, order_messages_newest_first, paginate_messages, sort_claude_dir_entries,
-    sort_projects_by_recency, sort_sessions_by_recency, ClaudeDirEntry, ClaudeDirPage,
-    ClaudeMdFile, ClaudeSettingsFile, HubLayout, NodePosition, Project, RuleSummary, Session,
-    SessionSummary, Settings, SkillSummary, CURRENT_HUB_LAYOUT_VERSION,
+    is_valid_skill_name, order_messages_newest_first, paginate_messages,
+    repositories_from_profiles, sort_claude_dir_entries, sort_projects_by_recency,
+    sort_sessions_by_recency, ClaudeDirEntry, ClaudeDirPage, ClaudeMdFile, ClaudeSettingsFile,
+    HubLayout, NodePosition, Project, RuleSummary, Session, SessionSummary, Settings, SkillSummary,
+    CURRENT_HUB_LAYOUT_VERSION,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -412,6 +413,24 @@ pub fn load_hub_layout(store: &dyn HubLayoutStore) -> Result<HubLayout, AppError
 /// この関数自体はアプリを止めるようなエラーを返さない(issue #182)。
 pub fn current_pc(source: &dyn ExecutionEnvironmentSource) -> Result<domain::Pc, AppError> {
     source.current_pc()
+}
+
+/// `pc` の各ユーザーに、現在の settings から組み立てた `GitRepository` 一覧を
+/// 差し込む(オブジェクトモデル実装 第2弾。issue #189)。
+///
+/// `GitRepository` の真実の源は settings のプロファイルであり、`AppState` に
+/// 保持せず(専用の永続化・同期は持たない)、クエリのたびにここで都度組み立て
+/// る設計を選んだ(issue本文の実装時判断(b))。理由: (a) `AppState.pc` に
+/// 保持する案は、プロファイルを増減・変更する既存のユースケース
+/// (`create_profile`/`delete_profile`/`update_settings` 等)すべてで再構築が
+/// 必要になり変更点が広がるのに対し、(b) はこの関数1箇所に閉じるため
+/// settings変更への追従(鮮度)を単純に保証できる。
+pub fn current_pc_with_repositories(mut pc: domain::Pc, settings: &Settings) -> domain::Pc {
+    let repositories = repositories_from_profiles(&settings.profiles);
+    for user in &mut pc.users {
+        user.repositories = repositories.clone();
+    }
+    pc
 }
 
 /// ハブグラフのノード位置を丸ごと置き換えて保存する。マージではなく置き換え
@@ -2919,6 +2938,7 @@ mod tests {
                 user_id: "yanqi".to_string(),
                 user_name: "yanqi".to_string(),
                 home_directory: PathBuf::from(r"C:\Users\yanqi"),
+                repositories: Vec::new(),
             }],
         };
         let source = FakeExecutionEnvironmentSource { pc: pc.clone() };
@@ -2945,5 +2965,58 @@ mod tests {
         let result = current_pc(&source).expect("should not error even with placeholders");
 
         assert_eq!(result, placeholder_pc);
+    }
+
+    fn pc_with_one_user(user_id: &str) -> domain::Pc {
+        domain::Pc {
+            system_uuid: "uuid".to_string(),
+            pc_name: "pc".to_string(),
+            description: String::new(),
+            users: vec![domain::User {
+                user_id: user_id.to_string(),
+                user_name: user_id.to_string(),
+                home_directory: PathBuf::from(r"C:\Users\yanqi"),
+                repositories: Vec::new(),
+            }],
+        }
+    }
+
+    #[test]
+    fn current_pc_with_repositories_fills_repositories_from_settings_profiles() {
+        let pc = pc_with_one_user("yanqi");
+        let mut profile = domain::Profile::new("p1".to_string(), "p1".to_string());
+        profile.repository_path = Some(PathBuf::from(r"C:\repo\a"));
+        let settings = settings_with_profile(profile);
+
+        let result = current_pc_with_repositories(pc, &settings);
+
+        assert_eq!(result.users.len(), 1);
+        assert_eq!(result.users[0].repositories.len(), 1);
+        assert_eq!(
+            result.users[0].repositories[0].repository_path,
+            PathBuf::from(r"C:\repo\a")
+        );
+    }
+
+    #[test]
+    fn current_pc_with_repositories_leaves_other_pc_fields_unchanged() {
+        let pc = pc_with_one_user("yanqi");
+        let settings = Settings::default();
+
+        let result = current_pc_with_repositories(pc.clone(), &settings);
+
+        assert_eq!(result.system_uuid, pc.system_uuid);
+        assert_eq!(result.pc_name, pc.pc_name);
+        assert_eq!(result.users[0].user_id, pc.users[0].user_id);
+    }
+
+    #[test]
+    fn current_pc_with_repositories_gives_no_repositories_when_no_profile_has_a_path() {
+        let pc = pc_with_one_user("yanqi");
+        let settings = Settings::default();
+
+        let result = current_pc_with_repositories(pc, &settings);
+
+        assert!(result.users[0].repositories.is_empty());
     }
 }
