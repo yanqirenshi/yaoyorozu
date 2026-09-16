@@ -685,13 +685,69 @@ impl From<domain::ClaudeDirPage> for ClaudeDirPageDto {
     }
 }
 
+/// `GitRepository.branches` の1件分(オブジェクトモデル実装 第3弾。
+/// issue #193)。削除済み(`deleted_at_time.is_some()`)は`GitRepositoryDto`
+/// への変換時点で除外するため、このDTO自体は「現存するブランチ」のみを
+/// 表す(`deleted_at_time`フィールドを持たない)。
+#[derive(Serialize, Clone)]
+pub struct GitBranchDto {
+    pub branch_id: String,
+    pub branch_name: String,
+    pub description: String,
+    pub created_at_time: u64,
+}
+
+impl From<domain::GitBranch> for GitBranchDto {
+    fn from(branch: domain::GitBranch) -> Self {
+        Self {
+            branch_id: branch.branch_id,
+            branch_name: branch.branch_name,
+            description: branch.description,
+            created_at_time: branch.created_at_time,
+        }
+    }
+}
+
+/// `GitRepository.worktrees` の1件分(issue #193)。`checked_out_branch`は
+/// `GitBranch.branch_id`(未解決・detachedなら`null`)。削除済みの扱いは
+/// [`GitBranchDto`]と同じ。
+#[derive(Serialize, Clone)]
+pub struct GitWorktreeDto {
+    pub worktree_id: String,
+    pub worktree_name: String,
+    pub description: String,
+    pub worktree_folder_path: String,
+    pub worktree_git_file_path: String,
+    pub created_at_time: u64,
+    pub checked_out_branch: Option<String>,
+}
+
+impl From<domain::GitWorktree> for GitWorktreeDto {
+    fn from(worktree: domain::GitWorktree) -> Self {
+        Self {
+            worktree_id: worktree.worktree_id,
+            worktree_name: worktree.worktree_name,
+            description: worktree.description,
+            worktree_folder_path: worktree.worktree_folder_path.display().to_string(),
+            worktree_git_file_path: worktree.worktree_git_file_path.display().to_string(),
+            created_at_time: worktree.created_at_time,
+            checked_out_branch: worktree.checked_out_branch,
+        }
+    }
+}
+
 /// `get_pc` の1ユーザーが所有するリポジトリ1件分(オブジェクトモデル実装
-/// 第2弾。issue #189)。
+/// 第2弾。issue #189)。`branches`/`worktrees`は第3弾(issue #193)で追加。
+/// 削除済み(`deleted_at_time.is_some()`)のレコードは既定でここから除外
+/// する(フロントは「今あるもの」だけを表示すればよく、削除イベントの履歴
+/// 自体はハブの表示要件に無いため。issue本文の実装時判断)。
 #[derive(Serialize, Clone)]
 pub struct GitRepositoryDto {
     pub repository_path: String,
     pub repository_name: String,
     pub description: String,
+    pub branches: Vec<GitBranchDto>,
+    pub worktrees: Vec<GitWorktreeDto>,
 }
 
 impl From<domain::GitRepository> for GitRepositoryDto {
@@ -700,6 +756,18 @@ impl From<domain::GitRepository> for GitRepositoryDto {
             repository_path: repository.repository_path.display().to_string(),
             repository_name: repository.repository_name,
             description: repository.description,
+            branches: repository
+                .branches
+                .into_iter()
+                .filter(|b| b.deleted_at_time.is_none())
+                .map(GitBranchDto::from)
+                .collect(),
+            worktrees: repository
+                .worktrees
+                .into_iter()
+                .filter(|w| w.deleted_at_time.is_none())
+                .map(GitWorktreeDto::from)
+                .collect(),
         }
     }
 }

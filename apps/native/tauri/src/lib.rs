@@ -418,11 +418,46 @@ async fn list_window_states(
 /// ユーザーが所有する `GitRepository` 一覧は settings のプロファイルから
 /// クエリのたびに都度組み立てて差し込む(鮮度のため。issue #189。
 /// `app::current_pc_with_repositories` のドキュメントコメント参照)。
+/// `GitRepository.branches`/`.worktrees` は `AppState.git_ledger`(起動時と
+/// 再読み込み操作時にのみ突き合わせ済みのもの)を差し込むだけで、ここでは
+/// gitコマンドを実行しない(issue #193。`app::reconcile_git_ledger` の
+/// ドキュメントコメント参照: 都度実行するには重すぎるため)。
 #[tauri::command]
 async fn get_pc(state: tauri::State<'_, Mutex<AppState>>) -> Result<PcDto, AppErrorDto> {
     let guard = state.lock().await;
     let pc = app::current_pc_with_repositories(guard.pc.clone(), &guard.settings);
+    let pc = app::pc_with_git_ledger(pc, &guard.git_ledger);
     Ok(PcDto::from(pc))
+}
+
+/// 登録済み全リポジトリのGit状態(ブランチ・worktree)を再観測し、台帳を
+/// 更新する(オブジェクトモデル実装 第3弾。issue #193)。ハブの「再読み込み」
+/// 操作から呼ぶ想定(起動時の突き合わせは `AppState::load` が既に行う)。
+/// gitサブプロセスの起動を伴うため `spawn_blocking` で実行する。
+#[tauri::command]
+async fn reconcile_git_state(state: tauri::State<'_, Mutex<AppState>>) -> Result<(), AppErrorDto> {
+    let (settings, previous_ledger, git_ledger_path) = {
+        let guard = state.lock().await;
+        (
+            guard.settings.clone(),
+            guard.git_ledger.clone(),
+            guard.git_ledger_path.clone(),
+        )
+    };
+
+    let new_ledger = tauri::async_runtime::spawn_blocking(move || {
+        state::reconcile_and_save_git_ledger(&settings, &previous_ledger, &git_ledger_path)
+    })
+    .await
+    .map_err(|_| {
+        AppErrorDto::from(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })?;
+
+    let mut guard = state.lock().await;
+    guard.git_ledger = new_ledger;
+    Ok(())
 }
 
 /// 指定ラベルのウィンドウを前面化する(最小化されていれば復元してから)。
@@ -1106,11 +1141,13 @@ fn start_session_watcher(app_handle: &tauri::AppHandle, root: PathBuf) {
 /// 場合はフロントへ `settings:corrupted` を通知する(native.md §2)。
 /// 戻り値は起動時点での有効なセッションルート(ファイル監視の初期対象)。
 fn setup_app_state(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let save_path = app.path().app_data_dir()?.join("settings.json");
+    let app_data_dir = app.path().app_data_dir()?;
+    let save_path = app_data_dir.join("settings.json");
+    let git_ledger_path = app_data_dir.join("git-ledger.json");
     let state::LoadResult {
         state,
         recovered_from_corruption,
-    } = AppState::load(save_path)?;
+    } = AppState::load(save_path, git_ledger_path)?;
     let root = resolve_effective_projects_dir(&state.settings)?;
     app.manage(Mutex::new(state));
 
@@ -1263,6 +1300,7 @@ pub fn run() {
             list_window_states,
             focus_window,
             get_pc,
+            reconcile_git_state,
             get_hub_layout,
             save_hub_layout,
             get_project_claude_md,

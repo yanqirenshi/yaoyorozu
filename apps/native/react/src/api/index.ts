@@ -44,7 +44,9 @@ export type {
   ClaudeMdDto,
   ClaudeSettingsDto,
   DeviceCodeDto,
+  GitBranchDto,
   GitRepositoryDto,
+  GitWorktreeDto,
   GithubAuthFailedEvent,
   GithubAuthStatusDto,
   GithubAuthenticatedEvent,
@@ -189,6 +191,13 @@ export function focusWindow(label: string): Promise<void> {
 // issue #182)。
 export function getPc(): Promise<PcDto> {
   return invoke<PcDto>("get_pc");
+}
+
+// 登録済み全リポジトリのGit状態(ブランチ・worktree)を再観測し、台帳を
+// 更新する(オブジェクトモデル実装 第3弾。issue #193)。ハブの「再読み込み」
+// 操作から呼ぶ。反映された結果は次の `getPc` で取得できる。
+export function reconcileGitState(): Promise<void> {
+  return invoke<void>("reconcile_git_state");
 }
 
 // ハブグラフのノード位置(ドラッグ固定)を取得する(issue #121)。

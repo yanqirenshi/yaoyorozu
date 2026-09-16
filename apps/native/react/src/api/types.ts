@@ -190,13 +190,36 @@ export type HubLayoutDto = {
   positions: Record<string, NodePositionDto>;
 };
 
+// `GitRepository.branches` の1件分(オブジェクトモデル実装 第3弾。
+// issue #193)。削除済みはRust側(`GitRepositoryDto`への変換)で除外済み。
+export type GitBranchDto = {
+  branch_id: string;
+  branch_name: string;
+  description: string;
+  created_at_time: number;
+};
+
+// `GitRepository.worktrees` の1件分(issue #193)。`checked_out_branch`は
+// `GitBranchDto.branch_id`(未解決・detachedなら`null`)。
+export type GitWorktreeDto = {
+  worktree_id: string;
+  worktree_name: string;
+  description: string;
+  worktree_folder_path: string;
+  worktree_git_file_path: string;
+  created_at_time: number;
+  checked_out_branch: string | null;
+};
+
 // `getPc` の1ユーザー分(オブジェクトモデル実装 第1弾。issue #182)。
 // `getPc` の1ユーザーが所有するリポジトリ1件分(オブジェクトモデル実装
-// 第2弾。issue #189)。
+// 第2弾。issue #189)。`branches`/`worktrees` は第3弾(issue #193)で追加。
 export type GitRepositoryDto = {
   repository_path: string;
   repository_name: string;
   description: string;
+  branches: GitBranchDto[];
+  worktrees: GitWorktreeDto[];
 };
 
 export type UserDto = {
