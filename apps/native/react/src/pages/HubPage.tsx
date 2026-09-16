@@ -14,9 +14,13 @@ import {
   onSettingsUpdated,
   onWindowsChanged,
   openProfileWindow,
+  reconcileGitState,
   saveHubLayout,
 } from "../api";
 import type {
+  GitBranchDto,
+  GitRepositoryDto,
+  GitWorktreeDto,
   GithubProjectDto,
   NodePositionDto,
   PcDto,
@@ -69,6 +73,14 @@ function branchLabel(gitBranch: string | null): string {
   return gitBranch === "HEAD" ? DETACHED_BRANCH_LABEL : gitBranch;
 }
 
+// cwdのパス(セッションJSONL由来)とGitWorktree.worktree_folder_path
+// (Rust側の`PathBuf::display()`由来)を比較するための正規化(issue #193)。
+// 区切り文字(`\`/`/`)・末尾のスラッシュ・大文字小文字(Windowsパスは
+// 大小無視)の表記ゆれを吸収する。表示には使わず、突き合わせ専用。
+function normalizePathForComparison(path: string): string {
+  return path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
 // ノード種別アイコン(issue #119)導入にあたり、ラベル文字を円の下に逃がす
 // (アイコンは円の中央にデフォルト位置で描くため、ラベルが重なる)。
 // `d3.network` の label.y はテキストの上端基準で、実際の描画は
@@ -104,7 +116,9 @@ type HubNodeCore = {
     | "git-repository"
     | "profile"
     | "cwd"
+    | "git-worktree"
     | "branch"
+    | "git-branch"
     | "session"
     | "profile-unopened";
   windowLabel?: string;
@@ -134,9 +148,17 @@ type HubNodeCore = {
   // cwd
   cwdPath?: string;
   folder?: string;
-  // branch
+  // git-worktree(オブジェクトモデル実装 第3弾。issue #193)
+  worktreeName?: string;
+  worktreeId?: string;
+  worktreeFolderPath?: string;
+  worktreeGitFilePath?: string;
+  checkedOutBranchName?: string | null;
+  // branch / git-branch(issue #193)。`createdAtTime` はgit-worktreeとも共用。
   branchName?: string;
   sessionCount?: number;
+  branchId?: string;
+  createdAtTime?: number;
   // session
   sessionId?: string;
   sessionTitle?: string;
@@ -332,6 +354,11 @@ function buildGraphData(
   // 代表プロファイル(GitRepositoryなら先頭の参照プロファイル。issue #189)。
   // セッションノード自体は `sessions` の各要素が持つ実際の由来プロファイルを
   // クリック挙動に使う(そのセッションの実際の持ち主を開くのが自然なため)。
+  // `gitRepository` を渡した場合(GitRepository配下の呼び出しのみ。issue
+  // #193)、cwd/branchグループを台帳(`branches`/`worktrees`)と突き合わせ、
+  // 一致すれば `git-worktree`/`git-branch` ノードに差し替える。一致しない
+  // ものは従来どおり `cwd`/`branch`(既存のフォールバック。issue本文の
+  // 明示的な要求により変更しない)。
   // 消費した行数を返す(呼び出し側の `row` 更新用)。
   function addSessionBranch(
     parentNodeId: string,
@@ -341,8 +368,18 @@ function buildGraphData(
     sessions: AggregatedSession[],
     selectedSessionId: string | undefined,
     startRow: number,
+    gitRepository?: GitRepositoryDto,
   ): number {
     let row = startRow;
+
+    const branchByName = new Map<string, GitBranchDto>();
+    gitRepository?.branches.forEach((b) => branchByName.set(b.branch_name, b));
+    const branchNameById = new Map<string, string>();
+    gitRepository?.branches.forEach((b) => branchNameById.set(b.branch_id, b.branch_name));
+    const worktreeByNormalizedPath = new Map<string, GitWorktreeDto>();
+    gitRepository?.worktrees.forEach((w) =>
+      worktreeByNormalizedPath.set(normalizePathForComparison(w.worktree_folder_path), w),
+    );
 
     const cwdGroups = groupBy(sessions, (s) => s.cwd ?? UNKNOWN_CWD);
     for (const cwdGroup of cwdGroups) {
@@ -392,7 +429,13 @@ function buildGraphData(
         });
         row += branchGroup.items.length;
 
-        const branchPositionKey = branchNodeId;
+        // 台帳の`GitBranch`と一致すれば`git-branch`ノードに差し替える
+        // (issue #193)。突き合わせはセッションの`gitBranch`文字列と
+        // `branch_name`の一致でよい(issue本文の明示的な指示)。
+        const matchedBranch = branchByName.get(branchGroup.key);
+        const branchPositionKey = matchedBranch
+          ? `git-branch:${matchedBranch.branch_id}`
+          : branchNodeId;
         positionKeys.add(branchPositionKey);
         const branchPosition = resolvePosition(
           branchPositionKey,
@@ -407,13 +450,16 @@ function buildGraphData(
           move: "support",
           label: { text: branchGroup.key, fill: COLOR_SUMI, font: { size: 12 }, y: labelYBelowCircle(20) },
           circle: { r: 20, fill: COLOR_PEARL, stroke: { color: COLOR_KUSAIRO, width: 2 } },
-          icon: { url: HUB_NODE_ICON_URIS.branch },
-          kind: "branch",
+          icon: { url: HUB_NODE_ICON_URIS[matchedBranch ? "gitBranch" : "branch"] },
+          kind: matchedBranch ? "git-branch" : "branch",
           windowLabel: defaultWindowLabel,
           profileId: defaultProfileId,
           positionKey: branchPositionKey,
           branchName: branchGroup.key,
           sessionCount: branchGroup.items.length,
+          branchId: matchedBranch?.branch_id,
+          description: matchedBranch?.description,
+          createdAtTime: matchedBranch?.created_at_time,
         });
         edges.push({
           id: `e${edgeSeq++}`,
@@ -423,7 +469,15 @@ function buildGraphData(
         });
       }
 
-      const cwdPositionKey = cwdNodeId;
+      // 台帳の`GitWorktree`と一致すれば`git-worktree`ノードに差し替える
+      // (issue #193)。突き合わせはパスの正規化比較(`normalizePathForComparison`)
+      // で行う(セッションJSONL側とRust側で区切り文字表記が揺れうるため)。
+      const matchedWorktree = worktreeByNormalizedPath.get(
+        normalizePathForComparison(cwdGroup.key),
+      );
+      const cwdPositionKey = matchedWorktree
+        ? `git-worktree:${matchedWorktree.worktree_id}`
+        : cwdNodeId;
       positionKeys.add(cwdPositionKey);
       const cwdPosition = resolvePosition(
         cwdPositionKey,
@@ -436,15 +490,28 @@ function buildGraphData(
         x: cwdPosition.x,
         y: cwdPosition.y,
         move: "support",
-        label: { text: cwdTail(cwdGroup.key), fill: COLOR_SUMI, font: { size: 12 }, y: labelYBelowCircle(22) },
+        label: {
+          text: matchedWorktree ? matchedWorktree.worktree_name : cwdTail(cwdGroup.key),
+          fill: COLOR_SUMI,
+          font: { size: 12 },
+          y: labelYBelowCircle(22),
+        },
         circle: { r: 22, fill: COLOR_PEARL, stroke: { color: COLOR_KINCHA, width: 2 } },
-        icon: { url: HUB_NODE_ICON_URIS.cwd },
-        kind: "cwd",
+        icon: { url: HUB_NODE_ICON_URIS[matchedWorktree ? "gitWorktree" : "cwd"] },
+        kind: matchedWorktree ? "git-worktree" : "cwd",
         windowLabel: defaultWindowLabel,
         profileId: defaultProfileId,
         positionKey: cwdPositionKey,
         cwdPath: cwdGroup.key,
         folder: cwdGroup.items[0]?.folder,
+        worktreeName: matchedWorktree?.worktree_name,
+        worktreeId: matchedWorktree?.worktree_id,
+        worktreeFolderPath: matchedWorktree?.worktree_folder_path,
+        worktreeGitFilePath: matchedWorktree?.worktree_git_file_path,
+        checkedOutBranchName: matchedWorktree?.checked_out_branch
+          ? (branchNameById.get(matchedWorktree.checked_out_branch) ?? null)
+          : null,
+        createdAtTime: matchedWorktree?.created_at_time,
       });
       edges.push({
         id: `e${edgeSeq++}`,
@@ -555,6 +622,7 @@ function buildGraphData(
       aggregatedSessions,
       selectedSessionId,
       nodeRow,
+      gitRepo,
     );
   });
 
@@ -763,11 +831,39 @@ function buildInspectorContent(
         ],
         action,
       };
+    case "git-worktree":
+      return {
+        title: core.worktreeName ?? "worktree",
+        fields: [
+          { label: "フォルダ", value: core.worktreeFolderPath ?? "" },
+          { label: ".gitファイル", value: core.worktreeGitFilePath ?? "" },
+          { label: "チェックアウト中ブランチ", value: core.checkedOutBranchName ?? "(detached)" },
+          {
+            label: "作成日時",
+            value: core.createdAtTime !== undefined ? formatModifiedAt(core.createdAtTime) : "",
+          },
+        ],
+        action,
+      };
     case "branch":
       return {
         title: "ブランチ",
         fields: [
           { label: "ブランチ名", value: core.branchName ?? "" },
+          { label: "セッション数", value: String(core.sessionCount ?? 0) },
+        ],
+        action,
+      };
+    case "git-branch":
+      return {
+        title: core.branchName ?? "ブランチ",
+        fields: [
+          { label: "ブランチID", value: core.branchId ?? "" },
+          { label: "説明", value: core.description || "(未設定)" },
+          {
+            label: "作成日時",
+            value: core.createdAtTime !== undefined ? formatModifiedAt(core.createdAtTime) : "",
+          },
           { label: "セッション数", value: String(core.sessionCount ?? 0) },
         ],
         action,
@@ -1156,13 +1252,27 @@ function HubPage() {
     saveHubLayout({}).catch((e) => console.error(e));
   }, []);
 
+  // 「再読み込み」操作では、通常の再取得(`load`)に加えて登録済み全
+  // リポジトリのGit状態(ブランチ・worktree)も再観測する(issue #193)。
+  // 起動時は`AppState::load`が既に突き合わせ済みのため、ここでは明示的な
+  // 再読み込み操作のときだけ呼ぶ。観測に失敗しても(fail-safe。バックエンド
+  // 側で該当リポジトリの台帳は変更されないだけ)`getPc`は必ず呼び直す。
+  const handleReload = useCallback((): Promise<void> => {
+    const reconcile = reconcileGitState()
+      .catch((e) => console.error(e))
+      .then(() => getPc())
+      .then(setPc)
+      .catch((e) => console.error(e));
+    return Promise.all([load(), reconcile]).then(() => undefined);
+  }, [load]);
+
   const dockItems = useMemo(
     () => [
       {
         id: "hub-reload",
         label: RELOAD_ICON,
         title: "再読み込み",
-        onClick: load,
+        onClick: handleReload,
       },
       {
         id: "hub-reset-layout",
@@ -1171,7 +1281,7 @@ function HubPage() {
         onClick: handleResetLayout,
       },
     ],
-    [load, handleResetLayout],
+    [handleReload, handleResetLayout],
   );
   usePageDockItems(dockItems);
 
