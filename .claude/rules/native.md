@@ -29,6 +29,16 @@ react/           React（フロントエンド）。内部は Vite 標準構成�
   - `tauri/tauri.conf.json` の `build.frontendDist` / `build.devUrl` / `beforeDevCommand` を `react/` 基準に修正
   - `npm run tauri` 実行位置と Vite の `root` を `react/` に合わせる
 - MUST: `domain` は `tauri` / `tokio` / ファイル I/O に依存しない。`Cargo.toml` に書かないことで強制する。
+- MUST: `domain` クレートは **1型(クラス)= 1ファイル**とする。人がクラスを通じてコードを
+  理解するための規約であり、クラス図(`/class-diagram`)の1クラスとファイルが1対1で対応する
+  状態を保つ。
+  - ファイル名は型名の snake_case(例: `Pc` → `pc.rs`、`SessionSummary` → `session_summary.rs`)。
+  - `lib.rs` は `mod` 宣言と `pub use` のみ(型・関数の定義を書かない)。外部からのパスは
+    従来どおり `domain::Pc` の形を保つ。
+  - その型専用の小さな補助enum(区分コード等)は主たる型のファイルに同居してよい。
+    どの型にも属さない純粋関数は機能別のファイル(例: `jsonl.rs`)に置く。
+  - まとまりの大きい型群(例: `session_line` の33型)はディレクトリモジュールにして
+    その中で1型1ファイルにする(`session_line/xxx.rs`)。
 - MUST: 依存の向きは `tauri → app → domain`、`infra → domain`。逆流禁止。
 - MUST: `domain` と `app` は `cargo test -p domain` / `-p app` だけで検証できる状態を保つ。
 - NEVER: `tauri/src/*.rs` にビジネスロジックを書く。command 関数は「引数の変換 → ユースケース呼び出し → DTO 化」の3行〜10行程度に収める。
