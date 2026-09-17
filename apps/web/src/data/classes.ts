@@ -8,6 +8,8 @@
  *   さらに右)
  * - `classes-infra.ts`: infra クレートの型と、それが実現する app の port(trait)。
  *   x 正側、`classes-native-prototype.ts` のさらに下
+ * - `classes-tauri.ts`: tauri クレートの型(DTO・アプリ状態・ローカルAPI)。
+ *   x 正側、`classes-infra.ts` のさらに下
  *
  * どちらも座標は同じ平面上にあるので、新しい図を足すときは既存の図と重ならない
  * 位置に置く。
@@ -24,12 +26,14 @@ import {
   NATIVE_PROTOTYPE_CLASS_FILE_PATHS,
 } from "./classes-native-prototype";
 import { INFRA_CLASS_DATA, INFRA_CLASS_FILE_PATHS } from "./classes-infra";
+import { TAURI_CLASS_DATA, TAURI_CLASS_FILE_PATHS } from "./classes-tauri";
 
 export const CLASS_DIAGRAM_DATA: DiagramInput = mergeDiagrams(
   DOMAIN_CLASS_DATA,
   SESSION_LINE_CLASS_DATA,
   NATIVE_PROTOTYPE_CLASS_DATA,
   INFRA_CLASS_DATA,
+  TAURI_CLASS_DATA,
 );
 
 /**
@@ -41,4 +45,5 @@ export const CLASS_FILE_PATHS: ClassFilePaths = {
   ...SESSION_LINE_CLASS_FILE_PATHS,
   ...NATIVE_PROTOTYPE_CLASS_FILE_PATHS,
   ...INFRA_CLASS_FILE_PATHS,
+  ...TAURI_CLASS_FILE_PATHS,
 };
