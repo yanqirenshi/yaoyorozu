@@ -20,7 +20,9 @@ export type MessageDto = {
   timestamp: string;
 };
 
-export type SessionDto = {
+// 表示中の会話(issue #197でRust側`Session`→`Conversation`に改名したのに
+// 合わせて、こちらの型名も追従)。
+export type ConversationDto = {
   session_id: string;
   messages: MessageDto[];
   agent: AgentKindDto;

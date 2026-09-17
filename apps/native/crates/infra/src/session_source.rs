@@ -1,7 +1,7 @@
 use app::{AppError, SessionSource};
 use domain::{
     extract_custom_title, extract_cwd, extract_git_branch, extract_message, extract_session_id,
-    resolve_session_title, AgentKind, Project, Role, Session, SessionSummary,
+    resolve_session_title, AgentKind, Conversation, Project, Role, SessionSummary,
 };
 use notify::RecursiveMode;
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
@@ -270,7 +270,7 @@ impl SessionSource for FileSystemRepository {
         Ok(projects)
     }
 
-    fn session(&self, project: &str, session_id: &str) -> Result<Session, AppError> {
+    fn session(&self, project: &str, session_id: &str) -> Result<Conversation, AppError> {
         // `session_id` は app 層の `is_valid_session_id` で英数字とハイフンのみに
         // 検証済みの前提(native.md §4)。ここでは検証済みの値としてそのまま
         // ファイル名の構築に使う。
@@ -288,7 +288,7 @@ impl SessionSource for FileSystemRepository {
             .filter_map(|value| extract_message(&value))
             .collect();
 
-        Ok(Session {
+        Ok(Conversation {
             id: session_id.to_string(),
             messages,
             agent: AgentKind::ClaudeCode,

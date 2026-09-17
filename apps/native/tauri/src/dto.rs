@@ -68,21 +68,26 @@ impl From<domain::Message> for MessageDto {
     }
 }
 
-/// 表示中のセッション。`session_id` はフロントが保持し、送信時に渡すことで
-/// 「表示中の会話 = 追記される会話」の一致検証(送信直前チェック)に使う。
+/// 表示中の会話(`domain::Conversation`。issue #197で改名。旧`SessionDto`)。
+/// `session_id` はフロントが保持し、送信時に渡すことで「表示中の会話 =
+/// 追記される会話」の一致検証(送信直前チェック)に使う。
 #[derive(Serialize, Clone)]
-pub struct SessionDto {
+pub struct ConversationDto {
     pub session_id: String,
     pub messages: Vec<MessageDto>,
     pub agent: AgentKindDto,
 }
 
-impl From<domain::Session> for SessionDto {
-    fn from(session: domain::Session) -> Self {
+impl From<domain::Conversation> for ConversationDto {
+    fn from(conversation: domain::Conversation) -> Self {
         Self {
-            session_id: session.id,
-            messages: session.messages.into_iter().map(MessageDto::from).collect(),
-            agent: session.agent.into(),
+            session_id: conversation.id,
+            messages: conversation
+                .messages
+                .into_iter()
+                .map(MessageDto::from)
+                .collect(),
+            agent: conversation.agent.into(),
         }
     }
 }

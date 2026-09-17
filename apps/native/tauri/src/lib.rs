@@ -5,12 +5,12 @@ mod state;
 use app::{SessionSource, SettingsStore, TokenStore};
 use dto::{
     AgentKindDto, AgentModeDto, AppErrorDto, AppWarningDto, ClaudeDirPageDto, ClaudeMdDto,
-    ClaudeSettingsDto, DeviceCodeDto, GithubAuthFailedEventDto, GithubAuthStatusDto,
-    GithubAuthenticatedEventDto, GithubProjectDto, GithubProjectSummaryDto, HubLayoutDto,
-    NodePositionDto, PcDto, ProfileSummaryDto, ProjectDto, ProjectItemsPageDto,
-    ProjectSettingsFileDto, RuleDto, RuleSummaryDto, SessionChangedEventDto, SessionDto,
-    SessionSummaryDto, SettingsCorruptedEventDto, SettingsDto, SettingsInputDto, SkillDto,
-    SkillSummaryDto, WindowStateDto, WindowTabDto,
+    ClaudeSettingsDto, ConversationDto, DeviceCodeDto, GithubAuthFailedEventDto,
+    GithubAuthStatusDto, GithubAuthenticatedEventDto, GithubProjectDto, GithubProjectSummaryDto,
+    HubLayoutDto, NodePositionDto, PcDto, ProfileSummaryDto, ProjectDto, ProjectItemsPageDto,
+    ProjectSettingsFileDto, RuleDto, RuleSummaryDto, SessionChangedEventDto, SessionSummaryDto,
+    SettingsCorruptedEventDto, SettingsDto, SettingsInputDto, SkillDto, SkillSummaryDto,
+    WindowStateDto, WindowTabDto,
 };
 use infra::{
     ClaudeCliAgent, FileClaudeDirStore, FileClaudeMdStore, FileClaudeSettingsStore,
@@ -101,9 +101,9 @@ async fn get_session(
     session_id: String,
     offset: usize,
     limit: usize,
-) -> Result<SessionDto, AppErrorDto> {
+) -> Result<ConversationDto, AppErrorDto> {
     let root = effective_projects_dir_from_state(&state).await?;
-    tauri::async_runtime::spawn_blocking(move || -> Result<SessionDto, app::AppError> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<ConversationDto, app::AppError> {
         let source = FileSystemRepository::new(root);
         let session = app::get_session(&source, &project, &session_id, offset, limit)?;
         Ok(session.into())

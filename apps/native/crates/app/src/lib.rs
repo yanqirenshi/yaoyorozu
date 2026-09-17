@@ -3,8 +3,8 @@ use domain::{
     is_valid_skill_name, order_messages_newest_first, paginate_messages, reconcile_branches,
     reconcile_worktrees, repositories_from_profiles, sort_claude_dir_entries,
     sort_projects_by_recency, sort_sessions_by_recency, ClaudeDirEntry, ClaudeDirPage,
-    ClaudeMdFile, ClaudeSettingsFile, GitLedger, GitRepositoryLedger, HubLayout, NodePosition,
-    Project, RuleSummary, Session, SessionSummary, Settings, SkillSummary,
+    ClaudeMdFile, ClaudeSettingsFile, Conversation, GitLedger, GitRepositoryLedger, HubLayout,
+    NodePosition, Project, RuleSummary, SessionSummary, Settings, SkillSummary,
     CURRENT_GIT_LEDGER_VERSION, CURRENT_HUB_LAYOUT_VERSION,
 };
 use std::collections::HashMap;
@@ -72,7 +72,7 @@ pub trait SessionSource {
     fn list_projects(&self) -> Result<Vec<Project>, AppError>;
 
     /// 指定セッション(ID + 全メッセージ)を返す。
-    fn session(&self, project: &str, session_id: &str) -> Result<Session, AppError>;
+    fn session(&self, project: &str, session_id: &str) -> Result<Conversation, AppError>;
 
     /// 最新セッションのIDだけを返す(送信前後の一致検証用の軽量な問い合わせ)。
     fn latest_session_id(&self, project: &str) -> Result<String, AppError>;
@@ -347,7 +347,7 @@ pub fn get_session(
     session_id: &str,
     offset: usize,
     limit: usize,
-) -> Result<Session, AppError> {
+) -> Result<Conversation, AppError> {
     if !is_valid_session_id(session_id) {
         return Err(AppError::InvalidInput("不正なセッションIDです".to_string()));
     }
@@ -1195,8 +1195,8 @@ mod tests {
             Ok(self.projects.clone())
         }
 
-        fn session(&self, _project: &str, session_id: &str) -> Result<Session, AppError> {
-            Ok(Session {
+        fn session(&self, _project: &str, session_id: &str) -> Result<Conversation, AppError> {
+            Ok(Conversation {
                 id: session_id.to_string(),
                 messages: self.messages.clone(),
                 agent: AgentKind::ClaudeCode,
