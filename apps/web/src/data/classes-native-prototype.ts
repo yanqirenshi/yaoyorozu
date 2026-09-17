@@ -20,8 +20,8 @@
  *     フィールドを含む)は関係線を引かない。コードにそのまま対応させるため、
  *     型注釈からは読み取れない関係(IDによる参照など)を図だけの判断で
  *     描き足さない。
- * - `session_line/`(`classes-session-line.ts`)と違い、tag 付き enum の
- *   バリアント分岐(依存関係)は無い(該当する型が無いため)。
+ * - `session_line/`(旧 `classes-session-line.ts`。図は削除済み)と違い、
+ *   tag 付き enum のバリアント分岐(依存関係)は無い(該当する型が無いため)。
  *
  * 【対象・ファイル対応】native.md §1 の「1型(クラス)= 1ファイル」(issue #184、
  * PR #185)により、domain クレートは各型が型名 snake_case のファイルに分かれて
@@ -30,8 +30,8 @@
  * に、`ClaudeDirEntryKind` は `ClaudeDirEntry` と同じ `claude_dir_entry.rs` に
  * 同居する(native.md 曰く「その型専用の小さな補助enum」)。ほかの23クラスは
  * それぞれ単独のファイル(型名 snake_case)。掲載対象は `classes-domain.ts` に
- * 掲載済みの Pc・User と、`session_line/`(`classes-session-line.ts`)の33型を
- * 除いたもの。
+ * 掲載済みの Pc・User と、`session_line/`(33型。かつては `classes-session-line.ts`
+ * で描いていたが、不要になったため図ごと削除した)を除いたもの。
  *
  * 【Conversation(旧 Session)】オブジェクトモデル実装 第4弾(issue #197、
  * PR #199)で、クラス図のオブジェクトモデル側の `Session`(セッションリソース。

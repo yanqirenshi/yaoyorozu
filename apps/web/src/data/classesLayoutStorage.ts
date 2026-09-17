@@ -171,7 +171,7 @@ export function applyLayoutOverrides<T extends ClassLike>(
     return {
       ...c,
       // d3.classes は position オブジェクトを in-place で書き換えるため、
-      // 元データ(SESSION_LINE_CLASS_DATA 等)を汚染しないよう常に複製する。
+      // 元データ(NATIVE_PROTOTYPE_CLASS_DATA 等)を汚染しないよう常に複製する。
       position: { x: override?.x ?? c.position.x, y: override?.y ?? c.position.y },
     };
   });
