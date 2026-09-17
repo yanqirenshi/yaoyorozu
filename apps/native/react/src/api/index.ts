@@ -68,6 +68,7 @@ export type {
   RuleDto,
   RuleSummaryDto,
   SessionChangedEvent,
+  SessionDto,
   SessionSummaryDto,
   SettingsCorruptedEvent,
   SettingsDto,

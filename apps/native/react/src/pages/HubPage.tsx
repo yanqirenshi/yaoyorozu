@@ -25,6 +25,7 @@ import type {
   NodePositionDto,
   PcDto,
   ProfileSummaryDto,
+  SessionDto,
   SessionSummaryDto,
   WindowStateDto,
 } from "../api";
@@ -159,11 +160,20 @@ type HubNodeCore = {
   sessionCount?: number;
   branchId?: string;
   createdAtTime?: number;
-  // session
+  // session。cwd/git_branch(cwdPath/gitBranchRaw)はモデル上Sessionの属性
+  // ではなくLogLineの属性(TMの決定)であり、グルーピング・更新時刻の
+  // 表示補助データとして`SessionSummaryDto`由来のまま使い続ける
+  // (issue #197)。custom_title以下はモデル属性(`domain::Session`。
+  // `SessionDto`由来)。
   sessionId?: string;
   sessionTitle?: string;
   modifiedAt?: number;
   gitBranchRaw?: string | null;
+  customTitle?: string | null;
+  aiTitle?: string | null;
+  mode?: string | null;
+  slug?: string | null;
+  lastPrompt?: string | null;
 };
 
 // プロファイルの詳細(インスペクタ表示用。issue #109)。セッション一覧の
@@ -299,6 +309,13 @@ function buildGraphData(
   // スコープ外)。`pc` 未取得時は `pcId` へ直接ぶら下げてグラフを壊さない。
   const primaryUser = pc?.users[0];
   const userAnchorId = primaryUser ? `user:${primaryUser.user_id}` : pcId;
+
+  // `session_id` → モデル属性(issue #197)。セッションノードは既存どおり
+  // `SessionSummaryDto`(表示補助データ。cwd/git_branch/タイトル解決)から
+  // 組み立て、`custom_title`/`ai_title`/`mode`/`slug`/`last_prompt` だけを
+  // このルックアップでインスペクタ用に差し込む。
+  const sessionModelById = new Map<string, SessionDto>();
+  (primaryUser?.sessions ?? []).forEach((s) => sessionModelById.set(s.session_id, s));
   if (primaryUser) {
     nodes.push({
       id: userAnchorId,
@@ -394,6 +411,7 @@ function buildGraphData(
         branchGroup.items.forEach((session, si) => {
           const sessionNodeId = `session:${branchNamespace}:${session.id}`;
           const isSelected = session.id === selectedSessionId;
+          const sessionModel = sessionModelById.get(session.id);
           nodes.push({
             id: sessionNodeId,
             x: COL_X.session,
@@ -419,6 +437,11 @@ function buildGraphData(
             modifiedAt: session.modified_at,
             cwdPath: session.cwd ?? undefined,
             gitBranchRaw: session.git_branch,
+            customTitle: sessionModel?.custom_title,
+            aiTitle: sessionModel?.ai_title,
+            mode: sessionModel?.mode,
+            slug: sessionModel?.slug,
+            lastPrompt: sessionModel?.last_prompt,
           });
           edges.push({
             id: `e${edgeSeq++}`,
@@ -872,8 +895,16 @@ function buildInspectorContent(
       return {
         title: "セッション",
         fields: [
-          { label: "タイトル", value: core.sessionTitle ?? "" },
+          // モデル属性(`domain::Session`。issue #197)。
           { label: "セッションID", value: core.sessionId ?? "" },
+          { label: "custom_title", value: core.customTitle ?? "(未設定)" },
+          { label: "ai_title", value: core.aiTitle ?? "(未設定)" },
+          { label: "mode", value: core.mode ?? "(未設定)" },
+          { label: "slug", value: core.slug ?? "(未設定)" },
+          { label: "last_prompt", value: core.lastPrompt ?? "(未設定)" },
+          // 表示補助データ(`SessionSummaryDto`。タイトル解決・グルーピング・
+          // 更新時刻はモデル属性ではなくこちらを使い続ける。issue #197)。
+          { label: "タイトル", value: core.sessionTitle ?? "" },
           {
             label: "最終更新",
             value: core.modifiedAt !== undefined ? formatModifiedAt(core.modifiedAt) : "",

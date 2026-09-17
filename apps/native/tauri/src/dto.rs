@@ -777,6 +777,32 @@ impl From<domain::GitRepository> for GitRepositoryDto {
     }
 }
 
+/// `User.sessions` の1件分(オブジェクトモデル実装 第4弾。issue #197)。
+/// 名前が空いた旧`SessionDto`(プロトタイプの`Session`。issue #197で
+/// `ConversationDto`に改名済み)を、クラス図の新しい`Session`用に使う。
+#[derive(Serialize, Clone)]
+pub struct SessionDto {
+    pub session_id: String,
+    pub custom_title: Option<String>,
+    pub ai_title: Option<String>,
+    pub mode: Option<String>,
+    pub slug: Option<String>,
+    pub last_prompt: Option<String>,
+}
+
+impl From<domain::Session> for SessionDto {
+    fn from(session: domain::Session) -> Self {
+        Self {
+            session_id: session.session_id,
+            custom_title: session.custom_title,
+            ai_title: session.ai_title,
+            mode: session.mode,
+            slug: session.slug,
+            last_prompt: session.last_prompt,
+        }
+    }
+}
+
 /// `get_pc` の1ユーザー分(オブジェクトモデル実装 第1弾。issue #182)。
 #[derive(Serialize, Clone)]
 pub struct UserDto {
@@ -784,6 +810,7 @@ pub struct UserDto {
     pub user_name: String,
     pub home_directory: String,
     pub repositories: Vec<GitRepositoryDto>,
+    pub sessions: Vec<SessionDto>,
 }
 
 impl From<domain::User> for UserDto {
@@ -797,6 +824,7 @@ impl From<domain::User> for UserDto {
                 .into_iter()
                 .map(GitRepositoryDto::from)
                 .collect(),
+            sessions: user.sessions.into_iter().map(SessionDto::from).collect(),
         }
     }
 }

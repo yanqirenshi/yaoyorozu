@@ -1,7 +1,8 @@
 use app::{AppError, SessionSource};
 use domain::{
-    extract_custom_title, extract_cwd, extract_git_branch, extract_message, extract_session_id,
-    resolve_session_title, AgentKind, Conversation, Project, Role, SessionSummary,
+    extract_ai_title, extract_custom_title, extract_cwd, extract_git_branch, extract_last_prompt,
+    extract_message, extract_mode, extract_session_id, extract_slug, resolve_session_title,
+    AgentKind, Conversation, Project, Role, Session, SessionSummary,
 };
 use notify::RecursiveMode;
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
@@ -324,6 +325,27 @@ impl SessionSource for FileSystemRepository {
             })
             .collect()
     }
+
+    fn list_session_models(&self, project: &str) -> Result<Vec<Session>, AppError> {
+        // `list_sessions`と同じキャッシュ(`cached_or_scanned_summary`)に
+        // 相乗りし、jsonlのフルパースをもう1周増やさない(issue #197)。
+        let project_dir = self.projects_dir.join(project);
+        session_files_by_recency(&project_dir)
+            .iter()
+            .map(|path| {
+                let modified_at_ms = to_millis(fs::metadata(path).and_then(|m| m.modified()));
+                let scanned = cached_or_scanned_summary(path, modified_at_ms)?;
+                Ok(Session {
+                    session_id: scanned.id,
+                    custom_title: scanned.custom_title,
+                    ai_title: scanned.ai_title,
+                    mode: scanned.mode,
+                    slug: scanned.slug,
+                    last_prompt: scanned.last_prompt,
+                })
+            })
+            .collect()
+    }
 }
 
 /// `(ファイルパス, mtime)` をキーにしたタイトル抽出結果のキャッシュ。
@@ -331,7 +353,10 @@ impl SessionSource for FileSystemRepository {
 /// は限らないため全行走査が必要になる。未変更のファイルを毎回再走査しない
 /// ため、プロセス内メモリでキャッシュする(永続化不要。issue #33)。
 /// `cwd`/`git_branch`(issue #104)も同じ全行走査のついでに求まるため、
-/// このキャッシュに含める。
+/// このキャッシュに含める。`custom_title`(生値)/`ai_title`/`mode`/`slug`/
+/// `last_prompt` はオブジェクトモデル実装 第4弾(issue #197)の`Session`用に
+/// 追加した。`title`(表示用に解決済みの値)とは別に、生の`custom_title`も
+/// 保持する。
 /// `FileSystemRepository` はコマンド呼び出しごとに使い捨てで生成される
 /// (tauri層)ため、インスタンスのフィールドではなくモジュール静的な領域に
 /// 置く。
@@ -342,6 +367,11 @@ struct CachedSessionSummary {
     title: String,
     cwd: Option<String>,
     git_branch: Option<String>,
+    custom_title: Option<String>,
+    ai_title: Option<String>,
+    mode: Option<String>,
+    slug: Option<String>,
+    last_prompt: Option<String>,
 }
 
 static SESSION_SUMMARY_CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedSessionSummary>>> =
@@ -385,6 +415,11 @@ fn cached_or_scanned_summary(
 /// 置かれたプロジェクトフォルダに対応する値([`SessionCwdSelector`]。送信時の
 /// cwd と揃える)、`git_branch` は最後に記録された値(checkoutの最終状態)を
 /// 採用する。
+///
+/// `custom_title`(生値)/`ai_title`/`mode`/`slug`/`last_prompt`(issue #197。
+/// `domain::Session`用)も同じ全行走査のついでに求める(jsonlの再パースを
+/// 増やさないため)。いずれも`custom_title`/`git_branch`と同じく「最後に
+/// 見つかったものを採用」する。
 fn scan_session_summary(path: &Path) -> Result<CachedSessionSummary, AppError> {
     let file = fs::File::open(path)
         .map_err(|e| AppError::Io(format!("{} を開けませんでした: {}", path.display(), e)))?;
@@ -394,6 +429,10 @@ fn scan_session_summary(path: &Path) -> Result<CachedSessionSummary, AppError> {
     let mut first_user_message: Option<String> = None;
     let mut cwd_selector = SessionCwdSelector::for_session_file(path);
     let mut git_branch: Option<String> = None;
+    let mut ai_title: Option<String> = None;
+    let mut mode: Option<String> = None;
+    let mut slug: Option<String> = None;
+    let mut last_prompt: Option<String> = None;
 
     for value in BufReader::new(file)
         .lines()
@@ -421,6 +460,18 @@ fn scan_session_summary(path: &Path) -> Result<CachedSessionSummary, AppError> {
         if let Some(branch) = extract_git_branch(&value) {
             git_branch = Some(branch);
         }
+        if let Some(value) = extract_ai_title(&value) {
+            ai_title = Some(value);
+        }
+        if let Some(value) = extract_mode(&value) {
+            mode = Some(value);
+        }
+        if let Some(value) = extract_slug(&value) {
+            slug = Some(value);
+        }
+        if let Some(value) = extract_last_prompt(&value) {
+            last_prompt = Some(value);
+        }
     }
 
     let id = id.ok_or_else(|| AppError::Io("セッションIDを取得できませんでした".to_string()))?;
@@ -437,6 +488,11 @@ fn scan_session_summary(path: &Path) -> Result<CachedSessionSummary, AppError> {
         title,
         cwd: cwd_selector.finish(),
         git_branch,
+        custom_title: last_custom_title,
+        ai_title,
+        mode,
+        slug,
+        last_prompt,
     })
 }
 
@@ -691,6 +747,62 @@ mod tests {
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].cwd, None);
         assert_eq!(sessions[0].git_branch, None);
+    }
+
+    #[test]
+    fn list_session_models_reads_all_model_attributes_and_prefers_the_last_occurrence() {
+        // issue #197: custom_title/ai_title/mode/slug/last_prompt はいずれも
+        // 「最後に見つかったものを採用」する(custom_title/git_branchと同じ
+        // 流儀)。
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        fs::write(
+            project_dir.join("s1.jsonl"),
+            [
+                r#"{"type":"user","sessionId":"s1","slug":"first-slug","message":{"content":"hello"}}"#,
+                r#"{"type":"user","sessionId":"s1","slug":"last-slug","message":{"content":"world"}}"#,
+                r#"{"type":"custom-title","customTitle":"最後のタイトル","sessionId":"s1"}"#,
+                r#"{"type":"ai-title","aiTitle":"AIタイトル","sessionId":"s1"}"#,
+                r#"{"type":"mode","mode":"read","sessionId":"s1"}"#,
+                r#"{"type":"last-prompt","lastPrompt":"直近の入力","leafUuid":"u1","sessionId":"s1"}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let sessions = repo
+            .list_session_models("proj")
+            .expect("should list session models");
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, "s1");
+        assert_eq!(sessions[0].custom_title.as_deref(), Some("最後のタイトル"));
+        assert_eq!(sessions[0].ai_title.as_deref(), Some("AIタイトル"));
+        assert_eq!(sessions[0].mode.as_deref(), Some("read"));
+        assert_eq!(sessions[0].slug.as_deref(), Some("last-slug"));
+        assert_eq!(sessions[0].last_prompt.as_deref(), Some("直近の入力"));
+    }
+
+    #[test]
+    fn list_session_models_leaves_optional_attributes_none_when_never_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        write_session_file(&project_dir, "s1", &project_dir);
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let sessions = repo
+            .list_session_models("proj")
+            .expect("should list session models");
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].custom_title, None);
+        assert_eq!(sessions[0].ai_title, None);
+        assert_eq!(sessions[0].mode, None);
+        assert_eq!(sessions[0].slug, None);
+        assert_eq!(sessions[0].last_prompt, None);
     }
 
     #[test]

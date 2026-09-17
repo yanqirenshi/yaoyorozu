@@ -27,6 +27,7 @@ mod project_items_page;
 mod project_status_option;
 mod role;
 mod rule_summary;
+mod session;
 mod session_line;
 mod session_summary;
 mod session_title;
@@ -63,6 +64,7 @@ pub use project_items_page::ProjectItemsPage;
 pub use project_status_option::ProjectStatusOption;
 pub use role::Role;
 pub use rule_summary::RuleSummary;
+pub use session::Session;
 pub use session_summary::{sort_sessions_by_recency, SessionSummary};
 pub use session_title::{excerpt, resolve_session_title};
 pub use settings::{effective_projects_dir, Settings, CURRENT_SETTINGS_VERSION};
@@ -80,6 +82,7 @@ pub use window_tab::WindowTab;
 /// は挙動を変えないリファクタリングとして既存の呼び出し元(infra)から
 /// そのまま使えるよう、モジュール名を介さずクレート直下に再エクスポートする。
 pub use session_line::{
-    extract_custom_title, extract_cwd, extract_git_branch, extract_message, extract_session_id,
-    AssistantLine, AttachmentLine, ChainLineBase, SessionLine, SystemLevel, UserLine,
+    extract_ai_title, extract_custom_title, extract_cwd, extract_git_branch, extract_last_prompt,
+    extract_message, extract_mode, extract_session_id, extract_slug, AssistantLine, AttachmentLine,
+    ChainLineBase, SessionLine, SystemLevel, UserLine,
 };
