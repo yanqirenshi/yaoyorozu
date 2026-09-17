@@ -33,12 +33,16 @@
  * 掲載済みの Pc・User と、`session_line/`(`classes-session-line.ts`)の33型を
  * 除いたもの。
  *
- * 【名前の重なり】domain クレートの `Session`(`session.rs`。セッション閲覧の
- * プロトタイプ実装)は、`classes-domain.ts` が予定しているオブジェクトモデルの
- * `Session`(セッションリソース、まだ未実装)と名前が重なる。図の重複チェック
- * (`mergeDiagrams`)に引っかかるため、こちらは `SessionPrototype` という名前で
- * 描く(Rust の実際の型名は `Session`)。オブジェクトモデルの Session が
- * 実装されるとき、この型は置き換えられて消える見込み。
+ * 【Conversation(旧 Session)】オブジェクトモデル実装 第4弾(issue #197、
+ * PR #199)で、クラス図のオブジェクトモデル側の `Session`(セッションリソース。
+ * session_id/custom_title/ai_title/mode/slug/last_prompt)が `session.rs` に
+ * 実装され、`User` にコンポジションで所有されるようになった(`User.sessions`)。
+ * これに伴い、このプロトタイプ側の型(id/messages/agent。ビューアに表示する
+ * 会話内容そのものの入れ物)は名前がぶつからないよう `Conversation` に改名
+ * された(`conversation.rs`)。以前はここを `SessionPrototype` という表記で
+ * 描いていたが、実装側の改名で本来の型名のまま描けるようになったため、
+ * この図でも `Conversation` に改めた。第5〜6弾(SessionFile/LogLine)の実装後、
+ * ビューアがそちらのモデルへ移行すれば、この型と `Message` は退役する見込み。
  */
 import type { DiagramInput } from "@yanqirenshi/d3.classes";
 import {
@@ -69,14 +73,14 @@ const DEFS: ClassDef[] = [
     filePath: "apps/native/crates/domain/src/project.rs",
   },
   {
-    name: { physical: "SessionPrototype", logical: "SessionPrototype", description: "1つのセッション(.jsonl 1ファイル)。Rust の実際の型名は Session(名前の重なりは冒頭コメントを参照)" },
+    name: { physical: "Conversation", logical: "Conversation", description: "ビューアに表示する会話内容(メッセージ列)の入れ物(.jsonl 1ファイル分)。旧 Session(名前の重なりは冒頭コメントを参照)" },
     attributes: [
       attr("id", "String"),
       attr("messages", "Vec<Message>"),
       attr("agent", "AgentKind"),
     ],
     position: { x: 2100, y: 150 },
-    filePath: "apps/native/crates/domain/src/session.rs",
+    filePath: "apps/native/crates/domain/src/conversation.rs",
   },
   {
     name: { physical: "Message", logical: "Message", description: "1件の会話メッセージ" },
@@ -292,8 +296,8 @@ const { classes, rel, filePaths } = defineDiagram(DEFS);
 const RELATIONSHIPS = [
   // セッション閲覧(プロトタイプ)
   rel("composition", "Project", "AgentKind", "agent", "left", "right"),
-  rel("composition", "SessionPrototype", "AgentKind", "agent", "top", "bottom"),
-  rel("association", "SessionPrototype", "Message", "messages", "right", "left"),
+  rel("composition", "Conversation", "AgentKind", "agent", "top", "bottom"),
+  rel("association", "Conversation", "Message", "messages", "right", "left"),
   rel("composition", "Message", "Role", "role", "bottom", "top"),
   // 設定・プロファイル
   rel("association", "Settings", "Profile", "profiles", "right", "left"),
