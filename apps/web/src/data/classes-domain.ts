@@ -91,6 +91,7 @@ const DEFS: ClassDef[] = [
     ],
     // User の右に並べる(User の右辺と横につなぐ)。
     position: { x: 468, y: 217 },
+    filePath: "apps/native/crates/domain/src/git_repository.rs",
   },
   {
     name: { physical: "GitBranch", logical: "GitBranch", description: "ブランチの作成・削除。git 自体はブランチに ID を持たないため、管理対象にするために ID を新設する。TM: Gitブランチ(イベント)" }, // 論理名: Gitブランチ
@@ -102,6 +103,7 @@ const DEFS: ClassDef[] = [
       attr("deleted_at_time", "Option<u64>"),
     ],
     position: { x: 951, y: 161 },
+    filePath: "apps/native/crates/domain/src/git_branch.rs",
   },
   {
     name: { physical: "GitWorktree", logical: "GitWorktree", description: "ワーキングツリーの作成・削除。git の識別子は台帳のディレクトリ名(パス由来)だけなので、ID を新設する。TM: ワーキングツリー(イベント)" }, // 論理名: ワーキングツリー
@@ -115,6 +117,7 @@ const DEFS: ClassDef[] = [
       attr("deleted_at_time", "Option<u64>"),
     ],
     position: { x: 951, y: 470 },
+    filePath: "apps/native/crates/domain/src/git_worktree.rs",
   },
   // ============ 会話 ============
   {
@@ -128,6 +131,7 @@ const DEFS: ClassDef[] = [
       attr("/last_prompt", "Option<String>"), // TM: 直近入力テキスト(D)。ログから導出する
     ],
     position: { x: 55, y: 824 },
+    filePath: "apps/native/crates/domain/src/session.rs",
   },
   {
     name: { physical: "SessionFile", logical: "SessionFile", description: "セッションログの .jsonl ファイル1件。会話ファイル(<フォルダ名>/<セッションID>.jsonl)とサブエージェントのファイル(<フォルダ名>/<セッションID>/subagents/agent-<エージェントID>.jsonl)がある。TM: セッションファイル(jsonl)(リソース)" }, // 論理名: セッションファイル(jsonl)
@@ -301,6 +305,8 @@ export const DOMAIN_CLASS_DATA: DiagramInput = {
   relationships: RELATIONSHIPS,
 };
 
-// 実装済みなのは Pc・User の2クラスのみ(オブジェクトモデル実装 第1弾)。
-// ほかの10クラスはまだ実装されていないため、filePath を持たない。
+// 実装済みなのは Pc・User(第1弾)・GitRepository・GitBranch・GitWorktree(第2〜3弾)・
+// Session(第4弾)の6クラス。SessionFile・LogLine・UserLogLine・AssistantLogLine・
+// SystemLogLine・AttachmentLogLine(第5〜6弾。未着手)はまだ実装されていないため、
+// filePath を持たない。
 export const DOMAIN_CLASS_FILE_PATHS: ClassFilePaths = filePaths;
