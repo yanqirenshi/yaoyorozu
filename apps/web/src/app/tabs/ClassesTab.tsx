@@ -121,11 +121,10 @@ export default function ClassesTab() {
     const svg = container.querySelector("svg");
     if (svg) applyCamera(svg);
 
-    // d3.classes の ClassBox はクリック/ドラッグ移動をライブラリ内部で完結させており、
-    // 通知コールバック(click/dragend相当)が無い。SitemapTab と同じ方式で、
+    // d3.classes の ClassBox はドラッグ移動をライブラリ内部で完結させており、
+    // 通知コールバック(dragend相当)が無い。SitemapTab と同じ方式で、
     // レンダー結果のDOM(data-id + transform)を読み取って対応する。
     let before: Map<string, { x: number; y: number }> | null = null;
-    let suppressNextClick = false;
 
     const snapshotPositions = () => {
       const map = new Map<string, { x: number; y: number }>();
@@ -168,22 +167,22 @@ export default function ClassesTab() {
       // 同じ classes.json に接続辺・視点も入るため、保存済みの値を必ず一緒に書く
       // (クラスの位置だけを書くとほかが消える)。
       save(buildLayoutFile(next, portOverridesRef.current, cameraRef.current));
-      // 移動を伴った操作の直後に発生する click でインスペクタが開かないようにする
-      // (d3-sitemap の Rectum が「静止クリックだけ届ける」のと同じ意図)。
-      suppressNextClick = true;
     };
 
-    // click は mousedown とは別にブラウザが発火する素のイベントなので、
-    // d3-drag の stopPropagation の影響を受けずコンテナの bubble で拾える。
-    const handleClick = (event: MouseEvent) => {
-      if (suppressNextClick) {
-        suppressNextClick = false;
-        return;
-      }
+    // 右クリックでインスペクタを開く(TM・サイトマップと同じ流儀)。d3.classes に
+    // contextmenu のコールバックが無いため、コンテナへの委譲で拾う。ドラッグは
+    // 左ボタンにしか反応しない(d3-drag の既定フィルタ)ので、右クリックで
+    // 位置がずれる心配は無い。
+    const handleContextMenu = (event: MouseEvent) => {
+      event.preventDefault();
 
       const target = (event.target as Element).closest?.("g.class-box");
       const dataId = target?.getAttribute("data-id");
-      if (!dataId) return;
+      if (!dataId) {
+        // 空き地の右クリックは閉じる操作にあてる。
+        setSelected(null);
+        return;
+      }
 
       const cls = classById.get(dataId);
       if (!cls) return;
@@ -205,13 +204,13 @@ export default function ClassesTab() {
     window.addEventListener("mousedown", handleMouseDown, { capture: true });
     window.addEventListener("mouseup", handleMouseUp, { capture: true });
     window.addEventListener("keydown", handleKeyDown);
-    container.addEventListener("click", handleClick);
+    container.addEventListener("contextmenu", handleContextMenu);
 
     return () => {
       window.removeEventListener("mousedown", handleMouseDown, { capture: true });
       window.removeEventListener("mouseup", handleMouseUp, { capture: true });
       window.removeEventListener("keydown", handleKeyDown);
-      container.removeEventListener("click", handleClick);
+      container.removeEventListener("contextmenu", handleContextMenu);
       diagram.clear();
       container.innerHTML = "";
       diagramRef.current = null;

@@ -10,7 +10,7 @@ import TextField from "@mui/material/TextField";
 import { normalizeAngle } from "@/data/classesLayoutStorage";
 
 /**
- * Classes 図のインスペクタ。クラスのクリックで開く右端の詳細パネル。
+ * Classes 図のインスペクタ。クラスの右クリックで開く右端の詳細パネル。
  *
  * 以前は `@yanqirenshi/colonoscope` を使っていたが、結線の一覧を置く手段が無いため
  * MUI で作り直した。作りは TM のインスペクタ(`tabs/tm/TmInspector.tsx`)に揃えている
