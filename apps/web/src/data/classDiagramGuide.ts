@@ -18,10 +18,6 @@ export const GUIDE_FILES: GuideFile[] = [
     role: "ドメインのオブジェクトモデル。TM を元に、クラス・関係線・位置を書く。",
   },
   {
-    path: "src/data/classes-session-line.ts",
-    role: "SessionLine の図(Labo の試作)。native の session_line/ 以下の型を写したもので、この決まりで書いたものではない。",
-  },
-  {
     path: "src/data/classes-native-prototype.ts",
     role: "domain クレートに実装済みの、まだオブジェクトモデルへ置き換えられていない型(プロトタイプ期の型)を、コードのまま写した図。",
   },

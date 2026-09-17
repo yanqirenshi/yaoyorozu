@@ -2,7 +2,6 @@
  * `/class-diagram` に描く1枚の図。図ごとのデータファイルを重ねる。
  *
  * - `classes-domain.ts`: YAOYOROZU のドメインのオブジェクトモデル(原点付近)
- * - `classes-session-line.ts`: セッションログ1行の型構造(Labo試作。x 負側に退避)
  * - `classes-native-prototype.ts`: domain クレートに実装済みの、まだオブジェクト
  *   モデルへ置き換えられていない型(プロトタイプ期の型。x 正側、ドメインモデルの
  *   さらに右)
@@ -18,10 +17,6 @@ import type { DiagramInput } from "@yanqirenshi/d3.classes";
 import { mergeDiagrams, type ClassFilePaths } from "./classDiagram";
 import { DOMAIN_CLASS_DATA, DOMAIN_CLASS_FILE_PATHS } from "./classes-domain";
 import {
-  SESSION_LINE_CLASS_DATA,
-  SESSION_LINE_CLASS_FILE_PATHS,
-} from "./classes-session-line";
-import {
   NATIVE_PROTOTYPE_CLASS_DATA,
   NATIVE_PROTOTYPE_CLASS_FILE_PATHS,
 } from "./classes-native-prototype";
@@ -30,7 +25,6 @@ import { TAURI_CLASS_DATA, TAURI_CLASS_FILE_PATHS } from "./classes-tauri";
 
 export const CLASS_DIAGRAM_DATA: DiagramInput = mergeDiagrams(
   DOMAIN_CLASS_DATA,
-  SESSION_LINE_CLASS_DATA,
   NATIVE_PROTOTYPE_CLASS_DATA,
   INFRA_CLASS_DATA,
   TAURI_CLASS_DATA,
@@ -42,7 +36,6 @@ export const CLASS_DIAGRAM_DATA: DiagramInput = mergeDiagrams(
  */
 export const CLASS_FILE_PATHS: ClassFilePaths = {
   ...DOMAIN_CLASS_FILE_PATHS,
-  ...SESSION_LINE_CLASS_FILE_PATHS,
   ...NATIVE_PROTOTYPE_CLASS_FILE_PATHS,
   ...INFRA_CLASS_FILE_PATHS,
   ...TAURI_CLASS_FILE_PATHS,
