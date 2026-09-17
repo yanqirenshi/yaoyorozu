@@ -31,7 +31,13 @@
  * 【対象・ファイル対応】infra クレートは domain と違い、まだ1型=1ファイルに
  * 揃っている(型名 snake_case のファイル。例外: `FileClaudeDirStore` は
  * `claude_dir_store.rs`、`SessionWatcher`/`FileSystemRepository` は
- * `session_source.rs` に同居)。全17型(実装16 + SessionWatcher)を載せた。
+ * `session_source.rs` に同居)。全19型(実装18 + SessionWatcher)と、
+ * app の port 18個を載せた。
+ *
+ * 【GitLedgerStore・GitStateSource への参照】メソッドの戻り値・引数に出てくる
+ * `domain::GitLedger`・`domain::ObservedGitState` は、`classes-native-prototype.ts`
+ * に載っているクラス(`GitLedger`・`ObservedGitState`)だが、別の図の離れた
+ * 位置にあるため、ほかの `domain::` 参照と同じ方針で線は引かない。
  */
 import type { DiagramInput } from "@yanqirenshi/d3.classes";
 import {
@@ -327,6 +333,38 @@ const DEFS: ClassDef[] = [
     position: { x: 4300, y: 4650 },
     filePath: "apps/native/crates/infra/src/claude_dir_store.rs",
   },
+  // ============ Git台帳・観測(第3弾) ============
+  {
+    name: { physical: "GitLedgerStore", logical: "GitLedgerStore", description: "GitBranch/GitWorktree台帳(domain::GitLedger)の永続化(port)。app::lib.rs" },
+    stereotype: "interface",
+    methods: [
+      method("load", [], "Result<domain::GitLedger, AppError>"),
+      method("save", ["ledger: &domain::GitLedger"], "Result<(), AppError>"),
+    ],
+    position: { x: 5150, y: 2050 },
+    filePath: "apps/native/crates/app/src/lib.rs",
+    size: { w: 350, h: 0 },
+  },
+  {
+    name: { physical: "FileGitLedgerStore", logical: "FileGitLedgerStore", description: "GitLedger をJSONファイルとして永続化。FileHubLayoutStore と同じ実装パターン(git_ledger_store.rs)" },
+    attributes: [attr("path", "PathBuf")],
+    position: { x: 5150, y: 2400 },
+    filePath: "apps/native/crates/infra/src/git_ledger_store.rs",
+  },
+  {
+    name: { physical: "GitStateSource", logical: "GitStateSource", description: "リポジトリの現在状態(ブランチ名一覧・worktree一覧)の観測(port)。app::lib.rs" },
+    stereotype: "interface",
+    methods: [method("observe", ["repo_root: &Path"], "Result<domain::ObservedGitState, AppError>")],
+    position: { x: 5600, y: 2050 },
+    filePath: "apps/native/crates/app/src/lib.rs",
+    size: { w: 450, h: 0 },
+  },
+  {
+    name: { physical: "SystemGitStateSource", logical: "SystemGitStateSource", description: "git コマンドを実行してリポジトリの現在状態を観測する(git_state_source.rs)" },
+    attributes: [],
+    position: { x: 5600, y: 2400 },
+    filePath: "apps/native/crates/infra/src/git_state_source.rs",
+  },
 ];
 
 const { classes, rel, filePaths } = defineDiagram(DEFS);
@@ -348,6 +386,9 @@ const RELATIONSHIPS = [
   rel("realization", "FileLocalApiTokenStore", "LocalApiTokenStore", undefined, "top", "bottom"),
   rel("realization", "SystemGitWorktreeLister", "GitWorktreeLister", undefined, "top", "bottom"),
   rel("realization", "FileClaudeDirStore", "ClaudeDirStore", undefined, "top", "bottom"),
+  // Git台帳・観測(第3弾)
+  rel("realization", "FileGitLedgerStore", "GitLedgerStore", undefined, "top", "bottom"),
+  rel("realization", "SystemGitStateSource", "GitStateSource", undefined, "top", "bottom"),
 ];
 
 export const INFRA_CLASS_DATA: DiagramInput = {
