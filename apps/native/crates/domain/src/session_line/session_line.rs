@@ -76,4 +76,11 @@ impl SessionLine {
     pub fn git_branch(&self) -> Option<&str> {
         self.base().and_then(|b| b.git_branch.as_deref())
     }
+
+    /// `slug`(TM: セッション別名)。会話チェーン行のみが持つ(セッションメタ
+    /// 行・未知の行は `None`。オブジェクトモデル実装 第4弾。issue #197。
+    /// `domain::Session.slug`)。
+    pub fn slug(&self) -> Option<&str> {
+        self.base().and_then(|b| b.slug.as_deref())
+    }
 }
