@@ -4,7 +4,7 @@
  * `classes-infra.ts` と同じ「実装の as-is スナップショット」の書き方を踏襲する。
  *
  * 【対象】
- * - `dto.rs`: フロント(React)へ渡す DTO。38型。native.md §3.1 により、
+ * - `dto.rs`: フロント(React)へ渡す DTO。44型。native.md §3.1 により、
  *   command の戻り値は必ず DTO で、`domain`/`app` の型に `Serialize` を付けて
  *   直接返さない(型注釈のとおり、DTO は `domain`/`app` の型と1対1で対応する
  *   ことが多いが、フィールドを絞る・別名にする等の違いがある)。
@@ -15,15 +15,24 @@
  * 【書き方】`classes-native-prototype.ts` と同じ基準。
  * - フィールドの型がこの図の中の別のクラス(enum を含む)を指すときだけ関係線を
  *   引く(必須・単数 → コンポジション、`Option`/`Vec`/`HashMap` → 関連)。
- * - `AppState.settings` は `domain::Settings`(`classes-native-prototype.ts` の
- *   `Settings`)そのものだが、別の図の離れた位置にあり線を引くと図をまたいで
- *   長く伸びるため、線は引かない(属性の型名にそのまま `domain::` を残して
- *   分かるようにする)。`AppState.window_states`(`app::WindowRegistry`)は
- *   この図にも他の図にも無い型なので、同様に線を引かない。
+ * - `AppState.settings`(`domain::Settings`)・`AppState.pc`(`domain::Pc`)・
+ *   `AppState.user_sessions`(`Vec<domain::Session>`)は、それぞれ
+ *   `classes-native-prototype.ts`・`classes-domain.ts` に載っている実在の
+ *   クラスだが、別の図の離れた位置にあり線を引くと図をまたいで長く伸びるため、
+ *   線は引かない(属性の型名にそのまま `domain::` を残して分かるようにする)。
+ *   `AppState.window_states`(`app::WindowRegistry`)・`AppState.git_ledger`
+ *   (`domain::GitLedger`)は、この図にも他の図にも無い型なので、同様に線を
+ *   引かない。
  * - `From<domain::X>`/`From<app::X>` の実装(DTOへの変換)がある型は、対応する
  *   クラスをコメントに書いた(`classes-native-prototype.ts`・`classes-infra.ts`
  *   に同名 + `Dto` を外した名前で載っている)。線では結ばない(変換であって
  *   フィールドの型ではないため。冒頭の書き方の基準を参照)。
+ * - `SessionDto` は issue #197(第4弾)で入れ替わっている。旧 `SessionDto`
+ *   (会話内容 = id/messages/agent)は `ConversationDto` に改名され
+ *   (`domain::Conversation` から変換)、`SessionDto` という名前はクラス図の
+ *   `Session`(session_id/custom_title/ai_title/mode/slug/last_prompt。
+ *   `domain::Session` から変換)に付け替わった。この図でも同じ名前の入れ替え
+ *   を反映している。
  */
 import type { DiagramInput } from "@yanqirenshi/d3.classes";
 import { attr, defineDiagram, label, type ClassDef } from "./classDiagram";
@@ -65,7 +74,7 @@ const DEFS: ClassDef[] = [
     filePath: "apps/native/tauri/src/dto.rs",
   },
   {
-    name: { physical: "SessionDto", logical: "SessionDto", description: "表示中のセッション。domain::Session から変換(From)。session_id は送信直前の一致検証に使う" },
+    name: { physical: "ConversationDto", logical: "ConversationDto", description: "表示中の会話。domain::Conversation(issue #197で改名。旧 domain::Session)から変換(From)。session_id は送信直前の一致検証に使う" },
     attributes: [
       attr("session_id", "String"),
       attr("messages", "Vec<MessageDto>"),
@@ -359,6 +368,13 @@ const DEFS: ClassDef[] = [
       attr("github_login", "Option<String>"),
       // app::WindowRegistry。この図にも他の図にも無い型なので線は引かない。
       attr("window_states", "app::WindowRegistry"),
+      // domain::Pc(classes-domain.ts の Pc)そのもの。線は引かない(冒頭コメントを参照)。
+      attr("pc", "domain::Pc"),
+      // domain::GitLedger。この図にも他の図にも無い型なので線は引かない。
+      attr("git_ledger", "domain::GitLedger"),
+      attr("git_ledger_path", "PathBuf"),
+      // domain::Session(classes-domain.ts の Session)そのもの。線は引かない。
+      attr("user_sessions", "Vec<domain::Session>"),
     ],
     position: { x: 2100, y: 10500 },
     filePath: "apps/native/tauri/src/state.rs",
@@ -395,6 +411,83 @@ const DEFS: ClassDef[] = [
     position: { x: 2900, y: 10900 },
     filePath: "apps/native/tauri/src/local_api.rs",
   },
+  // ============ PC・ユーザー・Git・セッション(第1〜4弾) ============
+  {
+    name: { physical: "PcDto", logical: "PcDto", description: "get_pc の戻り値(オブジェクトモデル実装 第1弾。issue #182)。domain::Pc から変換(From)" },
+    attributes: [
+      attr("system_uuid", "String"),
+      attr("pc_name", "String"),
+      attr("description", "String"),
+      attr("users", "Vec<UserDto>"),
+    ],
+    position: { x: 2100, y: 11300 },
+    filePath: "apps/native/tauri/src/dto.rs",
+  },
+  {
+    name: { physical: "UserDto", logical: "UserDto", description: "get_pc の1ユーザー分(オブジェクトモデル実装 第1弾。issue #182)。domain::User から変換(From)" },
+    attributes: [
+      attr("user_id", "String"),
+      attr("user_name", "String"),
+      attr("home_directory", "String"),
+      attr("repositories", "Vec<GitRepositoryDto>"),
+      attr("sessions", "Vec<SessionDto>"),
+    ],
+    position: { x: 2100, y: 11650 },
+    filePath: "apps/native/tauri/src/dto.rs",
+    size: { w: 230, h: 0 },
+  },
+  {
+    name: { physical: "SessionDto", logical: "SessionDto", description: "User.sessions の1件分(オブジェクトモデル実装 第4弾。issue #197)。domain::Session から変換(From)。旧 SessionDto(会話内容の入れ物)は issue #197 で ConversationDto に改名済み" },
+    attributes: [
+      attr("session_id", "String"),
+      attr("custom_title", "Option<String>"),
+      attr("ai_title", "Option<String>"),
+      attr("mode", "Option<String>"),
+      attr("slug", "Option<String>"),
+      attr("last_prompt", "Option<String>"),
+    ],
+    position: { x: 2500, y: 11650 },
+    filePath: "apps/native/tauri/src/dto.rs",
+  },
+  {
+    name: { physical: "GitRepositoryDto", logical: "GitRepositoryDto", description: "get_pc の1ユーザーが所有するリポジトリ1件分(オブジェクトモデル実装 第2〜3弾。issue #189/#193)。domain::GitRepository から変換(From)。削除済みの branch/worktree は変換時に除外する" },
+    attributes: [
+      attr("repository_path", "String"),
+      attr("repository_name", "String"),
+      attr("description", "String"),
+      attr("branches", "Vec<GitBranchDto>"),
+      attr("worktrees", "Vec<GitWorktreeDto>"),
+    ],
+    position: { x: 2100, y: 12000 },
+    filePath: "apps/native/tauri/src/dto.rs",
+    size: { w: 225, h: 0 },
+  },
+  {
+    name: { physical: "GitWorktreeDto", logical: "GitWorktreeDto", description: "GitRepository.worktrees の1件分(issue #193)。domain::GitWorktree から変換(From)。checked_out_branch は GitBranch.branch_id(未解決・detached なら null)" },
+    attributes: [
+      attr("worktree_id", "String"),
+      attr("worktree_name", "String"),
+      attr("description", "String"),
+      attr("worktree_folder_path", "String"),
+      attr("worktree_git_file_path", "String"),
+      attr("created_at_time", "u64"),
+      attr("checked_out_branch", "Option<String>"),
+    ],
+    position: { x: 2500, y: 12000 },
+    filePath: "apps/native/tauri/src/dto.rs",
+    size: { w: 260, h: 0 },
+  },
+  {
+    name: { physical: "GitBranchDto", logical: "GitBranchDto", description: "GitRepository.branches の1件分(issue #193)。domain::GitBranch から変換(From)。このDTO自体は現存するブランチのみを表す(deleted_at_time を持たない)" },
+    attributes: [
+      attr("branch_id", "String"),
+      attr("branch_name", "String"),
+      attr("description", "String"),
+      attr("created_at_time", "u64"),
+    ],
+    position: { x: 2100, y: 12350 },
+    filePath: "apps/native/tauri/src/dto.rs",
+  },
 ];
 
 const { classes, rel, filePaths } = defineDiagram(DEFS);
@@ -402,9 +495,9 @@ const { classes, rel, filePaths } = defineDiagram(DEFS);
 const RELATIONSHIPS = [
   // セッション閲覧(AgentKindDto に3クラスから集まるので角度で分ける)
   rel("composition", "ProjectDto", "AgentKindDto", "agent", "top", 40),
-  rel("composition", "SessionDto", "AgentKindDto", "agent", "top", 355),
+  rel("composition", "ConversationDto", "AgentKindDto", "agent", "top", 355),
   rel("composition", "SessionChangedEventDto", "AgentKindDto", "agent", "top", 315),
-  rel("association", "SessionDto", "MessageDto", "messages", "bottom", "top"),
+  rel("association", "ConversationDto", "MessageDto", "messages", "bottom", "top"),
   rel("composition", "MessageDto", "RoleDto", "role", "right", "left"),
   // 設定・プロファイル(2x2 に並べ、3本とも縦横だけで結ぶ)
   rel("association", "SettingsDto", "GithubProjectDto", "github_project", "top", "bottom"),
@@ -422,6 +515,12 @@ const RELATIONSHIPS = [
   rel("composition", "ClaudeDirEntryDto", "ClaudeDirEntryKindDto", "kind", "bottom", "top"),
   // アプリ状態
   rel("composition", "LoadResult", "AppState", "state", "left", "right"),
+  // PC・ユーザー・Git・セッション(第1〜4弾)
+  rel("association", "PcDto", "UserDto", "users", "bottom", "top"),
+  rel("association", "UserDto", "SessionDto", "sessions", "right", "left"),
+  rel("association", "UserDto", "GitRepositoryDto", "repositories", "bottom", "top"),
+  rel("association", "GitRepositoryDto", "GitWorktreeDto", "worktrees", "right", "left"),
+  rel("association", "GitRepositoryDto", "GitBranchDto", "branches", "bottom", "top"),
 ];
 
 export const TAURI_CLASS_DATA: DiagramInput = {
