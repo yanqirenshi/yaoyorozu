@@ -99,6 +99,48 @@ pub fn extract_custom_title(value: &serde_json::Value) -> Option<String> {
     }
 }
 
+/// 1行分のJSONLエントリから `type=ai-title` の `aiTitle` を取り出す
+/// (オブジェクトモデル実装 第4弾。issue #197。`domain::Session.ai_title`)。
+/// `custom_title` と同じ「セッションメタ行」の流儀で、呼び出し側で最後に
+/// 見つかったものを採用すること。
+pub fn extract_ai_title(value: &serde_json::Value) -> Option<String> {
+    match serde_json::from_value::<SessionLine>(value.clone()).ok()? {
+        SessionLine::AiTitle(l) => l.ai_title,
+        _ => None,
+    }
+}
+
+/// 1行分のJSONLエントリから `type=mode` の `mode` を取り出す(issue #197。
+/// `domain::Session.mode`)。呼び出し側で最後に見つかったものを採用すること。
+pub fn extract_mode(value: &serde_json::Value) -> Option<String> {
+    match serde_json::from_value::<SessionLine>(value.clone()).ok()? {
+        SessionLine::Mode(l) => l.mode,
+        _ => None,
+    }
+}
+
+/// 1行分のJSONLエントリから `type=last-prompt` の `lastPrompt` を取り出す
+/// (issue #197。`domain::Session.last_prompt`。クラス図上は導出属性
+/// `/last_prompt`)。呼び出し側で最後に見つかったものを採用すること。
+pub fn extract_last_prompt(value: &serde_json::Value) -> Option<String> {
+    match serde_json::from_value::<SessionLine>(value.clone()).ok()? {
+        SessionLine::LastPrompt(l) => l.last_prompt,
+        _ => None,
+    }
+}
+
+/// 1行分のJSONLエントリから `slug`(TM: セッション別名)を取り出す
+/// (issue #197。`domain::Session.slug`)。`cwd`/`gitBranch` と同じく会話
+/// チェーン行(`ChainLineBase`)が持つ値で、セッション中のcheckout等に
+/// 追従して複数回出現しうるため、呼び出し側で最後に見つかったものを
+/// 採用すること。
+pub fn extract_slug(value: &serde_json::Value) -> Option<String> {
+    serde_json::from_value::<SessionLine>(value.clone())
+        .ok()?
+        .slug()
+        .map(String::from)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,6 +373,76 @@ mod tests {
     fn extract_custom_title_returns_none_for_other_types() {
         let value = json!({ "type": "ai-title", "aiTitle": "ignored", "sessionId": "s1" });
         assert!(extract_custom_title(&value).is_none());
+    }
+
+    #[test]
+    fn extract_ai_title_reads_field_when_type_matches() {
+        let value =
+            json!({ "type": "ai-title", "aiTitle": "AIが付けたタイトル", "sessionId": "s1" });
+        assert_eq!(
+            extract_ai_title(&value).as_deref(),
+            Some("AIが付けたタイトル")
+        );
+    }
+
+    #[test]
+    fn extract_ai_title_returns_none_for_other_types() {
+        let value = json!({ "type": "mode", "mode": "chat", "sessionId": "s1" });
+        assert!(extract_ai_title(&value).is_none());
+    }
+
+    #[test]
+    fn extract_mode_reads_field_when_type_matches() {
+        let value = json!({ "type": "mode", "mode": "read", "sessionId": "s1" });
+        assert_eq!(extract_mode(&value).as_deref(), Some("read"));
+    }
+
+    #[test]
+    fn extract_mode_returns_none_for_other_types() {
+        let value = json!({ "type": "ai-title", "aiTitle": "ignored", "sessionId": "s1" });
+        assert!(extract_mode(&value).is_none());
+    }
+
+    #[test]
+    fn extract_last_prompt_reads_field_when_type_matches() {
+        let value = json!({
+            "type": "last-prompt",
+            "lastPrompt": "テストを書いて",
+            "leafUuid": "u1",
+            "sessionId": "s1"
+        });
+        assert_eq!(
+            extract_last_prompt(&value).as_deref(),
+            Some("テストを書いて")
+        );
+    }
+
+    #[test]
+    fn extract_last_prompt_returns_none_for_other_types() {
+        let value = json!({ "type": "mode", "mode": "chat", "sessionId": "s1" });
+        assert!(extract_last_prompt(&value).is_none());
+    }
+
+    #[test]
+    fn extract_slug_reads_field_when_present() {
+        let value = json!({
+            "type": "user",
+            "slug": "sunny-otter",
+            "message": { "role": "user", "content": "hello" }
+        });
+        assert_eq!(extract_slug(&value).as_deref(), Some("sunny-otter"));
+    }
+
+    #[test]
+    fn extract_slug_returns_none_when_missing() {
+        let value = json!({ "type": "user", "message": { "content": "hello" } });
+        assert!(extract_slug(&value).is_none());
+    }
+
+    #[test]
+    fn extract_slug_returns_none_for_session_meta_lines() {
+        let value = json!({ "type": "custom-title", "customTitle": "タイトル", "sessionId": "s1" });
+        assert!(extract_slug(&value).is_none());
     }
 
     #[test]

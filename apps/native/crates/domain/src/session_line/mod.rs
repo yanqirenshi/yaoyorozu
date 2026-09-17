@@ -70,7 +70,8 @@ pub use compact_boundary_line::CompactBoundaryLine;
 pub use compact_metadata::CompactMetadata;
 pub use custom_title_line::CustomTitleLine;
 pub use extract::{
-    extract_custom_title, extract_cwd, extract_git_branch, extract_message, extract_session_id,
+    extract_ai_title, extract_custom_title, extract_cwd, extract_git_branch, extract_last_prompt,
+    extract_message, extract_mode, extract_session_id, extract_slug,
 };
 pub use hook_info::HookInfo;
 pub use image_block::ImageBlock;

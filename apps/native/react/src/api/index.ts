@@ -7,6 +7,7 @@ import type {
   ClaudeDirPageDto,
   ClaudeMdDto,
   ClaudeSettingsDto,
+  ConversationDto,
   DeviceCodeDto,
   GithubAuthFailedEvent,
   GithubAuthStatusDto,
@@ -22,7 +23,6 @@ import type {
   RuleDto,
   RuleSummaryDto,
   SessionChangedEvent,
-  SessionDto,
   SessionSummaryDto,
   SettingsCorruptedEvent,
   SettingsDto,
@@ -43,6 +43,7 @@ export type {
   ClaudeDirPageDto,
   ClaudeMdDto,
   ClaudeSettingsDto,
+  ConversationDto,
   DeviceCodeDto,
   GitBranchDto,
   GitRepositoryDto,
@@ -88,8 +89,8 @@ export function getSession(
   sessionId: string,
   offset: number,
   limit: number,
-): Promise<SessionDto> {
-  return invoke<SessionDto>("get_session", { project, sessionId, offset, limit });
+): Promise<ConversationDto> {
+  return invoke<ConversationDto>("get_session", { project, sessionId, offset, limit });
 }
 
 export function listSessions(project: string): Promise<SessionSummaryDto[]> {

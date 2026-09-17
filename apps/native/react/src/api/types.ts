@@ -20,7 +20,9 @@ export type MessageDto = {
   timestamp: string;
 };
 
-export type SessionDto = {
+// 表示中の会話(issue #197でRust側`Session`→`Conversation`に改名したのに
+// 合わせて、こちらの型名も追従)。
+export type ConversationDto = {
   session_id: string;
   messages: MessageDto[];
   agent: AgentKindDto;
@@ -222,11 +224,25 @@ export type GitRepositoryDto = {
   worktrees: GitWorktreeDto[];
 };
 
+// `User.sessions` の1件分(オブジェクトモデル実装 第4弾。issue #197)。
+// メッセージ本文は持たない(そちらは `ConversationDto`)。属性はセッションの
+// jsonlから導出したモデル値そのもので、cwd/git_branch(表示補助データ。
+// `SessionSummaryDto`側)は含まない。
+export type SessionDto = {
+  session_id: string;
+  custom_title: string | null;
+  ai_title: string | null;
+  mode: string | null;
+  slug: string | null;
+  last_prompt: string | null;
+};
+
 export type UserDto = {
   user_id: string;
   user_name: string;
   home_directory: string;
   repositories: GitRepositoryDto[];
+  sessions: SessionDto[];
 };
 
 // `getPc` の戻り値。

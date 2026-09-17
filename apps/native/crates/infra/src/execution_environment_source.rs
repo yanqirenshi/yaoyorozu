@@ -52,6 +52,9 @@ impl ExecutionEnvironmentSource for WindowsExecutionEnvironmentSource {
                 // settingsから都度組み立てる(app::current_pc_with_repositories。
                 // issue #189)ため、ここでは常に空。
                 repositories: Vec::new(),
+                // 起動時・ハブ再読み込み時にAppStateへ組み立てて差し込む
+                // (issue #197)ため、ここでは常に空。
+                sessions: Vec::new(),
             }],
         })
     }

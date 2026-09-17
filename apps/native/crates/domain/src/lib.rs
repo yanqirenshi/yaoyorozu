@@ -8,6 +8,7 @@ mod claude_dir_entry;
 mod claude_dir_page;
 mod claude_md_file;
 mod claude_settings_file;
+mod conversation;
 mod git_branch;
 mod git_ledger;
 mod git_repository;
@@ -44,6 +45,7 @@ pub use claude_dir_entry::{
 pub use claude_dir_page::ClaudeDirPage;
 pub use claude_md_file::ClaudeMdFile;
 pub use claude_settings_file::ClaudeSettingsFile;
+pub use conversation::Conversation;
 pub use git_branch::{reconcile_branches, GitBranch};
 pub use git_ledger::{GitLedger, GitRepositoryLedger, CURRENT_GIT_LEDGER_VERSION};
 pub use git_repository::{repositories_from_profiles, GitRepository};
@@ -80,6 +82,7 @@ pub use window_tab::WindowTab;
 /// は挙動を変えないリファクタリングとして既存の呼び出し元(infra)から
 /// そのまま使えるよう、モジュール名を介さずクレート直下に再エクスポートする。
 pub use session_line::{
-    extract_custom_title, extract_cwd, extract_git_branch, extract_message, extract_session_id,
-    AssistantLine, AttachmentLine, ChainLineBase, SessionLine, SystemLevel, UserLine,
+    extract_ai_title, extract_custom_title, extract_cwd, extract_git_branch, extract_last_prompt,
+    extract_message, extract_mode, extract_session_id, extract_slug, AssistantLine, AttachmentLine,
+    ChainLineBase, SessionLine, SystemLevel, UserLine,
 };
