@@ -26,12 +26,19 @@
  * 【対象・ファイル対応】native.md §1 の「1型(クラス)= 1ファイル」(issue #184、
  * PR #185)により、domain クレートは各型が型名 snake_case のファイルに分かれて
  * いる(例: `Profile` → `profile.rs`)。`lib.rs` は `mod` 宣言と `pub use` のみ。
- * 本図の25クラスのうち、`ProjectItemKind` は `ProjectItem` と同じ `project_item.rs`
- * に、`ClaudeDirEntryKind` は `ClaudeDirEntry` と同じ `claude_dir_entry.rs` に
- * 同居する(native.md 曰く「その型専用の小さな補助enum」)。ほかの23クラスは
- * それぞれ単独のファイル(型名 snake_case)。掲載対象は `classes-domain.ts` に
- * 掲載済みの Pc・User と、`session_line/`(33型。かつては `classes-session-line.ts`
+ * 本図の29クラスのうち、`ProjectItemKind` は `ProjectItem` と同じ `project_item.rs`
+ * に、`ClaudeDirEntryKind` は `ClaudeDirEntry` と同じ `claude_dir_entry.rs` に、
+ * `GitRepositoryLedger` は `GitLedger` と同じ `git_ledger.rs` に、`ObservedWorktree`
+ * は `ObservedGitState` と同じ `observed_git_state.rs` に同居する(native.md 曰く
+ * 「その型専用の小さな補助enum」だが、補助structも同じ扱いにしている)。ほかの25
+ * クラスはそれぞれ単独のファイル(型名 snake_case)。掲載対象は `classes-domain.ts`
+ * に掲載済みの Pc・User と、`session_line/`(33型。かつては `classes-session-line.ts`
  * で描いていたが、不要になったため図ごと削除した)を除いたもの。
+ *
+ * 【GitBranch・GitWorktree への参照】`GitRepositoryLedger.branches`/`worktrees` は
+ * `classes-domain.ts` のオブジェクトモデル側のクラス(`GitBranch`・`GitWorktree`)を
+ * 指す。図の離れた位置にあり線を引くと長く伸びるため、`AppState.settings` 等と
+ * 同じ方針で線は引かない(属性の型名だけで分かるようにする)。
  *
  * 【Conversation(旧 Session)】オブジェクトモデル実装 第4弾(issue #197、
  * PR #199)で、クラス図のオブジェクトモデル側の `Session`(セッションリソース。
@@ -289,6 +296,51 @@ const DEFS: ClassDef[] = [
     position: { x: 3300, y: 1650 },
     filePath: "apps/native/crates/domain/src/claude_dir_entry.rs",
   },
+  // ============ Git台帳・観測(第3弾) ============
+  {
+    name: { physical: "GitLedger", logical: "GitLedger", description: "登録済み全リポジトリの GitBranch/GitWorktree 台帳(issue #193)。settings.json・hub-layout.json とは別ファイル(git-ledger.json)に保存する。キーはリポジトリの個体指定子(GitRepository.repository_path の文字列表現)" },
+    attributes: [
+      attr("version", "u32"),
+      attr("repositories", "HashMap<String, GitRepositoryLedger>"),
+    ],
+    position: { x: 4100, y: -150 },
+    filePath: "apps/native/crates/domain/src/git_ledger.rs",
+    // 名前と型の列が重なるので広げる(LogLine の size の説明を参照)。
+    size: { w: 340, h: 0 },
+  },
+  {
+    name: { physical: "GitRepositoryLedger", logical: "GitRepositoryLedger", description: "1リポジトリ分の台帳(issue #193)。クラス図上の型ではなく、GitLedger が抱える小さな入れ物(GitRepository 本体は settings から都度組み立てるため永続化しない)" },
+    attributes: [
+      // GitBranch・GitWorktree は classes-domain.ts のオブジェクトモデル側の
+      // クラス(図の離れた位置)。冒頭コメントの基準どおり線は引かない。
+      attr("branches", "Vec<GitBranch>"),
+      attr("worktrees", "Vec<GitWorktree>"),
+    ],
+    position: { x: 4700, y: -150 },
+    filePath: "apps/native/crates/domain/src/git_ledger.rs",
+    size: { w: 220, h: 0 },
+  },
+  {
+    name: { physical: "ObservedGitState", logical: "ObservedGitState", description: "1リポジトリ分の観測結果(issue #193)。GitStateSource port(app層)の戻り値として使う、reconcile_branches・reconcile_worktrees への入力データ" },
+    attributes: [
+      attr("branch_names", "Vec<String>"),
+      attr("worktrees", "Vec<ObservedWorktree>"),
+    ],
+    position: { x: 4100, y: 150 },
+    filePath: "apps/native/crates/domain/src/observed_git_state.rs",
+    size: { w: 250, h: 0 },
+  },
+  {
+    name: { physical: "ObservedWorktree", logical: "ObservedWorktree", description: "1つの worktree について、git コマンドから観測した生の状態(issue #193)。GitWorktree(台帳のレコード)そのものではない(ID・作成/削除時刻を持たない)" },
+    attributes: [
+      attr("folder_path", "PathBuf"),
+      attr("git_file_path", "PathBuf"),
+      attr("checked_out_branch_name", "Option<String>"),
+    ],
+    position: { x: 4500, y: 150 },
+    filePath: "apps/native/crates/domain/src/observed_git_state.rs",
+    size: { w: 300, h: 0 },
+  },
 ];
 
 const { classes, rel, filePaths } = defineDiagram(DEFS);
@@ -312,6 +364,9 @@ const RELATIONSHIPS = [
   // /claude 画面(Explorer)
   rel("association", "ClaudeDirPage", "ClaudeDirEntry", "entries", "right", "left"),
   rel("composition", "ClaudeDirEntry", "ClaudeDirEntryKind", "kind", "bottom", "top"),
+  // Git台帳・観測(第3弾)
+  rel("association", "GitLedger", "GitRepositoryLedger", "repositories", "right", "left"),
+  rel("association", "ObservedGitState", "ObservedWorktree", "worktrees", "right", "left"),
 ];
 
 export const NATIVE_PROTOTYPE_CLASS_DATA: DiagramInput = {
