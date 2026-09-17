@@ -1,10 +1,23 @@
 use app::AppError;
-use domain::{GitLedger, Pc, Settings};
+use domain::{effective_projects_dir, GitLedger, Pc, Session, Settings};
 use infra::{
-    FileGitLedgerStore, FileSettingsStore, SystemGitStateSource, WindowsExecutionEnvironmentSource,
+    FileGitLedgerStore, FileSettingsStore, FileSystemRepository, SystemGitStateSource,
+    WindowsExecutionEnvironmentSource,
 };
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// 設定の `claude_projects_dir` と既定値(`~/.claude/projects/`)から、
+/// 実際に使うルートディレクトリを求める。`AppState::load`(起動時)・各
+/// commandの両方から使う共通処理のため、`tauri/src/lib.rs` ではなくここに
+/// 置く(issue #197でセッションモデルの組み立てに必要になり移設した)。
+pub fn resolve_effective_projects_dir(settings: &Settings) -> Result<PathBuf, AppError> {
+    let default = FileSystemRepository::default_projects_dir()?;
+    Ok(effective_projects_dir(
+        settings.claude_projects_dir.as_deref(),
+        &default,
+    ))
+}
 
 /// アプリの唯一の真実(SSoT)。`tauri::State<tokio::sync::Mutex<AppState>>` として
 /// 管理する(native.md §2)。
@@ -32,6 +45,12 @@ pub struct AppState {
     /// (`app::reconcile_git_ledger`のドキュメントコメント参照)。
     pub git_ledger: GitLedger,
     pub git_ledger_path: PathBuf,
+    /// 全プロジェクトから組み立てた`Session`一覧(オブジェクトモデル実装
+    /// 第4弾。issue #197)。`git_ledger`と同じ理由(jsonl走査コスト)で
+    /// クエリのたびには再構築せず、起動時とハブ再読み込み時
+    /// (`reconcile_git_state` command。第3弾と合わせて再観測する)にのみ
+    /// 更新する。
+    pub user_sessions: Vec<Session>,
 }
 
 /// エポック秒からのミリ秒。`GitBranch`/`GitWorktree`の
@@ -82,6 +101,23 @@ pub fn reconcile_and_save_git_ledger(
     result.ledger
 }
 
+/// 全プロジェクトから`Session`一覧を組み立てる(issue #197)。起動時
+/// (`AppState::load`)とハブの再読み込み操作(`reconcile_git_state`
+/// command。第3弾のGit台帳と同じタイミングで呼ぶ)の両方から使う共通処理。
+/// プロジェクト単位で読み取りに失敗しても他のプロジェクトの結果は失わない
+/// (fail-safe。`app::build_user_sessions`参照)。永続化対象ではない
+/// (真実の源は常にjsonlファイル自体であり、`GitLedger`のような独自の
+/// 台帳・IDは持たない)ため、ロード/セーブは無い。
+pub fn build_and_report_user_sessions(settings: &Settings) -> Result<Vec<Session>, AppError> {
+    let projects_dir = resolve_effective_projects_dir(settings)?;
+    let source = FileSystemRepository::new(projects_dir);
+    let result = app::build_user_sessions(&source)?;
+    for failed_project in &result.failed_projects {
+        eprintln!("セッションの読み取りに失敗したため、{failed_project} は含めませんでした");
+    }
+    Ok(result.sessions)
+}
+
 /// [`AppState::load`] の結果。設定ファイルの破損から復旧した場合、呼び出し側
 /// (`run()`)が `settings:corrupted` イベントを emit するかどうかの判断に使う。
 pub struct LoadResult {
@@ -103,6 +139,7 @@ impl AppState {
         let previous_ledger = app::load_git_ledger(&ledger_store)?;
         let git_ledger =
             reconcile_and_save_git_ledger(&loaded.settings, &previous_ledger, &git_ledger_path);
+        let user_sessions = build_and_report_user_sessions(&loaded.settings)?;
 
         Ok(LoadResult {
             state: AppState {
@@ -113,6 +150,7 @@ impl AppState {
                 pc,
                 git_ledger,
                 git_ledger_path,
+                user_sessions,
             },
             recovered_from_corruption: loaded.recovered_from_corruption,
         })

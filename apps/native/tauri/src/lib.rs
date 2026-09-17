@@ -5,19 +5,19 @@ mod state;
 use app::{SessionSource, SettingsStore, TokenStore};
 use dto::{
     AgentKindDto, AgentModeDto, AppErrorDto, AppWarningDto, ClaudeDirPageDto, ClaudeMdDto,
-    ClaudeSettingsDto, DeviceCodeDto, GithubAuthFailedEventDto, GithubAuthStatusDto,
-    GithubAuthenticatedEventDto, GithubProjectDto, GithubProjectSummaryDto, HubLayoutDto,
-    NodePositionDto, PcDto, ProfileSummaryDto, ProjectDto, ProjectItemsPageDto,
-    ProjectSettingsFileDto, RuleDto, RuleSummaryDto, SessionChangedEventDto, SessionDto,
-    SessionSummaryDto, SettingsCorruptedEventDto, SettingsDto, SettingsInputDto, SkillDto,
-    SkillSummaryDto, WindowStateDto, WindowTabDto,
+    ClaudeSettingsDto, ConversationDto, DeviceCodeDto, GithubAuthFailedEventDto,
+    GithubAuthStatusDto, GithubAuthenticatedEventDto, GithubProjectDto, GithubProjectSummaryDto,
+    HubLayoutDto, NodePositionDto, PcDto, ProfileSummaryDto, ProjectDto, ProjectItemsPageDto,
+    ProjectSettingsFileDto, RuleDto, RuleSummaryDto, SessionChangedEventDto, SessionSummaryDto,
+    SettingsCorruptedEventDto, SettingsDto, SettingsInputDto, SkillDto, SkillSummaryDto,
+    WindowStateDto, WindowTabDto,
 };
 use infra::{
     ClaudeCliAgent, FileClaudeDirStore, FileClaudeMdStore, FileClaudeSettingsStore,
     FileHubLayoutStore, FileProjectSettingsStore, FileRulesStore, FileSettingsStore,
     FileSkillsStore, FileSystemRepository, GithubApiClient, KeyringTokenStore,
 };
-use state::AppState;
+use state::{resolve_effective_projects_dir, AppState};
 use std::path::PathBuf;
 use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
@@ -31,16 +31,6 @@ const GITHUB_CLIENT_ID: &str = "Ov23liqOl7JIbaGeJev4";
 /// 旧い監視は自動的に止まる)。`tauri::State` は同じ型を複数回 `manage()`
 /// できないため、`AppState`(設定のSSoT)とは別にこの型で1つだけ管理する。
 type WatcherSlot = std::sync::Mutex<Option<infra::SessionWatcher>>;
-
-/// 設定の `claude_projects_dir` と既定値(`~/.claude/projects/`)から、
-/// 実際に使うルートディレクトリを求める。
-fn resolve_effective_projects_dir(settings: &domain::Settings) -> Result<PathBuf, app::AppError> {
-    let default = FileSystemRepository::default_projects_dir()?;
-    Ok(domain::effective_projects_dir(
-        settings.claude_projects_dir.as_deref(),
-        &default,
-    ))
-}
 
 /// `AppState` をロックして現在の設定から有効なルートディレクトリを求める。
 /// 各コマンドで重複しないよう共通化する。
@@ -101,9 +91,9 @@ async fn get_session(
     session_id: String,
     offset: usize,
     limit: usize,
-) -> Result<SessionDto, AppErrorDto> {
+) -> Result<ConversationDto, AppErrorDto> {
     let root = effective_projects_dir_from_state(&state).await?;
-    tauri::async_runtime::spawn_blocking(move || -> Result<SessionDto, app::AppError> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<ConversationDto, app::AppError> {
         let source = FileSystemRepository::new(root);
         let session = app::get_session(&source, &project, &session_id, offset, limit)?;
         Ok(session.into())
@@ -422,18 +412,26 @@ async fn list_window_states(
 /// 再読み込み操作時にのみ突き合わせ済みのもの)を差し込むだけで、ここでは
 /// gitコマンドを実行しない(issue #193。`app::reconcile_git_ledger` の
 /// ドキュメントコメント参照: 都度実行するには重すぎるため)。
+/// `User.sessions` も同様に `AppState.user_sessions`(起動時と再読み込み
+/// 操作時にのみ組み立て済みのもの)を差し込むだけで、ここではjsonlを
+/// 走査しない(issue #197)。
 #[tauri::command]
 async fn get_pc(state: tauri::State<'_, Mutex<AppState>>) -> Result<PcDto, AppErrorDto> {
     let guard = state.lock().await;
     let pc = app::current_pc_with_repositories(guard.pc.clone(), &guard.settings);
     let pc = app::pc_with_git_ledger(pc, &guard.git_ledger);
+    let pc = app::pc_with_user_sessions(pc, guard.user_sessions.clone());
     Ok(PcDto::from(pc))
 }
 
-/// 登録済み全リポジトリのGit状態(ブランチ・worktree)を再観測し、台帳を
-/// 更新する(オブジェクトモデル実装 第3弾。issue #193)。ハブの「再読み込み」
-/// 操作から呼ぶ想定(起動時の突き合わせは `AppState::load` が既に行う)。
-/// gitサブプロセスの起動を伴うため `spawn_blocking` で実行する。
+/// 登録済み全リポジトリのGit状態(ブランチ・worktree)を再観測して台帳を
+/// 更新し、あわせて全プロジェクトから`Session`一覧も再構築する
+/// (オブジェクトモデル実装 第3弾。issue #193/第4弾。issue #197。
+/// `User.sessions`は「起動時とハブ再読み込み時に組み立てる」というissue
+/// #197の要求を、既存のGit台帳再観測(同じ再読み込み操作)に相乗りする形で
+/// 満たす)。ハブの「再読み込み」操作から呼ぶ想定(起動時の組み立ては
+/// `AppState::load` が既に行う)。gitサブプロセス起動・jsonl走査を伴うため
+/// `spawn_blocking` で実行する。
 #[tauri::command]
 async fn reconcile_git_state(state: tauri::State<'_, Mutex<AppState>>) -> Result<(), AppErrorDto> {
     let (settings, previous_ledger, git_ledger_path) = {
@@ -445,8 +443,11 @@ async fn reconcile_git_state(state: tauri::State<'_, Mutex<AppState>>) -> Result
         )
     };
 
-    let new_ledger = tauri::async_runtime::spawn_blocking(move || {
-        state::reconcile_and_save_git_ledger(&settings, &previous_ledger, &git_ledger_path)
+    let (new_ledger, new_sessions) = tauri::async_runtime::spawn_blocking(move || {
+        let ledger =
+            state::reconcile_and_save_git_ledger(&settings, &previous_ledger, &git_ledger_path);
+        let sessions = state::build_and_report_user_sessions(&settings);
+        (ledger, sessions)
     })
     .await
     .map_err(|_| {
@@ -457,6 +458,7 @@ async fn reconcile_git_state(state: tauri::State<'_, Mutex<AppState>>) -> Result
 
     let mut guard = state.lock().await;
     guard.git_ledger = new_ledger;
+    guard.user_sessions = new_sessions?;
     Ok(())
 }
 
