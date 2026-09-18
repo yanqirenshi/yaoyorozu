@@ -1,3 +1,5 @@
+use crate::SessionFile;
+
 /// クラス図(`classes-domain.ts`)の `Session`(オブジェクトモデル実装
 /// 第4弾。issue #197)。1つの会話。TM: セッション(リソース)。`User` に
 /// コンポジションで所有される(`User.sessions`)。フィールド名・構成は
@@ -20,4 +22,9 @@ pub struct Session {
     /// クラス図上は導出属性(`/last_prompt`)。ログ(`last-prompt`行)から
     /// 導出する値であり、アプリが独自に発行する値ではない。
     pub last_prompt: Option<String>,
+    /// コンポジション(クラス図の`conversation_file`。1。オブジェクトモデル
+    /// 実装 第5弾。issue #208)。会話本体のファイル。
+    pub conversation_file: SessionFile,
+    /// コンポジション(クラス図の`subagent_files`。0..*。issue #208)。
+    pub subagent_files: Vec<SessionFile>,
 }

@@ -174,6 +174,11 @@ type HubNodeCore = {
   mode?: string | null;
   slug?: string | null;
   lastPrompt?: string | null;
+  // Session.conversation_file/subagent_files(オブジェクトモデル実装
+  // 第5弾。issue #208)。行(LogLine)は遅延読み込みのため、ここではファイル
+  // パスとサブエージェント数だけを見せる。
+  conversationFilePath?: string;
+  subagentFileCount?: number;
 };
 
 // プロファイルの詳細(インスペクタ表示用。issue #109)。セッション一覧の
@@ -442,6 +447,8 @@ function buildGraphData(
             mode: sessionModel?.mode,
             slug: sessionModel?.slug,
             lastPrompt: sessionModel?.last_prompt,
+            conversationFilePath: sessionModel?.conversation_file.file_path,
+            subagentFileCount: sessionModel?.subagent_files.length,
           });
           edges.push({
             id: `e${edgeSeq++}`,
@@ -902,6 +909,13 @@ function buildInspectorContent(
           { label: "mode", value: core.mode ?? "(未設定)" },
           { label: "slug", value: core.slug ?? "(未設定)" },
           { label: "last_prompt", value: core.lastPrompt ?? "(未設定)" },
+          // Session.conversation_file/subagent_files(issue #208)。行の内容
+          // 自体は遅延読み込みのため、ここではファイルパス・件数のみ表示する。
+          { label: "会話ファイル", value: core.conversationFilePath ?? "" },
+          {
+            label: "サブエージェント数",
+            value: String(core.subagentFileCount ?? 0),
+          },
           // 表示補助データ(`SessionSummaryDto`。タイトル解決・グルーピング・
           // 更新時刻はモデル属性ではなくこちらを使い続ける。issue #197)。
           { label: "タイトル", value: core.sessionTitle ?? "" },

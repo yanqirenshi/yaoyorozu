@@ -4,7 +4,7 @@ use domain::{
     reconcile_worktrees, repositories_from_profiles, sort_claude_dir_entries,
     sort_projects_by_recency, sort_sessions_by_recency, ClaudeDirEntry, ClaudeDirPage,
     ClaudeMdFile, ClaudeSettingsFile, Conversation, GitLedger, GitRepositoryLedger, HubLayout,
-    NodePosition, Project, RuleSummary, Session, SessionSummary, Settings, SkillSummary,
+    NodePosition, ParsedSession, Project, RuleSummary, SessionSummary, Settings, SkillSummary,
     CURRENT_GIT_LEDGER_VERSION, CURRENT_HUB_LAYOUT_VERSION,
 };
 use std::collections::HashMap;
@@ -85,12 +85,17 @@ pub trait SessionSource {
     /// 左ペイン用。issue #33)。
     fn list_sessions(&self, project: &str) -> Result<Vec<SessionSummary>, AppError>;
 
-    /// 指定プロジェクトの全セッションを、クラス図の `Session`(session_id/
-    /// custom_title/ai_title/mode/slug/last_prompt)として返す(オブジェクト
-    /// モデル実装 第4弾。issue #197)。`list_sessions` と同じ走査(jsonlの
-    /// 全行読み)に相乗りし、フルパースをもう1周増やさない実装にすること
-    /// (実装側は `list_sessions` と同じキャッシュを共有してよい)。
-    fn list_session_models(&self, project: &str) -> Result<Vec<Session>, AppError>;
+    /// 指定プロジェクトの全セッションを `ParsedSession`(`User::load_sessions`
+    /// への入力。session_id/custom_title/ai_title/mode/slug/last_prompt、
+    /// 会話ファイル・サブエージェントファイルのパスを持つ)として返す
+    /// (オブジェクトモデル実装 第4〜5弾。issue #197/#208)。`list_sessions`
+    /// と同じ走査(jsonlの全行読み)に相乗りし、フルパースをもう1周増やさない
+    /// 実装にすること(実装側は `list_sessions` と同じキャッシュを共有して
+    /// よい)。行(`LogLine`)自体はここでは読まない(遅延読み込み)。
+    ///
+    /// issue #197で追加した`list_session_models`(ファイルパスを持たない
+    /// 版)は、この`ParsedSession`に統合したため廃止した。
+    fn list_parsed_sessions(&self, project: &str) -> Result<Vec<ParsedSession>, AppError>;
 }
 
 /// アプリ設定の永続化(port)。実体(ファイル形式・保存先の解決)は infra に
@@ -574,43 +579,48 @@ pub fn pc_with_git_ledger(mut pc: domain::Pc, ledger: &GitLedger) -> domain::Pc 
 /// 同じ設計判断。issue #197)。失敗したプロジェクト名は呼び出し元が警告を
 /// 出せるように残す。
 pub struct BuildUserSessionsResult {
-    pub sessions: Vec<Session>,
+    pub parsed: Vec<ParsedSession>,
     pub failed_projects: Vec<String>,
 }
 
-/// 全プロジェクトから `domain::Session`(session_id/custom_title/ai_title/
-/// mode/slug/last_prompt)の一覧を組み立てる(オブジェクトモデル実装
-/// 第4弾。issue #197)。対象範囲は `SessionSource::list_projects` が返す
-/// 全プロジェクト(既存の `list_sessions` の呼び出しパターンと同じ範囲。
-/// issue本文の指示)。
+/// 全プロジェクトから `ParsedSession`(`User::load_sessions`への入力。
+/// issue #197/#208)の一覧を組み立てる。対象範囲は
+/// `SessionSource::list_projects` が返す全プロジェクト(既存の
+/// `list_sessions` の呼び出しパターンと同じ範囲。issue本文の指示)。
 ///
-/// gitコマンドほどではないがjsonl走査コストがあるため、`GitLedger`
-/// (第3弾)と同じくクエリのたびには実行せず、起動時とハブ再読み込み時に
-/// `AppState`へ組み立てて保持する(`get_pc`では実行しない)。
+/// ここで行うのはファイル走査(jsonlのメタ情報の読み取り・ファイルパスの
+/// 列挙)までで、`Session`/`SessionFile`インスタンスの組み立て自体は
+/// `domain::User::load_sessions`(純粋関数)が担う(呼び出し元
+/// `pc_with_user_sessions`参照)。gitコマンドほどではないがjsonl走査コストが
+/// あるため、`GitLedger`(第3弾)と同じくクエリのたびには実行せず、起動時と
+/// ハブ再読み込み時にのみ実行する(`get_pc`では実行しない)。
 pub fn build_user_sessions(
     source: &dyn SessionSource,
 ) -> Result<BuildUserSessionsResult, AppError> {
     let projects = source.list_projects()?;
-    let mut sessions = Vec::new();
+    let mut parsed = Vec::new();
     let mut failed_projects = Vec::new();
     for project in projects {
-        match source.list_session_models(&project.name) {
-            Ok(mut project_sessions) => sessions.append(&mut project_sessions),
+        match source.list_parsed_sessions(&project.name) {
+            Ok(mut project_sessions) => parsed.append(&mut project_sessions),
             Err(_) => failed_projects.push(project.name),
         }
     }
     Ok(BuildUserSessionsResult {
-        sessions,
+        parsed,
         failed_projects,
     })
 }
 
-/// `pc`の各ユーザーへ、組み立て済みの`Session`一覧を差し込む(issue #197)。
+/// `pc`の各ユーザーへ、走査済みの`ParsedSession`一覧から`Session`/
+/// `SessionFile`を組み立てて差し込む(issue #197/#208)。組み立て自体
+/// (`User::load_sessions`)はI/Oを伴わない純粋な変換のため、ここで
+/// (クエリのたびに)呼び出してもファイルの再走査にはならない。
 /// `pc_with_git_ledger`と同様、複数ユーザーがいてもクラス図どおり同じ
 /// 一覧を全ユーザーに割り当てる(現状のスコープでは常に1ユーザー)。
-pub fn pc_with_user_sessions(mut pc: domain::Pc, sessions: Vec<Session>) -> domain::Pc {
+pub fn pc_with_user_sessions(mut pc: domain::Pc, parsed: Vec<ParsedSession>) -> domain::Pc {
     for user in &mut pc.users {
-        user.sessions = sessions.clone();
+        user.load_sessions(parsed.clone());
     }
     pc
 }
@@ -1223,7 +1233,7 @@ mod tests {
         fail_list_projects: bool,
         latest_session_id_calls: std::cell::Cell<usize>,
         sessions: Vec<SessionSummary>,
-        session_models: HashMap<String, Result<Vec<Session>, ()>>,
+        parsed_sessions: HashMap<String, Result<Vec<ParsedSession>, ()>>,
     }
 
     impl FakeSessionSource {
@@ -1237,7 +1247,7 @@ mod tests {
                 fail_list_projects: false,
                 latest_session_id_calls: std::cell::Cell::new(0),
                 sessions: Vec::new(),
-                session_models: HashMap::new(),
+                parsed_sessions: HashMap::new(),
             }
         }
     }
@@ -1279,8 +1289,8 @@ mod tests {
             Ok(self.sessions.clone())
         }
 
-        fn list_session_models(&self, project: &str) -> Result<Vec<Session>, AppError> {
-            match self.session_models.get(project) {
+        fn list_parsed_sessions(&self, project: &str) -> Result<Vec<ParsedSession>, AppError> {
+            match self.parsed_sessions.get(project) {
                 Some(Ok(models)) => Ok(models.clone()),
                 Some(Err(())) => Err(AppError::Io("boom".to_string())),
                 None => Ok(Vec::new()),
@@ -1417,14 +1427,16 @@ mod tests {
         assert!(!sessions[1].is_latest);
     }
 
-    fn sample_session(session_id: &str) -> Session {
-        Session {
+    fn sample_parsed_session(session_id: &str) -> ParsedSession {
+        ParsedSession {
             session_id: session_id.to_string(),
             custom_title: Some("タイトル".to_string()),
             ai_title: None,
             mode: None,
             slug: None,
             last_prompt: None,
+            conversation_file_path: PathBuf::from(format!("/tmp/{session_id}.jsonl")),
+            subagent_file_paths: Vec::new(),
         }
     }
 
@@ -1443,15 +1455,15 @@ mod tests {
                 agent: AgentKind::ClaudeCode,
             },
         ];
-        source.session_models = HashMap::from([
-            ("proj1".to_string(), Ok(vec![sample_session("a")])),
-            ("proj2".to_string(), Ok(vec![sample_session("b")])),
+        source.parsed_sessions = HashMap::from([
+            ("proj1".to_string(), Ok(vec![sample_parsed_session("a")])),
+            ("proj2".to_string(), Ok(vec![sample_parsed_session("b")])),
         ]);
 
         let result = build_user_sessions(&source).expect("should build");
 
         let ids: Vec<&str> = result
-            .sessions
+            .parsed
             .iter()
             .map(|s| s.session_id.as_str())
             .collect();
@@ -1474,26 +1486,35 @@ mod tests {
                 agent: AgentKind::ClaudeCode,
             },
         ];
-        source.session_models = HashMap::from([
-            ("ok".to_string(), Ok(vec![sample_session("a")])),
+        source.parsed_sessions = HashMap::from([
+            ("ok".to_string(), Ok(vec![sample_parsed_session("a")])),
             ("broken".to_string(), Err(())),
         ]);
 
         let result = build_user_sessions(&source).expect("should not fail overall");
 
-        assert_eq!(result.sessions.len(), 1);
-        assert_eq!(result.sessions[0].session_id, "a");
+        assert_eq!(result.parsed.len(), 1);
+        assert_eq!(result.parsed[0].session_id, "a");
         assert_eq!(result.failed_projects, vec!["broken".to_string()]);
     }
 
     #[test]
     fn pc_with_user_sessions_assigns_sessions_to_every_user() {
         let pc = pc_with_one_user("yanqi");
-        let sessions = vec![sample_session("a")];
+        let parsed = vec![sample_parsed_session("a")];
 
-        let result = pc_with_user_sessions(pc, sessions.clone());
+        let result = pc_with_user_sessions(pc, parsed);
 
-        assert_eq!(result.users[0].sessions, sessions);
+        assert_eq!(result.users[0].sessions.len(), 1);
+        assert_eq!(result.users[0].sessions[0].session_id, "a");
+        assert_eq!(
+            result.users[0].sessions[0].conversation_file.file_path,
+            PathBuf::from("/tmp/a.jsonl")
+        );
+        assert!(result.users[0].sessions[0]
+            .conversation_file
+            .lines
+            .is_empty());
     }
 
     #[test]

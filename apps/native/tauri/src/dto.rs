@@ -777,9 +777,34 @@ impl From<domain::GitRepository> for GitRepositoryDto {
     }
 }
 
+/// `Session.conversation_file`/`subagent_files` の1件分(オブジェクトモデル
+/// 実装 第5弾。issue #208)。`lines_loaded`/`line_count`は`LogLine`が
+/// 遅延読み込みであることの可視化用(未読み込みの間は常に`false`/`0`。
+/// issue本文の「行の読み込み状態・行数程度」)。
+#[derive(Serialize, Clone)]
+pub struct SessionFileDto {
+    pub file_path: String,
+    pub lines_loaded: bool,
+    pub line_count: usize,
+}
+
+impl From<domain::SessionFile> for SessionFileDto {
+    fn from(file: domain::SessionFile) -> Self {
+        Self {
+            file_path: file.file_path.display().to_string(),
+            // `SessionFile`のドキュメントコメントのとおり、空Vecは
+            // 「未読み込み」を表す(クラス図の多重度1..*により、読み込み
+            // 済みで0行ということはありえない)。
+            lines_loaded: !file.lines.is_empty(),
+            line_count: file.lines.len(),
+        }
+    }
+}
+
 /// `User.sessions` の1件分(オブジェクトモデル実装 第4弾。issue #197)。
 /// 名前が空いた旧`SessionDto`(プロトタイプの`Session`。issue #197で
 /// `ConversationDto`に改名済み)を、クラス図の新しい`Session`用に使う。
+/// `conversation_file`/`subagent_files`は第5弾(issue #208)で追加。
 #[derive(Serialize, Clone)]
 pub struct SessionDto {
     pub session_id: String,
@@ -788,6 +813,8 @@ pub struct SessionDto {
     pub mode: Option<String>,
     pub slug: Option<String>,
     pub last_prompt: Option<String>,
+    pub conversation_file: SessionFileDto,
+    pub subagent_files: Vec<SessionFileDto>,
 }
 
 impl From<domain::Session> for SessionDto {
@@ -799,6 +826,12 @@ impl From<domain::Session> for SessionDto {
             mode: session.mode,
             slug: session.slug,
             last_prompt: session.last_prompt,
+            conversation_file: SessionFileDto::from(session.conversation_file),
+            subagent_files: session
+                .subagent_files
+                .into_iter()
+                .map(SessionFileDto::from)
+                .collect(),
         }
     }
 }
