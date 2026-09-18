@@ -1,9 +1,10 @@
 use app::AppError;
-use domain::{effective_projects_dir, GitLedger, ParsedSession, Pc, Settings};
+use domain::{effective_projects_dir, GitLedger, LogLine, ParsedSession, Pc, Settings};
 use infra::{
     FileGitLedgerStore, FileSettingsStore, FileSystemRepository, SystemGitStateSource,
     WindowsExecutionEnvironmentSource,
 };
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -54,6 +55,16 @@ pub struct AppState {
     /// クエリのたび(`get_pc`)に呼んでも構わない
     /// (`app::pc_with_user_sessions`参照)。
     pub user_sessions: Vec<ParsedSession>,
+    /// セッションを開いたとき(`get_session` command)に組み立てた
+    /// `LogLine`のキャッシュ(オブジェクトモデル実装 第6弾。issue #208)。
+    /// キーは会話ファイルのパス(`Session.conversation_file.file_path`と
+    /// 一致)。`window_states`と同様、設定ファイルには保存しないランタイム
+    /// 状態で、起動時は常に空(遅延読み込み。行は読まない)。同じファイルを
+    /// 再度開いても読み直さないための唯一の目的のキャッシュのため、
+    /// エントリを削除する経路は無い(セッション数×平均行数程度で、
+    /// アプリの実行中に無制限膨張する心配は小さいという判断。issue本文の
+    /// スコープには含まれないため深追いしない)。
+    pub loaded_log_lines: HashMap<PathBuf, Vec<LogLine>>,
 }
 
 /// エポック秒からのミリ秒。`GitBranch`/`GitWorktree`の
@@ -154,6 +165,7 @@ impl AppState {
                 git_ledger,
                 git_ledger_path,
                 user_sessions,
+                loaded_log_lines: HashMap::new(),
             },
             recovered_from_corruption: loaded.recovered_from_corruption,
         })

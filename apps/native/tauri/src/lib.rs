@@ -84,6 +84,13 @@ async fn list_projects(
     .map_err(Into::into)
 }
 
+/// 指定セッションの会話(メッセージ本文)を返す。あわせて、同じ操作の
+/// 一部として`LogLine`一覧も組み立てて`AppState.loaded_log_lines`へ
+/// キャッシュする(オブジェクトモデル実装 第6弾。issue #208。
+/// `app::SessionSource::session_lines`のドキュメントコメント参照:
+/// 実装上は別読み込みだが、セッションを開いた操作に相乗りする形で
+/// 「開いたときに組み立てる」意図を満たす)。LogLine側の読み込みに
+/// 失敗しても会話表示自体は妨げない(fail-safe。警告ログのみ)。
 #[tauri::command]
 async fn get_session(
     state: tauri::State<'_, Mutex<AppState>>,
@@ -93,18 +100,48 @@ async fn get_session(
     limit: usize,
 ) -> Result<ConversationDto, AppErrorDto> {
     let root = effective_projects_dir_from_state(&state).await?;
-    tauri::async_runtime::spawn_blocking(move || -> Result<ConversationDto, app::AppError> {
-        let source = FileSystemRepository::new(root);
-        let session = app::get_session(&source, &project, &session_id, offset, limit)?;
-        Ok(session.into())
+    let conversation_file_path = root.join(&project).join(format!("{session_id}.jsonl"));
+
+    let project_for_lines = project.clone();
+    let session_id_for_lines = session_id.clone();
+    let root_for_lines = root.clone();
+
+    let conversation =
+        tauri::async_runtime::spawn_blocking(move || -> Result<ConversationDto, app::AppError> {
+            let source = FileSystemRepository::new(root);
+            let session = app::get_session(&source, &project, &session_id, offset, limit)?;
+            Ok(session.into())
+        })
+        .await
+        .unwrap_or_else(|_| {
+            Err(app::AppError::Io(
+                "バックグラウンド処理に失敗しました".to_string(),
+            ))
+        })
+        .map_err(AppErrorDto::from)?;
+
+    let log_lines = tauri::async_runtime::spawn_blocking(move || {
+        let source = FileSystemRepository::new(root_for_lines);
+        app::load_session_lines(&source, &project_for_lines, &session_id_for_lines)
     })
     .await
-    .unwrap_or_else(|_| {
-        Err(app::AppError::Io(
-            "バックグラウンド処理に失敗しました".to_string(),
-        ))
-    })
-    .map_err(Into::into)
+    .ok()
+    .and_then(|result| {
+        result
+            .inspect_err(|e| {
+                eprintln!("LogLineの読み込みに失敗したため、行キャッシュは更新しません: {e}")
+            })
+            .ok()
+    });
+
+    if let Some(log_lines) = log_lines {
+        let mut guard = state.lock().await;
+        guard
+            .loaded_log_lines
+            .insert(conversation_file_path, log_lines);
+    }
+
+    Ok(conversation)
 }
 
 #[tauri::command]
@@ -414,13 +451,17 @@ async fn list_window_states(
 /// ドキュメントコメント参照: 都度実行するには重すぎるため)。
 /// `User.sessions` も同様に `AppState.user_sessions`(起動時と再読み込み
 /// 操作時にのみ組み立て済みのもの)を差し込むだけで、ここではjsonlを
-/// 走査しない(issue #197)。
+/// 走査しない(issue #197)。`Session.conversation_file.lines`(`LogLine`)は
+/// `AppState.loaded_log_lines`(`get_session`でセッションを開いたときに
+/// キャッシュ済みのもの)を差し込むだけで、ここでは行の読み込みをしない
+/// (issue #208。未読み込みのセッションは空Vecのまま)。
 #[tauri::command]
 async fn get_pc(state: tauri::State<'_, Mutex<AppState>>) -> Result<PcDto, AppErrorDto> {
     let guard = state.lock().await;
     let pc = app::current_pc_with_repositories(guard.pc.clone(), &guard.settings);
     let pc = app::pc_with_git_ledger(pc, &guard.git_ledger);
     let pc = app::pc_with_user_sessions(pc, guard.user_sessions.clone());
+    let pc = app::pc_with_loaded_lines(pc, &guard.loaded_log_lines);
     Ok(PcDto::from(pc))
 }
 

@@ -4,6 +4,7 @@
 
 mod assistant_log_line;
 mod attachment_log_line;
+mod convert;
 #[allow(clippy::module_inception)]
 mod log_line;
 mod log_line_base;
@@ -12,6 +13,7 @@ mod user_log_line;
 
 pub use assistant_log_line::AssistantLogLine;
 pub use attachment_log_line::AttachmentLogLine;
+pub use convert::{convert_json_line_to_log_line, convert_session_line, LogLineConversionError};
 pub use log_line::LogLine;
 pub use log_line_base::LogLineBase;
 pub use system_log_line::SystemLogLine;
