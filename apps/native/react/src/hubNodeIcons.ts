@@ -18,9 +18,11 @@ const SVG_CLOSE = `</svg>`;
 // セッション(吹き出し)。dockのVIEWER_ICONと同じ形状。
 const SESSION_ICON_SVG = `${SVG_OPEN}<rect x="3" y="4" width="14" height="9" rx="1.5"/><path d="M7 13v3l4-3"/>${SVG_CLOSE}`;
 
-// プロファイル(箱)。ハブ再構築 第3段(issue #229)で、#215 で一度削除した
-// 線画を git 履歴から復活させた。
-const PROFILE_ICON_SVG = `${SVG_OPEN}<path d="M3 6.5 10 3l7 3.5-7 3.5-7-3.5Z"/><path d="M3 6.5v7l7 3.5 7-3.5v-7"/><line x1="10" y1="10" x2="10" y2="17"/>${SVG_CLOSE}`;
+// プロファイル。Material Icons の「DisplaySettings」(ユーザー指示。MUI の
+// `@mui/icons-material` v9.4.0 `DisplaySettings` の2つのパスをそのまま使う。
+// MIT ライセンス)。GitRepository と同じく塗りつぶしの図形で、viewBox は MUI の
+// 24×24 のまま。
+const PROFILE_ICON_SVG = `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" fill="${ICON_STROKE_COLOR}" stroke="none"><path d="M20 3H4c-1.11 0-2 .89-2 2v12c0 1.1.89 2 2 2h4v2h8v-2h4c1.1 0 2-.9 2-2V5c0-1.11-.9-2-2-2m0 14H4V5h16z"/><path d="M6 8.25h8v1.5H6zm10.5 1.5H18v-1.5h-1.5V7H15v4h1.5zm-6.5 2.5h8v1.5h-8zM7.5 15H9v-4H7.5v1.25H6v1.5h1.5z"/></svg>`;
 
 // GitRepository。Material Icons の「GitHub」(ユーザー指示。MUI の
 // `@mui/icons-material` v9.4.0 `GitHub` のパスをそのまま使う。MIT ライセンス)。
