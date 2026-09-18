@@ -3,85 +3,51 @@ import type { MouseEvent as ReactMouseEvent } from "react";
 import D3Network, { Rectum } from "@yanqirenshi/d3.network";
 import type { NodeDatum } from "@yanqirenshi/d3.network";
 import {
-  focusWindow,
   getHubLayout,
   getPc,
   getSettings,
   isAppError,
-  listSessions,
-  listWindowStates,
   onPcDataLoaded,
-  onSessionChanged,
   onSettingsUpdated,
-  onWindowsChanged,
-  openProfileWindow,
   reconcileGitState,
   saveHubLayout,
 } from "../api";
-import type {
-  GitBranchDto,
-  GitRepositoryDto,
-  GitWorktreeDto,
-  GithubProjectDto,
-  NodePositionDto,
-  PcDto,
-  ProfileSummaryDto,
-  SessionDto,
-  SessionSummaryDto,
-  WindowStateDto,
-} from "../api";
+import type { NodePositionDto, PcDto, SessionDto } from "../api";
 import { usePageDockItems } from "../DockItemsContext";
 import { LAYOUT_RESET_ICON, RELOAD_ICON } from "../icons";
 import { HUB_NODE_ICON_URIS } from "../hubNodeIcons";
 import HubInspector from "../HubInspector";
-import type { InspectorContent, InspectorField } from "../HubInspector";
+import type { InspectorContent } from "../HubInspector";
 
 // 伝統色パレット(App.css の :root/tokens.css と同じ値。issue #84・#93)。
 const COLOR_PEARL = "#fbfbf8"; // 真珠
-const COLOR_KYO_MURASAKI = "#9d5b8b"; // 京紫(profile/session)
-const COLOR_KINCHA = "#ce7a19"; // 金茶(作業ディレクトリ。issue #104)
-const COLOR_KUSAIRO = "#7b8d41"; // 草色(ブランチ。issue #104)
+const COLOR_KYO_MURASAKI = "#9d5b8b"; // 京紫(session)
 const COLOR_SUMI = "#373737"; // 墨
 const COLOR_BORDER = "#a1a1aa";
-const COLOR_MUTED = "#737373";
 
-// PC → User → profile → 作業ディレクトリ → ブランチ → セッション
-// (issue #104・#182)。
-const COL_X = { pc: 70, user: 200, profile: 380, cwd: 580, branch: 780, session: 1000 };
-const ROW_HEIGHT = 76;
-const ROW_START_Y = 70;
+// PC → User の固定配置(issue #182)。セッションは User の周りに散らす
+// (ハブ再構築 第1段。issue #214)。
+const PC_POSITION = { x: 70, y: 70 };
+const USER_POSITION = { x: 200, y: 70 };
 
-// 作業ディレクトリ・ブランチが未記録(古いセッション等)のときのグループ
-// キー/ラベル。実際のパス・ブランチ名と衝突しない固定文字列にする
-// (issue #104)。
-const UNKNOWN_CWD = "(不明)";
-const UNKNOWN_BRANCH = "(不明)";
-const DETACHED_BRANCH_LABEL = "(detached)";
+// セッションノードの初期配置(issue #214)。d3.network の衝突半径は
+// ライブラリ側で 111px 固定(`Simulation.js` の `forceCollide`)のため、
+// ノード中心どうしは約 222px 離れて落ち着く。最初からその間隔のひまわり
+// (フィロタキシス)状に User の周りへ並べておき、141件が一点から弾け
+// 飛ぶような初期の暴れを抑える。`SESSION_SPIRAL_SPACING * sqrt(n)` が
+// n番目の半径になり、隣接ノードの間隔がおおむね衝突直径に揃う値にした。
+const SESSION_SPIRAL_SPACING = 125;
+// 中心(User)に最初のセッションが重ならないよう、番号をずらして始める。
+const SESSION_SPIRAL_START_INDEX = 1.5;
+const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 
-// 作業ディレクトリのフルパスは長いため、末尾のフォルダ名だけを表示する
-// (issue #104)。`\` 区切り(Windows)・`/` 区切りのどちらにも対応する。
-function cwdTail(cwd: string): string {
-  const normalized = cwd.replace(/\\/g, "/").replace(/\/+$/, "");
-  const idx = normalized.lastIndexOf("/");
-  return idx === -1 || idx === normalized.length - 1
-    ? normalized
-    : normalized.slice(idx + 1);
-}
-
-// `gitBranch` の表示用ラベル。`"HEAD"` はデタッチ状態、未記録は不明として
-// 扱う(issue #104)。
-function branchLabel(gitBranch: string | null): string {
-  if (gitBranch === null) return UNKNOWN_BRANCH;
-  return gitBranch === "HEAD" ? DETACHED_BRANCH_LABEL : gitBranch;
-}
-
-// cwdのパス(セッションJSONL由来)とGitWorktree.worktree_folder_path
-// (Rust側の`PathBuf::display()`由来)を比較するための正規化(issue #193)。
-// 区切り文字(`\`/`/`)・末尾のスラッシュ・大文字小文字(Windowsパスは
-// 大小無視)の表記ゆれを吸収する。表示には使わず、突き合わせ専用。
-function normalizePathForComparison(path: string): string {
-  return path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-}
+// セッションノードのラベルの最大文字数(issue #214)。衝突直径(約222px)に
+// 12pxの文字が収まる長さにする(日本語でも隣のラベルと重なりにくい)。
+const SESSION_LABEL_MAX_CHARS = 16;
+// インスペクタの見出しに使うタイトルの最大文字数。
+const SESSION_TITLE_MAX_CHARS = 40;
+// session_id から表示名を作るときの桁数(既存のタイトル解決と同じ。issue #33)。
+const SESSION_ID_PREFIX_CHARS = 8;
 
 // ノード種別アイコン(issue #119)導入にあたり、ラベル文字を円の下に逃がす
 // (アイコンは円の中央にデフォルト位置で描くため、ラベルが重なる)。
@@ -103,31 +69,15 @@ const INSPECTOR_MAX_WIDTH = 888;
 // 続けて動かした場合)をまとめて1回の保存にする。
 const HUB_LAYOUT_SAVE_DEBOUNCE_MS = 500;
 
-// クリック・右クリック時にどう振る舞うか/何を表示するかを判定するための、
-// ノードの元データ(`_core`)。PC → profile → 作業ディレクトリ → ブランチ →
-// session の階層(issue #84・#104。Windowノードは廃止し、開いている
-// プロファイルは直接PCの下に並べる)。`windowLabel` があればそのウィンドウを
-// 前面化、無ければ `profileId` のウィンドウを新規に開く(profile・cwd・
-// branch・session のどのノードも同じ判定でよい。issue #100・#104)。
-// それ以外のフィールドはインスペクタ(issue #109)の表示専用で、ノード種別に
-// よってどれが埋まっているかが変わる。
+// 右クリック時に何を表示するかを判定するための、ノードの元データ(`_core`)。
+// PC → User → Session の3階層(ハブ再構築 第1段。issue #214)。フィールドは
+// インスペクタ(issue #109)の表示専用で、ノード種別によってどれが埋まって
+// いるかが変わる。
 type HubNodeCore = {
-  kind:
-    | "pc"
-    | "user"
-    | "git-repository"
-    | "profile"
-    | "cwd"
-    | "git-worktree"
-    | "branch"
-    | "git-branch"
-    | "session"
-    | "profile-unopened";
-  windowLabel?: string;
-  profileId?: string;
-  // ドラッグ位置の永続化(issue #121)に使う安定キー。`id` はウィンドウ起動の
-  // たびに変わるラベルを含む場合がある(profile系)ため別に持つ。`move:
-  // "support"` のノード(git-repository・profile・cwd・branch)にのみ設定する。
+  kind: "pc" | "user" | "session";
+  // ドラッグ位置の永続化(issue #121)に使う安定キー。位置を保存する
+  // ノードにのみ設定する(第1段の3種別はいずれも対象外: pc/user は固定、
+  // session は force シミュレーションに委ねる)。
   positionKey?: string;
   // pc(オブジェクトモデル実装 第1弾。issue #182)
   pcName?: string;
@@ -138,38 +88,9 @@ type HubNodeCore = {
   userId?: string;
   userName?: string;
   homeDirectory?: string;
-  // git-repository(オブジェクトモデル実装 第2弾。issue #189)
-  repositoryName?: string;
-  referencingProfileNames?: string[];
-  // profile / profile-unopened
-  profileName?: string;
-  repositoryPath?: string | null;
-  githubProject?: GithubProjectDto | null;
-  folders?: string[];
-  selectedSessionTitle?: string | null;
-  // cwd
-  cwdPath?: string;
-  folder?: string;
-  // git-worktree(オブジェクトモデル実装 第3弾。issue #193)
-  worktreeName?: string;
-  worktreeId?: string;
-  worktreeFolderPath?: string;
-  worktreeGitFilePath?: string;
-  checkedOutBranchName?: string | null;
-  // branch / git-branch(issue #193)。`createdAtTime` はgit-worktreeとも共用。
-  branchName?: string;
-  sessionCount?: number;
-  branchId?: string;
-  createdAtTime?: number;
-  // session。cwd/git_branch(cwdPath/gitBranchRaw)はモデル上Sessionの属性
-  // ではなくLogLineの属性(TMの決定)であり、グルーピング・更新時刻の
-  // 表示補助データとして`SessionSummaryDto`由来のまま使い続ける
-  // (issue #197)。custom_title以下はモデル属性(`domain::Session`。
-  // `SessionDto`由来)。
+  // session(`domain::Session` のモデル属性。issue #197)
   sessionId?: string;
   sessionTitle?: string;
-  modifiedAt?: number;
-  gitBranchRaw?: string | null;
   customTitle?: string | null;
   aiTitle?: string | null;
   mode?: string | null;
@@ -185,122 +106,55 @@ type HubNodeCore = {
   subagentFileCount?: number;
 };
 
-// プロファイルの詳細(インスペクタ表示用。issue #109)。セッション一覧の
-// 取得(`loadSessionsForProfile`)のついでに `getSettings` から得られる。
-type ProfileDetail = {
-  repositoryPath: string | null;
-  githubProject: GithubProjectDto | null;
-  folders: string[];
-};
-type ProfileDetails = Record<string, ProfileDetail>;
-
-// セッションの取得元フォルダを保持する(issue #100。未オープンのプロファイル
-// のセッションノードをクリックした際、将来的に対象フォルダ付きで
-// ビューアを開けるようにする余地を残すため)。
-type ProfileSession = SessionSummaryDto & { folder: string };
-
-// プロファイルごとの全セッション一覧(新しい順)。ウィンドウの開閉に関係なく
-// ディスク上の実体(`selected_project_folders` の各フォルダ)から取得する
-// (issue #100)。
-type SessionsByProfile = Record<string, ProfileSession[]>;
-
-// `addSessionBranch` に渡す、由来プロファイルを保持したセッション
-// (issue #189)。GitRepository配下では複数プロファイルのセッションを合算
-// するため、各セッションが「自分がどのプロファイル・ウィンドウ由来か」を
-// 保持しておき、セッションノード個別のクリック挙動(前面化/起動)に使う
-// (cwd・branchノードのクリック挙動は代表プロファイル1つに決め打ちでよいが、
-// セッション自体は実際の持ち主のプロファイルを開くのが自然なため)。
-type AggregatedSession = ProfileSession & {
-  profileId: string;
-  windowLabel?: string;
-};
-
-// プロファイルIDの列から、セッションをID重複なく合算する(issue #189)。
-// 同じセッションを複数プロファイルが指す状況は通常無いはずだが、念のため
-// 先に出現した方を優先する。
-function collectSessionsForProfiles(
-  profileIds: string[],
-  sessionsByProfile: SessionsByProfile,
-  openTabByProfileId: Map<string, { windowLabel: string; sessionId?: string }>,
-): AggregatedSession[] {
-  const seen = new Set<string>();
-  const result: AggregatedSession[] = [];
-  for (const profileId of profileIds) {
-    const windowLabel = openTabByProfileId.get(profileId)?.windowLabel;
-    for (const session of sessionsByProfile[profileId] ?? []) {
-      if (seen.has(session.id)) continue;
-      seen.add(session.id);
-      result.push({ ...session, profileId, windowLabel });
-    }
-  }
-  return result;
+// 空白だけの値は未設定として扱い、改行を詰めて1行にする(last_prompt は
+// 複数行になりうるため)。
+function normalizeTitleSource(value: string | null): string | null {
+  if (value === null) return null;
+  const collapsed = value.replace(/\s+/g, " ").trim();
+  return collapsed === "" ? null : collapsed;
 }
 
-// 保存済み位置(issue #121)があればそれを使い、無ければ自前計算した初期
-// レイアウト位置(fallback)を使う。`move: "support"` のノード(profile・
-// 作業ディレクトリ・ブランチ)はD3の `.data()` 差分更新で `id` が一致する
-// 既存ノードでも新しいデータオブジェクトの x/y でまるごと置き換わる仕様
-// (`Nodes.js` の `drawGroup`)のため、ドラッグ位置は呼び出し側(このヘルパー)
-// で明示的に引き継がないと再描画のたびに消える。
-//
-// NOTE(issue #121からの逸脱): issueの設計では保存位置のあるノードを
-// `move: "freeze"` にする案だったが、`Simulation.js` の
-// `makeDragAndDropCallbacks` を確認したところ `freeze` は
-// dragStarted/dragged/dragEnded の全てを即 return させ、ドラッグ自体を
-// 受け付けない(fx/fyの固定うんぬん以前にイベントが握れない)。これでは
-// issue自身が要求する「保存済みノードを再度ドラッグした場合も再固定+保存」
-// が満たせないため、既存の `move: "support"`(ドラッグ可能かつ
-// dragEnded後もfx/fyを保持=事実上の固定)をそのまま使う。挙動としては
-// 「保存位置があれば固定、無ければ自動配置、いつでも再ドラッグ可」という
-// issueの意図を満たす。
-function resolvePosition(
-  positionKey: string,
-  fallbackX: number,
-  fallbackY: number,
-  savedPositions: Record<string, NodePositionDto>,
-): { x: number; y: number } {
-  const saved = savedPositions[positionKey];
-  return saved ? { x: saved.x, y: saved.y } : { x: fallbackX, y: fallbackY };
+function truncate(text: string, maxChars: number): string {
+  const chars = Array.from(text);
+  return chars.length <= maxChars ? text : `${chars.slice(0, maxChars).join("")}…`;
 }
 
-// このマシン上で開いているウィンドウ・全プロファイル・そのセッション一覧から
-// PC → profile → 作業ディレクトリ → ブランチ → session の階層グラフ
-// (d3.network 用ノード・エッジ)を組み立てる。座標は左→右の5列固定レイアウト
-// を初期位置として自前計算する(issue #84・#104。d3.network はノードに
-// x/y が必須)。「このPC」ノードは `move: "freeze"` で固定、profile・作業
-// ディレクトリ・ブランチのノードは `move: "support"` で初期位置に留めつつ
-// ユーザーがドラッグで動かせるようにし、sessionノードは `move: "will"` で
-// forceシミュレーションに委ねる。`move: "support"` のノードはユーザーが
-// ドラッグ固定した位置を `hub-layout.json` に永続化する(issue #121。
-// sessionノードは force シミュレーションに委ねる性質上、対象外)。
-function buildGraphData(
-  windowStates: WindowStateDto[],
-  profiles: ProfileSummaryDto[],
-  sessionsByProfile: SessionsByProfile,
-  profileDetails: ProfileDetails,
-  effectiveProjectsDir: string,
-  savedPositions: Record<string, NodePositionDto>,
-  pc: PcDto | null,
-) {
+// セッションの表示名を決める(issue #214)。優先順位: custom_title →
+// ai_title → last_prompt → session_id の先頭8文字。既存のタイトル解決
+// (`domain::resolve_session_title`。issue #33)と同じ発想で、モデル属性
+// (`SessionDto`)だけから組み立てる。表示用の整形であり、業務ルールではない。
+function resolveSessionTitle(session: SessionDto): string {
+  return (
+    normalizeTitleSource(session.custom_title) ??
+    normalizeTitleSource(session.ai_title) ??
+    normalizeTitleSource(session.last_prompt) ??
+    session.session_id.slice(0, SESSION_ID_PREFIX_CHARS)
+  );
+}
+
+// `pc`(`get_pc`)から PC → User → Session の3階層グラフ(d3.network 用
+// ノード・エッジ)を組み立てる(ハブ再構築 第1段。issue #214)。セッションは
+// `pc.users[].sessions` の全件(~/.claude/projects 全体。プロファイルの
+// 対象フォルダ設定とは無関係)。「PC」「User」ノードは `move: "freeze"` で
+// 固定し、sessionノードは `move: "will"` で force シミュレーションに委ねる。
+// d3.network はノードに x/y が必須のため、初期座標は自前で計算する。
+function buildGraphData(pc: PcDto | null, effectiveProjectsDir: string) {
   const nodes: Record<string, unknown>[] = [];
   const edges: Record<string, unknown>[] = [];
   // 現在のグラフに実在する positionKey の集合(issue #121)。保存時、既に
   // 存在しないノードの位置情報をここで自然に除外する(呼び出し側が保存前に
-  // この集合でフィルタする)。
+  // この集合でフィルタする)。第1段では位置を保存するノードが無いため空。
   const positionKeys = new Set<string>();
   let edgeSeq = 0;
-  let row = 0;
 
-  // クラス図のオブジェクトモデル実装 第1弾(issue #182)。`Pc` インスタンス
-  // 由来のラベル・インスペクタ表示に置き換える。`pc` が未取得(初回読み込み
-  // 中)の間は "このPC" のプレースホルダで描画し、Userノードは省略する
-  // (取得後の再描画で自然に補われる)。
+  // `pc` が未取得(初回読み込み中)の間は "このPC" のプレースホルダで描画し、
+  // Userノード以下は省略する(取得後の再描画で自然に補われる。issue #182)。
   const pcId = "pc";
   const pcName = pc?.pc_name ?? "このPC";
   nodes.push({
     id: pcId,
-    x: COL_X.pc,
-    y: ROW_START_Y,
+    x: PC_POSITION.x,
+    y: PC_POSITION.y,
     move: "freeze",
     label: { text: pcName, fill: COLOR_SUMI, font: { size: 16 }, y: labelYBelowCircle(34) },
     circle: { r: 34, fill: COLOR_PEARL, stroke: { color: COLOR_SUMI, width: 3 } },
@@ -312,503 +166,84 @@ function buildGraphData(
     effectiveProjectsDir,
   });
 
-  // 現在のユーザー1人を PC の右隣に配置し、以降 profile はこのノードの下に
-  // ぶら下げる(Pc → User → profile。issue #182)。複数ユーザーは型上は
-  // 許容するが、今回のスコープでは先頭の1人だけを表示する(仕様上も現在の
-  // スコープ外)。`pc` 未取得時は `pcId` へ直接ぶら下げてグラフを壊さない。
+  // 現在のユーザー1人を PC の右隣に配置する(issue #182)。複数ユーザーは
+  // 型上は許容するが、先頭の1人だけを表示する(仕様上も現在のスコープ外)。
   const primaryUser = pc?.users[0];
-  const userAnchorId = primaryUser ? `user:${primaryUser.user_id}` : pcId;
+  if (!primaryUser) return { nodes, edges, positionKeys };
 
-  // `session_id` → モデル属性(issue #197)。セッションノードは既存どおり
-  // `SessionSummaryDto`(表示補助データ。cwd/git_branch/タイトル解決)から
-  // 組み立て、`custom_title`/`ai_title`/`mode`/`slug`/`last_prompt` だけを
-  // このルックアップでインスペクタ用に差し込む。
-  const sessionModelById = new Map<string, SessionDto>();
-  (primaryUser?.sessions ?? []).forEach((s) => sessionModelById.set(s.session_id, s));
-  if (primaryUser) {
+  const userId = `user:${primaryUser.user_id}`;
+  nodes.push({
+    id: userId,
+    x: USER_POSITION.x,
+    y: USER_POSITION.y,
+    move: "freeze",
+    label: {
+      text: primaryUser.user_name,
+      fill: COLOR_SUMI,
+      font: { size: 14 },
+      y: labelYBelowCircle(28),
+    },
+    circle: { r: 28, fill: COLOR_PEARL, stroke: { color: COLOR_SUMI, width: 2 } },
+    icon: { url: HUB_NODE_ICON_URIS.user },
+    kind: "user",
+    userId: primaryUser.user_id,
+    userName: primaryUser.user_name,
+    homeDirectory: primaryUser.home_directory,
+  });
+  edges.push({
+    id: `e${edgeSeq++}`,
+    source: pcId,
+    target: userId,
+    line: { width: 2, color: COLOR_BORDER },
+  });
+
+  primaryUser.sessions.forEach((session, i) => {
+    const sessionNodeId = `session:${session.session_id}`;
+    const title = resolveSessionTitle(session);
+    const radius = SESSION_SPIRAL_SPACING * Math.sqrt(i + SESSION_SPIRAL_START_INDEX);
+    const angle = i * GOLDEN_ANGLE;
     nodes.push({
-      id: userAnchorId,
-      x: COL_X.user,
-      y: ROW_START_Y,
-      move: "freeze",
+      id: sessionNodeId,
+      x: USER_POSITION.x + radius * Math.cos(angle),
+      y: USER_POSITION.y + radius * Math.sin(angle),
+      move: "will",
       label: {
-        text: primaryUser.user_name,
+        text: truncate(title, SESSION_LABEL_MAX_CHARS),
         fill: COLOR_SUMI,
-        font: { size: 14 },
-        y: labelYBelowCircle(28),
+        font: { size: 12 },
+        y: labelYBelowCircle(20),
       },
-      circle: { r: 28, fill: COLOR_PEARL, stroke: { color: COLOR_SUMI, width: 2 } },
-      icon: { url: HUB_NODE_ICON_URIS.user },
-      kind: "user",
-      userId: primaryUser.user_id,
-      userName: primaryUser.user_name,
-      homeDirectory: primaryUser.home_directory,
+      circle: { r: 20, fill: COLOR_PEARL, stroke: { color: COLOR_KYO_MURASAKI, width: 2 } },
+      icon: { url: HUB_NODE_ICON_URIS.session },
+      kind: "session",
+      sessionId: session.session_id,
+      sessionTitle: title,
+      customTitle: session.custom_title,
+      aiTitle: session.ai_title,
+      mode: session.mode,
+      slug: session.slug,
+      lastPrompt: session.last_prompt,
+      conversationFilePath: session.conversation_file.file_path,
+      conversationFileLinesLoaded: session.conversation_file.lines_loaded,
+      conversationFileLineCount: session.conversation_file.line_count,
+      subagentFileCount: session.subagent_files.length,
     });
     edges.push({
       id: `e${edgeSeq++}`,
-      source: pcId,
-      target: userAnchorId,
-      line: { width: 2, color: COLOR_BORDER },
-    });
-  }
-
-  // 同じキーを持つセッションをグループにまとめる(出現順=新しい順を保つ)。
-  // 作業ディレクトリ・ブランチのグループ化(issue #104)に使う汎用ヘルパー。
-  function groupBy<T>(items: T[], keyOf: (item: T) => string): { key: string; items: T[] }[] {
-    const groups: { key: string; items: T[] }[] = [];
-    for (const item of items) {
-      const key = keyOf(item);
-      let group = groups.find((g) => g.key === key);
-      if (!group) {
-        group = { key, items: [] };
-        groups.push(group);
-      }
-      group.items.push(item);
-    }
-    return groups;
-  }
-
-  // 指定セッション群のセッション枝を `parentNodeId` の下に生やす。全セッション
-  // (新しい順)を作業ディレクトリ→ブランチの2段でグループ化して表示する
-  // (issue #104)。表示件数の上限は設けない(issue #100で導入した上限+
-  // 集約ノードは、実運用でグラフより一覧性の高いビューアで確認したいという
-  // 要望により撤廃した)。
-  // `branchNamespace` はcwd/branch/sessionノードのID構築にのみ使う(issue
-  // #189でGitRepository配下は複数プロファイルのセッションを合算するため、
-  // 「プロファイルID」ではなく汎用の名前空間にした)。`defaultProfileId`/
-  // `defaultWindowLabel` はcwd/branchノードのクリック挙動(前面化/起動)に使う
-  // 代表プロファイル(GitRepositoryなら先頭の参照プロファイル。issue #189)。
-  // セッションノード自体は `sessions` の各要素が持つ実際の由来プロファイルを
-  // クリック挙動に使う(そのセッションの実際の持ち主を開くのが自然なため)。
-  // `gitRepository` を渡した場合(GitRepository配下の呼び出しのみ。issue
-  // #193)、cwd/branchグループを台帳(`branches`/`worktrees`)と突き合わせ、
-  // 一致すれば `git-worktree`/`git-branch` ノードに差し替える。一致しない
-  // ものは従来どおり `cwd`/`branch`(既存のフォールバック。issue本文の
-  // 明示的な要求により変更しない)。
-  // 消費した行数を返す(呼び出し側の `row` 更新用)。
-  function addSessionBranch(
-    parentNodeId: string,
-    branchNamespace: string,
-    defaultProfileId: string | undefined,
-    defaultWindowLabel: string | undefined,
-    sessions: AggregatedSession[],
-    selectedSessionId: string | undefined,
-    startRow: number,
-    gitRepository?: GitRepositoryDto,
-  ): number {
-    let row = startRow;
-
-    const branchByName = new Map<string, GitBranchDto>();
-    gitRepository?.branches.forEach((b) => branchByName.set(b.branch_name, b));
-    const branchNameById = new Map<string, string>();
-    gitRepository?.branches.forEach((b) => branchNameById.set(b.branch_id, b.branch_name));
-    const worktreeByNormalizedPath = new Map<string, GitWorktreeDto>();
-    gitRepository?.worktrees.forEach((w) =>
-      worktreeByNormalizedPath.set(normalizePathForComparison(w.worktree_folder_path), w),
-    );
-
-    const cwdGroups = groupBy(sessions, (s) => s.cwd ?? UNKNOWN_CWD);
-    for (const cwdGroup of cwdGroups) {
-      const cwdNodeId = `cwd:${branchNamespace}:${cwdGroup.key}`;
-      const cwdRowStart = row;
-
-      const branchGroups = groupBy(cwdGroup.items, (s) => branchLabel(s.git_branch));
-      for (const branchGroup of branchGroups) {
-        const branchNodeId = `branch:${branchNamespace}:${cwdGroup.key}:${branchGroup.key}`;
-        const branchRowStart = row;
-
-        branchGroup.items.forEach((session, si) => {
-          const sessionNodeId = `session:${branchNamespace}:${session.id}`;
-          const isSelected = session.id === selectedSessionId;
-          const sessionModel = sessionModelById.get(session.id);
-          nodes.push({
-            id: sessionNodeId,
-            x: COL_X.session,
-            y: ROW_START_Y + (branchRowStart + si) * ROW_HEIGHT,
-            move: "will",
-            label: {
-              text: session.title.slice(0, 24),
-              fill: isSelected ? COLOR_SUMI : COLOR_MUTED,
-              font: { size: 12 },
-              y: labelYBelowCircle(20),
-            },
-            circle: {
-              r: 20,
-              fill: isSelected ? COLOR_KYO_MURASAKI : COLOR_PEARL,
-              stroke: { color: isSelected ? COLOR_KYO_MURASAKI : COLOR_BORDER, width: 2 },
-            },
-            icon: { url: HUB_NODE_ICON_URIS.session },
-            kind: "session",
-            windowLabel: session.windowLabel,
-            profileId: session.profileId,
-            sessionId: session.id,
-            sessionTitle: session.title,
-            modifiedAt: session.modified_at,
-            cwdPath: session.cwd ?? undefined,
-            gitBranchRaw: session.git_branch,
-            customTitle: sessionModel?.custom_title,
-            aiTitle: sessionModel?.ai_title,
-            mode: sessionModel?.mode,
-            slug: sessionModel?.slug,
-            lastPrompt: sessionModel?.last_prompt,
-            conversationFilePath: sessionModel?.conversation_file.file_path,
-            conversationFileLinesLoaded: sessionModel?.conversation_file.lines_loaded,
-            conversationFileLineCount: sessionModel?.conversation_file.line_count,
-            subagentFileCount: sessionModel?.subagent_files.length,
-          });
-          edges.push({
-            id: `e${edgeSeq++}`,
-            source: branchNodeId,
-            target: sessionNodeId,
-            line: { width: 2, color: COLOR_BORDER },
-          });
-        });
-        row += branchGroup.items.length;
-
-        // 台帳の`GitBranch`と一致すれば`git-branch`ノードに差し替える
-        // (issue #193)。突き合わせはセッションの`gitBranch`文字列と
-        // `branch_name`の一致でよい(issue本文の明示的な指示)。
-        const matchedBranch = branchByName.get(branchGroup.key);
-        const branchPositionKey = matchedBranch
-          ? `git-branch:${matchedBranch.branch_id}`
-          : branchNodeId;
-        positionKeys.add(branchPositionKey);
-        const branchPosition = resolvePosition(
-          branchPositionKey,
-          COL_X.branch,
-          ROW_START_Y + branchRowStart * ROW_HEIGHT,
-          savedPositions,
-        );
-        nodes.push({
-          id: branchNodeId,
-          x: branchPosition.x,
-          y: branchPosition.y,
-          move: "support",
-          label: { text: branchGroup.key, fill: COLOR_SUMI, font: { size: 12 }, y: labelYBelowCircle(20) },
-          circle: { r: 20, fill: COLOR_PEARL, stroke: { color: COLOR_KUSAIRO, width: 2 } },
-          icon: { url: HUB_NODE_ICON_URIS[matchedBranch ? "gitBranch" : "branch"] },
-          kind: matchedBranch ? "git-branch" : "branch",
-          windowLabel: defaultWindowLabel,
-          profileId: defaultProfileId,
-          positionKey: branchPositionKey,
-          branchName: branchGroup.key,
-          sessionCount: branchGroup.items.length,
-          branchId: matchedBranch?.branch_id,
-          description: matchedBranch?.description,
-          createdAtTime: matchedBranch?.created_at_time,
-        });
-        edges.push({
-          id: `e${edgeSeq++}`,
-          source: cwdNodeId,
-          target: branchNodeId,
-          line: { width: 2, color: COLOR_BORDER },
-        });
-      }
-
-      // 台帳の`GitWorktree`と一致すれば`git-worktree`ノードに差し替える
-      // (issue #193)。突き合わせはパスの正規化比較(`normalizePathForComparison`)
-      // で行う(セッションJSONL側とRust側で区切り文字表記が揺れうるため)。
-      const matchedWorktree = worktreeByNormalizedPath.get(
-        normalizePathForComparison(cwdGroup.key),
-      );
-      const cwdPositionKey = matchedWorktree
-        ? `git-worktree:${matchedWorktree.worktree_id}`
-        : cwdNodeId;
-      positionKeys.add(cwdPositionKey);
-      const cwdPosition = resolvePosition(
-        cwdPositionKey,
-        COL_X.cwd,
-        ROW_START_Y + cwdRowStart * ROW_HEIGHT,
-        savedPositions,
-      );
-      nodes.push({
-        id: cwdNodeId,
-        x: cwdPosition.x,
-        y: cwdPosition.y,
-        move: "support",
-        label: {
-          text: matchedWorktree ? matchedWorktree.worktree_name : cwdTail(cwdGroup.key),
-          fill: COLOR_SUMI,
-          font: { size: 12 },
-          y: labelYBelowCircle(22),
-        },
-        circle: { r: 22, fill: COLOR_PEARL, stroke: { color: COLOR_KINCHA, width: 2 } },
-        icon: { url: HUB_NODE_ICON_URIS[matchedWorktree ? "gitWorktree" : "cwd"] },
-        kind: matchedWorktree ? "git-worktree" : "cwd",
-        windowLabel: defaultWindowLabel,
-        profileId: defaultProfileId,
-        positionKey: cwdPositionKey,
-        cwdPath: cwdGroup.key,
-        folder: cwdGroup.items[0]?.folder,
-        worktreeName: matchedWorktree?.worktree_name,
-        worktreeId: matchedWorktree?.worktree_id,
-        worktreeFolderPath: matchedWorktree?.worktree_folder_path,
-        worktreeGitFilePath: matchedWorktree?.worktree_git_file_path,
-        checkedOutBranchName: matchedWorktree?.checked_out_branch
-          ? (branchNameById.get(matchedWorktree.checked_out_branch) ?? null)
-          : null,
-        createdAtTime: matchedWorktree?.created_at_time,
-      });
-      edges.push({
-        id: `e${edgeSeq++}`,
-        source: parentNodeId,
-        target: cwdNodeId,
-        line: { width: 2, color: COLOR_BORDER },
-      });
-    }
-
-    return Math.max(row - startRow, 1);
-  }
-
-  // プロファイルID → 開いているウィンドウ(issue #189。GitRepositoryノードの
-  // クリック挙動・セッションの由来ウィンドウ判定に使う共通ルックアップ)。
-  // 1ウィンドウ=1プロファイル(native.md §6)のため、複数ウィンドウが同じ
-  // プロファイルを開くことはない前提。
-  const openTabByProfileId = new Map<string, { windowLabel: string; sessionId?: string }>();
-  windowStates.forEach((w) => {
-    w.tabs.forEach((tab) => {
-      openTabByProfileId.set(tab.profile_id, {
-        windowLabel: w.label,
-        sessionId: tab.session_id ?? undefined,
-      });
+      source: userId,
+      target: sessionNodeId,
+      line: { width: 1, color: COLOR_BORDER },
     });
   });
-
-  // プロファイル列をGitRepository列に置き換える(オブジェクトモデル実装
-  // 第2弾。issue #189)。GitRepositoryの一覧はPcインスタンス由来
-  // (`pc.users[0].repositories`。settingsのプロファイルから重複排除して
-  // バックエンドが組み立て済み)。それを参照するプロファイル(`repository_path`
-  // が一致するもの。判定は `profileDetails` を使う。バックエンド側の重複排除
-  // 判定とは別経路だが、どちらもsettingsのプロファイルが真実の源のため
-  // 実質的に一致する)のセッションを合算して配下にぶら下げる。クリック挙動は
-  // 先頭の参照プロファイルを対象にする(issue #189で明示された仕様)。
-  const repositoriesToRender = primaryUser?.repositories ?? [];
-  const profilesWithRepository = new Set<string>();
-
-  repositoriesToRender.forEach((gitRepo) => {
-    const referencingProfiles = profiles.filter(
-      (p) => profileDetails[p.id]?.repositoryPath === gitRepo.repository_path,
-    );
-    referencingProfiles.forEach((p) => profilesWithRepository.add(p.id));
-
-    const targetProfile = referencingProfiles[0];
-    const openTab = targetProfile ? openTabByProfileId.get(targetProfile.id) : undefined;
-
-    const nodeId = `git-repository:${gitRepo.repository_path}`;
-    const positionKey = nodeId;
-    positionKeys.add(positionKey);
-    const nodeRow = row;
-    const position = resolvePosition(
-      positionKey,
-      COL_X.profile,
-      ROW_START_Y + nodeRow * ROW_HEIGHT,
-      savedPositions,
-    );
-
-    nodes.push({
-      id: nodeId,
-      x: position.x,
-      y: position.y,
-      move: "support",
-      label: {
-        text: gitRepo.repository_name,
-        fill: COLOR_SUMI,
-        font: { size: 13 },
-        y: labelYBelowCircle(26),
-      },
-      circle: {
-        // 京紫(伝統色パレット)。旧profileノードと同じ色を使う(issue #189:
-        // GitRepositoryはプロファイル列の後継であり、パレットに未使用色が
-        // 無いため既存色を踏襲する。実装時判断)。
-        r: 26,
-        fill: openTab ? COLOR_KYO_MURASAKI : COLOR_PEARL,
-        stroke: { color: COLOR_KYO_MURASAKI, width: 2 },
-      },
-      icon: { url: HUB_NODE_ICON_URIS.gitRepository },
-      kind: "git-repository",
-      positionKey,
-      repositoryName: gitRepo.repository_name,
-      repositoryPath: gitRepo.repository_path,
-      description: gitRepo.description,
-      referencingProfileNames: referencingProfiles.map((p) => p.name),
-      windowLabel: openTab?.windowLabel,
-      profileId: targetProfile?.id,
-    });
-    edges.push({
-      id: `e${edgeSeq++}`,
-      source: userAnchorId,
-      target: nodeId,
-      line: { width: 2, color: COLOR_BORDER },
-    });
-
-    const aggregatedSessions = collectSessionsForProfiles(
-      referencingProfiles.map((p) => p.id),
-      sessionsByProfile,
-      openTabByProfileId,
-    );
-    const selectedSessionId = referencingProfiles
-      .map((p) => openTabByProfileId.get(p.id)?.sessionId)
-      .find((id): id is string => id != null);
-
-    row += addSessionBranch(
-      nodeId,
-      nodeId,
-      targetProfile?.id,
-      openTab?.windowLabel,
-      aggregatedSessions,
-      selectedSessionId,
-      nodeRow,
-      gitRepo,
-    );
-  });
-
-  const openedProfileIds = new Set<string>();
-
-  windowStates.forEach((w) => {
-    w.tabs.forEach((tab, ti) => {
-      openedProfileIds.add(tab.profile_id);
-      // GitRepositoryノードに吸収済み(repository_pathが設定されている)なら
-      // 個別のprofileノードは描かない(issue #189)。
-      if (profilesWithRepository.has(tab.profile_id)) return;
-      const profileNodeId = `profile:${w.label}:${ti}`;
-      const profileName = profiles.find((p) => p.id === tab.profile_id)?.name ?? tab.profile_id;
-      const isActiveTab = ti === w.active_tab_index;
-
-      const profileRow = row;
-      const profileY = ROW_START_Y + profileRow * ROW_HEIGHT;
-      // `id`(profileNodeId)はウィンドウラベル+タブ番号を含み、ウィンドウの
-      // 開閉のたびに変わり得るため、ドラッグ位置の永続化には使えない。
-      // 代わりに `profileId` だけを使う安定キーを別に持つ(issue #121)。
-      // 未オープン時(profile-unopened)も同じキーを使うことで、開閉に関係
-      // なく同じ保存位置を引き継ぐ。
-      const profilePositionKey = `profile:${tab.profile_id}`;
-      positionKeys.add(profilePositionKey);
-      const profilePosition = resolvePosition(
-        profilePositionKey,
-        COL_X.profile,
-        profileY,
-        savedPositions,
-      );
-      nodes.push({
-        id: profileNodeId,
-        x: profilePosition.x,
-        y: profilePosition.y,
-        move: "support",
-        label: { text: profileName, fill: COLOR_SUMI, font: { size: 13 }, y: labelYBelowCircle(26) },
-        circle: {
-          r: 26,
-          fill: isActiveTab ? COLOR_KYO_MURASAKI : COLOR_PEARL,
-          stroke: { color: COLOR_KYO_MURASAKI, width: 2 },
-        },
-        icon: { url: HUB_NODE_ICON_URIS.profile },
-        kind: "profile",
-        windowLabel: w.label,
-        profileId: tab.profile_id,
-        positionKey: profilePositionKey,
-        profileName,
-        repositoryPath: profileDetails[tab.profile_id]?.repositoryPath ?? null,
-        githubProject: profileDetails[tab.profile_id]?.githubProject ?? null,
-        folders: profileDetails[tab.profile_id]?.folders ?? [],
-        selectedSessionTitle: tab.session_title,
-      });
-      edges.push({
-        id: `e${edgeSeq++}`,
-        source: userAnchorId,
-        target: profileNodeId,
-        line: { width: 2, color: COLOR_BORDER },
-      });
-
-      row += addSessionBranch(
-        profileNodeId,
-        tab.profile_id,
-        tab.profile_id,
-        w.label,
-        collectSessionsForProfiles([tab.profile_id], sessionsByProfile, openTabByProfileId),
-        tab.session_id ?? undefined,
-        profileRow,
-      );
-    });
-  });
-
-  // 未オープンのプロファイル(どのウィンドウでも開いていない)は、PC直下に
-  // 薄い配色で表示する(issue #84)。セッションの取得元がディスク上の実体に
-  // なったため(issue #100)、ウィンドウが無くてもセッション枝を描ける。
-  // GitRepositoryノードに吸収済み(repository_pathが設定されている)なら
-  // 個別のprofile-unopenedノードは描かない(issue #189)。
-  profiles
-    .filter((p) => !openedProfileIds.has(p.id) && !profilesWithRepository.has(p.id))
-    .forEach((p) => {
-      const nodeId = `profile-unopened:${p.id}`;
-      const profileRow = row;
-      const profilePositionKey = `profile:${p.id}`;
-      positionKeys.add(profilePositionKey);
-      const profilePosition = resolvePosition(
-        profilePositionKey,
-        COL_X.profile,
-        ROW_START_Y + profileRow * ROW_HEIGHT,
-        savedPositions,
-      );
-      nodes.push({
-        id: nodeId,
-        x: profilePosition.x,
-        y: profilePosition.y,
-        move: "support",
-        label: { text: p.name, fill: COLOR_MUTED, font: { size: 13 }, y: labelYBelowCircle(22) },
-        circle: { r: 22, fill: COLOR_PEARL, stroke: { color: COLOR_BORDER, width: 2 } },
-        icon: { url: HUB_NODE_ICON_URIS.profile },
-        kind: "profile-unopened",
-        profileId: p.id,
-        positionKey: profilePositionKey,
-        profileName: p.name,
-        repositoryPath: profileDetails[p.id]?.repositoryPath ?? null,
-        githubProject: profileDetails[p.id]?.githubProject ?? null,
-        folders: profileDetails[p.id]?.folders ?? [],
-      });
-      edges.push({
-        id: `e${edgeSeq++}`,
-        source: userAnchorId,
-        target: nodeId,
-        line: { width: 1, color: COLOR_BORDER },
-      });
-
-      row += addSessionBranch(
-        nodeId,
-        p.id,
-        p.id,
-        undefined,
-        collectSessionsForProfiles([p.id], sessionsByProfile, openTabByProfileId),
-        undefined,
-        profileRow,
-      );
-    });
 
   return { nodes, edges, positionKeys };
 }
 
-function formatModifiedAt(ms: number): string {
-  return new Date(ms).toLocaleString();
-}
-
-function formatGithubProject(project: GithubProjectDto | null | undefined): string {
-  return project ? `${project.owner}#${project.number}` : "(未設定)";
-}
-
 // ノードの `_core`(issue #109)からインスペクタの表示内容を組み立てる。
 // 追加のbackend呼び出しはせず、グラフ構築時に `_core` へ埋め込んだ値のみを
-// 使う。
-function buildInspectorContent(
-  core: HubNodeCore,
-  actions: {
-    onFocusWindow: (windowLabel: string) => void;
-    onOpenProfileWindow: (profileId: string) => void;
-  },
-): InspectorContent | null {
-  const action = core.windowLabel
-    ? { label: "前面化", onClick: () => actions.onFocusWindow(core.windowLabel!) }
-    : core.profileId
-      ? { label: "ウィンドウで開く", onClick: () => actions.onOpenProfileWindow(core.profileId!) }
-      : null;
-
+// 使う。第1段ではノードからウィンドウを開く動線を持たないため、アクションは
+// 無し(issue #214)。
+function buildInspectorContent(core: HubNodeCore): InspectorContent | null {
   switch (core.kind) {
     case "pc":
       return {
@@ -829,84 +264,9 @@ function buildInspectorContent(
         ],
         action: null,
       };
-    case "git-repository":
-      return {
-        title: core.repositoryName ?? "GitRepository",
-        fields: [
-          { label: "パス", value: core.repositoryPath ?? "" },
-          { label: "説明", value: core.description || "(未設定)" },
-          {
-            label: "参照プロファイル",
-            value: (core.referencingProfileNames ?? []).join(", ") || "(なし)",
-          },
-        ],
-        action,
-      };
-    case "profile":
-    case "profile-unopened": {
-      const fields: InspectorField[] = [
-        { label: "名前", value: core.profileName ?? "" },
-        { label: "対象リポジトリ", value: core.repositoryPath ?? "(未設定)" },
-        { label: "GitHubプロジェクト", value: formatGithubProject(core.githubProject) },
-        { label: "対象フォルダ", value: (core.folders ?? []).join(", ") || "(未設定)" },
-      ];
-      if (core.windowLabel) {
-        fields.push({
-          label: "選択中セッション",
-          value: core.selectedSessionTitle ?? "(未選択)",
-        });
-      }
-      return { title: "プロファイル", fields, action };
-    }
-    case "cwd":
-      return {
-        title: "作業ディレクトリ",
-        fields: [
-          { label: "フルパス", value: core.cwdPath ?? "" },
-          { label: "プロジェクトフォルダ", value: core.folder ?? "" },
-        ],
-        action,
-      };
-    case "git-worktree":
-      return {
-        title: core.worktreeName ?? "worktree",
-        fields: [
-          { label: "フォルダ", value: core.worktreeFolderPath ?? "" },
-          { label: ".gitファイル", value: core.worktreeGitFilePath ?? "" },
-          { label: "チェックアウト中ブランチ", value: core.checkedOutBranchName ?? "(detached)" },
-          {
-            label: "作成日時",
-            value: core.createdAtTime !== undefined ? formatModifiedAt(core.createdAtTime) : "",
-          },
-        ],
-        action,
-      };
-    case "branch":
-      return {
-        title: "ブランチ",
-        fields: [
-          { label: "ブランチ名", value: core.branchName ?? "" },
-          { label: "セッション数", value: String(core.sessionCount ?? 0) },
-        ],
-        action,
-      };
-    case "git-branch":
-      return {
-        title: core.branchName ?? "ブランチ",
-        fields: [
-          { label: "ブランチID", value: core.branchId ?? "" },
-          { label: "説明", value: core.description || "(未設定)" },
-          {
-            label: "作成日時",
-            value: core.createdAtTime !== undefined ? formatModifiedAt(core.createdAtTime) : "",
-          },
-          { label: "セッション数", value: String(core.sessionCount ?? 0) },
-        ],
-        action,
-      };
     case "session":
       return {
-        title: "セッション",
+        title: truncate(core.sessionTitle ?? "セッション", SESSION_TITLE_MAX_CHARS),
         fields: [
           // モデル属性(`domain::Session`。issue #197)。
           { label: "セッションID", value: core.sessionId ?? "" },
@@ -929,17 +289,8 @@ function buildInspectorContent(
             label: "サブエージェント数",
             value: String(core.subagentFileCount ?? 0),
           },
-          // 表示補助データ(`SessionSummaryDto`。タイトル解決・グルーピング・
-          // 更新時刻はモデル属性ではなくこちらを使い続ける。issue #197)。
-          { label: "タイトル", value: core.sessionTitle ?? "" },
-          {
-            label: "最終更新",
-            value: core.modifiedAt !== undefined ? formatModifiedAt(core.modifiedAt) : "",
-          },
-          { label: "作業ディレクトリ", value: core.cwdPath ?? UNKNOWN_CWD },
-          { label: "ブランチ", value: branchLabel(core.gitBranchRaw ?? null) },
         ],
-        action,
+        action: null,
       };
     default:
       return null;
@@ -947,179 +298,71 @@ function buildInspectorContent(
 }
 
 // メインウィンドウの起点となる「俯瞰グラフ」画面(ハブ化 その2。issue #84)。
-// list_window_states(レジストリ。issue #83)+ get_settings(全プロファイル)
-// から PC → profile の階層を描く。profile → 作業ディレクトリ → ブランチ →
-// session の枝はウィンドウの有無と無関係に、プロファイルごとの
-// `selected_project_folders` を `list_sessions` で直接読んで描く(issue #100・
-// #104。コールドスタート(ウィンドウ0)でも全プロファイルのセッションが
-// 最初から見える)。windows:changed / settings:updated / session:changed で
-// 再描画する。ノードのクリックで該当ウィンドウを前面化(focus_window)、
-// 無ければ新規ウィンドウを起動する(open_profile_window。issue #76)。
+// オブジェクトモデルのインスタンスビューとして作り直している途中で、第1段
+// (issue #214)は `get_pc` の PC → User → 全セッション(User.sessions)だけを
+// 描く。セッション一覧は起動後のバックグラウンド読み込み(issue #212)で
+// 揃うため、`pc:data_loaded` までは PC・User のみを表示する。ノードの右クリック
+// でインスペクタを表示する(左クリックの動作は第1段では持たない)。
 function HubPage() {
-  const [windowStates, setWindowStates] = useState<WindowStateDto[]>([]);
-  const [profiles, setProfiles] = useState<ProfileSummaryDto[]>([]);
-  const [sessionsByProfile, setSessionsByProfile] = useState<SessionsByProfile>({});
-  const [profileDetails, setProfileDetails] = useState<ProfileDetails>({});
   const [effectiveProjectsDir, setEffectiveProjectsDir] = useState("");
   const [error, setError] = useState<string | null>(null);
-  // このPC・ログインユーザー情報(オブジェクトモデル実装 第1弾。issue #182)。
-  // `window_states`/設定とは独立して起動時に一度だけ読み込む(値がOS由来で
-  // アプリの実行中に変わらないため、再取得の必要が無い)。
+  // このPC・ログインユーザー・セッション一覧(オブジェクトモデル実装。
+  // issue #182・#197)。
   const [pc, setPc] = useState<PcDto | null>(null);
-  // Git台帳・セッション一覧の読み込み状態(issue #212)。起動直後は
-  // `AppState.git_ledger`/`user_sessions` が空のまま(jsonl走査・git観測を
-  // バックグラウンド化して初回表示のラグを無くしたため)なので、
-  // `pc:data_loaded` を受け取るまでは「読み込み中」として表示する。
+  // セッション一覧・Git台帳の読み込み状態(issue #212)。起動直後は
+  // `AppState.user_sessions` が空のまま(jsonl走査をバックグラウンド化して
+  // 初回表示のラグを無くしたため)なので、`pc:data_loaded` を受け取るまでは
+  // 「読み込み中」として表示する。
   const [pcDataLoaded, setPcDataLoaded] = useState(false);
+
+  // PCノードのインスペクタに出すセッションルートディレクトリ。設定画面で
+  // 変わりうるため `settings:updated` でも取り直す。
+  const loadEffectiveProjectsDir = useCallback((): Promise<void> => {
+    return getSettings()
+      .then((settings) => {
+        setEffectiveProjectsDir(settings.effective_projects_dir);
+        setError(null);
+      })
+      .catch((e) => setError(isAppError(e) ? e.message : String(e)));
+  }, []);
+
+  const loadPc = useCallback((): Promise<void> => {
+    return getPc()
+      .then(setPc)
+      .catch((e) => setError(isAppError(e) ? e.message : String(e)));
+  }, []);
+
+  useEffect(() => {
+    loadEffectiveProjectsDir();
+    loadPc();
+  }, [loadEffectiveProjectsDir, loadPc]);
+
+  useEffect(() => {
+    const unlistenPromise = onSettingsUpdated(loadEffectiveProjectsDir);
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, [loadEffectiveProjectsDir]);
+
+  // 起動後のバックグラウンド読み込み(Git台帳の観測・全プロジェクトの
+  // jsonl走査。issue #212)が完了したら`pc`を取り直す。
+  useEffect(() => {
+    const unlistenPromise = onPcDataLoaded(() => {
+      setPcDataLoaded(true);
+      loadPc();
+    });
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, [loadPc]);
+
   // ノードのドラッグ固定位置(issue #121)。起動時に一度だけ読み込み、以後は
   // ドラッグのたびに更新する。キーは `positionKey`(`buildGraphData` 参照)。
   const [savedPositions, setSavedPositions] = useState<Record<string, NodePositionDto>>({});
-
-  // `session:changed` ハンドラは購読を1回だけにしたい(プロファイル一覧が
-  // 変わるたびに listen/unlisten し直すと無駄なため)一方、判定には最新の
-  // プロファイル→詳細(対象フォルダ含む)対応表が要る。ref 経由で最新値を
-  // 参照する。
-  const profileDetailsRef = useRef<ProfileDetails>({});
-  useEffect(() => {
-    profileDetailsRef.current = profileDetails;
-  }, [profileDetails]);
-
-  // 指定プロファイルの詳細(対象リポジトリ・GitHubプロジェクト・対象フォルダ)
-  // を読み、各フォルダの `list_sessions`(profile_id 明示。issue #76で導入済み)
-  // を呼んで新しい順にまとめる(issue #100)。詳細はインスペクタ表示用
-  // (issue #109)。`list_sessions` はmtimeキャッシュ(issue #33)があるため、
-  // 再取得のコストは低い。
-  const loadSessionsForProfile = useCallback(
-    (profileId: string): Promise<{ detail: ProfileDetail; sessions: ProfileSession[] }> => {
-      return getSettings(profileId).then((settings) => {
-        const folders = settings.selected_project_folders;
-        const detail: ProfileDetail = {
-          repositoryPath: settings.repository_path,
-          githubProject: settings.github_project,
-          folders,
-        };
-        return Promise.all(
-          folders.map((folder) =>
-            listSessions(folder).then((sessions) =>
-              sessions.map((s): ProfileSession => ({ ...s, folder })),
-            ),
-          ),
-        ).then((byFolder) => ({
-          detail,
-          sessions: byFolder.flat().sort((a, b) => b.modified_at - a.modified_at),
-        }));
-      });
-    },
-    [],
-  );
-
-  const loadAllProfileSessions = useCallback(
-    (profileList: ProfileSummaryDto[]): Promise<void> => {
-      return Promise.all(
-        profileList.map((p) => loadSessionsForProfile(p.id).then((r) => [p.id, r] as const)),
-      ).then((entries) => {
-        setSessionsByProfile(Object.fromEntries(entries.map(([id, r]) => [id, r.sessions])));
-        setProfileDetails(Object.fromEntries(entries.map(([id, r]) => [id, r.detail])));
-      });
-    },
-    [loadSessionsForProfile],
-  );
-
-  const load = useCallback((): Promise<void> => {
-    return Promise.all([listWindowStates(), getSettings()])
-      .then(([states, settings]) => {
-        setWindowStates(states);
-        setProfiles(settings.profiles);
-        setEffectiveProjectsDir(settings.effective_projects_dir);
-        setError(null);
-        return loadAllProfileSessions(settings.profiles);
-      })
-      .catch((e) => setError(isAppError(e) ? e.message : String(e)));
-  }, [loadAllProfileSessions]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  // ドラッグ固定位置(issue #121)は起動時に一度だけ読み込む。プロファイル・
-  // セッション一覧とは独立したファイル(`hub-layout.json`)のため、
-  // `windows:changed` 等の再取得では読み直さない(このセッション内で保存
-  // した内容は既に `savedPositions` state 側が最新)。
   useEffect(() => {
     getHubLayout()
       .then((layout) => setSavedPositions(layout.positions))
       .catch((e) => console.error(e));
-  }, []);
-
-  // このPC・ログインユーザー情報も起動時に一度だけ読み込む(issue #182)。
-  useEffect(() => {
-    getPc()
-      .then(setPc)
-      .catch((e) => console.error(e));
-  }, []);
-
-  useEffect(() => {
-    const unlistenPromises = [onWindowsChanged(load), onSettingsUpdated(load)];
-    return () => {
-      unlistenPromises.forEach((p) => p.then((unlisten) => unlisten()));
-    };
-  }, [load]);
-
-  // 起動後のバックグラウンド読み込み(Git台帳の観測・全プロジェクトの
-  // jsonl走査。issue #212)が完了したら`pc`を取り直す。`onWindowsChanged`
-  // 等と同じ購読の形。
-  useEffect(() => {
-    const unlistenPromise = onPcDataLoaded(() => {
-      setPcDataLoaded(true);
-      getPc()
-        .then(setPc)
-        .catch((e) => console.error(e));
-    });
-    return () => {
-      unlistenPromise.then((unlisten) => unlisten());
-    };
-  }, []);
-
-  // 該当プロファイルのセッション枝だけを再取得する(全体の再読み込みより
-  // 軽い。issue #100)。
-  useEffect(() => {
-    const unlistenPromise = onSessionChanged(({ project }) => {
-      const affectedProfileIds = Object.entries(profileDetailsRef.current)
-        .filter(([, detail]) => detail.folders.includes(project))
-        .map(([id]) => id);
-      if (affectedProfileIds.length === 0) return;
-      Promise.all(
-        affectedProfileIds.map((id) => loadSessionsForProfile(id).then((r) => [id, r] as const)),
-      )
-        .then((entries) => {
-          setSessionsByProfile((prev) => ({
-            ...prev,
-            ...Object.fromEntries(entries.map(([id, r]) => [id, r.sessions])),
-          }));
-          setProfileDetails((prev) => ({
-            ...prev,
-            ...Object.fromEntries(entries.map(([id, r]) => [id, r.detail])),
-          }));
-        })
-        .catch((e) => console.error(e));
-    });
-    return () => {
-      unlistenPromise.then((unlisten) => unlisten());
-    };
-  }, [loadSessionsForProfile]);
-
-  // `windowLabel` があればそのウィンドウを前面化、無ければ `profileId` の
-  // ウィンドウを新規に開く(開いていれば前面化、未オープンなら新規起動。
-  // issue #100)。
-  const handleNodeClick = useCallback((d: NodeDatum) => {
-    const core = d._core as HubNodeCore;
-    if (core.windowLabel) {
-      focusWindow(core.windowLabel).catch((e) => console.error(e));
-      return;
-    }
-    if (core.profileId) {
-      openProfileWindow(core.profileId).catch((e) => console.error(e));
-    }
   }, []);
 
   // `buildGraphData` が直近に払い出した positionKey の集合(issue #121)。
@@ -1147,8 +390,8 @@ function HubPage() {
   }, []);
 
   // ノードのドラッグ終了時、位置を `savedPositions` に反映しつつ
-  // デバウンス保存する(issue #121)。`positionKey` が無いノード(pc・
-  // sessionなど永続化対象外)は何もしない。
+  // デバウンス保存する(issue #121)。`positionKey` が無いノード(永続化
+  // 対象外)は何もしない。
   const handleNodeDragEnded = useCallback(
     (node: NodeDatum) => {
       const core = node._core as HubNodeCore;
@@ -1167,65 +410,34 @@ function HubPage() {
   // 使い続ける。`@yanqirenshi/assh0le` の `Colon.data()` は、`selector()`
   // (`Asshole` がマウント時に一度だけ呼ぶ)が設定済みであれば、以後の
   // `.data(newData)` 呼び出しのたびにD3のenter/update/exit差分更新で
-  // 再描画するだけで済む(カメラ=パン/ズームには触れない)。以前は
-  // データが変わるたびにRectumを作り直し、`<D3Network key={dataKey}>` で
-  // コンポーネントごと強制再マウントしていたため、ウィンドウを開く操作
-  // (`windows:changed` → 再取得 → データ更新)のたびに視点・ズームが
-  // 初期状態にリセットされる不具合があった。`handleNodeClick`/
-  // `handleNodeDragEnded` は空配列依存で安定しているため、このRectumは
+  // 再描画するだけで済む(カメラ=パン/ズームには触れない)。データが
+  // 変わるたびにRectumを作り直すと、そのたびに視点・ズームが初期状態に
+  // リセットされる。`handleNodeDragEnded` は安定しているため、このRectumは
   // `HubPage` のマウント中ずっと同一インスタンスのままになる。
-  //
-  // NOTE: 現状 @yanqirenshi/d3.network 側の既知の問題により、ノードの
-  // `<g>` に無条件で付く d3.drag() がネイティブの click イベントを
-  // 抑制してしまい、この node.click コールバックが呼ばれない
-  // (issue #84 のPRコメント参照)。ライブラリ本体の修正・バージョンアップ
-  // 待ち。ここは修正後にそのまま動くよう、素直な形にしてある。
   const rectum = useMemo(() => {
     return new Rectum({
-      callbacks: { node: { click: handleNodeClick, dragEnded: handleNodeDragEnded } },
+      callbacks: { node: { dragEnded: handleNodeDragEnded } },
     });
-  }, [handleNodeClick, handleNodeDragEnded]);
+  }, [handleNodeDragEnded]);
 
   // データが変わるたびに同じRectumインスタンスへ `.data()` を呼んで更新
-  // する。`move: "support"`(profile・作業ディレクトリ・ブランチ)の
-  // ノードは `buildGraphData` が毎回座標を計算し直すため、`savedPositions`
-  // (issue #121)を渡さない限りユーザーがドラッグした位置は更新のたびに
-  // リセットされる(これはRectumを作り直すかどうかに関係ない、`move:
-  // "support"` の既知の仕様。カメラ=パン/ズームとは別の話)。`Asshole` の
-  // `rectum.selector()` 呼び出しより先にこのeffectが走った場合でも、
-  // `Colon.data()` は selector 未設定なら描画せず値を保持するだけなので、
-  // 後から selector が設定された時点で自動的に初回描画される。
-  const dataKey = JSON.stringify({
-    windowStates,
-    profiles,
-    sessionsByProfile,
-    profileDetails,
-    effectiveProjectsDir,
-    savedPositions,
-    pc,
-  });
+  // する。`Asshole` の `rectum.selector()` 呼び出しより先にこのeffectが
+  // 走った場合でも、`Colon.data()` は selector 未設定なら描画せず値を保持
+  // するだけなので、後から selector が設定された時点で自動的に初回描画される。
+  // `savedPositions` は第1段のグラフ内容には影響しないが、位置を保存する
+  // ノードを再導入したとき(次段以降)に取りこぼさないよう依存に含めておく。
+  const dataKey = JSON.stringify({ pc, effectiveProjectsDir, savedPositions });
   useEffect(() => {
     // NOTE: `@yanqirenshi/d3.network` の `Edges.js`(`draw()`)には、IDが
     // 一致した既存の辺要素(本来は「更新」として残すべきもの)まで無条件に
     // `remove()` してしまうバグがある(`Nodes.js` 側は `exit()` のみを
-    // 正しく削除しており影響を受けない)。Rectumインスタンスを使い回す
-    // ようになった(このeffect)ことで、2回目以降の `.data()` 呼び出しで
-    // このバグが表面化し、辺(接続線)だけが全部消えてノードだけが残る
-    // 状態になっていた。ライブラリ本体の修正待ちの間、ここで毎回いったん
-    // 既存の辺要素を明示的に空にしてから `.data()` を呼ぶことで、
-    // ライブラリの `enter()` が必ず全辺を新規追加として作り直すようにする
-    // (辺自体はドラッグ位置等の保持すべき状態を持たないため、毎回作り
-    // 直しても実害はない)。
+    // 正しく削除しており影響を受けない)。2回目以降の `.data()` 呼び出しで
+    // 辺(接続線)だけが全部消えてノードだけが残る状態になるため、ライブラリ
+    // 本体の修正待ちの間、ここで毎回いったん既存の辺要素を明示的に空にして
+    // から `.data()` を呼び、ライブラリの `enter()` が必ず全辺を新規追加として
+    // 作り直すようにする(辺自体は保持すべき状態を持たないため実害はない)。
     hubPageRef.current?.querySelectorAll("path.ng-edge").forEach((el) => el.remove());
-    const { nodes, edges, positionKeys } = buildGraphData(
-      windowStates,
-      profiles,
-      sessionsByProfile,
-      profileDetails,
-      effectiveProjectsDir,
-      savedPositions,
-      pc,
-    );
+    const { nodes, edges, positionKeys } = buildGraphData(pc, effectiveProjectsDir);
     validPositionKeysRef.current = positionKeys;
     rectum.data({ nodes, edges });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1233,13 +445,11 @@ function HubPage() {
 
   // ノードの右クリックでインスペクタ(issue #109)を表示する。d3.network の
   // ノードAPI(node.click等)にcontextmenuの仕組みが無いため、描画後のDOMへ
-  // イベント委任で直接バインドする(#84のクリック対応と同じ流儀。d3の
-  // データ結合(`selection.data()`)はDOM要素の `__data__` にその要素の
-  // データを直接載せる仕様のため、右クリックされた要素の祖先から
-  // `g.ng-node` を辿ればノードの生データ(`_core` を含む)が取れる)。
-  // `.hub-page` 自体はデータが変わっても作り直されない(key を持つのは
-  // 中の `D3Network` だけ)ため、委任先の要素は安定しており、購読はマウント
-  // 時の1回だけでよい(グラフが再描画されるたびに張り直す必要が無い)。
+  // イベント委任で直接バインドする(d3のデータ結合(`selection.data()`)は
+  // DOM要素の `__data__` にその要素のデータを直接載せる仕様のため、右クリック
+  // された要素の祖先から `g.ng-node` を辿ればノードの生データ(`_core` を
+  // 含む)が取れる)。`.hub-page` 自体はデータが変わっても作り直されない
+  // ため、委任先の要素は安定しており、購読はマウント時の1回だけでよい。
   const [inspectorCore, setInspectorCore] = useState<HubNodeCore | null>(null);
   const hubPageRef = useRef<HTMLDivElement>(null);
 
@@ -1261,8 +471,6 @@ function HubPage() {
   }, []);
 
   // 閉じる: ×(HubInspector側)・グラフの空白部クリック・Esc(issue #109)。
-  // ノード自身のクリック(前面化・ウィンドウ起動)はここでは扱わず、既存の
-  // 左クリック挙動をそのまま保つ。
   const handleHubPageClick = useCallback((e: ReactMouseEvent<HTMLDivElement>) => {
     const target = e.target as Element;
     if (target.closest("g.ng-node")) return;
@@ -1278,13 +486,7 @@ function HubPage() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [inspectorCore]);
 
-  const inspectorContent = inspectorCore
-    ? buildInspectorContent(inspectorCore, {
-        onFocusWindow: (windowLabel) => focusWindow(windowLabel).catch((e) => console.error(e)),
-        onOpenProfileWindow: (profileId) =>
-          openProfileWindow(profileId).catch((e) => console.error(e)),
-      })
-    : null;
+  const inspectorContent = inspectorCore ? buildInspectorContent(inspectorCore) : null;
 
   // インスペクタの幅をマウスドラッグで変更できるようにする(初期444px・
   // 最小222px・最大888px)。パネルは右端固定(`right:0`)のため、幅は
@@ -1330,23 +532,17 @@ function HubPage() {
     saveHubLayout({}).catch((e) => console.error(e));
   }, []);
 
-  // 「再読み込み」操作では、通常の再取得(`load`)に加えて登録済み全
-  // リポジトリのGit状態(ブランチ・worktree)も再観測する(issue #193)。
-  // 起動直後のバックグラウンド読み込み(issue #212)とは別に、明示的な
-  // 再読み込み操作のときはここで都度呼ぶ。観測に失敗しても(fail-safe。
-  // バックエンド側で該当リポジトリの台帳は変更されないだけ)`getPc`は
-  // 必ず呼び直す。
+  // 「再読み込み」操作。`reconcile_git_state` はGit台帳の再観測に加えて
+  // 全プロジェクトの `Session` 一覧も組み立て直す(issue #193・#197)ため、
+  // これを呼んでから `getPc` で取り直すとセッションの増減が反映される。
+  // 失敗しても(fail-safe)`getPc` は必ず呼び直す。
   const handleReload = useCallback((): Promise<void> => {
-    const reconcile = reconcileGitState()
+    const reloadPc = reconcileGitState()
       .catch((e) => console.error(e))
-      .then(() => getPc())
-      .then((next) => {
-        setPc(next);
-        setPcDataLoaded(true);
-      })
-      .catch((e) => console.error(e));
-    return Promise.all([load(), reconcile]).then(() => undefined);
-  }, [load]);
+      .then(() => loadPc())
+      .then(() => setPcDataLoaded(true));
+    return Promise.all([loadEffectiveProjectsDir(), reloadPc]).then(() => undefined);
+  }, [loadEffectiveProjectsDir, loadPc]);
 
   const dockItems = useMemo(
     () => [
@@ -1370,11 +566,7 @@ function HubPage() {
   return (
     <div className="hub-page" ref={hubPageRef} onClick={handleHubPageClick}>
       {error && <p className="error">{error}</p>}
-      {!pcDataLoaded && (
-        <p className="hub-loading">
-          セッション・Gitブランチ情報を読み込み中…
-        </p>
-      )}
+      {!pcDataLoaded && <p className="hub-loading">セッションを読み込み中…</p>}
       {/* `rectum` はマウント中ずっと同一インスタンス(上記参照)なので、
           `key` は付けない。`key` を付けて`dataKey`が変わるたびに強制再
           マウントすると、そのたびにカメラ(パン/ズーム)がリセットされて
