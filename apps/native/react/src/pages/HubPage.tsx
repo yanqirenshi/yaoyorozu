@@ -198,7 +198,12 @@ function buildGraphData(pc: PcDto | null, effectiveProjectsDir: string) {
   });
 
   primaryUser.sessions.forEach((session, i) => {
-    const sessionNodeId = `session:${session.session_id}`;
+    // ノードIDは会話ファイルのパスで作る。session_id は一意ではない
+    // (セッション途中で worktree へ移ると、同じ session_id の jsonl が
+    // 元のプロジェクトフォルダと worktree 側のフォルダの両方にできる)ため、
+    // session_id をキーにすると d3 のデータ結合で1つにまとめられ、件数が
+    // 減って見える(issue #214 の実機確認で判明)。
+    const sessionNodeId = `session:${session.conversation_file.file_path}`;
     const title = resolveSessionTitle(session);
     const radius = SESSION_SPIRAL_SPACING * Math.sqrt(i + SESSION_SPIRAL_START_INDEX);
     const angle = i * GOLDEN_ANGLE;
