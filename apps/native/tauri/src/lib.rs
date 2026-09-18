@@ -451,7 +451,7 @@ async fn list_window_states(
 /// ドキュメントコメント参照: 都度実行するには重すぎるため)。
 /// `User.sessions` も同様に `AppState.user_sessions`(起動時と再読み込み
 /// 操作時にのみ組み立て済みのもの)を差し込むだけで、ここではjsonlを
-/// 走査しない(issue #197)。`Session.conversation_file.lines`(`LogLine`)は
+/// 走査しない(issue #197)。`Session.conversation_files[].lines`(`LogLine`)は
 /// `AppState.loaded_log_lines`(`get_session`でセッションを開いたときに
 /// キャッシュ済みのもの)を差し込むだけで、ここでは行の読み込みをしない
 /// (issue #208。未読み込みのセッションは空Vecのまま)。

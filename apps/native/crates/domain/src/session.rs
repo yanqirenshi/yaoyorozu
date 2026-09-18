@@ -22,9 +22,13 @@ pub struct Session {
     /// クラス図上は導出属性(`/last_prompt`)。ログ(`last-prompt`行)から
     /// 導出する値であり、アプリが独自に発行する値ではない。
     pub last_prompt: Option<String>,
-    /// コンポジション(クラス図の`conversation_file`。1。オブジェクトモデル
-    /// 実装 第5弾。issue #208)。会話本体のファイル。
-    pub conversation_file: SessionFile,
+    /// コンポジション(クラス図の`conversation_files`。1..*。オブジェクトモデル
+    /// 実装 第5弾。issue #208。issue #217で1件固定から1..*へ変更)。会話本体の
+    /// ファイル群。同じ`session_id`のセッションが途中でworktreeへ移動すると、
+    /// 元のプロジェクトフォルダとworktree側の両方にjsonlができる(issue #214)
+    /// ため、複数件になりうる。並びは更新時刻の古い順(`User::load_sessions`
+    /// 参照)。
+    pub conversation_files: Vec<SessionFile>,
     /// コンポジション(クラス図の`subagent_files`。0..*。issue #208)。
     pub subagent_files: Vec<SessionFile>,
 }

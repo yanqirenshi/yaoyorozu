@@ -394,18 +394,22 @@ pub fn load_session_lines(
     source.session_lines(project, session_id)
 }
 
-/// `pc`の各ユーザーが持つ`Session.conversation_file`/`subagent_files`へ、
+/// `pc`の各ユーザーが持つ`Session.conversation_files`/`subagent_files`へ、
 /// 読み込み済みの`LogLine`キャッシュ(ファイルパスをキーにする)を差し込む
 /// (issue #208)。`load_sessions`が常に空Vecで組み立てた`lines`のうち、
 /// 実際に開かれてキャッシュ済みのものだけを埋める(遅延読み込み)。
+/// `conversation_files`は issue #217 で1..*になったため、各ファイルを
+/// パスで個別に照合する。
 pub fn pc_with_loaded_lines(
     mut pc: domain::Pc,
     loaded_lines: &HashMap<PathBuf, Vec<LogLine>>,
 ) -> domain::Pc {
     for user in &mut pc.users {
         for session in &mut user.sessions {
-            if let Some(lines) = loaded_lines.get(&session.conversation_file.file_path) {
-                session.conversation_file.lines = lines.clone();
+            for file in &mut session.conversation_files {
+                if let Some(lines) = loaded_lines.get(&file.file_path) {
+                    file.lines = lines.clone();
+                }
             }
         }
     }
@@ -1492,6 +1496,7 @@ mod tests {
             last_prompt: None,
             conversation_file_path: PathBuf::from(format!("/tmp/{session_id}.jsonl")),
             subagent_file_paths: Vec::new(),
+            modified_at_ms: 0,
         }
     }
 
@@ -1562,12 +1567,12 @@ mod tests {
 
         assert_eq!(result.users[0].sessions.len(), 1);
         assert_eq!(result.users[0].sessions[0].session_id, "a");
+        assert_eq!(result.users[0].sessions[0].conversation_files.len(), 1);
         assert_eq!(
-            result.users[0].sessions[0].conversation_file.file_path,
+            result.users[0].sessions[0].conversation_files[0].file_path,
             PathBuf::from("/tmp/a.jsonl")
         );
-        assert!(result.users[0].sessions[0]
-            .conversation_file
+        assert!(result.users[0].sessions[0].conversation_files[0]
             .lines
             .is_empty());
     }
@@ -1620,7 +1625,7 @@ mod tests {
         let result = pc_with_loaded_lines(pc, &loaded_lines);
 
         assert_eq!(
-            result.users[0].sessions[0].conversation_file.lines,
+            result.users[0].sessions[0].conversation_files[0].lines,
             vec![sample_log_line("l1")]
         );
     }
@@ -1631,8 +1636,7 @@ mod tests {
 
         let result = pc_with_loaded_lines(pc, &HashMap::new());
 
-        assert!(result.users[0].sessions[0]
-            .conversation_file
+        assert!(result.users[0].sessions[0].conversation_files[0]
             .lines
             .is_empty());
     }

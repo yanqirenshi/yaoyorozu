@@ -61,7 +61,7 @@ pub struct AppState {
     pub user_sessions: Vec<ParsedSession>,
     /// セッションを開いたとき(`get_session` command)に組み立てた
     /// `LogLine`のキャッシュ(オブジェクトモデル実装 第6弾。issue #208)。
-    /// キーは会話ファイルのパス(`Session.conversation_file.file_path`と
+    /// キーは会話ファイルのパス(`Session.conversation_files[].file_path`と
     /// 一致)。`window_states`と同様、設定ファイルには保存しないランタイム
     /// 状態で、起動時は常に空(遅延読み込み。行は読まない)。同じファイルを
     /// 再度開いても読み直さないための唯一の目的のキャッシュのため、

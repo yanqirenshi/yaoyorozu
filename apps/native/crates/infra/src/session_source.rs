@@ -381,6 +381,7 @@ impl SessionSource for FileSystemRepository {
                     last_prompt: scanned.last_prompt,
                     conversation_file_path: path.clone(),
                     subagent_file_paths,
+                    modified_at_ms,
                 })
             })
             .collect()

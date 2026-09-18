@@ -6,7 +6,7 @@ use std::path::PathBuf;
 /// (`<フォルダ名>/<セッションID>.jsonl`)とサブエージェントのファイル
 /// (`<フォルダ名>/<セッションID>/subagents/agent-<エージェントID>.jsonl`)
 /// がある。`Session`にコンポジションで所有される
-/// (`Session.conversation_file`/`Session.subagent_files`)。
+/// (`Session.conversation_files`/`Session.subagent_files`)。
 ///
 /// `lines`の遅延読み込み状態は、専用のOption/フラグを追加せず**空Vec**で
 /// 表す(実装時判断)。クラス図の多重度が`1..*`(SessionFileは必ず1行以上の
