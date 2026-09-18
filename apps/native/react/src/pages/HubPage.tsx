@@ -81,13 +81,13 @@ type HubNodeCore = {
   mode?: string | null;
   slug?: string | null;
   lastPrompt?: string | null;
-  // Session.conversation_file/subagent_files(オブジェクトモデル実装
+  // Session.conversation_files/subagent_files(オブジェクトモデル実装
   // 第5〜6弾。issue #208)。行(LogLine)は遅延読み込みのため、未読み込みの
   // 間は常に`false`/`0`(セッションを開くと`get_session`の読み込みに
-  // 相乗りしてキャッシュされる)。
-  conversationFilePath?: string;
-  conversationFileLinesLoaded?: boolean;
-  conversationFileLineCount?: number;
+  // 相乗りしてキャッシュされる)。`conversationFiles`は issue #217 で
+  // 1..*(配列)になった(同じsession_idのjsonlがworktree移動により複数
+  // フォルダにできるケースに対応するため)。並びは更新時刻の古い順。
+  conversationFiles?: { filePath: string; linesLoaded: boolean; lineCount: number }[];
   subagentFileCount?: number;
 };
 
@@ -136,12 +136,13 @@ function buildGraphData(pc: PcDto | null) {
   const columns = Math.max(1, Math.ceil(Math.sqrt(sessions.length * SESSION_GRID_ASPECT)));
 
   sessions.forEach((session, i) => {
-    // ノードIDは会話ファイルのパスで作る。session_id は一意ではない
-    // (セッション途中で worktree へ移ると、同じ session_id の jsonl が
-    // 元のプロジェクトフォルダと worktree 側のフォルダの両方にできる)ため、
-    // session_id をキーにすると d3 のデータ結合で1つにまとめられ、件数が
-    // 減って見える(issue #214 の実機確認で判明)。
-    const sessionNodeId = `session:${session.conversation_file.file_path}`;
+    // ノードIDは session_id で作る。旧実装(issue #214〜#215)では、同じ
+    // session_id の jsonl がworktree移動により複数フォルダにできることで
+    // session_id が一意でなくなる問題を避けるため会話ファイルのパスを
+    // 使っていたが、issue #217 でバックエンド側(`User::load_sessions`)が
+    // 同じ session_id の Session を1つに集約する(`conversation_files` が
+    // 1..*)ようになったため、session_id は再び一意になり、本来のIDへ戻した。
+    const sessionNodeId = `session:${session.session_id}`;
     const title = resolveSessionTitle(session);
     nodes.push({
       id: sessionNodeId,
@@ -164,9 +165,11 @@ function buildGraphData(pc: PcDto | null) {
       mode: session.mode,
       slug: session.slug,
       lastPrompt: session.last_prompt,
-      conversationFilePath: session.conversation_file.file_path,
-      conversationFileLinesLoaded: session.conversation_file.lines_loaded,
-      conversationFileLineCount: session.conversation_file.line_count,
+      conversationFiles: session.conversation_files.map((file) => ({
+        filePath: file.file_path,
+        linesLoaded: file.lines_loaded,
+        lineCount: file.line_count,
+      })),
       subagentFileCount: session.subagent_files.length,
     });
   });
@@ -179,6 +182,7 @@ function buildGraphData(pc: PcDto | null) {
 // 使う。第1段ではノードからウィンドウを開く動線を持たないため、アクションは
 // 無し(issue #214)。
 function buildInspectorContent(core: HubNodeCore): InspectorContent {
+  const conversationFiles = core.conversationFiles ?? [];
   return {
     title: truncate(core.sessionTitle ?? "セッション", SESSION_TITLE_MAX_CHARS),
     fields: [
@@ -189,15 +193,22 @@ function buildInspectorContent(core: HubNodeCore): InspectorContent {
       { label: "mode", value: core.mode ?? "(未設定)" },
       { label: "slug", value: core.slug ?? "(未設定)" },
       { label: "last_prompt", value: core.lastPrompt ?? "(未設定)" },
-      // Session.conversation_file/subagent_files(issue #208)。行
+      // Session.conversation_files/subagent_files(issue #208)。行
       // (LogLine)は遅延読み込みのため、読み込み状態・行数もあわせて
-      // 表示する(未読み込みなら「未読み込み」・0件)。
-      { label: "会話ファイル", value: core.conversationFilePath ?? "" },
+      // 表示する(未読み込みなら「未読み込み」・0件)。conversation_files は
+      // issue #217 で1..*になった(worktree移動で同じsession_idのjsonlが
+      // 複数フォルダにできるケースに対応)。1件のときは従来どおりの見え方に
+      // なる。並びは更新時刻の古い順。改行区切りで複数件を表示する(App.css
+      // の `.hub-inspector-field dd` に `white-space: pre-line` を設定済み)。
+      {
+        label: "会話ファイル",
+        value: conversationFiles.map((f) => f.filePath).join("\n"),
+      },
       {
         label: "会話ファイルの行",
-        value: core.conversationFileLinesLoaded
-          ? `読み込み済み(${core.conversationFileLineCount ?? 0}行)`
-          : "未読み込み",
+        value: conversationFiles
+          .map((f) => (f.linesLoaded ? `読み込み済み(${f.lineCount}行)` : "未読み込み"))
+          .join("\n"),
       },
       {
         label: "サブエージェント数",

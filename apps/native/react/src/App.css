@@ -193,12 +193,15 @@ body,
 }
 
 /* 長い値(フルパス・IDなど)は折り返し、選択してコピーできるようにする
-   (issue #109)。 */
+   (issue #109)。会話ファイルパス等、値に改行(`\n`)を含めて複数件を
+   1フィールドに詰める場合があるため、改行をそのまま表示する
+   (issue #217)。 */
 .hub-inspector-field dd {
   margin: 0;
   font-size: 0.9rem;
   color: var(--text-primary);
   overflow-wrap: anywhere;
+  white-space: pre-line;
   user-select: text;
 }
 
