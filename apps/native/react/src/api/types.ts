@@ -235,12 +235,16 @@ export type SessionFileDto = {
 
 // `User.sessions` の1件分(オブジェクトモデル実装 第4弾。issue #197)。
 // メッセージ本文は持たない(そちらは `ConversationDto`)。属性はセッションの
-// jsonlから導出したモデル値そのもので、cwd/git_branch(表示補助データ。
-// `SessionSummaryDto`側)は含まない。`conversation_files`/`subagent_files`は
+// jsonlから導出したモデル値そのもの。`conversation_files`/`subagent_files`は
 // 第5弾(issue #208)で追加。`conversation_files`は issue #217 で単数
 // (`conversation_file`)から1..*(配列)に変更した(セッション途中で
 // worktreeへ移動すると、同じsession_idのjsonlが元のプロジェクトフォルダと
 // worktree側の両方にできるため)。
+// `cwd`/`git_branch`(issue #224)はハブのグラフ(セッション→ブランチの線)
+// 表示用の表示補助データ。`domain::Session`の属性ではない(TMの決定:
+// cwd/git_branchはLogLineの属性)ため、Rust側の`get_pc`が`ParsedSession`
+// から差し込む(`data_loaded`と同じ「Fromでは埋めずcommand側で設定する」
+// パターン)。
 export type SessionDto = {
   session_id: string;
   custom_title: string | null;
@@ -250,6 +254,8 @@ export type SessionDto = {
   last_prompt: string | null;
   conversation_files: SessionFileDto[];
   subagent_files: SessionFileDto[];
+  cwd: string | null;
+  git_branch: string | null;
 };
 
 export type UserDto = {

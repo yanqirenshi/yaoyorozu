@@ -808,6 +808,13 @@ impl From<domain::SessionFile> for SessionFileDto {
 /// `conversation_files`は issue #217 で単数(`conversation_file`)から
 /// 1..*(`Vec`)に変更した(同じsession_idのjsonlがworktree移動により
 /// 複数フォルダにできるケースに対応するため)。
+///
+/// `cwd`/`git_branch`(issue #224)はハブのグラフ(セッション→ブランチの線)
+/// 表示用の**表示補助データ**。`domain::Session`は持たない(TMの決定:
+/// cwd/git_branchはLogLineの属性でありSessionの属性ではない)ため、
+/// `From<domain::Session>`では埋めず(`data_loaded`と同じパターン)、
+/// `get_pc` commandが`AppState.user_sessions`(`ParsedSession`)から
+/// `app::resolve_session_display_hints`で解決して差し込む。
 #[derive(Serialize, Clone)]
 pub struct SessionDto {
     pub session_id: String,
@@ -818,6 +825,8 @@ pub struct SessionDto {
     pub last_prompt: Option<String>,
     pub conversation_files: Vec<SessionFileDto>,
     pub subagent_files: Vec<SessionFileDto>,
+    pub cwd: Option<String>,
+    pub git_branch: Option<String>,
 }
 
 impl From<domain::Session> for SessionDto {
@@ -839,6 +848,9 @@ impl From<domain::Session> for SessionDto {
                 .into_iter()
                 .map(SessionFileDto::from)
                 .collect(),
+            // `get_pc` commandが後から差し込む(上のドキュメントコメント参照)。
+            cwd: None,
+            git_branch: None,
         }
     }
 }

@@ -460,6 +460,10 @@ async fn list_window_states(
 /// `pc:data_loaded`イベントはマウント中のハブにしか届かない(#212の既知の
 /// 制約)ため、フロントはマウント時にこの値をまず問い合わせ、あわせて
 /// イベントを購読する形にする(イベントとポーリングの二重化はしない)。
+///
+/// `SessionDto.cwd`/`git_branch`(issue #224)も同様に`From`では埋まらない
+/// (`domain::Session`が持たないため)。`AppState.user_sessions`から
+/// `apply_session_display_hints`で差し込む。
 #[tauri::command]
 async fn get_pc(state: tauri::State<'_, Mutex<AppState>>) -> Result<PcDto, AppErrorDto> {
     let guard = state.lock().await;
@@ -469,7 +473,24 @@ async fn get_pc(state: tauri::State<'_, Mutex<AppState>>) -> Result<PcDto, AppEr
     let pc = app::pc_with_loaded_lines(pc, &guard.loaded_log_lines);
     let mut dto = PcDto::from(pc);
     dto.data_loaded = guard.pc_data_loaded;
+    apply_session_display_hints(&mut dto, &guard.user_sessions);
     Ok(dto)
+}
+
+/// `SessionDto.cwd`/`git_branch`(issue #224)へ、表示補助データを差し込む。
+/// 解決規則(同じsession_idが複数あれば更新時刻の新しい方を優先)自体は
+/// `app::resolve_session_display_hints`(純粋関数)に置き、ここでは結果を
+/// `SessionDto`へ書き戻すだけの薄い配線に留める。
+fn apply_session_display_hints(dto: &mut PcDto, parsed: &[domain::ParsedSession]) {
+    let hints = app::resolve_session_display_hints(parsed);
+    for user in &mut dto.users {
+        for session in &mut user.sessions {
+            if let Some(hint) = hints.get(&session.session_id) {
+                session.cwd = hint.cwd.clone();
+                session.git_branch = hint.git_branch.clone();
+            }
+        }
+    }
 }
 
 /// 登録済み全リポジトリのGit状態(ブランチ・worktree)を再観測して台帳を

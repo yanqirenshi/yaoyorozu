@@ -18,6 +18,16 @@ const SVG_CLOSE = `</svg>`;
 // セッション(吹き出し)。dockのVIEWER_ICONと同じ形状。
 const SESSION_ICON_SVG = `${SVG_OPEN}<rect x="3" y="4" width="14" height="9" rx="1.5"/><path d="M7 13v3l4-3"/>${SVG_CLOSE}`;
 
+// GitRepository(貯蔵庫を表す円筒)。ハブ再構築 第2段(issue #224)で
+// #215 で一度削除した線画を git 履歴から復活させた。
+const GIT_REPOSITORY_ICON_SVG = `${SVG_OPEN}<ellipse cx="10" cy="5.2" rx="6" ry="2.2"/><path d="M4 5.2v9.6c0 1.2 2.7 2.2 6 2.2s6-1 6-2.2V5.2"/><path d="M4 10c0 1.2 2.7 2.2 6 2.2s6-1 6-2.2"/>${SVG_CLOSE}`;
+
+// GitBranch(台帳で追跡しているブランチ)。タグ(ラベル)の形。issue #224で
+// GitRepositoryと同様に git 履歴から復活させた。
+const GIT_BRANCH_ICON_SVG = `${SVG_OPEN}<path d="M4.5 10 10.5 4h5v5l-6 6Z"/><circle cx="13" cy="6.5" r="1.1" fill="${ICON_STROKE_COLOR}" stroke="none"/><path d="M9 12l-4.5 4.5"/>${SVG_CLOSE}`;
+
 export const HUB_NODE_ICON_URIS = {
   session: toDataUri(SESSION_ICON_SVG),
+  gitRepository: toDataUri(GIT_REPOSITORY_ICON_SVG),
+  gitBranch: toDataUri(GIT_BRANCH_ICON_SVG),
 } as const;
