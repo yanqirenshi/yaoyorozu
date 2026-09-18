@@ -30,9 +30,13 @@
  *   1つだけ)。サブエージェントのファイルの行も、親のセッションが所有するファイルに属する
  *   ので、行に記録される sessionId(親と同じ値)と食い違わない。
  * - TM の `fileKind`(ファイル種別)は SessionFile のフィールドにしない。Session が
- *   会話ファイル(`conversation_file`、1件)とサブエージェントのファイル(`subagent_files`、
- *   0件以上)を別の役割で持ち、どちらに入っているかで種別が決まるため。1件の枠を分ける
- *   ことで、ファイルが0件のセッション(TM の 1..* に反する)を型で作れなくもしている。
+ *   会話ファイル(`conversation_files`、1..*)とサブエージェントのファイル(`subagent_files`、
+ *   0..*)を別の役割で持ち、どちらに入っているかで種別が決まるため。
+ * - 会話ファイルは当初 1件固定(`conversation_file`)にしていたが、実機確認でセッション途中に
+ *   worktree へ移動すると、同じセッションIDの jsonl が複数のプロジェクトフォルダに分かれて
+ *   できることが判明した(#214)。TM どおり `conversation_files` を 1..* に直した(#216)。
+ *   1..* なので「ファイル0件のセッション」は引き続き型で作れない。複数ファイルにまたがる
+ *   属性(custom_title 等)の解決規則は図には書かず、実装イシュー側(#217)で扱う。
  * - PC とユーザーはコンポジションにしている(PC が全体で User を所有する)。User は
  *   「その PC 上の OS のユーザーアカウント」で、1台の PC にしか属さない。同じ人が2台の
  *   PC を使えば User は2つになる。TM ではユーザーを PC から独立したリソースとし、対照表
@@ -271,16 +275,20 @@ const RELATIONSHIPS = [
     fromMultiplicity: "0..*",
   }),
   // TM: セッション．セッションファイル(対照表、属性なし)。1つの会話にファイルは
-  // 会話ファイル1件 + サブエージェント0件以上、ファイルは必ず1つの会話に属する。
+  // 会話ファイル1..* + サブエージェント0件以上、ファイルは必ず1つの会話に属する。
   // Session が SessionFile を所有するのでコンポジションにし、役割(会話ファイル /
   // サブエージェントのファイル)ごとに線を分ける。1つのファイルはどちらか一方にだけ入る。
   // 線は「部分 → 全体」の向き(◆が Session 側に付く)。SessionFile を Session の右に置き、
-  // SessionFile の左辺から Session の右辺へ、2本を上下に並べてつなぐ。conversation_file は
+  // SessionFile の左辺から Session の右辺へ、2本を上下に並べてつなぐ。conversation_files は
   // 上寄り(左辺 100° → 右辺 260°)、subagent_files は下寄り(左辺 80° → 右辺 280°)で、
   // 2本は交差しない。
-  rel("composition", "SessionFile", "Session", "conversation_file", 100, 260, {
-    key: "conversation_file",
-    fromMultiplicity: "1",
+  // conversation_files は当初 1件固定だったが、実機確認でセッション途中に worktree へ
+  // 移動すると同じセッションIDの jsonl が複数のプロジェクトフォルダにできることが判明し
+  // (#214)、TM どおりの 1..* に直した(#216)。複数ファイルにまたがる属性(custom_title 等)
+  // の解決規則は図には書かず、実装イシュー側(#217)で扱う。
+  rel("composition", "SessionFile", "Session", "conversation_files", 100, 260, {
+    key: "conversation_files",
+    fromMultiplicity: "1..*",
   }),
   rel("composition", "SessionFile", "Session", "subagent_files", 80, 280, {
     key: "subagent_files",
