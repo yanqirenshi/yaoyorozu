@@ -3,16 +3,23 @@ import type { MouseEvent as ReactMouseEvent } from "react";
 import D3Network, { Rectum } from "@yanqirenshi/d3.network";
 import type { NodeDatum } from "@yanqirenshi/d3.network";
 import {
+  focusWindow,
   getHubLayout,
   getPc,
+  getSettings,
   isAppError,
+  listWindowStates,
   onPcDataLoaded,
+  onSettingsUpdated,
+  onWindowsChanged,
+  openProfileWindow,
   reconcileGitState,
   saveHubLayout,
 } from "../api";
 import type {
   GitBranchDto,
   GitRepositoryDto,
+  GithubProjectDto,
   NodePositionDto,
   PcDto,
   SessionDto,
@@ -25,19 +32,26 @@ import type { InspectorContent } from "../HubInspector";
 
 // 伝統色パレット(App.css の :root/tokens.css と同じ値。issue #84・#93)。
 const COLOR_PEARL = "#fbfbf8"; // 真珠
-const COLOR_KYO_MURASAKI = "#9d5b8b"; // 京紫(session)
+const COLOR_KYO_MURASAKI = "#9d5b8b"; // 京紫(session・profile)
 const COLOR_KINCHA = "#CE7A19"; // 金茶(GitRepository。issue #224)
 const COLOR_KUSAIRO = "#7b8d41"; // 苔色(GitBranch。issue #224)
 const COLOR_SUMI = "#373737"; // 墨
 const COLOR_BORDER = "#dbdbdb"; // tokens.css の --border-default(エッジの線)
 
-// GitRepository/GitBranch ノードの配置(ハブ再構築 第2段。issue #224)。
-// 左側にリポジトリ列・ブランチ列を縦に並べ、セッションのグリッドはその
-// 右側から始める。位置は台帳の並び順(`buildGraphData`参照)で決まるだけの
-// 簡易な整列で、ドラッグで動かせる(`move: "support"`)ため実装時点では
-// 見やすさよりも「エッジが追える」ことを優先する。
-const REPOSITORY_COLUMN_X = 80;
-const BRANCH_COLUMN_X = 320;
+// プロファイル/GitRepository/GitBranch ノードの配置(ハブ再構築 第2〜3段。
+// issue #224・#229)。左からプロファイル列・リポジトリ列・ブランチ列を縦に
+// 並べ、セッションのグリッドはその右側から始める。位置は並び順
+// (`buildGraphData`参照)で決まるだけの簡易な整列で、ドラッグで動かせる
+// (`move: "support"`)ため実装時点では見やすさよりも「エッジが追える」ことを
+// 優先する。第3段でプロファイル列を一番左に足したため、他の列は1列ぶん右へ
+// ずらした(保存済みの位置があるノードはその位置のまま)。
+const PROFILE_COLUMN_X = 80;
+const REPOSITORY_COLUMN_X = 320;
+const BRANCH_COLUMN_X = 560;
+// プロファイルノードの枠の太さ。ウィンドウで開いているものを太くする
+// (issue #229。`buildGraphData` 参照)。
+const PROFILE_OPEN_STROKE_WIDTH = 6;
+const PROFILE_CLOSED_STROKE_WIDTH = 2;
 const GIT_NODE_ORIGIN_Y = 70;
 const GIT_NODE_ROW_HEIGHT = 90;
 
@@ -47,8 +61,9 @@ const GIT_NODE_ROW_HEIGHT = 90;
 // 集まるようになったため)。ここで決めるのはシミュレーション開始時の位置で、
 // 第1段(issue #214)の格子の計算をそのまま流用する。列数は横長の画面に
 // 合わせて「行数 × 1.5 ≒ 列数」になるよう決める(141件なら15列 × 10行)。
-// 原点のxはGitRepository/GitBranch列(issue #224)と重ならない位置まで右へ寄せる。
-const SESSION_GRID_ORIGIN = { x: 560, y: 70 };
+// 原点のxはプロファイル/GitRepository/GitBranch列(issue #224・#229)と
+// 重ならない位置まで右へ寄せる。
+const SESSION_GRID_ORIGIN = { x: 800, y: 70 };
 const SESSION_GRID_ASPECT = 1.5;
 // 格子の間隔。横はラベル(12px × 最大16文字 ≒ 192px)が隣と重ならない幅、
 // 縦は円(半径20)+ ラベル1行が収まる高さ。
@@ -111,10 +126,11 @@ function restartSimulation(rectum: Rectum): void {
 
 // 右クリック時に何を表示するかを判定するための、ノードの元データ(`_core`)。
 // 第1段(issue #214)はセッションノードのみだったが、第2段(issue #224)で
-// GitRepository/GitBranch ノードを戻した。フィールドはインスペクタ
-// (issue #109)の表示専用。
+// GitRepository/GitBranch ノードを、第3段(issue #229)でプロファイルノードを
+// 戻した。フィールドはインスペクタ(issue #109)の表示と、プロファイルノードの
+// 左クリック(ウィンドウの前面化/新規オープン)に使う。
 type HubNodeCore = {
-  kind: "session" | "git-repository" | "git-branch";
+  kind: "session" | "git-repository" | "git-branch" | "profile";
   // ドラッグ位置の永続化(issue #121)に使う安定キー。位置を保存する
   // ノードにのみ設定する(セッションノードは force シミュレーションに委ねる
   // ため保存しない。issue #226)。GitRepository/GitBranch ノード(issue #224)は
@@ -152,6 +168,27 @@ type HubNodeCore = {
   branchId?: string;
   branchDescription?: string;
   branchCreatedAtTime?: number;
+  // プロファイル(settings 由来。issue #229)。オブジェクトモデルのクラス
+  // ではなく「1ウィンドウ = 1プロファイル」の起点となる設定。
+  profileId?: string;
+  profileName?: string;
+  profileRepositoryPath?: string | null;
+  profileGithubProject?: GithubProjectDto | null;
+  profileFolders?: string[];
+  // このプロファイルを開いているウィンドウのラベル(無ければ未オープン)。
+  windowLabel?: string;
+};
+
+// ハブに描くプロファイル1件分(issue #229)。`get_settings` のプロファイル
+// 一覧(id・名前)と、プロファイルごとの `get_settings(profileId)` の内容、
+// `list_window_states` のウィンドウとの対応を合わせた表示用スナップショット。
+type HubProfile = {
+  id: string;
+  name: string;
+  repositoryPath: string | null;
+  githubProject: GithubProjectDto | null;
+  folders: string[];
+  windowLabel?: string;
 };
 
 // 空白だけの値は未設定として扱い、改行を詰めて1行にする(last_prompt は
@@ -229,10 +266,11 @@ function gitBranchNodeId(branchId: string): string {
   return `git-branch:${branchId}`;
 }
 
-// `pc`(`get_pc`)から、GitRepository/GitBranch ノード(ハブ再構築 第2段。
-// issue #224)とセッションノード(第1段。issue #214)を組み立てる。表示対象は
-// 登録済みリポジトリ(`User.repositories`)とその現存ブランチ(削除済みは
-// バックエンド側で除外済み)、および全セッション(`User.sessions`。
+// `pc`(`get_pc`)と settings のプロファイルから、プロファイルノード(ハブ
+// 再構築 第3段。issue #229)、GitRepository/GitBranch ノード(第2段。
+// issue #224)、セッションノード(第1段。issue #214)を組み立てる。表示対象は
+// 全プロファイル、登録済みリポジトリ(`User.repositories`)とその現存ブランチ
+// (削除済みはバックエンド側で除外済み)、および全セッション(`User.sessions`。
 // `~/.claude/projects` 全体で、プロファイルの対象フォルダ設定とは無関係)。
 // Pc・User ノードは引き続き表示しない。backend は全ユーザーに同じ一覧を
 // 割り当てる(`app::pc_with_user_sessions`/`app::current_pc_with_repositories`)
@@ -240,6 +278,7 @@ function gitBranchNodeId(branchId: string): string {
 // x/y が必須のため、座標は列・格子の位置として自前で計算する。
 function buildGraphData(
   pc: PcDto | null,
+  profiles: HubProfile[],
   savedPositions: Record<string, NodePositionDto>,
   currentPositions: Map<string, NodePositionDto>,
 ) {
@@ -262,6 +301,10 @@ function buildGraphData(
 
   // GitRepository / GitBranch ノード(issue #224)。リポジトリを縦に並べ、
   // 各リポジトリのブランチをその右列・同じ行範囲に並べる。
+  // プロファイルノード(issue #229)を参照先のリポジトリと同じ高さに並べ、
+  // 線を引くため、リポジトリごとのノードIDと位置(正規化したパスがキー)を
+  // 控えておく。
+  const repositoryNodeByPath = new Map<string, { nodeId: string; y: number }>();
   let row = 0;
   repositories.forEach((repo) => {
     const repoRowStart = row;
@@ -305,6 +348,10 @@ function buildGraphData(
       REPOSITORY_COLUMN_X,
       GIT_NODE_ORIGIN_Y + repoRowStart * GIT_NODE_ROW_HEIGHT,
     );
+    repositoryNodeByPath.set(normalizePathForComparison(repo.repository_path), {
+      nodeId: repositoryNodeId,
+      y: repositoryPosition.y,
+    });
     nodes.push({
       id: repositoryNodeId,
       x: repositoryPosition.x,
@@ -336,6 +383,74 @@ function buildGraphData(
         line: { width: 2, color: COLOR_BORDER },
       });
     });
+  });
+
+  // プロファイルノード(issue #229)。GitRepository 列の左に並べる。
+  // `repository_path` が登録リポジトリと一致するものは、そのリポジトリと同じ
+  // 高さから下へ積み、線(プロファイル → GitRepository。参照)を引く。
+  // 未設定・不一致のものは線を引かず(フォールバックノードは作らない。第1〜2段
+  // の割り切りを維持)、全リポジトリの行の下へ並べる。
+  const linkedCountByRepository = new Map<string, number>();
+  let unlinkedRow = row;
+  profiles.forEach((profile) => {
+    const profileNodeId = `profile:${profile.id}`;
+    positionKeys.add(profileNodeId);
+    const repositoryKey = profile.repositoryPath
+      ? normalizePathForComparison(profile.repositoryPath)
+      : null;
+    const repository = repositoryKey ? repositoryNodeByPath.get(repositoryKey) : undefined;
+    let defaultY: number;
+    if (repositoryKey && repository) {
+      const stacked = linkedCountByRepository.get(repositoryKey) ?? 0;
+      linkedCountByRepository.set(repositoryKey, stacked + 1);
+      defaultY = repository.y + stacked * GIT_NODE_ROW_HEIGHT;
+    } else {
+      defaultY = GIT_NODE_ORIGIN_Y + unlinkedRow * GIT_NODE_ROW_HEIGHT;
+      unlinkedRow += 1;
+    }
+    const position = resolvePosition(profileNodeId, PROFILE_COLUMN_X, defaultY);
+    const isOpen = profile.windowLabel !== undefined;
+    nodes.push({
+      id: profileNodeId,
+      x: position.x,
+      y: position.y,
+      move: "support",
+      label: {
+        text: truncate(profile.name, SESSION_LABEL_MAX_CHARS),
+        fill: COLOR_SUMI,
+        font: { size: 13 },
+        y: labelYBelowCircle(24),
+      },
+      // ウィンドウで開いているプロファイルは枠を太くして見分けられるようにする。
+      // 旧プロファイルノード(issue #84)は円を京紫で塗っていたが、d3.network
+      // 0.5 の `makeDataCircle` は `circle.fill` を読まず常に白で塗るため、
+      // 塗りでは区別できない(issue #229 の実機確認で判明)。
+      circle: {
+        r: 24,
+        fill: COLOR_PEARL,
+        stroke: {
+          color: COLOR_KYO_MURASAKI,
+          width: isOpen ? PROFILE_OPEN_STROKE_WIDTH : PROFILE_CLOSED_STROKE_WIDTH,
+        },
+      },
+      icon: { url: HUB_NODE_ICON_URIS.profile },
+      kind: "profile",
+      positionKey: profileNodeId,
+      profileId: profile.id,
+      profileName: profile.name,
+      profileRepositoryPath: profile.repositoryPath,
+      profileGithubProject: profile.githubProject,
+      profileFolders: profile.folders,
+      windowLabel: profile.windowLabel,
+    });
+    if (repository) {
+      edges.push({
+        id: `e${edgeSeq++}`,
+        source: profileNodeId,
+        target: repository.nodeId,
+        line: { width: 2, color: COLOR_BORDER },
+      });
+    }
   });
 
   const columns = Math.max(1, Math.ceil(Math.sqrt(sessions.length * SESSION_GRID_ASPECT)));
@@ -408,13 +523,47 @@ function buildGraphData(
 
 // ノードの `_core`(issue #109)からインスペクタの表示内容を組み立てる。
 // 追加のbackend呼び出しはせず、グラフ構築時に `_core` へ埋め込んだ値のみを
-// 使う。ノードからウィンドウを開く動線は持たないため、アクションは無し
-// (issue #214)。ノード種別(issue #224でセッション以外も追加)ごとに
-// 表示内容を分ける。
-function buildInspectorContent(core: HubNodeCore): InspectorContent {
+// 使う。アクションはプロファイルノードの「前面化/ウィンドウで開く」だけで
+// (issue #229)、他のノードは持たない(issue #214)。ノード種別(issue #224・
+// #229でセッション以外も追加)ごとに表示内容を分ける。
+function buildInspectorContent(
+  core: HubNodeCore,
+  onOpenProfile: (core: HubNodeCore) => void,
+): InspectorContent {
+  if (core.kind === "profile") return buildProfileInspectorContent(core, onOpenProfile);
   if (core.kind === "git-repository") return buildRepositoryInspectorContent(core);
   if (core.kind === "git-branch") return buildBranchInspectorContent(core);
   return buildSessionInspectorContent(core);
+}
+
+// プロファイル(issue #229)。settings の内容とウィンドウの開閉状態を表示し、
+// 左クリックと同じ操作(前面化/ウィンドウで開く)をボタンでも出す。
+function buildProfileInspectorContent(
+  core: HubNodeCore,
+  onOpenProfile: (core: HubNodeCore) => void,
+): InspectorContent {
+  const project = core.profileGithubProject;
+  return {
+    title: truncate(core.profileName ?? "プロファイル", SESSION_TITLE_MAX_CHARS),
+    fields: [
+      { label: "名前", value: core.profileName ?? "" },
+      { label: "repository_path", value: core.profileRepositoryPath ?? "(未設定)" },
+      {
+        label: "GitHubプロジェクト",
+        value: project ? `${project.owner}#${project.number}` : "(未設定)",
+      },
+      // 複数件は改行区切り(`.hub-inspector-field dd` は `white-space: pre-line`)。
+      { label: "対象フォルダ", value: (core.profileFolders ?? []).join("\n") || "(未設定)" },
+      {
+        label: "ウィンドウ",
+        value: core.windowLabel ? "開いている" : "開いていない",
+      },
+    ],
+    action: {
+      label: core.windowLabel ? "前面化" : "ウィンドウで開く",
+      onClick: () => onOpenProfile(core),
+    },
+  };
 }
 
 function buildSessionInspectorContent(core: HubNodeCore): InspectorContent {
@@ -492,11 +641,13 @@ function buildBranchInspectorContent(core: HubNodeCore): InspectorContent {
 // オブジェクトモデルのインスタンスビューとして作り直している途中で、第1段
 // (issue #214)は `get_pc` で読み込んだ全セッション(User.sessions)のノード
 // だけを描いた。第2段(issue #224)で GitRepository/GitBranch のノードと、
-// GitRepository→GitBranch・セッション→GitBranch の線を戻した(Pc・Userの
+// GitRepository→GitBranch・セッション→GitBranch の線を、第3段(issue #229)で
+// プロファイルのノードとプロファイル→GitRepository の線を戻した(Pc・Userの
 // ノードは引き続き表示しない)。セッション一覧・Git台帳は起動後のバック
 // グラウンド読み込み(issue #212)で揃うため、`pc:data_loaded` までは空のまま
-// 「読み込み中」を表示する。ノードの右クリックでインスペクタを表示する
-// (左クリックの動作は持たない)。
+// 「読み込み中」を表示する。ノードの右クリックでインスペクタを表示する。
+// 左クリックはプロファイルノードだけが持つ(開いていれば前面化、無ければ
+// ウィンドウを開く。issue #229)。
 function HubPage() {
   const [error, setError] = useState<string | null>(null);
   // セッション一覧の取得元(オブジェクトモデル実装。issue #182・#197)。
@@ -537,6 +688,87 @@ function HubPage() {
       unlistenPromise.then((unlisten) => unlisten());
     };
   }, [loadPc]);
+
+  // プロファイル(issue #229)。`get_settings` の一覧(id・名前)に、プロファイル
+  // ごとの `get_settings(profileId)` の内容(対象リポジトリ等)と、
+  // `list_window_states` から引いた開いているウィンドウを合わせる。
+  // 1ウィンドウ = 1プロファイル(native.md §6)のため、同じプロファイルを
+  // 複数ウィンドウが開いている場合は最初に見つかったウィンドウを使う。
+  const [profiles, setProfiles] = useState<HubProfile[]>([]);
+  const loadProfiles = useCallback((): Promise<void> => {
+    return Promise.all([getSettings(), listWindowStates()])
+      .then(([settings, windowStates]) => {
+        const windowLabelByProfileId = new Map<string, string>();
+        windowStates.forEach((w) =>
+          w.tabs.forEach((tab) => {
+            if (!windowLabelByProfileId.has(tab.profile_id)) {
+              windowLabelByProfileId.set(tab.profile_id, w.label);
+            }
+          }),
+        );
+        return Promise.all(
+          settings.profiles.map((p) =>
+            getSettings(p.id).then(
+              (detail): HubProfile => ({
+                id: p.id,
+                name: p.name,
+                repositoryPath: detail.repository_path,
+                githubProject: detail.github_project,
+                folders: detail.selected_project_folders,
+                windowLabel: windowLabelByProfileId.get(p.id),
+              }),
+            ),
+          ),
+        );
+      })
+      .then(setProfiles)
+      .catch((e) => setError(isAppError(e) ? e.message : String(e)));
+  }, []);
+
+  useEffect(() => {
+    loadProfiles();
+  }, [loadProfiles]);
+
+  // ウィンドウの開閉ではプロファイルの開閉状態だけが変わる。settings の変更
+  // ではプロファイルに加えて登録リポジトリ(`get_pc` が settings から都度
+  // 組み立てる)も変わりうるため、`pc` も取り直す(旧実装と同じ流儀。
+  // issue #229)。
+  useEffect(() => {
+    const unlistenPromises = [
+      onWindowsChanged(() => {
+        loadProfiles();
+      }),
+      onSettingsUpdated(() => {
+        loadProfiles();
+        loadPc();
+      }),
+    ];
+    return () => {
+      unlistenPromises.forEach((p) => p.then((unlisten) => unlisten()));
+    };
+  }, [loadProfiles, loadPc]);
+
+  // プロファイルのウィンドウが開いていれば前面化し、無ければ開く(issue #229。
+  // #215 で外した動作をプロファイルノードに限って戻した)。左クリックと
+  // インスペクタのボタンの両方から使う。
+  const openOrFocusProfile = useCallback((core: HubNodeCore) => {
+    if (core.windowLabel) {
+      focusWindow(core.windowLabel).catch((e) => console.error(e));
+      return;
+    }
+    if (core.profileId) {
+      openProfileWindow(core.profileId).catch((e) => console.error(e));
+    }
+  }, []);
+
+  const handleNodeClick = useCallback(
+    (node: NodeDatum) => {
+      const core = node._core as HubNodeCore;
+      if (core.kind !== "profile") return;
+      openOrFocusProfile(core);
+    },
+    [openOrFocusProfile],
+  );
 
   // ノードのドラッグ固定位置(issue #121)。起動時に一度だけ読み込み、以後は
   // ドラッグのたびに更新する。キーは `positionKey`(`buildGraphData` 参照)。
@@ -598,9 +830,9 @@ function HubPage() {
   // `HubPage` のマウント中ずっと同一インスタンスのままになる。
   const rectum = useMemo(() => {
     return new Rectum({
-      callbacks: { node: { dragEnded: handleNodeDragEnded } },
+      callbacks: { node: { click: handleNodeClick, dragEnded: handleNodeDragEnded } },
     });
-  }, [handleNodeDragEnded]);
+  }, [handleNodeClick, handleNodeDragEnded]);
 
   // データが変わるたびに同じRectumインスタンスへ `.data()` を呼んで更新
   // する。`Asshole` の `rectum.selector()` 呼び出しより先にこのeffectが
@@ -615,7 +847,7 @@ function HubPage() {
   // 保存位置が元々空で `savedPositions` が変わらなくても再描画させるための値。
   const [layoutResetSeq, setLayoutResetSeq] = useState(0);
   const skipPositionCarryOverRef = useRef(false);
-  const dataKey = JSON.stringify({ pc, savedPositions, layoutResetSeq });
+  const dataKey = JSON.stringify({ pc, profiles, savedPositions, layoutResetSeq });
   useEffect(() => {
     // NOTE: `@yanqirenshi/d3.network` の `Edges.js`(`draw()`)には、IDが
     // 一致した既存の辺要素(本来は「更新」として残すべきもの)まで無条件に
@@ -638,7 +870,12 @@ function HubPage() {
         if (datum) currentPositions.set(datum.id, { x: datum.x, y: datum.y });
       });
     }
-    const { nodes, edges, positionKeys } = buildGraphData(pc, savedPositions, currentPositions);
+    const { nodes, edges, positionKeys } = buildGraphData(
+      pc,
+      profiles,
+      savedPositions,
+      currentPositions,
+    );
     validPositionKeysRef.current = positionKeys;
     rectum.data({ nodes, edges });
     restartSimulation(rectum);
@@ -688,7 +925,9 @@ function HubPage() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [inspectorCore]);
 
-  const inspectorContent = inspectorCore ? buildInspectorContent(inspectorCore) : null;
+  const inspectorContent = inspectorCore
+    ? buildInspectorContent(inspectorCore, openOrFocusProfile)
+    : null;
 
   // インスペクタの幅をマウスドラッグで変更できるようにする(初期444px・
   // 最小222px・最大888px)。パネルは右端固定(`right:0`)のため、幅は
@@ -744,10 +983,11 @@ function HubPage() {
   // `loadPc` が応答の `data_loaded` から都度導出するため、ここで個別に
   // 更新する必要は無い(issue #218)。
   const handleReload = useCallback((): Promise<void> => {
-    return reconcileGitState()
+    const reloadPc = reconcileGitState()
       .catch((e) => console.error(e))
       .then(() => loadPc());
-  }, [loadPc]);
+    return Promise.all([reloadPc, loadProfiles()]).then(() => undefined);
+  }, [loadPc, loadProfiles]);
 
   const dockItems = useMemo(
     () => [
