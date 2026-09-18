@@ -41,14 +41,13 @@ const BRANCH_COLUMN_X = 320;
 const GIT_NODE_ORIGIN_Y = 70;
 const GIT_NODE_ROW_HEIGHT = 90;
 
-// セッションノードの配置(ハブ再構築 第1段。issue #214 の仕様変更コメント)。
-// セッションノードだけでエッジが無いため、force に任せると d3.network の
-// シミュレーション(反発力と衝突のみ。中心への引力は無く、外から足す API も
-// 無い)では互いに押し合って際限なく広がり続ける。そこで整列(グリッド)に
-// する。`move: "support"` で格子の位置に留めつつ、ドラッグでは動かせる。
-// 列数は横長の画面に合わせて「行数 × 1.5 ≒ 列数」になるよう決める
-// (141件なら15列 × 10行)。原点のxはGitRepository/GitBranch列(issue #224)と
-// 重ならない位置まで右へ寄せる。
+// セッションノードの初期配置(issue #214・#226)。セッションノードは
+// `move: "will"` で force シミュレーションに委ねる(issue #226。第2段 #224 で
+// セッション → GitBranch の線が入り、線で結ばれたセッションはブランチの周りに
+// 集まるようになったため)。ここで決めるのはシミュレーション開始時の位置で、
+// 第1段(issue #214)の格子の計算をそのまま流用する。列数は横長の画面に
+// 合わせて「行数 × 1.5 ≒ 列数」になるよう決める(141件なら15列 × 10行)。
+// 原点のxはGitRepository/GitBranch列(issue #224)と重ならない位置まで右へ寄せる。
 const SESSION_GRID_ORIGIN = { x: 560, y: 70 };
 const SESSION_GRID_ASPECT = 1.5;
 // 格子の間隔。横はラベル(12px × 最大16文字 ≒ 192px)が隣と重ならない幅、
@@ -84,6 +83,32 @@ const INSPECTOR_MAX_WIDTH = 888;
 // 続けて動かした場合)をまとめて1回の保存にする。
 const HUB_LAYOUT_SAVE_DEBOUNCE_MS = 500;
 
+// `.data()` のたびに force シミュレーションを動かし直す(issue #226)。
+// d3.network の `dragEnded`(`Simulation.js`)はドラッグ終了時に
+// `alphaTarget(0)` を設定するため、ノードを1度でもドラッグするとシミュレー
+// ションはやがて止まる。`Rectum.data()` はシミュレーションを再開しないので、
+// 止まった後の再描画(再読み込み・配置のリセット等)では tick が走らず、
+// 作り直した辺に線の形(`d`)が入らない(線が消える)うえ、`will` のノードも
+// 動かない。ライブラリに再開用の API が無いため、内部の d3 シミュレーション
+// (`rectum.simulation.simulation`)を直接再開する。alphaTarget はライブラリの
+// 初期値(`makeSimuration` の 0.002)に戻し、alpha は再描画のたびにノードが
+// 大きく動き回らない程度の小さな値にする。
+const SIMULATION_RESTART_ALPHA = 0.1;
+const SIMULATION_DEFAULT_ALPHA_TARGET = 0.002;
+type D3SimulationLike = {
+  alpha(value: number): D3SimulationLike;
+  alphaTarget(value: number): D3SimulationLike;
+  restart(): D3SimulationLike;
+};
+function restartSimulation(rectum: Rectum): void {
+  const simulation = (rectum as unknown as { simulation?: { simulation?: D3SimulationLike } })
+    .simulation?.simulation;
+  simulation
+    ?.alpha(SIMULATION_RESTART_ALPHA)
+    .alphaTarget(SIMULATION_DEFAULT_ALPHA_TARGET)
+    .restart();
+}
+
 // 右クリック時に何を表示するかを判定するための、ノードの元データ(`_core`)。
 // 第1段(issue #214)はセッションノードのみだったが、第2段(issue #224)で
 // GitRepository/GitBranch ノードを戻した。フィールドはインスペクタ
@@ -91,8 +116,8 @@ const HUB_LAYOUT_SAVE_DEBOUNCE_MS = 500;
 type HubNodeCore = {
   kind: "session" | "git-repository" | "git-branch";
   // ドラッグ位置の永続化(issue #121)に使う安定キー。位置を保存する
-  // ノードにのみ設定する(第1段のセッションノードは格子に並べるだけで、
-  // 位置は保存しない)。GitRepository/GitBranch ノード(issue #224)は
+  // ノードにのみ設定する(セッションノードは force シミュレーションに委ねる
+  // ため保存しない。issue #226)。GitRepository/GitBranch ノード(issue #224)は
   // 台帳の個体指定子(repository_path/branch_id)由来のキーで保存する。
   positionKey?: string;
   // session(`domain::Session` のモデル属性。issue #197)
@@ -213,7 +238,11 @@ function gitBranchNodeId(branchId: string): string {
 // 割り当てる(`app::pc_with_user_sessions`/`app::current_pc_with_repositories`)
 // ため、重複させないよう先頭ユーザーの分だけを使う。d3.network はノードに
 // x/y が必須のため、座標は列・格子の位置として自前で計算する。
-function buildGraphData(pc: PcDto | null, savedPositions: Record<string, NodePositionDto>) {
+function buildGraphData(
+  pc: PcDto | null,
+  savedPositions: Record<string, NodePositionDto>,
+  currentPositions: Map<string, NodePositionDto>,
+) {
   const nodes: Record<string, unknown>[] = [];
   const edges: Record<string, unknown>[] = [];
   // 現在のグラフに実在する positionKey の集合(issue #121)。保存時、既に
@@ -320,11 +349,19 @@ function buildGraphData(pc: PcDto | null, savedPositions: Record<string, NodePos
     // 1..*)ようになったため、session_id は再び一意になり、本来のIDへ戻した。
     const sessionNodeId = `session:${session.session_id}`;
     const title = resolveSessionTitle(session);
-    nodes.push({
-      id: sessionNodeId,
+    // 既に描画中のノードは、シミュレーションで動いた現在位置から続ける
+    // (issue #226)。d3.network は `.data()` のたびに同じIDのノードも新しい
+    // データの x/y で置き換えるため、引き継がないと再読み込みやブランチの
+    // ドラッグ(位置保存 → 再描画)のたびにセッションが格子の位置へ戻る。
+    const position = currentPositions.get(sessionNodeId) ?? {
       x: SESSION_GRID_ORIGIN.x + (i % columns) * SESSION_GRID_CELL_WIDTH,
       y: SESSION_GRID_ORIGIN.y + Math.floor(i / columns) * SESSION_GRID_CELL_HEIGHT,
-      move: "support",
+    };
+    nodes.push({
+      id: sessionNodeId,
+      x: position.x,
+      y: position.y,
+      move: "will",
       label: {
         text: truncate(title, SESSION_LABEL_MAX_CHARS),
         fill: COLOR_SUMI,
@@ -571,7 +608,14 @@ function HubPage() {
   // するだけなので、後から selector が設定された時点で自動的に初回描画される。
   // `savedPositions` はGitRepository/GitBranchノードの位置(issue #224)に
   // 反映するため依存に含める。
-  const dataKey = JSON.stringify({ pc, savedPositions });
+  // 「配置をリセット」でセッションノードも初期位置(格子)から動かし直すための
+  // 印(issue #226)。セッションは再描画のたびに現在位置を引き継ぐため、線の
+  // 無いセッションがゆっくり広がり続けた分も残る。リセット時だけは引き継がず、
+  // 格子の位置からシミュレーションをやり直す。`layoutResetSeq` はリセット時に
+  // 保存位置が元々空で `savedPositions` が変わらなくても再描画させるための値。
+  const [layoutResetSeq, setLayoutResetSeq] = useState(0);
+  const skipPositionCarryOverRef = useRef(false);
+  const dataKey = JSON.stringify({ pc, savedPositions, layoutResetSeq });
   useEffect(() => {
     // NOTE: `@yanqirenshi/d3.network` の `Edges.js`(`draw()`)には、IDが
     // 一致した既存の辺要素(本来は「更新」として残すべきもの)まで無条件に
@@ -582,9 +626,22 @@ function HubPage() {
     // から `.data()` を呼び、ライブラリの `enter()` が必ず全辺を新規追加として
     // 作り直すようにする(辺自体は保持すべき状態を持たないため実害はない)。
     hubPageRef.current?.querySelectorAll("path.ng-edge").forEach((el) => el.remove());
-    const { nodes, edges, positionKeys } = buildGraphData(pc, savedPositions);
+    // 描画中のノードの現在位置(force シミュレーションで動いた後の値)。
+    // d3 のデータ結合は各 `g.ng-node` の `__data__` にノードのデータを載せる
+    // (右クリックのインスペクタと同じ取り方。issue #226)。
+    const currentPositions = new Map<string, NodePositionDto>();
+    if (skipPositionCarryOverRef.current) {
+      skipPositionCarryOverRef.current = false;
+    } else {
+      hubPageRef.current?.querySelectorAll("g.ng-node").forEach((el) => {
+        const datum = (el as Element & { __data__?: NodeDatum }).__data__;
+        if (datum) currentPositions.set(datum.id, { x: datum.x, y: datum.y });
+      });
+    }
+    const { nodes, edges, positionKeys } = buildGraphData(pc, savedPositions, currentPositions);
     validPositionKeysRef.current = positionKeys;
     rectum.data({ nodes, edges });
+    restartSimulation(rectum);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rectum, dataKey]);
 
@@ -675,6 +732,9 @@ function HubPage() {
     if (!window.confirm("ノードの配置をリセットしますか?")) return;
     setSavedPositions({});
     saveHubLayout({}).catch((e) => console.error(e));
+    // セッションノードも格子の初期位置からやり直す(issue #226)。
+    skipPositionCarryOverRef.current = true;
+    setLayoutResetSeq((seq) => seq + 1);
   }, []);
 
   // 「再読み込み」操作。`reconcile_git_state` はGit台帳の再観測に加えて
