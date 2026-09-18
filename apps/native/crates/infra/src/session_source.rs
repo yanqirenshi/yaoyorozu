@@ -2,7 +2,7 @@ use app::{AppError, SessionSource};
 use domain::{
     extract_ai_title, extract_custom_title, extract_cwd, extract_git_branch, extract_last_prompt,
     extract_message, extract_mode, extract_session_id, extract_slug, resolve_session_title,
-    AgentKind, Conversation, Project, Role, Session, SessionSummary,
+    AgentKind, Conversation, ParsedSession, Project, Role, SessionSummary,
 };
 use notify::RecursiveMode;
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
@@ -326,26 +326,47 @@ impl SessionSource for FileSystemRepository {
             .collect()
     }
 
-    fn list_session_models(&self, project: &str) -> Result<Vec<Session>, AppError> {
+    fn list_parsed_sessions(&self, project: &str) -> Result<Vec<ParsedSession>, AppError> {
         // `list_sessions`と同じキャッシュ(`cached_or_scanned_summary`)に
-        // 相乗りし、jsonlのフルパースをもう1周増やさない(issue #197)。
+        // 相乗りし、jsonlのフルパースをもう1周増やさない(issue #197/#208)。
+        // 行(`LogLine`)は読まない(遅延読み込み。issue #208)。
         let project_dir = self.projects_dir.join(project);
         session_files_by_recency(&project_dir)
             .iter()
             .map(|path| {
                 let modified_at_ms = to_millis(fs::metadata(path).and_then(|m| m.modified()));
                 let scanned = cached_or_scanned_summary(path, modified_at_ms)?;
-                Ok(Session {
+                let subagent_file_paths = list_subagent_file_paths(&project_dir, &scanned.id);
+                Ok(ParsedSession {
                     session_id: scanned.id,
                     custom_title: scanned.custom_title,
                     ai_title: scanned.ai_title,
                     mode: scanned.mode,
                     slug: scanned.slug,
                     last_prompt: scanned.last_prompt,
+                    conversation_file_path: path.clone(),
+                    subagent_file_paths,
                 })
             })
             .collect()
     }
+}
+
+/// `<project_dir>/<session_id>/subagents/agent-*.jsonl` を列挙する
+/// (issue #208)。ディレクトリが無ければ空(サブエージェントを使わなかった
+/// セッションが大半のため、通常のケース)。順序を安定させるためソートする。
+fn list_subagent_file_paths(project_dir: &Path, session_id: &str) -> Vec<PathBuf> {
+    let subagents_dir = project_dir.join(session_id).join("subagents");
+    let Ok(entries) = fs::read_dir(&subagents_dir) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("jsonl"))
+        .collect();
+    paths.sort();
+    paths
 }
 
 /// `(ファイルパス, mtime)` をキーにしたタイトル抽出結果のキャッシュ。
@@ -750,7 +771,7 @@ mod tests {
     }
 
     #[test]
-    fn list_session_models_reads_all_model_attributes_and_prefers_the_last_occurrence() {
+    fn list_parsed_sessions_reads_all_model_attributes_and_prefers_the_last_occurrence() {
         // issue #197: custom_title/ai_title/mode/slug/last_prompt はいずれも
         // 「最後に見つかったものを採用」する(custom_title/git_branchと同じ
         // 流儀)。
@@ -773,8 +794,8 @@ mod tests {
 
         let repo = FileSystemRepository::new(dir.path().to_path_buf());
         let sessions = repo
-            .list_session_models("proj")
-            .expect("should list session models");
+            .list_parsed_sessions("proj")
+            .expect("should list parsed sessions");
 
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].session_id, "s1");
@@ -783,10 +804,15 @@ mod tests {
         assert_eq!(sessions[0].mode.as_deref(), Some("read"));
         assert_eq!(sessions[0].slug.as_deref(), Some("last-slug"));
         assert_eq!(sessions[0].last_prompt.as_deref(), Some("直近の入力"));
+        assert_eq!(
+            sessions[0].conversation_file_path,
+            project_dir.join("s1.jsonl")
+        );
+        assert!(sessions[0].subagent_file_paths.is_empty());
     }
 
     #[test]
-    fn list_session_models_leaves_optional_attributes_none_when_never_recorded() {
+    fn list_parsed_sessions_leaves_optional_attributes_none_when_never_recorded() {
         let dir = tempfile::tempdir().unwrap();
         let project_dir = dir.path().join("proj");
         fs::create_dir_all(&project_dir).unwrap();
@@ -794,8 +820,8 @@ mod tests {
 
         let repo = FileSystemRepository::new(dir.path().to_path_buf());
         let sessions = repo
-            .list_session_models("proj")
-            .expect("should list session models");
+            .list_parsed_sessions("proj")
+            .expect("should list parsed sessions");
 
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].custom_title, None);
@@ -803,6 +829,50 @@ mod tests {
         assert_eq!(sessions[0].mode, None);
         assert_eq!(sessions[0].slug, None);
         assert_eq!(sessions[0].last_prompt, None);
+    }
+
+    #[test]
+    fn list_parsed_sessions_finds_subagent_files_when_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        write_session_file(&project_dir, "s1", &project_dir);
+        let subagents_dir = project_dir.join("s1").join("subagents");
+        fs::create_dir_all(&subagents_dir).unwrap();
+        fs::write(subagents_dir.join("agent-a.jsonl"), "").unwrap();
+        fs::write(subagents_dir.join("agent-b.jsonl"), "").unwrap();
+        // jsonl以外のファイル(念のため置かれていても無視する)。
+        fs::write(subagents_dir.join("notes.txt"), "").unwrap();
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let sessions = repo
+            .list_parsed_sessions("proj")
+            .expect("should list parsed sessions");
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(
+            sessions[0].subagent_file_paths,
+            vec![
+                subagents_dir.join("agent-a.jsonl"),
+                subagents_dir.join("agent-b.jsonl"),
+            ]
+        );
+    }
+
+    #[test]
+    fn list_parsed_sessions_leaves_subagent_files_empty_when_directory_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        write_session_file(&project_dir, "s1", &project_dir);
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let sessions = repo
+            .list_parsed_sessions("proj")
+            .expect("should list parsed sessions");
+
+        assert_eq!(sessions.len(), 1);
+        assert!(sessions[0].subagent_file_paths.is_empty());
     }
 
     #[test]

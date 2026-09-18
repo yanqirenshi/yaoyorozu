@@ -224,10 +224,20 @@ export type GitRepositoryDto = {
   worktrees: GitWorktreeDto[];
 };
 
+// `Session.conversation_file`/`subagent_files` の1件分(オブジェクトモデル
+// 実装 第5弾。issue #208)。`lines_loaded`/`line_count` は `LogLine` が
+// 遅延読み込みであることの可視化用(未読み込みの間は常に `false`/`0`)。
+export type SessionFileDto = {
+  file_path: string;
+  lines_loaded: boolean;
+  line_count: number;
+};
+
 // `User.sessions` の1件分(オブジェクトモデル実装 第4弾。issue #197)。
 // メッセージ本文は持たない(そちらは `ConversationDto`)。属性はセッションの
 // jsonlから導出したモデル値そのもので、cwd/git_branch(表示補助データ。
-// `SessionSummaryDto`側)は含まない。
+// `SessionSummaryDto`側)は含まない。`conversation_file`/`subagent_files`は
+// 第5弾(issue #208)で追加。
 export type SessionDto = {
   session_id: string;
   custom_title: string | null;
@@ -235,6 +245,8 @@ export type SessionDto = {
   mode: string | null;
   slug: string | null;
   last_prompt: string | null;
+  conversation_file: SessionFileDto;
+  subagent_files: SessionFileDto[];
 };
 
 export type UserDto = {

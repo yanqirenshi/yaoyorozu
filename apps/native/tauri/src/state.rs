@@ -1,5 +1,5 @@
 use app::AppError;
-use domain::{effective_projects_dir, GitLedger, Pc, Session, Settings};
+use domain::{effective_projects_dir, GitLedger, ParsedSession, Pc, Settings};
 use infra::{
     FileGitLedgerStore, FileSettingsStore, FileSystemRepository, SystemGitStateSource,
     WindowsExecutionEnvironmentSource,
@@ -45,12 +45,15 @@ pub struct AppState {
     /// (`app::reconcile_git_ledger`のドキュメントコメント参照)。
     pub git_ledger: GitLedger,
     pub git_ledger_path: PathBuf,
-    /// 全プロジェクトから組み立てた`Session`一覧(オブジェクトモデル実装
-    /// 第4弾。issue #197)。`git_ledger`と同じ理由(jsonl走査コスト)で
-    /// クエリのたびには再構築せず、起動時とハブ再読み込み時
-    /// (`reconcile_git_state` command。第3弾と合わせて再観測する)にのみ
-    /// 更新する。
-    pub user_sessions: Vec<Session>,
+    /// 全プロジェクトを走査した`ParsedSession`一覧(オブジェクトモデル実装
+    /// 第4〜5弾。issue #197/#208)。`git_ledger`と同じ理由(jsonl走査コスト)
+    /// で、ファイル走査自体はクエリのたびに再実行せず、起動時とハブ再読み込み
+    /// 時(`reconcile_git_state` command。第3弾と合わせて再観測する)にのみ
+    /// 更新する。実際の`Session`/`SessionFile`への組み立て
+    /// (`domain::User::load_sessions`)はI/Oを伴わない純粋変換のため、
+    /// クエリのたび(`get_pc`)に呼んでも構わない
+    /// (`app::pc_with_user_sessions`参照)。
+    pub user_sessions: Vec<ParsedSession>,
 }
 
 /// エポック秒からのミリ秒。`GitBranch`/`GitWorktree`の
@@ -101,21 +104,21 @@ pub fn reconcile_and_save_git_ledger(
     result.ledger
 }
 
-/// 全プロジェクトから`Session`一覧を組み立てる(issue #197)。起動時
-/// (`AppState::load`)とハブの再読み込み操作(`reconcile_git_state`
+/// 全プロジェクトから`ParsedSession`一覧を組み立てる(issue #197/#208)。
+/// 起動時(`AppState::load`)とハブの再読み込み操作(`reconcile_git_state`
 /// command。第3弾のGit台帳と同じタイミングで呼ぶ)の両方から使う共通処理。
 /// プロジェクト単位で読み取りに失敗しても他のプロジェクトの結果は失わない
 /// (fail-safe。`app::build_user_sessions`参照)。永続化対象ではない
 /// (真実の源は常にjsonlファイル自体であり、`GitLedger`のような独自の
 /// 台帳・IDは持たない)ため、ロード/セーブは無い。
-pub fn build_and_report_user_sessions(settings: &Settings) -> Result<Vec<Session>, AppError> {
+pub fn build_and_report_user_sessions(settings: &Settings) -> Result<Vec<ParsedSession>, AppError> {
     let projects_dir = resolve_effective_projects_dir(settings)?;
     let source = FileSystemRepository::new(projects_dir);
     let result = app::build_user_sessions(&source)?;
     for failed_project in &result.failed_projects {
         eprintln!("セッションの読み取りに失敗したため、{failed_project} は含めませんでした");
     }
-    Ok(result.sessions)
+    Ok(result.parsed)
 }
 
 /// [`AppState::load`] の結果。設定ファイルの破損から復旧した場合、呼び出し側
