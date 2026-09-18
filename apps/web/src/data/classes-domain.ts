@@ -54,6 +54,11 @@
  *   これにより、以前ここで未決にしていた「同じリポジトリでも置き場所のパスが PC ごとに
  *   違いうるので、`repository_path` では PC をまたいで同じリポジトリだと言えない」問題は
  *   解消する(クローンごとに別の GitRepository なので、パスで区別してよい)。
+ * - `Profile`(対象リポジトリ・GitHubプロジェクト・対象フォルダの組を名前付きで複数保存
+ *   できる設定の単位。1ウィンドウ = 1プロファイル。native.md §6)は TM にまだ無い(未整備)。
+ *   ユーザー指示により、実装(`profile.rs`。issue #72)を元に直接追加した。以前は
+ *   `classes-native-prototype.ts` に as-is で載っていたが、こちらへ昇格したので削除した
+ *   (Pc・User と同じ扱い)。TM 側への反映は デザイン(ドメイン:Data) セッションの今後の課題。
  */
 import type { DiagramInput } from "@yanqirenshi/d3.classes";
 import {
@@ -133,6 +138,24 @@ const DEFS: ClassDef[] = [
     ],
     position: { x: 951, y: 470 },
     filePath: "apps/native/crates/domain/src/git_worktree.rs",
+  },
+  {
+    name: { physical: "Profile", logical: "Profile", description: "対象リポジトリ・GitHubプロジェクト・対象フォルダの組を名前付きで複数保存できる設定の単位(issue #72)。1ウィンドウ = 1プロファイル(native.md §6)。TM 未整備(冒頭の【TM との違い・未決】を参照)" }, // 論理名: プロファイル
+    attributes: [
+      attr("id", "String"), // 個体指定子。名前変更に耐える安定ID(生成は実装側の責務)
+      attr("name", "String"),
+      // repository_path(GitRepository の個体指定子と同じ PathBuf)は ID 参照なので、
+      // フィールドにはせず下の関連(repository_path)で表す(冒頭の「TM からの写し方」)。
+      // domain::GithubProject(classes-native-prototype.ts)そのもの。図の離れた位置に
+      // あるため線は引かない(同ファイル冒頭の方針を参照)。
+      attr("github_project", "Option<GithubProject>"),
+      attr("selected_project_folders", "Vec<String>"), // 対象フォルダ名(パスではなくフォルダ名のまま持つ)
+    ],
+    // GitRepository の真下に置く(GitRepository の下辺 → Profile の上辺)。
+    position: { x: 468, y: 500 },
+    filePath: "apps/native/crates/domain/src/profile.rs",
+    // github_project の名前と型の列が重なるので広げる(LogLine の size の説明を参照)。
+    size: { w: 280, h: 0 },
   },
   // ============ 会話 ============
   {
@@ -271,6 +294,15 @@ const RELATIONSHIPS = [
     fromMultiplicity: "0..1",
     toMultiplicity: "0..1",
   }),
+  // Profile が対象リポジトリを ID(パス)で参照する(実装:
+  // `Profile { repository_path: Option<PathBuf> }`)。GitRepository は User が所有して
+  // いるので(持ち主は1つだけ)、コンポジションにはせず関連にする。GitRepository の側から
+  // はたどらない(起点の × の意味どおり)。GitRepository の真下に Profile を置き、
+  // Profile の上辺から GitRepository の下辺へ縦につなぐ。
+  rel("association", "Profile", "GitRepository", "repository_path", "top", "bottom", {
+    fromMultiplicity: "0..1",
+    toMultiplicity: "0..*",
+  }),
   // TM: ユーザー．セッション(対照表、属性なし)。1人に会話は 0 件以上、1つの会話は
   // 必ず1人のもの。User が Session を所有するのでコンポジションにする(「1つの会話は
   // 必ず1人のもの」はコンポジションの全体側の多重度 1 と一致し、TM と矛盾しない)。
@@ -330,7 +362,8 @@ export const DOMAIN_CLASS_DATA: DiagramInput = {
   relationships: RELATIONSHIPS,
 };
 
-// 全12クラスが実装済み(Pc・User(第1弾)・GitRepository・GitBranch・GitWorktree(第2〜3弾)・
+// 全13クラスが実装済み(Pc・User(第1弾)・GitRepository・GitBranch・GitWorktree(第2〜3弾)・
 // Session(第4弾)・SessionFile(第5弾)・LogLine・UserLogLine・AssistantLogLine・
-// SystemLogLine・AttachmentLogLine(第6弾))。すべて filePath を持つ。
+// SystemLogLine・AttachmentLogLine(第6弾)・Profile(classes-native-prototype.ts から昇格))。
+// すべて filePath を持つ。
 export const DOMAIN_CLASS_FILE_PATHS: ClassFilePaths = filePaths;
