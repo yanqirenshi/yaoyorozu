@@ -5,10 +5,8 @@ import type { NodeDatum } from "@yanqirenshi/d3.network";
 import {
   getHubLayout,
   getPc,
-  getSettings,
   isAppError,
   onPcDataLoaded,
-  onSettingsUpdated,
   reconcileGitState,
   saveHubLayout,
 } from "../api";
@@ -23,26 +21,23 @@ import type { InspectorContent } from "../HubInspector";
 const COLOR_PEARL = "#fbfbf8"; // 真珠
 const COLOR_KYO_MURASAKI = "#9d5b8b"; // 京紫(session)
 const COLOR_SUMI = "#373737"; // 墨
-const COLOR_BORDER = "#a1a1aa";
 
-// PC → User の固定配置(issue #182)。セッションは User の周りに散らす
-// (ハブ再構築 第1段。issue #214)。
-const PC_POSITION = { x: 70, y: 70 };
-const USER_POSITION = { x: 200, y: 70 };
+// セッションノードの配置(ハブ再構築 第1段。issue #214 の仕様変更コメント)。
+// セッションノードだけでエッジが無いため、force に任せると d3.network の
+// シミュレーション(反発力と衝突のみ。中心への引力は無く、外から足す API も
+// 無い)では互いに押し合って際限なく広がり続ける。そこで整列(グリッド)に
+// する。`move: "support"` で格子の位置に留めつつ、ドラッグでは動かせる。
+// 列数は横長の画面に合わせて「行数 × 1.5 ≒ 列数」になるよう決める
+// (141件なら15列 × 10行)。
+const SESSION_GRID_ORIGIN = { x: 80, y: 70 };
+const SESSION_GRID_ASPECT = 1.5;
+// 格子の間隔。横はラベル(12px × 最大16文字 ≒ 192px)が隣と重ならない幅、
+// 縦は円(半径20)+ ラベル1行が収まる高さ。
+const SESSION_GRID_CELL_WIDTH = 240;
+const SESSION_GRID_CELL_HEIGHT = 110;
 
-// セッションノードの初期配置(issue #214)。d3.network の衝突半径は
-// ライブラリ側で 111px 固定(`Simulation.js` の `forceCollide`)のため、
-// ノード中心どうしは約 222px 離れて落ち着く。最初からその間隔のひまわり
-// (フィロタキシス)状に User の周りへ並べておき、141件が一点から弾け
-// 飛ぶような初期の暴れを抑える。`SESSION_SPIRAL_SPACING * sqrt(n)` が
-// n番目の半径になり、隣接ノードの間隔がおおむね衝突直径に揃う値にした。
-const SESSION_SPIRAL_SPACING = 125;
-// 中心(User)に最初のセッションが重ならないよう、番号をずらして始める。
-const SESSION_SPIRAL_START_INDEX = 1.5;
-const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
-
-// セッションノードのラベルの最大文字数(issue #214)。衝突直径(約222px)に
-// 12pxの文字が収まる長さにする(日本語でも隣のラベルと重なりにくい)。
+// セッションノードのラベルの最大文字数(issue #214)。格子の横幅に 12px の
+// 文字が収まる長さにする(日本語でも隣のラベルと重なりにくい)。
 const SESSION_LABEL_MAX_CHARS = 16;
 // インスペクタの見出しに使うタイトルの最大文字数。
 const SESSION_TITLE_MAX_CHARS = 40;
@@ -70,24 +65,14 @@ const INSPECTOR_MAX_WIDTH = 888;
 const HUB_LAYOUT_SAVE_DEBOUNCE_MS = 500;
 
 // 右クリック時に何を表示するかを判定するための、ノードの元データ(`_core`)。
-// PC → User → Session の3階層(ハブ再構築 第1段。issue #214)。フィールドは
-// インスペクタ(issue #109)の表示専用で、ノード種別によってどれが埋まって
-// いるかが変わる。
+// 第1段はセッションノードのみ(ハブ再構築 第1段。issue #214)。フィールドは
+// インスペクタ(issue #109)の表示専用。
 type HubNodeCore = {
-  kind: "pc" | "user" | "session";
+  kind: "session";
   // ドラッグ位置の永続化(issue #121)に使う安定キー。位置を保存する
-  // ノードにのみ設定する(第1段の3種別はいずれも対象外: pc/user は固定、
-  // session は force シミュレーションに委ねる)。
+  // ノードにのみ設定する(第1段のセッションノードは格子に並べるだけで、
+  // 位置は保存しない)。
   positionKey?: string;
-  // pc(オブジェクトモデル実装 第1弾。issue #182)
-  pcName?: string;
-  systemUuid?: string;
-  description?: string;
-  effectiveProjectsDir?: string;
-  // user(issue #182)
-  userId?: string;
-  userName?: string;
-  homeDirectory?: string;
   // session(`domain::Session` のモデル属性。issue #197)
   sessionId?: string;
   sessionTitle?: string;
@@ -132,72 +117,25 @@ function resolveSessionTitle(session: SessionDto): string {
   );
 }
 
-// `pc`(`get_pc`)から PC → User → Session の3階層グラフ(d3.network 用
-// ノード・エッジ)を組み立てる(ハブ再構築 第1段。issue #214)。セッションは
-// `pc.users[].sessions` の全件(~/.claude/projects 全体。プロファイルの
-// 対象フォルダ設定とは無関係)。「PC」「User」ノードは `move: "freeze"` で
-// 固定し、sessionノードは `move: "will"` で force シミュレーションに委ねる。
-// d3.network はノードに x/y が必須のため、初期座標は自前で計算する。
-function buildGraphData(pc: PcDto | null, effectiveProjectsDir: string) {
+// `pc`(`get_pc`)から、読み込んだ全セッションのノードだけを組み立てる
+// (ハブ再構築 第1段。issue #214 の仕様変更コメント: Pc・User ノードと
+// 階層エッジは表示しない)。セッションは `pc.users[].sessions` の全件
+// (~/.claude/projects 全体。プロファイルの対象フォルダ設定とは無関係)。
+// backend は全ユーザーに同じ一覧を割り当てる(`app::pc_with_user_sessions`)
+// ため、重複させないよう先頭ユーザーの分だけを使う。d3.network はノードに
+// x/y が必須のため、座標は格子の位置として自前で計算する。
+function buildGraphData(pc: PcDto | null) {
   const nodes: Record<string, unknown>[] = [];
   const edges: Record<string, unknown>[] = [];
   // 現在のグラフに実在する positionKey の集合(issue #121)。保存時、既に
   // 存在しないノードの位置情報をここで自然に除外する(呼び出し側が保存前に
   // この集合でフィルタする)。第1段では位置を保存するノードが無いため空。
   const positionKeys = new Set<string>();
-  let edgeSeq = 0;
 
-  // `pc` が未取得(初回読み込み中)の間は "このPC" のプレースホルダで描画し、
-  // Userノード以下は省略する(取得後の再描画で自然に補われる。issue #182)。
-  const pcId = "pc";
-  const pcName = pc?.pc_name ?? "このPC";
-  nodes.push({
-    id: pcId,
-    x: PC_POSITION.x,
-    y: PC_POSITION.y,
-    move: "freeze",
-    label: { text: pcName, fill: COLOR_SUMI, font: { size: 16 }, y: labelYBelowCircle(34) },
-    circle: { r: 34, fill: COLOR_PEARL, stroke: { color: COLOR_SUMI, width: 3 } },
-    icon: { url: HUB_NODE_ICON_URIS.pc },
-    kind: "pc",
-    pcName,
-    systemUuid: pc?.system_uuid,
-    description: pc?.description,
-    effectiveProjectsDir,
-  });
+  const sessions = pc?.users[0]?.sessions ?? [];
+  const columns = Math.max(1, Math.ceil(Math.sqrt(sessions.length * SESSION_GRID_ASPECT)));
 
-  // 現在のユーザー1人を PC の右隣に配置する(issue #182)。複数ユーザーは
-  // 型上は許容するが、先頭の1人だけを表示する(仕様上も現在のスコープ外)。
-  const primaryUser = pc?.users[0];
-  if (!primaryUser) return { nodes, edges, positionKeys };
-
-  const userId = `user:${primaryUser.user_id}`;
-  nodes.push({
-    id: userId,
-    x: USER_POSITION.x,
-    y: USER_POSITION.y,
-    move: "freeze",
-    label: {
-      text: primaryUser.user_name,
-      fill: COLOR_SUMI,
-      font: { size: 14 },
-      y: labelYBelowCircle(28),
-    },
-    circle: { r: 28, fill: COLOR_PEARL, stroke: { color: COLOR_SUMI, width: 2 } },
-    icon: { url: HUB_NODE_ICON_URIS.user },
-    kind: "user",
-    userId: primaryUser.user_id,
-    userName: primaryUser.user_name,
-    homeDirectory: primaryUser.home_directory,
-  });
-  edges.push({
-    id: `e${edgeSeq++}`,
-    source: pcId,
-    target: userId,
-    line: { width: 2, color: COLOR_BORDER },
-  });
-
-  primaryUser.sessions.forEach((session, i) => {
+  sessions.forEach((session, i) => {
     // ノードIDは会話ファイルのパスで作る。session_id は一意ではない
     // (セッション途中で worktree へ移ると、同じ session_id の jsonl が
     // 元のプロジェクトフォルダと worktree 側のフォルダの両方にできる)ため、
@@ -205,13 +143,11 @@ function buildGraphData(pc: PcDto | null, effectiveProjectsDir: string) {
     // 減って見える(issue #214 の実機確認で判明)。
     const sessionNodeId = `session:${session.conversation_file.file_path}`;
     const title = resolveSessionTitle(session);
-    const radius = SESSION_SPIRAL_SPACING * Math.sqrt(i + SESSION_SPIRAL_START_INDEX);
-    const angle = i * GOLDEN_ANGLE;
     nodes.push({
       id: sessionNodeId,
-      x: USER_POSITION.x + radius * Math.cos(angle),
-      y: USER_POSITION.y + radius * Math.sin(angle),
-      move: "will",
+      x: SESSION_GRID_ORIGIN.x + (i % columns) * SESSION_GRID_CELL_WIDTH,
+      y: SESSION_GRID_ORIGIN.y + Math.floor(i / columns) * SESSION_GRID_CELL_HEIGHT,
+      move: "support",
       label: {
         text: truncate(title, SESSION_LABEL_MAX_CHARS),
         fill: COLOR_SUMI,
@@ -233,12 +169,6 @@ function buildGraphData(pc: PcDto | null, effectiveProjectsDir: string) {
       conversationFileLineCount: session.conversation_file.line_count,
       subagentFileCount: session.subagent_files.length,
     });
-    edges.push({
-      id: `e${edgeSeq++}`,
-      source: userId,
-      target: sessionNodeId,
-      line: { width: 1, color: COLOR_BORDER },
-    });
   });
 
   return { nodes, edges, positionKeys };
@@ -248,71 +178,45 @@ function buildGraphData(pc: PcDto | null, effectiveProjectsDir: string) {
 // 追加のbackend呼び出しはせず、グラフ構築時に `_core` へ埋め込んだ値のみを
 // 使う。第1段ではノードからウィンドウを開く動線を持たないため、アクションは
 // 無し(issue #214)。
-function buildInspectorContent(core: HubNodeCore): InspectorContent | null {
-  switch (core.kind) {
-    case "pc":
-      return {
-        title: core.pcName ?? "このPC",
-        fields: [
-          { label: "システムUUID", value: core.systemUuid ?? "" },
-          { label: "説明", value: core.description || "(未設定)" },
-          { label: "セッションルートディレクトリ", value: core.effectiveProjectsDir ?? "" },
-        ],
-        action: null,
-      };
-    case "user":
-      return {
-        title: core.userName ?? "ユーザー",
-        fields: [
-          { label: "ユーザーID", value: core.userId ?? "" },
-          { label: "ホームディレクトリ", value: core.homeDirectory ?? "" },
-        ],
-        action: null,
-      };
-    case "session":
-      return {
-        title: truncate(core.sessionTitle ?? "セッション", SESSION_TITLE_MAX_CHARS),
-        fields: [
-          // モデル属性(`domain::Session`。issue #197)。
-          { label: "セッションID", value: core.sessionId ?? "" },
-          { label: "custom_title", value: core.customTitle ?? "(未設定)" },
-          { label: "ai_title", value: core.aiTitle ?? "(未設定)" },
-          { label: "mode", value: core.mode ?? "(未設定)" },
-          { label: "slug", value: core.slug ?? "(未設定)" },
-          { label: "last_prompt", value: core.lastPrompt ?? "(未設定)" },
-          // Session.conversation_file/subagent_files(issue #208)。行
-          // (LogLine)は遅延読み込みのため、読み込み状態・行数もあわせて
-          // 表示する(未読み込みなら「未読み込み」・0件)。
-          { label: "会話ファイル", value: core.conversationFilePath ?? "" },
-          {
-            label: "会話ファイルの行",
-            value: core.conversationFileLinesLoaded
-              ? `読み込み済み(${core.conversationFileLineCount ?? 0}行)`
-              : "未読み込み",
-          },
-          {
-            label: "サブエージェント数",
-            value: String(core.subagentFileCount ?? 0),
-          },
-        ],
-        action: null,
-      };
-    default:
-      return null;
-  }
+function buildInspectorContent(core: HubNodeCore): InspectorContent {
+  return {
+    title: truncate(core.sessionTitle ?? "セッション", SESSION_TITLE_MAX_CHARS),
+    fields: [
+      // モデル属性(`domain::Session`。issue #197)。
+      { label: "セッションID", value: core.sessionId ?? "" },
+      { label: "custom_title", value: core.customTitle ?? "(未設定)" },
+      { label: "ai_title", value: core.aiTitle ?? "(未設定)" },
+      { label: "mode", value: core.mode ?? "(未設定)" },
+      { label: "slug", value: core.slug ?? "(未設定)" },
+      { label: "last_prompt", value: core.lastPrompt ?? "(未設定)" },
+      // Session.conversation_file/subagent_files(issue #208)。行
+      // (LogLine)は遅延読み込みのため、読み込み状態・行数もあわせて
+      // 表示する(未読み込みなら「未読み込み」・0件)。
+      { label: "会話ファイル", value: core.conversationFilePath ?? "" },
+      {
+        label: "会話ファイルの行",
+        value: core.conversationFileLinesLoaded
+          ? `読み込み済み(${core.conversationFileLineCount ?? 0}行)`
+          : "未読み込み",
+      },
+      {
+        label: "サブエージェント数",
+        value: String(core.subagentFileCount ?? 0),
+      },
+    ],
+    action: null,
+  };
 }
 
 // メインウィンドウの起点となる「俯瞰グラフ」画面(ハブ化 その2。issue #84)。
 // オブジェクトモデルのインスタンスビューとして作り直している途中で、第1段
-// (issue #214)は `get_pc` の PC → User → 全セッション(User.sessions)だけを
-// 描く。セッション一覧は起動後のバックグラウンド読み込み(issue #212)で
-// 揃うため、`pc:data_loaded` までは PC・User のみを表示する。ノードの右クリック
-// でインスペクタを表示する(左クリックの動作は第1段では持たない)。
+// (issue #214)は `get_pc` で読み込んだ全セッション(User.sessions)のノード
+// だけを描く。セッション一覧は起動後のバックグラウンド読み込み(issue #212)で
+// 揃うため、`pc:data_loaded` までは空のまま「読み込み中」を表示する。ノードの
+// 右クリックでインスペクタを表示する(左クリックの動作は第1段では持たない)。
 function HubPage() {
-  const [effectiveProjectsDir, setEffectiveProjectsDir] = useState("");
   const [error, setError] = useState<string | null>(null);
-  // このPC・ログインユーザー・セッション一覧(オブジェクトモデル実装。
-  // issue #182・#197)。
+  // セッション一覧の取得元(オブジェクトモデル実装。issue #182・#197)。
   const [pc, setPc] = useState<PcDto | null>(null);
   // セッション一覧・Git台帳の読み込み状態(issue #212)。起動直後は
   // `AppState.user_sessions` が空のまま(jsonl走査をバックグラウンド化して
@@ -320,34 +224,18 @@ function HubPage() {
   // 「読み込み中」として表示する。
   const [pcDataLoaded, setPcDataLoaded] = useState(false);
 
-  // PCノードのインスペクタに出すセッションルートディレクトリ。設定画面で
-  // 変わりうるため `settings:updated` でも取り直す。
-  const loadEffectiveProjectsDir = useCallback((): Promise<void> => {
-    return getSettings()
-      .then((settings) => {
-        setEffectiveProjectsDir(settings.effective_projects_dir);
+  const loadPc = useCallback((): Promise<void> => {
+    return getPc()
+      .then((next) => {
+        setPc(next);
         setError(null);
       })
       .catch((e) => setError(isAppError(e) ? e.message : String(e)));
   }, []);
 
-  const loadPc = useCallback((): Promise<void> => {
-    return getPc()
-      .then(setPc)
-      .catch((e) => setError(isAppError(e) ? e.message : String(e)));
-  }, []);
-
   useEffect(() => {
-    loadEffectiveProjectsDir();
     loadPc();
-  }, [loadEffectiveProjectsDir, loadPc]);
-
-  useEffect(() => {
-    const unlistenPromise = onSettingsUpdated(loadEffectiveProjectsDir);
-    return () => {
-      unlistenPromise.then((unlisten) => unlisten());
-    };
-  }, [loadEffectiveProjectsDir]);
+  }, [loadPc]);
 
   // 起動後のバックグラウンド読み込み(Git台帳の観測・全プロジェクトの
   // jsonl走査。issue #212)が完了したら`pc`を取り直す。
@@ -431,7 +319,7 @@ function HubPage() {
   // するだけなので、後から selector が設定された時点で自動的に初回描画される。
   // `savedPositions` は第1段のグラフ内容には影響しないが、位置を保存する
   // ノードを再導入したとき(次段以降)に取りこぼさないよう依存に含めておく。
-  const dataKey = JSON.stringify({ pc, effectiveProjectsDir, savedPositions });
+  const dataKey = JSON.stringify({ pc, savedPositions });
   useEffect(() => {
     // NOTE: `@yanqirenshi/d3.network` の `Edges.js`(`draw()`)には、IDが
     // 一致した既存の辺要素(本来は「更新」として残すべきもの)まで無条件に
@@ -442,7 +330,7 @@ function HubPage() {
     // から `.data()` を呼び、ライブラリの `enter()` が必ず全辺を新規追加として
     // 作り直すようにする(辺自体は保持すべき状態を持たないため実害はない)。
     hubPageRef.current?.querySelectorAll("path.ng-edge").forEach((el) => el.remove());
-    const { nodes, edges, positionKeys } = buildGraphData(pc, effectiveProjectsDir);
+    const { nodes, edges, positionKeys } = buildGraphData(pc);
     validPositionKeysRef.current = positionKeys;
     rectum.data({ nodes, edges });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -542,12 +430,11 @@ function HubPage() {
   // これを呼んでから `getPc` で取り直すとセッションの増減が反映される。
   // 失敗しても(fail-safe)`getPc` は必ず呼び直す。
   const handleReload = useCallback((): Promise<void> => {
-    const reloadPc = reconcileGitState()
+    return reconcileGitState()
       .catch((e) => console.error(e))
       .then(() => loadPc())
       .then(() => setPcDataLoaded(true));
-    return Promise.all([loadEffectiveProjectsDir(), reloadPc]).then(() => undefined);
-  }, [loadEffectiveProjectsDir, loadPc]);
+  }, [loadPc]);
 
   const dockItems = useMemo(
     () => [
