@@ -156,6 +156,7 @@ const DEFS: ClassDef[] = [
     ],
     // Session の右に置く(Session の右辺と横に2本並べてつなぐ)。
     position: { x: 489, y: 875 },
+    filePath: "apps/native/crates/domain/src/session_file.rs",
   },
   // ============ ログ行 ============
   {
@@ -179,6 +180,7 @@ const DEFS: ClassDef[] = [
     ],
     // SessionFile の右に置く。サブクラス4つはその下の横一列(y = 1248)。
     position: { x: 943, y: 773 },
+    filePath: "apps/native/crates/domain/src/log_line/log_line.rs",
     // d3.classes は箱の幅を中身から計算せず、指定が無ければ 200 で固定する。
     // logical_parent_uuid と型の列が重なるので広げる(h は無視され、中身から計算される)。
     size: { w: 250, h: 0 },
@@ -190,6 +192,7 @@ const DEFS: ClassDef[] = [
     // (幅 約112px)は線の中央に置かれるので、間が狭いと箱に隠れたり、線の両端の記号
     // (起点の ×、終点の矢印)に重なったりする。
     position: { x: 410, y: 1248 },
+    filePath: "apps/native/crates/domain/src/log_line/user_log_line.rs",
     // permission_mode と型の列が重なるので広げる(LogLine の size の説明を参照)。
     size: { w: 230, h: 0 },
   },
@@ -202,6 +205,7 @@ const DEFS: ClassDef[] = [
       attr("stop_reason", "Option<String>"),
     ],
     position: { x: 821, y: 1248 },
+    filePath: "apps/native/crates/domain/src/log_line/assistant_log_line.rs",
   },
   {
     name: { physical: "SystemLogLine", logical: "SystemLogLine", description: "内部イベントの行(type = system)。TM: システム行(イベントのサブセット)" }, // 論理名: システム行
@@ -212,6 +216,7 @@ const DEFS: ClassDef[] = [
       attr("level", "Option<String>"),
     ],
     position: { x: 1063, y: 1248 },
+    filePath: "apps/native/crates/domain/src/log_line/system_log_line.rs",
   },
   {
     name: { physical: "AttachmentLogLine", logical: "AttachmentLogLine", description: "実行環境が会話に注入した情報の行(type = attachment)。TM: 付帯情報行(イベントのサブセット)" }, // 論理名: 付帯情報行
@@ -220,6 +225,7 @@ const DEFS: ClassDef[] = [
       attr("attachment_type", "String"),
     ],
     position: { x: 1317, y: 1248 },
+    filePath: "apps/native/crates/domain/src/log_line/attachment_log_line.rs",
   },
 ];
 
@@ -324,8 +330,7 @@ export const DOMAIN_CLASS_DATA: DiagramInput = {
   relationships: RELATIONSHIPS,
 };
 
-// 実装済みなのは Pc・User(第1弾)・GitRepository・GitBranch・GitWorktree(第2〜3弾)・
-// Session(第4弾)の6クラス。SessionFile・LogLine・UserLogLine・AssistantLogLine・
-// SystemLogLine・AttachmentLogLine(第5〜6弾。未着手)はまだ実装されていないため、
-// filePath を持たない。
+// 全12クラスが実装済み(Pc・User(第1弾)・GitRepository・GitBranch・GitWorktree(第2〜3弾)・
+// Session(第4弾)・SessionFile(第5弾)・LogLine・UserLogLine・AssistantLogLine・
+// SystemLogLine・AttachmentLogLine(第6弾))。すべて filePath を持つ。
 export const DOMAIN_CLASS_FILE_PATHS: ClassFilePaths = filePaths;
