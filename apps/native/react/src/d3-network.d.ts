@@ -20,6 +20,9 @@ declare module "@yanqirenshi/d3.network" {
 
   export class Rectum {
     constructor(params: {
+      // 背景のグリッド線。`Rectum` は引数をそのまま `@yanqirenshi/assh0le` の
+      // `Colon` に渡し、`draw: false` なら描かない(`Colon.drawGrids`)。
+      grid?: { draw?: boolean; size?: number; span?: number };
       callbacks?: {
         node?: {
           click?: NodeClickHandler;

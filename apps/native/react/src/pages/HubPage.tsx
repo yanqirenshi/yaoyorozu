@@ -828,8 +828,10 @@ function HubPage() {
   // 変わるたびにRectumを作り直すと、そのたびに視点・ズームが初期状態に
   // リセットされる。`handleNodeDragEnded` は安定しているため、このRectumは
   // `HubPage` のマウント中ずっと同一インスタンスのままになる。
+  // 背景のグリッド線は描かない(ユーザー指示)。
   const rectum = useMemo(() => {
     return new Rectum({
+      grid: { draw: false },
       callbacks: { node: { click: handleNodeClick, dragEnded: handleNodeDragEnded } },
     });
   }, [handleNodeClick, handleNodeDragEnded]);
