@@ -69,6 +69,14 @@ pub struct AppState {
     /// アプリの実行中に無制限膨張する心配は小さいという判断。issue本文の
     /// スコープには含まれないため深追いしない)。
     pub loaded_log_lines: HashMap<PathBuf, Vec<LogLine>>,
+    /// `git_ledger`/`user_sessions` の読み込みが完了したかどうか
+    /// (issue #218)。起動時は`false`で、起動後のバックグラウンドタスク・
+    /// ハブの「再読み込み」操作のいずれかが一度でも完了すれば(成否に
+    /// かかわらず)`true`になり、以後戻らない。`pc:data_loaded`イベントは
+    /// マウント中のハブにしか届かない(#212の既知の制約)ため、`get_pc`の
+    /// 応答にもこの値を載せ、マウント時の問い合わせだけで正しい状態が
+    /// 分かるようにする(イベント購読と併用。ポーリングはしない)。
+    pub pc_data_loaded: bool,
 }
 
 /// エポック秒からのミリ秒。`GitBranch`/`GitWorktree`の
@@ -175,6 +183,7 @@ impl AppState {
                 git_ledger_path,
                 user_sessions: Vec::new(),
                 loaded_log_lines: HashMap::new(),
+                pc_data_loaded: false,
             },
             recovered_from_corruption: loaded.recovered_from_corruption,
         })

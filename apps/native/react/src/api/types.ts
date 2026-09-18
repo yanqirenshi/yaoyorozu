@@ -257,12 +257,17 @@ export type UserDto = {
   sessions: SessionDto[];
 };
 
-// `getPc` の戻り値。
+// `getPc` の戻り値。`data_loaded`(issue #218)は`AppState.git_ledger`/
+// `user_sessions`の読み込みが完了しているかどうか。`pc:data_loaded`
+// イベントはマウント中のハブにしか届かないため、マウント時にこの値を
+// 問い合わせることで、イベントの発火を聞き逃した場合でも正しい状態が
+// 分かるようにする。
 export type PcDto = {
   system_uuid: string;
   pc_name: string;
   description: string;
   users: UserDto[];
+  data_loaded: boolean;
 };
 
 // `~/.claude` 配下のエントリ種別(/claude のExplorerタブ)。リンクは辿らない。

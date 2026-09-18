@@ -218,16 +218,22 @@ function HubPage() {
   const [error, setError] = useState<string | null>(null);
   // セッション一覧の取得元(オブジェクトモデル実装。issue #182・#197)。
   const [pc, setPc] = useState<PcDto | null>(null);
-  // セッション一覧・Git台帳の読み込み状態(issue #212)。起動直後は
+  // セッション一覧・Git台帳の読み込み状態(issue #212・#218)。起動直後は
   // `AppState.user_sessions` が空のまま(jsonl走査をバックグラウンド化して
-  // 初回表示のラグを無くしたため)なので、`pc:data_loaded` を受け取るまでは
-  // 「読み込み中」として表示する。
+  // 初回表示のラグを無くしたため)なので「読み込み中」として表示する。
+  // `pc:data_loaded` イベントはマウント中のハブにしか届かない(#212の
+  // 既知の制約。イベント発火後に`/settings`から戻る等で再マウントすると
+  // 聞き逃す)ため、`PcDto.data_loaded`(`get_pc` の応答)をこの状態の
+  // 唯一の情報源にし、マウント時の問い合わせ(`loadPc`)+イベント購読の
+  // 両方から同じ`loadPc`を呼ぶだけにする(イベントとポーリングの二重化は
+  // しない)。
   const [pcDataLoaded, setPcDataLoaded] = useState(false);
 
   const loadPc = useCallback((): Promise<void> => {
     return getPc()
       .then((next) => {
         setPc(next);
+        setPcDataLoaded(next.data_loaded);
         setError(null);
       })
       .catch((e) => setError(isAppError(e) ? e.message : String(e)));
@@ -238,10 +244,10 @@ function HubPage() {
   }, [loadPc]);
 
   // 起動後のバックグラウンド読み込み(Git台帳の観測・全プロジェクトの
-  // jsonl走査。issue #212)が完了したら`pc`を取り直す。
+  // jsonl走査。issue #212)が完了したら`pc`を取り直す(成否によらず発火
+  // する。issue #218)。
   useEffect(() => {
     const unlistenPromise = onPcDataLoaded(() => {
-      setPcDataLoaded(true);
       loadPc();
     });
     return () => {
@@ -428,12 +434,13 @@ function HubPage() {
   // 「再読み込み」操作。`reconcile_git_state` はGit台帳の再観測に加えて
   // 全プロジェクトの `Session` 一覧も組み立て直す(issue #193・#197)ため、
   // これを呼んでから `getPc` で取り直すとセッションの増減が反映される。
-  // 失敗しても(fail-safe)`getPc` は必ず呼び直す。
+  // 失敗しても(fail-safe)`getPc` は必ず呼び直す。`pcDataLoaded` は
+  // `loadPc` が応答の `data_loaded` から都度導出するため、ここで個別に
+  // 更新する必要は無い(issue #218)。
   const handleReload = useCallback((): Promise<void> => {
     return reconcileGitState()
       .catch((e) => console.error(e))
-      .then(() => loadPc())
-      .then(() => setPcDataLoaded(true));
+      .then(() => loadPc());
   }, [loadPc]);
 
   const dockItems = useMemo(

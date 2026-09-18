@@ -862,13 +862,17 @@ impl From<domain::User> for UserDto {
     }
 }
 
-/// `get_pc` の戻り値(issue #182)。
+/// `get_pc` の戻り値(issue #182)。`data_loaded`(issue #218)は
+/// `domain::Pc`には無い値(`AppState.pc_data_loaded`由来)のため、
+/// `From<domain::Pc>`では埋めず呼び出し元(`get_pc` command)が設定する
+/// (既定値`false`。「未確認」ではなく「未読み込み」寄りの安全側)。
 #[derive(Serialize, Clone)]
 pub struct PcDto {
     pub system_uuid: String,
     pub pc_name: String,
     pub description: String,
     pub users: Vec<UserDto>,
+    pub data_loaded: bool,
 }
 
 impl From<domain::Pc> for PcDto {
@@ -878,6 +882,7 @@ impl From<domain::Pc> for PcDto {
             pc_name: pc.pc_name,
             description: pc.description,
             users: pc.users.into_iter().map(UserDto::from).collect(),
+            data_loaded: false,
         }
     }
 }
