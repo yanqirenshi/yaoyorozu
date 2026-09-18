@@ -5,6 +5,7 @@
     "permissions": {
         "allow": [
             "Bash",
+            "Bash(gh pr merge:*)",
             "Read(*)",
             "Write(*)",
             "Edit(*)",
