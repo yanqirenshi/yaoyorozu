@@ -55,6 +55,7 @@ import type { DiagramInput } from "@yanqirenshi/d3.classes";
 import {
   attr,
   defineDiagram,
+  method,
   type ClassDef,
   type ClassFilePaths,
 } from "./classDiagram";
@@ -78,9 +79,19 @@ const DEFS: ClassDef[] = [
       attr("user_name", "String"),
       attr("home_directory", "PathBuf"),
     ],
+    methods: [
+      // parsed は読み込み済みのパース結果(1セッション分。具体的な型は実装側
+      // (issue #208)が決める)。ファイルI/O・jsonl のパース自体はこのメソッドの
+      // 責務ではない(port が担う。「メソッドを書く基準」を参照)。組み立てるのは
+      // Session とその配下の SessionFile まで。LogLine は遅延読み込みのため、
+      // ここでは組み立てない(セッションを開いたときに別途構築する。issue #207)。
+      method("load_sessions", ["parsed: Vec<ParsedSession>"], "()"),
+    ],
     // Pc の真下に置く(Pc と Session にはさまれた列)。
     position: { x: 55, y: 217 },
     filePath: "apps/native/crates/domain/src/user.rs",
+    // メソッド名・引数が長いので広げる(LogLine の size の説明を参照)。
+    size: { w: 310, h: 0 },
   },
   {
     name: { physical: "GitRepository", logical: "GitRepository", description: "プロダクト開発の対象として登録したリポジトリ(クローン1つ)。User に所有される(コンポジション)。TM: Gitリポジトリ(リソース)" }, // 論理名: Gitリポジトリ

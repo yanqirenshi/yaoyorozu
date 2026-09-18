@@ -81,6 +81,12 @@ export const GUIDE_CLASS_ITEMS: GuideClassItem[] = [
     example: 'attr("branch_name", "String")',
   },
   {
+    item: "メソッド(オブジェクトモデルのみ)",
+    howTo:
+      "method(名前, 引数の配列, 戻り値の型) で書く。取得・保存(ファイルI/O、外部コマンドの実行など)は port(app/infra)の責務であり、クラスのメソッドには書かない。載せてよいのは組み立て・計算・判定のような純粋なロジックだけ。引数は「port が返した、読み込み済みのデータ」を受け取る形にし、I/O そのものは書かない(port の呼び出しは実装側の責務。図には表れない)。",
+    example: 'method("load_sessions", ["parsed: Vec<ParsedSession>"], "()")',
+  },
+  {
     item: "抽象クラス",
     howTo: "stereotype に abstract を書く。箱の名前の上に «abstract» が出る。",
     example: 'stereotype: "abstract"',
