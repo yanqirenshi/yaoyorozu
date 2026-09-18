@@ -202,6 +202,15 @@ export function reconcileGitState(): Promise<void> {
   return invoke<void>("reconcile_git_state");
 }
 
+// 起動直後は空で始まるGit台帳・セッション一覧(issue #212。初回表示の
+// ラグ解消のため、jsonl走査・git観測をバックグラウンド化した)の読み込みが
+// 完了したときに1回だけ発火する。ペイロードは持たず、購読側が `getPc` で
+// 取り直す(`onWindowsChanged` 等と同じ流儀)。
+export function onPcDataLoaded(callback: () => void): Promise<() => void> {
+  const unlisten = listen("pc:data_loaded", () => callback());
+  return unlisten.then((fn) => fn);
+}
+
 // ハブグラフのノード位置(ドラッグ固定)を取得する(issue #121)。
 export function getHubLayout(): Promise<HubLayoutDto> {
   return invoke<HubLayoutDto>("get_hub_layout");

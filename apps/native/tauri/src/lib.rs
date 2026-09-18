@@ -466,16 +466,16 @@ async fn get_pc(state: tauri::State<'_, Mutex<AppState>>) -> Result<PcDto, AppEr
 }
 
 /// 登録済み全リポジトリのGit状態(ブランチ・worktree)を再観測して台帳を
-/// 更新し、あわせて全プロジェクトから`Session`一覧も再構築する
-/// (オブジェクトモデル実装 第3弾。issue #193/第4弾。issue #197。
-/// `User.sessions`は「起動時とハブ再読み込み時に組み立てる」というissue
-/// #197の要求を、既存のGit台帳再観測(同じ再読み込み操作)に相乗りする形で
-/// 満たす)。ハブの「再読み込み」操作から呼ぶ想定(起動時の組み立ては
-/// `AppState::load` が既に行う)。gitサブプロセス起動・jsonl走査を伴うため
-/// `spawn_blocking` で実行する。
-#[tauri::command]
-async fn reconcile_git_state(state: tauri::State<'_, Mutex<AppState>>) -> Result<(), AppErrorDto> {
+/// 更新し、あわせて全プロジェクトから`Session`一覧も再構築して
+/// `AppState`へ書き込む(オブジェクトモデル実装 第3弾。issue #193/
+/// 第4弾。issue #197)。起動後のバックグラウンドタスク
+/// (`start_pc_data_background_load`)と `reconcile_git_state` command の
+/// 両方から使う共通処理(issue #212)。ロックは設定値取得時と書き込み時の
+/// 短時間だけ保持し、git実行・jsonl走査の間は保持しない(UI操作を
+/// ブロックしないため)。
+async fn reload_git_ledger_and_sessions(app: &tauri::AppHandle) -> Result<(), app::AppError> {
     let (settings, previous_ledger, git_ledger_path) = {
+        let state = app.state::<Mutex<AppState>>();
         let guard = state.lock().await;
         (
             guard.settings.clone(),
@@ -491,16 +491,23 @@ async fn reconcile_git_state(state: tauri::State<'_, Mutex<AppState>>) -> Result
         (ledger, sessions)
     })
     .await
-    .map_err(|_| {
-        AppErrorDto::from(app::AppError::Io(
-            "バックグラウンド処理に失敗しました".to_string(),
-        ))
-    })?;
+    .map_err(|_| app::AppError::Io("バックグラウンド処理に失敗しました".to_string()))?;
 
+    let state = app.state::<Mutex<AppState>>();
     let mut guard = state.lock().await;
     guard.git_ledger = new_ledger;
     guard.user_sessions = new_sessions?;
     Ok(())
+}
+
+/// ハブの「再読み込み」操作から呼ぶ想定(issue #193/#197)。明示操作のため
+/// 同期応答のままでよい(issue #212の注記)。実体は
+/// `reload_git_ledger_and_sessions` を共有する。
+#[tauri::command]
+async fn reconcile_git_state(app: tauri::AppHandle) -> Result<(), AppErrorDto> {
+    reload_git_ledger_and_sessions(&app)
+        .await
+        .map_err(Into::into)
 }
 
 /// 指定ラベルのウィンドウを前面化する(最小化されていれば復元してから)。
@@ -1233,6 +1240,24 @@ fn start_github_session_check(app: &tauri::App) {
     });
 }
 
+/// 起動直後は settings 読み込み・Pc 組み立てのみを同期で行い(`AppState::
+/// load`)、Git状態の観測(gitサブプロセス実行)・全プロジェクトのjsonl走査
+/// (`list_parsed_sessions`)はこのバックグラウンドタスクへ遅延させる
+/// (issue #212: 初回表示のラグ解消)。`.setup()` はすぐ返るため、ウィンドウは
+/// これらの完了を待たずに表示される。完了時に `pc:data_loaded` を発火し、
+/// ハブが `onSettingsUpdated` 等と同じ流儀で自動的に再取得する。
+fn start_pc_data_background_load(app: &tauri::App) {
+    let app_handle = app.handle().clone();
+    tauri::async_runtime::spawn(async move {
+        match reload_git_ledger_and_sessions(&app_handle).await {
+            Ok(()) => {
+                let _ = app_handle.emit("pc:data_loaded", ());
+            }
+            Err(e) => eprintln!("起動後のPCデータ読み込みに失敗しました: {e}"),
+        }
+    });
+}
+
 /// トークンが存在する前提でログイン名解決(`fetch_viewer`)を試み、結果を
 /// `AppState`/イベントへ反映する(issue #54)。`backoff_secs` が空なら1回
 /// だけ試す(タブ表示時の受動的な再取得など、長時間ブロックしたくない
@@ -1371,6 +1396,7 @@ pub fn run() {
             app.manage(WatcherSlot::new(None));
             start_session_watcher(app.handle(), root);
             start_github_session_check(app);
+            start_pc_data_background_load(app);
             local_api::start(app)?;
             Ok(())
         })

@@ -39,20 +39,24 @@ pub struct AppState {
     /// ランタイム状態で、真実の源はOSであるため起動のたびに組み立て直す。
     pub pc: Pc,
     /// `GitBranch`/`GitWorktree`台帳(オブジェクトモデル実装 第3弾。
-    /// issue #193)。`git-ledger.json`から読み込み、起動時に一度突き合わせ
-    /// (reconcile)た結果を保持する。`pc`と違い、gitサブプロセス実行を伴う
-    /// 突き合わせは高コストなためクエリのたびには行わず、起動時とハブの
+    /// issue #193)。起動直後は`git-ledger.json`から読み込んだだけの値
+    /// (前回終了時点の内容。突き合わせ前)で、ウィンドウ表示後の
+    /// バックグラウンドタスク(issue #212)が最初の突き合わせを行う。
+    /// `pc`と違い、gitサブプロセス実行を伴う突き合わせは高コストなため
+    /// クエリのたびには行わず、起動後のバックグラウンドタスクとハブの
     /// 再読み込み操作時(`reconcile_git_state` command)にのみ更新する
     /// (`app::reconcile_git_ledger`のドキュメントコメント参照)。
     pub git_ledger: GitLedger,
     pub git_ledger_path: PathBuf,
     /// 全プロジェクトを走査した`ParsedSession`一覧(オブジェクトモデル実装
-    /// 第4〜5弾。issue #197/#208)。`git_ledger`と同じ理由(jsonl走査コスト)
-    /// で、ファイル走査自体はクエリのたびに再実行せず、起動時とハブ再読み込み
-    /// 時(`reconcile_git_state` command。第3弾と合わせて再観測する)にのみ
-    /// 更新する。実際の`Session`/`SessionFile`への組み立て
-    /// (`domain::User::load_sessions`)はI/Oを伴わない純粋変換のため、
-    /// クエリのたび(`get_pc`)に呼んでも構わない
+    /// 第4〜5弾。issue #197/#208)。起動直後は空(永続化していないため。
+    /// issue #212)で、ウィンドウ表示後のバックグラウンドタスクが最初の
+    /// 走査結果を書き込む。`git_ledger`と同じ理由(jsonl走査コスト)で、
+    /// ファイル走査自体はクエリのたびに再実行せず、起動後のバックグラウンド
+    /// タスクとハブ再読み込み時(`reconcile_git_state` command。第3弾と
+    /// 合わせて再観測する)にのみ更新する。実際の`Session`/`SessionFile`への
+    /// 組み立て(`domain::User::load_sessions`)はI/Oを伴わない純粋変換の
+    /// ため、クエリのたび(`get_pc`)に呼んでも構わない
     /// (`app::pc_with_user_sessions`参照)。
     pub user_sessions: Vec<ParsedSession>,
     /// セッションを開いたとき(`get_session` command)に組み立てた
@@ -141,8 +145,16 @@ pub struct LoadResult {
 
 impl AppState {
     /// 起動時に設定ファイルを読み込む。存在しない/壊れている場合のデフォルト値
-    /// へのフォールバックは `FileSettingsStore` 側の責務。Git台帳の初回突き
-    /// 合わせもここで行う(issue #193)。
+    /// へのフォールバックは `FileSettingsStore` 側の責務。
+    ///
+    /// Git台帳の突き合わせ(git サブプロセス実行)・全プロジェクトのjsonl
+    /// 走査(`list_parsed_sessions`)はここでは行わない(issue #212:
+    /// 初回表示のラグ解消のため、ウィンドウ表示後のバックグラウンドタスクへ
+    /// 遅延させる。`tauri/src/lib.rs`の`start_pc_data_background_load`
+    /// 参照)。台帳ファイル自体の読み込み(JSON読み込みのみ。軽い)は
+    /// 同期のまま行い、前回終了時点の内容をひとまず見せる
+    /// (バックグラウンドタスク完了で最新化される)。`user_sessions`は
+    /// 永続化していないため、起動直後は空で始めるほかない。
     pub fn load(save_path: PathBuf, git_ledger_path: PathBuf) -> Result<LoadResult, AppError> {
         let store = FileSettingsStore::new(save_path.clone());
         let loaded = app::load_settings(&store)?;
@@ -150,10 +162,7 @@ impl AppState {
         let pc = app::current_pc(&environment_source)?;
 
         let ledger_store = FileGitLedgerStore::new(git_ledger_path.clone());
-        let previous_ledger = app::load_git_ledger(&ledger_store)?;
-        let git_ledger =
-            reconcile_and_save_git_ledger(&loaded.settings, &previous_ledger, &git_ledger_path);
-        let user_sessions = build_and_report_user_sessions(&loaded.settings)?;
+        let git_ledger = app::load_git_ledger(&ledger_store)?;
 
         Ok(LoadResult {
             state: AppState {
@@ -164,7 +173,7 @@ impl AppState {
                 pc,
                 git_ledger,
                 git_ledger_path,
-                user_sessions,
+                user_sessions: Vec::new(),
                 loaded_log_lines: HashMap::new(),
             },
             recovered_from_corruption: loaded.recovered_from_corruption,
