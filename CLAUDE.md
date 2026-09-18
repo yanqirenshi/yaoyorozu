@@ -28,7 +28,7 @@ Claude Code で以下のセッションに役割を分けて対応する。
 - **実装:APP (画面:/claude)**: Tauri + TypeScript + React によるネイティブアプリの構築
 - **実装:Web**: Next.js によるプロダクト情報管理Webアプリの構築
 - **Lab**: 機能化についての調査、理解など。
-- **運用:リリース**: apps/native のリリース作業の実施。`/release <バージョン>` スキル(`.claude/skills/release/`)を実行し、バージョン更新 → タグ push → MSI ビルド確認 → GitHub Releases での公開までを行う
+- **運用:リリース**: apps/native のリリース作業の実施。`/release <バージョン>` スキル(`.claude/skills/release/`)を実行し、バージョン更新 → タグ push → MSI ビルド確認 → GitHub Releases での公開までを行う。**main でのアプリ起動(動作確認用の `npm run native:dev`)もこのセッションに依頼して実施する**(2026-09-19 決定。他セッションは main 上でアプリを起動しない)
 - **管理**: このプロジェクト自体の管理、Claude Codeの利用方法の整理・実装
 
 ## 並行作業のルール
