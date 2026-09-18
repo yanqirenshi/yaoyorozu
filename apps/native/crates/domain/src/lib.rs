@@ -58,7 +58,8 @@ pub use github_project::GithubProject;
 pub use github_project_summary::GithubProjectSummary;
 pub use hub_layout::{HubLayout, CURRENT_HUB_LAYOUT_VERSION};
 pub use log_line::{
-    AssistantLogLine, AttachmentLogLine, LogLine, LogLineBase, SystemLogLine, UserLogLine,
+    convert_json_line_to_log_line, convert_session_line, AssistantLogLine, AttachmentLogLine,
+    LogLine, LogLineBase, LogLineConversionError, SystemLogLine, UserLogLine,
 };
 pub use message::{order_messages_newest_first, paginate_messages, Message};
 pub use node_position::NodePosition;

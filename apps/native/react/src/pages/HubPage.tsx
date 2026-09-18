@@ -175,9 +175,12 @@ type HubNodeCore = {
   slug?: string | null;
   lastPrompt?: string | null;
   // Session.conversation_file/subagent_files(オブジェクトモデル実装
-  // 第5弾。issue #208)。行(LogLine)は遅延読み込みのため、ここではファイル
-  // パスとサブエージェント数だけを見せる。
+  // 第5〜6弾。issue #208)。行(LogLine)は遅延読み込みのため、未読み込みの
+  // 間は常に`false`/`0`(セッションを開くと`get_session`の読み込みに
+  // 相乗りしてキャッシュされる)。
   conversationFilePath?: string;
+  conversationFileLinesLoaded?: boolean;
+  conversationFileLineCount?: number;
   subagentFileCount?: number;
 };
 
@@ -448,6 +451,8 @@ function buildGraphData(
             slug: sessionModel?.slug,
             lastPrompt: sessionModel?.last_prompt,
             conversationFilePath: sessionModel?.conversation_file.file_path,
+            conversationFileLinesLoaded: sessionModel?.conversation_file.lines_loaded,
+            conversationFileLineCount: sessionModel?.conversation_file.line_count,
             subagentFileCount: sessionModel?.subagent_files.length,
           });
           edges.push({
@@ -909,9 +914,16 @@ function buildInspectorContent(
           { label: "mode", value: core.mode ?? "(未設定)" },
           { label: "slug", value: core.slug ?? "(未設定)" },
           { label: "last_prompt", value: core.lastPrompt ?? "(未設定)" },
-          // Session.conversation_file/subagent_files(issue #208)。行の内容
-          // 自体は遅延読み込みのため、ここではファイルパス・件数のみ表示する。
+          // Session.conversation_file/subagent_files(issue #208)。行
+          // (LogLine)は遅延読み込みのため、読み込み状態・行数もあわせて
+          // 表示する(未読み込みなら「未読み込み」・0件)。
           { label: "会話ファイル", value: core.conversationFilePath ?? "" },
+          {
+            label: "会話ファイルの行",
+            value: core.conversationFileLinesLoaded
+              ? `読み込み済み(${core.conversationFileLineCount ?? 0}行)`
+              : "未読み込み",
+          },
           {
             label: "サブエージェント数",
             value: String(core.subagentFileCount ?? 0),

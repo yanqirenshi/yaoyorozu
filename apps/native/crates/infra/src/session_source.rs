@@ -1,8 +1,9 @@
 use app::{AppError, SessionSource};
 use domain::{
-    extract_ai_title, extract_custom_title, extract_cwd, extract_git_branch, extract_last_prompt,
-    extract_message, extract_mode, extract_session_id, extract_slug, resolve_session_title,
-    AgentKind, Conversation, ParsedSession, Project, Role, SessionSummary,
+    convert_json_line_to_log_line, extract_ai_title, extract_custom_title, extract_cwd,
+    extract_git_branch, extract_last_prompt, extract_message, extract_mode, extract_session_id,
+    extract_slug, resolve_session_title, AgentKind, Conversation, LogLine, ParsedSession, Project,
+    Role, SessionSummary,
 };
 use notify::RecursiveMode;
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
@@ -296,6 +297,40 @@ impl SessionSource for FileSystemRepository {
         })
     }
 
+    fn session_lines(&self, project: &str, session_id: &str) -> Result<Vec<LogLine>, AppError> {
+        // `session()`とは別にファイルを開く(issue #208。`app::SessionSource`
+        // のドキュメントコメント参照: セッションを開いた瞬間の1回だけの
+        // コストであり、以後はtauri層のキャッシュにより再読み込みしない)。
+        let path = self
+            .projects_dir
+            .join(project)
+            .join(format!("{session_id}.jsonl"));
+        let file = fs::File::open(&path)
+            .map_err(|e| AppError::NotFound(format!("{} が見つかりません: {e}", path.display())))?;
+
+        let lines = BufReader::new(file)
+            .lines()
+            .map_while(Result::ok)
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
+            .filter_map(|value| match convert_json_line_to_log_line(&value) {
+                Ok(log_line) => log_line,
+                Err(reason) => {
+                    // uuid/timestampを変換できないチェーン行はスキップする
+                    // (issue本文: 実データで発生したかを確認し、発生した
+                    // 場合はデザインへ報告すること。まずは警告ログで
+                    // 可視化する)。
+                    eprintln!(
+                        "{} の1行を LogLine に変換できずスキップしました: {reason:?}",
+                        path.display()
+                    );
+                    None
+                }
+            })
+            .collect();
+
+        Ok(lines)
+    }
+
     fn latest_session_id(&self, project: &str) -> Result<String, AppError> {
         latest_session_id_in_dir(&self.projects_dir.join(project))
     }
@@ -556,6 +591,64 @@ mod tests {
         assert_eq!(session.id, "s1");
         assert_eq!(session.messages.len(), 1);
         assert_eq!(session.messages[0].text, "hello");
+    }
+
+    #[test]
+    fn session_lines_converts_chain_lines_and_skips_non_chain_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        fs::write(
+            project_dir.join("s1.jsonl"),
+            [
+                r#"{"type":"user","uuid":"u1","sessionId":"s1","timestamp":"2026-01-01T00:00:00.000Z","message":{"role":"user","content":"hi"}}"#,
+                r#"{"type":"custom-title","customTitle":"タイトル","sessionId":"s1"}"#,
+                r#"{"type":"assistant","uuid":"u2","sessionId":"s1","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let lines = repo
+            .session_lines("proj", "s1")
+            .expect("should read log lines");
+
+        // custom-titleはチェーン行ではないため対象外(2行だけがLogLineになる)。
+        assert_eq!(lines.len(), 2);
+        assert!(matches!(lines[0], LogLine::User(_)));
+        assert!(matches!(lines[1], LogLine::Assistant(_)));
+    }
+
+    #[test]
+    fn session_lines_skips_chain_lines_missing_uuid_or_timestamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        // `write_session_file`が書く行にはuuid/timestampが無い(issue #208で
+        // 実データ確認が必要な欠損ケースの再現)。
+        write_session_file(&project_dir, "s1", &project_dir);
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let lines = repo
+            .session_lines("proj", "s1")
+            .expect("should not error even when every line is skipped");
+
+        assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn session_lines_returns_not_found_for_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let error = repo
+            .session_lines("proj", "does-not-exist")
+            .expect_err("should fail for missing session file");
+
+        assert!(matches!(error, AppError::NotFound(_)));
     }
 
     #[test]
@@ -939,5 +1032,90 @@ mod tests {
             "should return the cached id instead of failing to parse the corrupted file"
         );
         assert_eq!(second[0].title, "hello");
+    }
+
+    // native.md §5からの意図的な逸脱: 実ユーザーディレクトリ(`~/.claude/
+    // projects/`)を読む。issue #208が明示的に要求する「timestamp変換の
+    // 失敗ケースが実データに存在するかの確認」を行うための、一回限りの
+    // 手動診断であり、通常の `cargo test --workspace` では実行されない
+    // (`#[ignore]`)。CI・他マシンではこのディレクトリが無い/内容が違う
+    // ため、結果をアサーションで固定するテストにはしない(標準出力に
+    // 集計を出すだけ)。実行例: `cargo test -p infra -- --ignored
+    // --nocapture diagnose_real_log_line_conversion`。
+    #[test]
+    #[ignore]
+    fn diagnose_real_log_line_conversion() {
+        let projects_dir =
+            FileSystemRepository::default_projects_dir().expect("should resolve home directory");
+        if !projects_dir.is_dir() {
+            println!("{} が無いためスキップします", projects_dir.display());
+            return;
+        }
+
+        let mut file_count = 0u64;
+        let mut line_count = 0u64;
+        let mut converted_count = 0u64;
+        let mut missing_uuid = 0u64;
+        let mut missing_or_invalid_timestamp = 0u64;
+        let mut examples: Vec<String> = Vec::new();
+
+        for project_entry in fs::read_dir(&projects_dir).expect("should read projects dir") {
+            let Ok(project_entry) = project_entry else {
+                continue;
+            };
+            let project_path = project_entry.path();
+            if !project_path.is_dir() {
+                continue;
+            }
+            let Ok(session_files) = fs::read_dir(&project_path) else {
+                continue;
+            };
+            for session_file_entry in session_files.filter_map(|e| e.ok()) {
+                let path = session_file_entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                    continue;
+                }
+                let Ok(file) = fs::File::open(&path) else {
+                    continue;
+                };
+                file_count += 1;
+                for line in BufReader::new(file).lines().map_while(Result::ok) {
+                    line_count += 1;
+                    let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+                        continue;
+                    };
+                    match convert_json_line_to_log_line(&value) {
+                        Ok(Some(_)) => converted_count += 1,
+                        Ok(None) => {}
+                        Err(domain::LogLineConversionError::MissingUuid) => {
+                            missing_uuid += 1;
+                            if examples.len() < 5 {
+                                examples.push(format!("{}: uuid欠損: {line}", path.display()));
+                            }
+                        }
+                        Err(domain::LogLineConversionError::MissingOrInvalidTimestamp) => {
+                            missing_or_invalid_timestamp += 1;
+                            if examples.len() < 5 {
+                                examples.push(format!(
+                                    "{}: timestamp欠損/不正: {line}",
+                                    path.display()
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        println!("=== LogLine変換 実データ診断 (issue #208) ===");
+        println!("走査ディレクトリ: {}", projects_dir.display());
+        println!("走査ファイル数: {file_count}");
+        println!("走査行数: {line_count}");
+        println!("LogLineへ変換できた行数: {converted_count}");
+        println!("uuid欠損でスキップ: {missing_uuid}");
+        println!("timestamp欠損/不正でスキップ: {missing_or_invalid_timestamp}");
+        for example in &examples {
+            println!("  例: {example}");
+        }
     }
 }

@@ -4,8 +4,8 @@ use domain::{
     reconcile_worktrees, repositories_from_profiles, sort_claude_dir_entries,
     sort_projects_by_recency, sort_sessions_by_recency, ClaudeDirEntry, ClaudeDirPage,
     ClaudeMdFile, ClaudeSettingsFile, Conversation, GitLedger, GitRepositoryLedger, HubLayout,
-    NodePosition, ParsedSession, Project, RuleSummary, SessionSummary, Settings, SkillSummary,
-    CURRENT_GIT_LEDGER_VERSION, CURRENT_HUB_LAYOUT_VERSION,
+    LogLine, NodePosition, ParsedSession, Project, RuleSummary, SessionSummary, Settings,
+    SkillSummary, CURRENT_GIT_LEDGER_VERSION, CURRENT_HUB_LAYOUT_VERSION,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -96,6 +96,15 @@ pub trait SessionSource {
     /// issue #197で追加した`list_session_models`(ファイルパスを持たない
     /// 版)は、この`ParsedSession`に統合したため廃止した。
     fn list_parsed_sessions(&self, project: &str) -> Result<Vec<ParsedSession>, AppError>;
+
+    /// 指定セッションの会話ファイルを行単位で`LogLine`に変換して返す
+    /// (オブジェクトモデル実装 第6弾。issue #208)。`session`(メッセージ抽出。
+    /// `Conversation`用)とは別に1回ファイルを読む(呼び出し元
+    /// `get_session` commandが同じ操作のついでに呼ぶことで「セッションを
+    /// 開いたとき」に組み立てる意図は満たすが、実装としては別読み込みで
+    /// ある点に注意。行の変換に失敗した行(uuid/timestamp欠損等)は
+    /// 実装側でスキップし、警告ログを出すこと(issue本文の指示)。
+    fn session_lines(&self, project: &str, session_id: &str) -> Result<Vec<LogLine>, AppError>;
 }
 
 /// アプリ設定の永続化(port)。実体(ファイル形式・保存先の解決)は infra に
@@ -367,6 +376,40 @@ pub fn get_session(
     order_messages_newest_first(&mut session.messages);
     session.messages = paginate_messages(&session.messages, offset, limit);
     Ok(session)
+}
+
+/// 指定セッションの会話ファイルを`LogLine`一覧として読み込む(オブジェクト
+/// モデル実装 第6弾。issue #208)。ビューアがセッションを開いたとき
+/// (`get_session`と同じ操作の一部)に呼び、結果は呼び出し元
+/// (tauri層のAppState)がファイルパスをキーにキャッシュして、以後は
+/// 再読み込みしない。
+pub fn load_session_lines(
+    source: &dyn SessionSource,
+    project: &str,
+    session_id: &str,
+) -> Result<Vec<LogLine>, AppError> {
+    if !is_valid_session_id(session_id) {
+        return Err(AppError::InvalidInput("不正なセッションIDです".to_string()));
+    }
+    source.session_lines(project, session_id)
+}
+
+/// `pc`の各ユーザーが持つ`Session.conversation_file`/`subagent_files`へ、
+/// 読み込み済みの`LogLine`キャッシュ(ファイルパスをキーにする)を差し込む
+/// (issue #208)。`load_sessions`が常に空Vecで組み立てた`lines`のうち、
+/// 実際に開かれてキャッシュ済みのものだけを埋める(遅延読み込み)。
+pub fn pc_with_loaded_lines(
+    mut pc: domain::Pc,
+    loaded_lines: &HashMap<PathBuf, Vec<LogLine>>,
+) -> domain::Pc {
+    for user in &mut pc.users {
+        for session in &mut user.sessions {
+            if let Some(lines) = loaded_lines.get(&session.conversation_file.file_path) {
+                session.conversation_file.lines = lines.clone();
+            }
+        }
+    }
+    pc
 }
 
 /// 指定プロジェクトのセッション一覧を、最終更新の新しい順に並べて返す
@@ -1234,6 +1277,7 @@ mod tests {
         latest_session_id_calls: std::cell::Cell<usize>,
         sessions: Vec<SessionSummary>,
         parsed_sessions: HashMap<String, Result<Vec<ParsedSession>, ()>>,
+        log_lines: Result<Vec<LogLine>, ()>,
     }
 
     impl FakeSessionSource {
@@ -1248,6 +1292,7 @@ mod tests {
                 latest_session_id_calls: std::cell::Cell::new(0),
                 sessions: Vec::new(),
                 parsed_sessions: HashMap::new(),
+                log_lines: Ok(Vec::new()),
             }
         }
     }
@@ -1295,6 +1340,16 @@ mod tests {
                 Some(Err(())) => Err(AppError::Io("boom".to_string())),
                 None => Ok(Vec::new()),
             }
+        }
+
+        fn session_lines(
+            &self,
+            _project: &str,
+            _session_id: &str,
+        ) -> Result<Vec<LogLine>, AppError> {
+            self.log_lines
+                .clone()
+                .map_err(|()| AppError::Io("boom".to_string()))
         }
     }
 
@@ -1511,6 +1566,71 @@ mod tests {
             result.users[0].sessions[0].conversation_file.file_path,
             PathBuf::from("/tmp/a.jsonl")
         );
+        assert!(result.users[0].sessions[0]
+            .conversation_file
+            .lines
+            .is_empty());
+    }
+
+    fn sample_log_line(uuid: &str) -> LogLine {
+        LogLine::User(domain::UserLogLine {
+            base: domain::LogLineBase {
+                uuid: uuid.to_string(),
+                parent_uuid: None,
+                logical_parent_uuid: None,
+                timestamp: 1,
+                cwd: None,
+                entrypoint: None,
+                version: None,
+                git_branch: None,
+                is_sidechain: None,
+                user_type: None,
+            },
+            prompt_id: None,
+            permission_mode: None,
+        })
+    }
+
+    #[test]
+    fn load_session_lines_delegates_to_source_for_a_valid_session_id() {
+        let mut source = FakeSessionSource::new("s1", vec![]);
+        source.log_lines = Ok(vec![sample_log_line("l1")]);
+
+        let lines = load_session_lines(&source, "proj", "s1").expect("should load lines");
+
+        assert_eq!(lines, vec![sample_log_line("l1")]);
+    }
+
+    #[test]
+    fn load_session_lines_rejects_invalid_session_id_without_calling_source() {
+        let source = FakeSessionSource::new("s1", vec![]);
+
+        let error = load_session_lines(&source, "proj", "../etc/passwd")
+            .expect_err("should reject invalid session id");
+
+        assert!(matches!(error, AppError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn pc_with_loaded_lines_fills_matching_conversation_file_by_path() {
+        let pc = pc_with_user_sessions(pc_with_one_user("yanqi"), vec![sample_parsed_session("a")]);
+        let mut loaded_lines = HashMap::new();
+        loaded_lines.insert(PathBuf::from("/tmp/a.jsonl"), vec![sample_log_line("l1")]);
+
+        let result = pc_with_loaded_lines(pc, &loaded_lines);
+
+        assert_eq!(
+            result.users[0].sessions[0].conversation_file.lines,
+            vec![sample_log_line("l1")]
+        );
+    }
+
+    #[test]
+    fn pc_with_loaded_lines_leaves_conversation_file_empty_when_not_yet_cached() {
+        let pc = pc_with_user_sessions(pc_with_one_user("yanqi"), vec![sample_parsed_session("a")]);
+
+        let result = pc_with_loaded_lines(pc, &HashMap::new());
+
         assert!(result.users[0].sessions[0]
             .conversation_file
             .lines
