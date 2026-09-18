@@ -10,6 +10,7 @@ import {
   isAppError,
   listSessions,
   listWindowStates,
+  onPcDataLoaded,
   onSessionChanged,
   onSettingsUpdated,
   onWindowsChanged,
@@ -965,6 +966,11 @@ function HubPage() {
   // `window_states`/設定とは独立して起動時に一度だけ読み込む(値がOS由来で
   // アプリの実行中に変わらないため、再取得の必要が無い)。
   const [pc, setPc] = useState<PcDto | null>(null);
+  // Git台帳・セッション一覧の読み込み状態(issue #212)。起動直後は
+  // `AppState.git_ledger`/`user_sessions` が空のまま(jsonl走査・git観測を
+  // バックグラウンド化して初回表示のラグを無くしたため)なので、
+  // `pc:data_loaded` を受け取るまでは「読み込み中」として表示する。
+  const [pcDataLoaded, setPcDataLoaded] = useState(false);
   // ノードのドラッグ固定位置(issue #121)。起動時に一度だけ読み込み、以後は
   // ドラッグのたびに更新する。キーは `positionKey`(`buildGraphData` 参照)。
   const [savedPositions, setSavedPositions] = useState<Record<string, NodePositionDto>>({});
@@ -1058,6 +1064,21 @@ function HubPage() {
       unlistenPromises.forEach((p) => p.then((unlisten) => unlisten()));
     };
   }, [load]);
+
+  // 起動後のバックグラウンド読み込み(Git台帳の観測・全プロジェクトの
+  // jsonl走査。issue #212)が完了したら`pc`を取り直す。`onWindowsChanged`
+  // 等と同じ購読の形。
+  useEffect(() => {
+    const unlistenPromise = onPcDataLoaded(() => {
+      setPcDataLoaded(true);
+      getPc()
+        .then(setPc)
+        .catch((e) => console.error(e));
+    });
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
 
   // 該当プロファイルのセッション枝だけを再取得する(全体の再読み込みより
   // 軽い。issue #100)。
@@ -1311,14 +1332,18 @@ function HubPage() {
 
   // 「再読み込み」操作では、通常の再取得(`load`)に加えて登録済み全
   // リポジトリのGit状態(ブランチ・worktree)も再観測する(issue #193)。
-  // 起動時は`AppState::load`が既に突き合わせ済みのため、ここでは明示的な
-  // 再読み込み操作のときだけ呼ぶ。観測に失敗しても(fail-safe。バックエンド
-  // 側で該当リポジトリの台帳は変更されないだけ)`getPc`は必ず呼び直す。
+  // 起動直後のバックグラウンド読み込み(issue #212)とは別に、明示的な
+  // 再読み込み操作のときはここで都度呼ぶ。観測に失敗しても(fail-safe。
+  // バックエンド側で該当リポジトリの台帳は変更されないだけ)`getPc`は
+  // 必ず呼び直す。
   const handleReload = useCallback((): Promise<void> => {
     const reconcile = reconcileGitState()
       .catch((e) => console.error(e))
       .then(() => getPc())
-      .then(setPc)
+      .then((next) => {
+        setPc(next);
+        setPcDataLoaded(true);
+      })
       .catch((e) => console.error(e));
     return Promise.all([load(), reconcile]).then(() => undefined);
   }, [load]);
@@ -1345,6 +1370,11 @@ function HubPage() {
   return (
     <div className="hub-page" ref={hubPageRef} onClick={handleHubPageClick}>
       {error && <p className="error">{error}</p>}
+      {!pcDataLoaded && (
+        <p className="hub-loading">
+          セッション・Gitブランチ情報を読み込み中…
+        </p>
+      )}
       {/* `rectum` はマウント中ずっと同一インスタンス(上記参照)なので、
           `key` は付けない。`key` を付けて`dataKey`が変わるたびに強制再
           マウントすると、そのたびにカメラ(パン/ズーム)がリセットされて
