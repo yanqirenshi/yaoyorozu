@@ -10,7 +10,13 @@ import {
   reconcileGitState,
   saveHubLayout,
 } from "../api";
-import type { NodePositionDto, PcDto, SessionDto } from "../api";
+import type {
+  GitBranchDto,
+  GitRepositoryDto,
+  NodePositionDto,
+  PcDto,
+  SessionDto,
+} from "../api";
 import { usePageDockItems } from "../DockItemsContext";
 import { LAYOUT_RESET_ICON, RELOAD_ICON } from "../icons";
 import { HUB_NODE_ICON_URIS } from "../hubNodeIcons";
@@ -20,7 +26,20 @@ import type { InspectorContent } from "../HubInspector";
 // 伝統色パレット(App.css の :root/tokens.css と同じ値。issue #84・#93)。
 const COLOR_PEARL = "#fbfbf8"; // 真珠
 const COLOR_KYO_MURASAKI = "#9d5b8b"; // 京紫(session)
+const COLOR_KINCHA = "#CE7A19"; // 金茶(GitRepository。issue #224)
+const COLOR_KUSAIRO = "#7b8d41"; // 苔色(GitBranch。issue #224)
 const COLOR_SUMI = "#373737"; // 墨
+const COLOR_BORDER = "#dbdbdb"; // tokens.css の --border-default(エッジの線)
+
+// GitRepository/GitBranch ノードの配置(ハブ再構築 第2段。issue #224)。
+// 左側にリポジトリ列・ブランチ列を縦に並べ、セッションのグリッドはその
+// 右側から始める。位置は台帳の並び順(`buildGraphData`参照)で決まるだけの
+// 簡易な整列で、ドラッグで動かせる(`move: "support"`)ため実装時点では
+// 見やすさよりも「エッジが追える」ことを優先する。
+const REPOSITORY_COLUMN_X = 80;
+const BRANCH_COLUMN_X = 320;
+const GIT_NODE_ORIGIN_Y = 70;
+const GIT_NODE_ROW_HEIGHT = 90;
 
 // セッションノードの配置(ハブ再構築 第1段。issue #214 の仕様変更コメント)。
 // セッションノードだけでエッジが無いため、force に任せると d3.network の
@@ -28,8 +47,9 @@ const COLOR_SUMI = "#373737"; // 墨
 // 無い)では互いに押し合って際限なく広がり続ける。そこで整列(グリッド)に
 // する。`move: "support"` で格子の位置に留めつつ、ドラッグでは動かせる。
 // 列数は横長の画面に合わせて「行数 × 1.5 ≒ 列数」になるよう決める
-// (141件なら15列 × 10行)。
-const SESSION_GRID_ORIGIN = { x: 80, y: 70 };
+// (141件なら15列 × 10行)。原点のxはGitRepository/GitBranch列(issue #224)と
+// 重ならない位置まで右へ寄せる。
+const SESSION_GRID_ORIGIN = { x: 560, y: 70 };
 const SESSION_GRID_ASPECT = 1.5;
 // 格子の間隔。横はラベル(12px × 最大16文字 ≒ 192px)が隣と重ならない幅、
 // 縦は円(半径20)+ ラベル1行が収まる高さ。
@@ -65,13 +85,15 @@ const INSPECTOR_MAX_WIDTH = 888;
 const HUB_LAYOUT_SAVE_DEBOUNCE_MS = 500;
 
 // 右クリック時に何を表示するかを判定するための、ノードの元データ(`_core`)。
-// 第1段はセッションノードのみ(ハブ再構築 第1段。issue #214)。フィールドは
-// インスペクタ(issue #109)の表示専用。
+// 第1段(issue #214)はセッションノードのみだったが、第2段(issue #224)で
+// GitRepository/GitBranch ノードを戻した。フィールドはインスペクタ
+// (issue #109)の表示専用。
 type HubNodeCore = {
-  kind: "session";
+  kind: "session" | "git-repository" | "git-branch";
   // ドラッグ位置の永続化(issue #121)に使う安定キー。位置を保存する
   // ノードにのみ設定する(第1段のセッションノードは格子に並べるだけで、
-  // 位置は保存しない)。
+  // 位置は保存しない)。GitRepository/GitBranch ノード(issue #224)は
+  // 台帳の個体指定子(repository_path/branch_id)由来のキーで保存する。
   positionKey?: string;
   // session(`domain::Session` のモデル属性。issue #197)
   sessionId?: string;
@@ -89,6 +111,22 @@ type HubNodeCore = {
   // フォルダにできるケースに対応するため)。並びは更新時刻の古い順。
   conversationFiles?: { filePath: string; linesLoaded: boolean; lineCount: number }[];
   subagentFileCount?: number;
+  // セッション→ブランチの対応付けに使った表示補助データ(issue #224)。
+  // `domain::Session`の属性ではない(`SessionDto.cwd`/`git_branch`参照)。
+  cwd?: string | null;
+  gitBranch?: string | null;
+  // GitRepository(`domain::GitRepository`。issue #189/#193/#224)。
+  repositoryName?: string;
+  repositoryPath?: string;
+  repositoryDescription?: string;
+  repositoryBranchCount?: number;
+  repositoryWorktreeCount?: number;
+  // GitBranch(`domain::GitBranch`。issue #193/#224)。削除済みは
+  // バックエンド側(`GitRepositoryDto`への変換)で既に除外されている。
+  branchName?: string;
+  branchId?: string;
+  branchDescription?: string;
+  branchCreatedAtTime?: number;
 };
 
 // 空白だけの値は未設定として扱い、改行を詰めて1行にする(last_prompt は
@@ -117,22 +155,160 @@ function resolveSessionTitle(session: SessionDto): string {
   );
 }
 
-// `pc`(`get_pc`)から、読み込んだ全セッションのノードだけを組み立てる
-// (ハブ再構築 第1段。issue #214 の仕様変更コメント: Pc・User ノードと
-// 階層エッジは表示しない)。セッションは `pc.users[].sessions` の全件
-// (~/.claude/projects 全体。プロファイルの対象フォルダ設定とは無関係)。
-// backend は全ユーザーに同じ一覧を割り当てる(`app::pc_with_user_sessions`)
+// パス比較の正規化(区切り文字・末尾のスラッシュ・大小文字の違いを吸収する。
+// issue #224)。Windows のパス(バックスラッシュ・大文字小文字を区別しない)を
+// 主な対象にした簡易な比較で、シンボリックリンク解決等は行わない。
+function normalizePathForComparison(path: string): string {
+  return path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+// `path` が `base` そのもの、または `base` の配下にあるかを判定する
+// (issue #224)。
+function isPathUnder(path: string, base: string): boolean {
+  const normalizedPath = normalizePathForComparison(path);
+  const normalizedBase = normalizePathForComparison(base);
+  return normalizedPath === normalizedBase || normalizedPath.startsWith(`${normalizedBase}/`);
+}
+
+// セッションの `cwd` から、それを所有する登録済みリポジトリ(`repository_path`
+// またはいずれかの worktree の `worktree_folder_path` の配下)を1つ特定する
+// (issue #224)。複数のリポジトリの配下が重なることは通常無いため、最初に
+// 見つかったものを採用する単純な実装にしている。
+function findOwningRepository(
+  cwd: string,
+  repositories: GitRepositoryDto[],
+): GitRepositoryDto | undefined {
+  return repositories.find(
+    (repo) =>
+      isPathUnder(cwd, repo.repository_path) ||
+      repo.worktrees.some((worktree) => isPathUnder(cwd, worktree.worktree_folder_path)),
+  );
+}
+
+// セッション→GitBranch の対応付け(issue #224。クラス図に無い導出関係:
+// ログ行の `cwd`/`git_branch` から求めた表示補助であり、`Session` のモデル上の
+// 関連ではない)。`cwd` でリポジトリを特定し、その中で `branch_name` が
+// 一致するブランチを探す。対応が取れなければ `undefined` を返し、呼び出し側は
+// エッジを引かない(未登録リポジトリのプロジェクト・branch未記録・削除済み
+// ブランチ等。フォールバックノードは作らない。第1段の割り切りを維持)。
+function findMatchingBranch(
+  session: SessionDto,
+  repositories: GitRepositoryDto[],
+): GitBranchDto | undefined {
+  if (!session.cwd || !session.git_branch) return undefined;
+  const repository = findOwningRepository(session.cwd, repositories);
+  return repository?.branches.find((branch) => branch.branch_name === session.git_branch);
+}
+
+function gitBranchNodeId(branchId: string): string {
+  return `git-branch:${branchId}`;
+}
+
+// `pc`(`get_pc`)から、GitRepository/GitBranch ノード(ハブ再構築 第2段。
+// issue #224)とセッションノード(第1段。issue #214)を組み立てる。表示対象は
+// 登録済みリポジトリ(`User.repositories`)とその現存ブランチ(削除済みは
+// バックエンド側で除外済み)、および全セッション(`User.sessions`。
+// `~/.claude/projects` 全体で、プロファイルの対象フォルダ設定とは無関係)。
+// Pc・User ノードは引き続き表示しない。backend は全ユーザーに同じ一覧を
+// 割り当てる(`app::pc_with_user_sessions`/`app::current_pc_with_repositories`)
 // ため、重複させないよう先頭ユーザーの分だけを使う。d3.network はノードに
-// x/y が必須のため、座標は格子の位置として自前で計算する。
-function buildGraphData(pc: PcDto | null) {
+// x/y が必須のため、座標は列・格子の位置として自前で計算する。
+function buildGraphData(pc: PcDto | null, savedPositions: Record<string, NodePositionDto>) {
   const nodes: Record<string, unknown>[] = [];
   const edges: Record<string, unknown>[] = [];
   // 現在のグラフに実在する positionKey の集合(issue #121)。保存時、既に
   // 存在しないノードの位置情報をここで自然に除外する(呼び出し側が保存前に
-  // この集合でフィルタする)。第1段では位置を保存するノードが無いため空。
+  // この集合でフィルタする)。
   const positionKeys = new Set<string>();
+  let edgeSeq = 0;
 
-  const sessions = pc?.users[0]?.sessions ?? [];
+  // ドラッグで固定した位置(issue #121)があればそれを使い、無ければ計算した
+  // 既定位置を使う(issue #224でGitRepository/GitBranchノードに導入)。
+  const resolvePosition = (positionKey: string, defaultX: number, defaultY: number) =>
+    savedPositions[positionKey] ?? { x: defaultX, y: defaultY };
+
+  const user = pc?.users[0];
+  const repositories = user?.repositories ?? [];
+  const sessions = user?.sessions ?? [];
+
+  // GitRepository / GitBranch ノード(issue #224)。リポジトリを縦に並べ、
+  // 各リポジトリのブランチをその右列・同じ行範囲に並べる。
+  let row = 0;
+  repositories.forEach((repo) => {
+    const repoRowStart = row;
+    repo.branches.forEach((branch) => {
+      const branchNodeId = gitBranchNodeId(branch.branch_id);
+      positionKeys.add(branchNodeId);
+      const branchPosition = resolvePosition(
+        branchNodeId,
+        BRANCH_COLUMN_X,
+        GIT_NODE_ORIGIN_Y + row * GIT_NODE_ROW_HEIGHT,
+      );
+      nodes.push({
+        id: branchNodeId,
+        x: branchPosition.x,
+        y: branchPosition.y,
+        move: "support",
+        label: {
+          text: truncate(branch.branch_name, SESSION_LABEL_MAX_CHARS),
+          fill: COLOR_SUMI,
+          font: { size: 12 },
+          y: labelYBelowCircle(20),
+        },
+        circle: { r: 20, fill: COLOR_PEARL, stroke: { color: COLOR_KUSAIRO, width: 2 } },
+        icon: { url: HUB_NODE_ICON_URIS.gitBranch },
+        kind: "git-branch",
+        positionKey: branchNodeId,
+        branchName: branch.branch_name,
+        branchId: branch.branch_id,
+        branchDescription: branch.description,
+        branchCreatedAtTime: branch.created_at_time,
+      });
+      row += 1;
+    });
+    // ブランチが1つも無いリポジトリでも、自身の行を1つ確保する。
+    if (repo.branches.length === 0) row += 1;
+
+    const repositoryNodeId = `git-repository:${repo.repository_path}`;
+    positionKeys.add(repositoryNodeId);
+    const repositoryPosition = resolvePosition(
+      repositoryNodeId,
+      REPOSITORY_COLUMN_X,
+      GIT_NODE_ORIGIN_Y + repoRowStart * GIT_NODE_ROW_HEIGHT,
+    );
+    nodes.push({
+      id: repositoryNodeId,
+      x: repositoryPosition.x,
+      y: repositoryPosition.y,
+      move: "support",
+      label: {
+        text: truncate(repo.repository_name, SESSION_LABEL_MAX_CHARS),
+        fill: COLOR_SUMI,
+        font: { size: 13 },
+        y: labelYBelowCircle(26),
+      },
+      circle: { r: 26, fill: COLOR_PEARL, stroke: { color: COLOR_KINCHA, width: 2 } },
+      icon: { url: HUB_NODE_ICON_URIS.gitRepository },
+      kind: "git-repository",
+      positionKey: repositoryNodeId,
+      repositoryName: repo.repository_name,
+      repositoryPath: repo.repository_path,
+      repositoryDescription: repo.description,
+      repositoryBranchCount: repo.branches.length,
+      repositoryWorktreeCount: repo.worktrees.length,
+    });
+
+    // GitRepository → GitBranch(所有。台帳どおり。issue #224)。
+    repo.branches.forEach((branch) => {
+      edges.push({
+        id: `e${edgeSeq++}`,
+        source: repositoryNodeId,
+        target: gitBranchNodeId(branch.branch_id),
+        line: { width: 2, color: COLOR_BORDER },
+      });
+    });
+  });
+
   const columns = Math.max(1, Math.ceil(Math.sqrt(sessions.length * SESSION_GRID_ASPECT)));
 
   sessions.forEach((session, i) => {
@@ -171,7 +347,23 @@ function buildGraphData(pc: PcDto | null) {
         lineCount: file.line_count,
       })),
       subagentFileCount: session.subagent_files.length,
+      cwd: session.cwd,
+      gitBranch: session.git_branch,
     });
+
+    // セッション → GitBranch(issue #224。クラス図に無い導出関係。ログ行の
+    // cwd/git_branchから求めた表示補助のエッジであり、`Session`のモデル上の
+    // 関連ではない)。対応が取れないセッションは線を引かない
+    // (`findMatchingBranch`参照。フォールバックノードは作らない)。
+    const matchedBranch = findMatchingBranch(session, repositories);
+    if (matchedBranch) {
+      edges.push({
+        id: `e${edgeSeq++}`,
+        source: sessionNodeId,
+        target: gitBranchNodeId(matchedBranch.branch_id),
+        line: { width: 1, color: COLOR_BORDER },
+      });
+    }
   });
 
   return { nodes, edges, positionKeys };
@@ -179,9 +371,16 @@ function buildGraphData(pc: PcDto | null) {
 
 // ノードの `_core`(issue #109)からインスペクタの表示内容を組み立てる。
 // 追加のbackend呼び出しはせず、グラフ構築時に `_core` へ埋め込んだ値のみを
-// 使う。第1段ではノードからウィンドウを開く動線を持たないため、アクションは
-// 無し(issue #214)。
+// 使う。ノードからウィンドウを開く動線は持たないため、アクションは無し
+// (issue #214)。ノード種別(issue #224でセッション以外も追加)ごとに
+// 表示内容を分ける。
 function buildInspectorContent(core: HubNodeCore): InspectorContent {
+  if (core.kind === "git-repository") return buildRepositoryInspectorContent(core);
+  if (core.kind === "git-branch") return buildBranchInspectorContent(core);
+  return buildSessionInspectorContent(core);
+}
+
+function buildSessionInspectorContent(core: HubNodeCore): InspectorContent {
   const conversationFiles = core.conversationFiles ?? [];
   return {
     title: truncate(core.sessionTitle ?? "セッション", SESSION_TITLE_MAX_CHARS),
@@ -214,6 +413,39 @@ function buildInspectorContent(core: HubNodeCore): InspectorContent {
         label: "サブエージェント数",
         value: String(core.subagentFileCount ?? 0),
       },
+      // 表示補助データ(issue #224)。セッション→ブランチの線の根拠を
+      // インスペクタで確認できるようにする(`domain::Session`の属性ではない)。
+      { label: "cwd(表示補助)", value: core.cwd ?? "(未記録)" },
+      { label: "git_branch(表示補助)", value: core.gitBranch ?? "(未記録)" },
+    ],
+    action: null,
+  };
+}
+
+// GitRepository(issue #224)。`domain::GitRepository`のモデル属性のみを表示
+// する(worktree一覧の詳細は次段のスコープ)。
+function buildRepositoryInspectorContent(core: HubNodeCore): InspectorContent {
+  return {
+    title: truncate(core.repositoryName ?? "リポジトリ", SESSION_TITLE_MAX_CHARS),
+    fields: [
+      { label: "repository_path", value: core.repositoryPath ?? "" },
+      { label: "description", value: core.repositoryDescription || "(未設定)" },
+      { label: "ブランチ数", value: String(core.repositoryBranchCount ?? 0) },
+      { label: "worktree数", value: String(core.repositoryWorktreeCount ?? 0) },
+    ],
+    action: null,
+  };
+}
+
+// GitBranch(issue #224)。削除済みブランチはバックエンド側で既に除外されて
+// いるためノード自体が存在しない。
+function buildBranchInspectorContent(core: HubNodeCore): InspectorContent {
+  return {
+    title: truncate(core.branchName ?? "ブランチ", SESSION_TITLE_MAX_CHARS),
+    fields: [
+      { label: "branch_id", value: core.branchId ?? "" },
+      { label: "description", value: core.branchDescription || "(未設定)" },
+      { label: "created_at_time", value: String(core.branchCreatedAtTime ?? "") },
     ],
     action: null,
   };
@@ -222,9 +454,12 @@ function buildInspectorContent(core: HubNodeCore): InspectorContent {
 // メインウィンドウの起点となる「俯瞰グラフ」画面(ハブ化 その2。issue #84)。
 // オブジェクトモデルのインスタンスビューとして作り直している途中で、第1段
 // (issue #214)は `get_pc` で読み込んだ全セッション(User.sessions)のノード
-// だけを描く。セッション一覧は起動後のバックグラウンド読み込み(issue #212)で
-// 揃うため、`pc:data_loaded` までは空のまま「読み込み中」を表示する。ノードの
-// 右クリックでインスペクタを表示する(左クリックの動作は第1段では持たない)。
+// だけを描いた。第2段(issue #224)で GitRepository/GitBranch のノードと、
+// GitRepository→GitBranch・セッション→GitBranch の線を戻した(Pc・Userの
+// ノードは引き続き表示しない)。セッション一覧・Git台帳は起動後のバック
+// グラウンド読み込み(issue #212)で揃うため、`pc:data_loaded` までは空のまま
+// 「読み込み中」を表示する。ノードの右クリックでインスペクタを表示する
+// (左クリックの動作は持たない)。
 function HubPage() {
   const [error, setError] = useState<string | null>(null);
   // セッション一覧の取得元(オブジェクトモデル実装。issue #182・#197)。
@@ -334,8 +569,8 @@ function HubPage() {
   // する。`Asshole` の `rectum.selector()` 呼び出しより先にこのeffectが
   // 走った場合でも、`Colon.data()` は selector 未設定なら描画せず値を保持
   // するだけなので、後から selector が設定された時点で自動的に初回描画される。
-  // `savedPositions` は第1段のグラフ内容には影響しないが、位置を保存する
-  // ノードを再導入したとき(次段以降)に取りこぼさないよう依存に含めておく。
+  // `savedPositions` はGitRepository/GitBranchノードの位置(issue #224)に
+  // 反映するため依存に含める。
   const dataKey = JSON.stringify({ pc, savedPositions });
   useEffect(() => {
     // NOTE: `@yanqirenshi/d3.network` の `Edges.js`(`draw()`)には、IDが
@@ -347,7 +582,7 @@ function HubPage() {
     // から `.data()` を呼び、ライブラリの `enter()` が必ず全辺を新規追加として
     // 作り直すようにする(辺自体は保持すべき状態を持たないため実害はない)。
     hubPageRef.current?.querySelectorAll("path.ng-edge").forEach((el) => el.remove());
-    const { nodes, edges, positionKeys } = buildGraphData(pc);
+    const { nodes, edges, positionKeys } = buildGraphData(pc, savedPositions);
     validPositionKeysRef.current = positionKeys;
     rectum.data({ nodes, edges });
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -416,6 +416,40 @@ pub fn pc_with_loaded_lines(
     pc
 }
 
+/// `Session`の表示補助データ(issue #224)。`domain::Session`には持たせない
+/// (TMの決定: cwd/git_branchはLogLineの属性でありSessionの属性ではない)ため、
+/// `SessionDto`(tauri側)へ差し込むための中間値として`resolve_session_display_hints`
+/// が返す。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionDisplayHint {
+    pub cwd: Option<String>,
+    pub git_branch: Option<String>,
+}
+
+/// `parsed`(`AppState.user_sessions`)から、`session_id`ごとの表示補助データ
+/// (cwd/git_branch。issue #224)を解決する。同じ`session_id`の`ParsedSession`が
+/// 複数あれば(worktree移動。issue #217の集約と同じケース)、`modified_at_ms`の
+/// 古い順に見て値がある(`Some`)方で上書きする(`domain::User::load_sessions`の
+/// 属性解決規則と同じ)。呼び出し側(`get_pc` command)が`SessionDto`へ差し込む。
+pub fn resolve_session_display_hints(
+    parsed: &[ParsedSession],
+) -> HashMap<String, SessionDisplayHint> {
+    let mut sorted: Vec<&ParsedSession> = parsed.iter().collect();
+    sorted.sort_by_key(|p| p.modified_at_ms);
+
+    let mut hints: HashMap<String, SessionDisplayHint> = HashMap::new();
+    for p in sorted {
+        let hint = hints.entry(p.session_id.clone()).or_default();
+        if p.cwd.is_some() {
+            hint.cwd = p.cwd.clone();
+        }
+        if p.git_branch.is_some() {
+            hint.git_branch = p.git_branch.clone();
+        }
+    }
+    hints
+}
+
 /// 指定プロジェクトのセッション一覧を、最終更新の新しい順に並べて返す
 /// (ビューア左ペイン用。issue #33)。
 pub fn list_sessions(
@@ -1497,6 +1531,8 @@ mod tests {
             conversation_file_path: PathBuf::from(format!("/tmp/{session_id}.jsonl")),
             subagent_file_paths: Vec::new(),
             modified_at_ms: 0,
+            cwd: None,
+            git_branch: None,
         }
     }
 
@@ -1639,6 +1675,45 @@ mod tests {
         assert!(result.users[0].sessions[0].conversation_files[0]
             .lines
             .is_empty());
+    }
+
+    #[test]
+    fn resolve_session_display_hints_reads_the_matching_parsed_session() {
+        let mut p = sample_parsed_session("a");
+        p.cwd = Some("/repo".to_string());
+        p.git_branch = Some("main".to_string());
+
+        let hints = resolve_session_display_hints(&[p]);
+
+        let hint = hints.get("a").expect("hint for session a");
+        assert_eq!(hint.cwd.as_deref(), Some("/repo"));
+        assert_eq!(hint.git_branch.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn resolve_session_display_hints_overwrites_with_newer_some_values_only() {
+        let mut older = sample_parsed_session("a");
+        older.modified_at_ms = 100;
+        older.cwd = Some("/repo".to_string());
+        older.git_branch = Some("old-branch".to_string());
+        let mut newer = sample_parsed_session("a");
+        newer.modified_at_ms = 200;
+        newer.cwd = None;
+        newer.git_branch = Some("new-branch".to_string());
+
+        let hints = resolve_session_display_hints(&[newer, older]);
+
+        let hint = hints.get("a").expect("hint for session a");
+        assert_eq!(
+            hint.cwd.as_deref(),
+            Some("/repo"),
+            "新しい方がNoneなら古い方の値で補完される"
+        );
+        assert_eq!(
+            hint.git_branch.as_deref(),
+            Some("new-branch"),
+            "新しい方にSomeがあれば上書きされる"
+        );
     }
 
     #[test]

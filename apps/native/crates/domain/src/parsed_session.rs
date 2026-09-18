@@ -16,6 +16,13 @@ use std::path::PathBuf;
 /// worktree側の両方にできる。issue #214)を1つの`Session`に集約する際、
 /// この時刻の古い順に読み進めて属性を解決する(`User::load_sessions`参照)
 /// ための値。
+///
+/// `cwd`/`git_branch`(issue #224)はハブのグラフ表示用の**表示補助データ**。
+/// TMの決定により、これらはSessionの属性ではなくLogLineの属性であるため、
+/// `domain::Session`には持たせない(`User::load_sessions`では読み捨てる)。
+/// `ParsedSession`はただの運搬型なのでここに載せてよい。走査キャッシュ
+/// (`infra::session_source`)が既に抽出済みの値をそのまま使うため、新たな
+/// ファイル読み直しは発生しない。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedSession {
     pub session_id: String,
@@ -27,4 +34,6 @@ pub struct ParsedSession {
     pub conversation_file_path: PathBuf,
     pub subagent_file_paths: Vec<PathBuf>,
     pub modified_at_ms: u64,
+    pub cwd: Option<String>,
+    pub git_branch: Option<String>,
 }

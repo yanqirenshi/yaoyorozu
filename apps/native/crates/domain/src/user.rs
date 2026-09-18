@@ -154,6 +154,8 @@ mod tests {
             conversation_file_path: PathBuf::from(conversation_file),
             subagent_file_paths: Vec::new(),
             modified_at_ms,
+            cwd: None,
+            git_branch: None,
         }
     }
 

@@ -382,6 +382,11 @@ impl SessionSource for FileSystemRepository {
                     conversation_file_path: path.clone(),
                     subagent_file_paths,
                     modified_at_ms,
+                    // ハブのグラフ表示用の表示補助データ(issue #224)。走査
+                    // キャッシュ(`CachedSessionSummary`)に既に抽出済みの値
+                    // をそのまま使う(新たなファイル読み直しはしない)。
+                    cwd: scanned.cwd,
+                    git_branch: scanned.git_branch,
                 })
             })
             .collect()
