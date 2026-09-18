@@ -455,6 +455,11 @@ async fn list_window_states(
 /// `AppState.loaded_log_lines`(`get_session`でセッションを開いたときに
 /// キャッシュ済みのもの)を差し込むだけで、ここでは行の読み込みをしない
 /// (issue #208。未読み込みのセッションは空Vecのまま)。
+///
+/// `data_loaded`(issue #218)は`AppState.pc_data_loaded`をそのまま返す。
+/// `pc:data_loaded`イベントはマウント中のハブにしか届かない(#212の既知の
+/// 制約)ため、フロントはマウント時にこの値をまず問い合わせ、あわせて
+/// イベントを購読する形にする(イベントとポーリングの二重化はしない)。
 #[tauri::command]
 async fn get_pc(state: tauri::State<'_, Mutex<AppState>>) -> Result<PcDto, AppErrorDto> {
     let guard = state.lock().await;
@@ -462,7 +467,9 @@ async fn get_pc(state: tauri::State<'_, Mutex<AppState>>) -> Result<PcDto, AppEr
     let pc = app::pc_with_git_ledger(pc, &guard.git_ledger);
     let pc = app::pc_with_user_sessions(pc, guard.user_sessions.clone());
     let pc = app::pc_with_loaded_lines(pc, &guard.loaded_log_lines);
-    Ok(PcDto::from(pc))
+    let mut dto = PcDto::from(pc);
+    dto.data_loaded = guard.pc_data_loaded;
+    Ok(dto)
 }
 
 /// 登録済み全リポジトリのGit状態(ブランチ・worktree)を再観測して台帳を
@@ -484,17 +491,25 @@ async fn reload_git_ledger_and_sessions(app: &tauri::AppHandle) -> Result<(), ap
         )
     };
 
-    let (new_ledger, new_sessions) = tauri::async_runtime::spawn_blocking(move || {
+    let spawn_result = tauri::async_runtime::spawn_blocking(move || {
         let ledger =
             state::reconcile_and_save_git_ledger(&settings, &previous_ledger, &git_ledger_path);
         let sessions = state::build_and_report_user_sessions(&settings);
         (ledger, sessions)
     })
-    .await
-    .map_err(|_| app::AppError::Io("バックグラウンド処理に失敗しました".to_string()))?;
+    .await;
 
     let state = app.state::<Mutex<AppState>>();
     let mut guard = state.lock().await;
+    // 成否によらずここまで来たら「読み込み完了」扱いにする(issue #218:
+    // 観測・走査が失敗しても`pc_data_loaded`が永久に`false`のままにならない
+    // ようにする。失敗の詳細はこの後の`?`で呼び出し元へ伝わり、既存の
+    // fail-safe・ログ出力(`reconcile_and_save_git_ledger`/
+    // `build_and_report_user_sessions`)に委ねる)。
+    guard.pc_data_loaded = true;
+
+    let (new_ledger, new_sessions) = spawn_result
+        .map_err(|_| app::AppError::Io("バックグラウンド処理に失敗しました".to_string()))?;
     guard.git_ledger = new_ledger;
     guard.user_sessions = new_sessions?;
     Ok(())
@@ -1246,15 +1261,18 @@ fn start_github_session_check(app: &tauri::App) {
 /// (issue #212: 初回表示のラグ解消)。`.setup()` はすぐ返るため、ウィンドウは
 /// これらの完了を待たずに表示される。完了時に `pc:data_loaded` を発火し、
 /// ハブが `onSettingsUpdated` 等と同じ流儀で自動的に再取得する。
+///
+/// イベントは成否によらず発火する(issue #218)。失敗時も`AppState.
+/// pc_data_loaded`は`true`になる(`reload_git_ledger_and_sessions`
+/// 参照)ため、マウント中のハブの「読み込み中」表示を確実に解除する
+/// (失敗の詳細はログのみで、既存のfail-safeに委ねる)。
 fn start_pc_data_background_load(app: &tauri::App) {
     let app_handle = app.handle().clone();
     tauri::async_runtime::spawn(async move {
-        match reload_git_ledger_and_sessions(&app_handle).await {
-            Ok(()) => {
-                let _ = app_handle.emit("pc:data_loaded", ());
-            }
-            Err(e) => eprintln!("起動後のPCデータ読み込みに失敗しました: {e}"),
+        if let Err(e) = reload_git_ledger_and_sessions(&app_handle).await {
+            eprintln!("起動後のPCデータ読み込みに失敗しました: {e}");
         }
+        let _ = app_handle.emit("pc:data_loaded", ());
     });
 }
 
