@@ -25,15 +25,16 @@
  *
  * 【対象・ファイル対応】native.md §1 の「1型(クラス)= 1ファイル」(issue #184、
  * PR #185)により、domain クレートは各型が型名 snake_case のファイルに分かれて
- * いる(例: `Profile` → `profile.rs`)。`lib.rs` は `mod` 宣言と `pub use` のみ。
- * 本図の29クラスのうち、`ProjectItemKind` は `ProjectItem` と同じ `project_item.rs`
+ * いる(例: `Settings` → `settings.rs`)。`lib.rs` は `mod` 宣言と `pub use` のみ。
+ * 本図の28クラスのうち、`ProjectItemKind` は `ProjectItem` と同じ `project_item.rs`
  * に、`ClaudeDirEntryKind` は `ClaudeDirEntry` と同じ `claude_dir_entry.rs` に、
  * `GitRepositoryLedger` は `GitLedger` と同じ `git_ledger.rs` に、`ObservedWorktree`
  * は `ObservedGitState` と同じ `observed_git_state.rs` に同居する(native.md 曰く
- * 「その型専用の小さな補助enum」だが、補助structも同じ扱いにしている)。ほかの25
+ * 「その型専用の小さな補助enum」だが、補助structも同じ扱いにしている)。ほかの24
  * クラスはそれぞれ単独のファイル(型名 snake_case)。掲載対象は `classes-domain.ts`
- * に掲載済みの Pc・User と、`session_line/`(33型。かつては `classes-session-line.ts`
- * で描いていたが、不要になったため図ごと削除した)を除いたもの。
+ * に掲載済みの Pc・User・Profile と、`session_line/`(33型。かつては
+ * `classes-session-line.ts` で描いていたが、不要になったため図ごと削除した)を
+ * 除いたもの。
  *
  * 【GitBranch・GitWorktree への参照】`GitRepositoryLedger.branches`/`worktrees` は
  * `classes-domain.ts` のオブジェクトモデル側のクラス(`GitBranch`・`GitWorktree`)を
@@ -50,6 +51,13 @@
  * 描いていたが、実装側の改名で本来の型名のまま描けるようになったため、
  * この図でも `Conversation` に改めた。第5〜6弾(SessionFile/LogLine)の実装後、
  * ビューアがそちらのモデルへ移行すれば、この型と `Message` は退役する見込み。
+ *
+ * 【Profile】ユーザー指示により `classes-domain.ts` へ `Profile` を追加したため、
+ * このプロトタイプ側からは削除した(Pc・User と同じ扱い)。`Settings.profiles`
+ * は `Profile` 型そのものを指すが、図の離れた位置にあるため線は引かない
+ * (`GitRepositoryLedger.branches`/`worktrees` と同じ方針)。`GithubProject`・
+ * `GithubProjectSummary` はまだ `Profile` の実装をそのまま写したこの図側に残す
+ * (`Profile.github_project` からも同じ方針で線を引かない)。
  */
 import type { DiagramInput } from "@yanqirenshi/d3.classes";
 import {
@@ -124,6 +132,8 @@ const DEFS: ClassDef[] = [
     name: { physical: "Settings", logical: "Settings", description: "アプリの設定。issue #72" },
     attributes: [
       attr("version", "u32"),
+      // domain::Profile(classes-domain.ts に昇格済み)そのもの。図の離れた位置に
+      // あるため線は引かない(冒頭コメントの方針を参照)。
       attr("profiles", "Vec<Profile>"),
       attr("active_profile_id", "String"),
       attr("claude_projects_dir", "Option<PathBuf>"),
@@ -132,20 +142,6 @@ const DEFS: ClassDef[] = [
     filePath: "apps/native/crates/domain/src/settings.rs",
     // 名前と型の列が重なるので広げる(LogLine の size の説明を参照)。
     size: { w: 240, h: 0 },
-  },
-  {
-    name: { physical: "Profile", logical: "Profile", description: "対象リポジトリ・GitHubプロジェクト・対象フォルダの組。issue #72" },
-    attributes: [
-      attr("id", "String"),
-      attr("name", "String"),
-      attr("repository_path", "Option<PathBuf>"),
-      attr("github_project", "Option<GithubProject>"),
-      attr("selected_project_folders", "Vec<String>"),
-    ],
-    position: { x: 3300, y: -150 },
-    filePath: "apps/native/crates/domain/src/profile.rs",
-    // 名前と型の列が重なるので広げる(LogLine の size の説明を参照)。
-    size: { w: 250, h: 0 },
   },
   {
     name: { physical: "GithubProject", logical: "GithubProject", description: "永続化される GitHub プロジェクトの参照(owner + number)" },
@@ -351,9 +347,8 @@ const RELATIONSHIPS = [
   rel("composition", "Conversation", "AgentKind", "agent", "top", "bottom"),
   rel("association", "Conversation", "Message", "messages", "right", "left"),
   rel("composition", "Message", "Role", "role", "bottom", "top"),
-  // 設定・プロファイル
-  rel("association", "Settings", "Profile", "profiles", "right", "left"),
-  rel("association", "Profile", "GithubProject", "github_project", "bottom", "top"),
+  // 設定・プロファイル(Profile は classes-domain.ts に昇格済み。Settings.profiles の
+  // コメントを参照)
   // GitHub連携(Projects v2)
   rel("association", "ProjectItemsPage", "ProjectItem", "items", "right", "left"),
   rel("composition", "ProjectItem", "ProjectItemKind", "kind", "bottom", "top"),
