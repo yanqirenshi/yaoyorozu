@@ -26,11 +26,11 @@
  * 【対象・ファイル対応】native.md §1 の「1型(クラス)= 1ファイル」(issue #184、
  * PR #185)により、domain クレートは各型が型名 snake_case のファイルに分かれて
  * いる(例: `Settings` → `settings.rs`)。`lib.rs` は `mod` 宣言と `pub use` のみ。
- * 本図の28クラスのうち、`ProjectItemKind` は `ProjectItem` と同じ `project_item.rs`
+ * 本図の29クラスのうち、`ProjectItemKind` は `ProjectItem` と同じ `project_item.rs`
  * に、`ClaudeDirEntryKind` は `ClaudeDirEntry` と同じ `claude_dir_entry.rs` に、
  * `GitRepositoryLedger` は `GitLedger` と同じ `git_ledger.rs` に、`ObservedWorktree`
  * は `ObservedGitState` と同じ `observed_git_state.rs` に同居する(native.md 曰く
- * 「その型専用の小さな補助enum」だが、補助structも同じ扱いにしている)。ほかの24
+ * 「その型専用の小さな補助enum」だが、補助structも同じ扱いにしている)。ほかの25
  * クラスはそれぞれ単独のファイル(型名 snake_case)。掲載対象は `classes-domain.ts`
  * に掲載済みの Pc・User・Profile と、`session_line/`(33型。かつては
  * `classes-session-line.ts` で描いていたが、不要になったため図ごと削除した)を
@@ -265,6 +265,19 @@ const DEFS: ClassDef[] = [
     attributes: [attr("x", "f64"), attr("y", "f64")],
     position: { x: 2450, y: 1650 },
     filePath: "apps/native/crates/domain/src/node_position.rs",
+  },
+  {
+    name: { physical: "HubTuning", logical: "HubTuning", description: "ハブのグラフ(force シミュレーション)の調整値の永続化(hub-tuning.json)。ノード位置(hub-layout.json)とは関心が違うため別ファイル。issue #246・#249" },
+    attributes: [
+      attr("version", "u32"),
+      attr("link_distance", "f64"),
+      attr("link_strength", "Option<f64>"), // None = d3-force の既定のまま
+      attr("charge_strength", "f64"),
+      attr("collide_radius", "f64"),
+    ],
+    // HubLayout の真下に置く。他クラスへの参照は無いので線は無い。
+    position: { x: 2100, y: 1950 },
+    filePath: "apps/native/crates/domain/src/hub_tuning.rs",
   },
   // ============ /claude 画面(Explorer) ============
   {
