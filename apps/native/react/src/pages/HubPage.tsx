@@ -25,7 +25,7 @@ import type {
   SessionDto,
 } from "../api";
 import { usePageDockItems } from "../DockItemsContext";
-import { RELOAD_ICON } from "../icons";
+import { DOMAIN_RELOAD_ICON } from "../icons";
 import { HUB_NODE_ICON_URIS } from "../hubNodeIcons";
 import HubInspector from "../HubInspector";
 import type { InspectorContent } from "../HubInspector";
@@ -971,7 +971,8 @@ function HubPage() {
     window.addEventListener("mouseup", handleMouseUp);
   }, []);
 
-  // 「再読み込み」操作。`reconcile_git_state` はGit台帳の再観測に加えて
+  // dock の「domain データを再読み込み」操作(issue #243)。`reconcile_git_state`
+  // はGit台帳の再観測に加えて
   // 全プロジェクトの `Session` 一覧も組み立て直す(issue #193・#197)ため、
   // これを呼んでから `getPc` で取り直すとセッションの増減が反映される。
   // 失敗しても(fail-safe)`getPc` は必ず呼び直す。`pcDataLoaded` は
@@ -988,9 +989,11 @@ function HubPage() {
   const dockItems = useMemo(
     () => [
       {
-        id: "hub-reload",
-        label: RELOAD_ICON,
-        title: "再読み込み",
+        // ハブ固有の「domain データ再読み込み」(issue #243)。他画面の汎用
+        // 更新と同じ見た目にしないため、専用のアイコンと文言にする。
+        id: "hub-reload-domain",
+        label: DOMAIN_RELOAD_ICON,
+        title: "domain データを再読み込み",
         onClick: handleReload,
       },
     ],
