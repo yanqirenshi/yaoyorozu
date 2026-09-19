@@ -3,14 +3,13 @@ import { Outlet, useLocation, useNavigate } from "react-router";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { DockItem } from "command-dock";
 import AppDock from "./AppDock";
-import { getSettings, onSettingsCorrupted, onSettingsUpdated, switchProfile } from "./api";
+import { getSettings, onSettingsCorrupted, onSettingsUpdated } from "./api";
 import type { ProfileSummaryDto } from "./api";
 import { DockItemsProvider } from "./DockItemsContext";
 import type { DirtyGuard } from "./DockItemsContext";
 import {
   CLAUDE_SETTINGS_ICON,
   HUB_ICON,
-  PROFILE_ICON,
   SETTINGS_ICON,
   VIEWER_ICON,
 } from "./icons";
@@ -50,9 +49,10 @@ function Layout() {
   const [pageItems, setPageItems] = useState<DockItem[]>([]);
   const [corruptionWarning, setCorruptionWarning] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<ProfileSummaryDto[]>([]);
-  const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
-  // プロファイル切り替え前に、表示中のページの未保存編集を確認するための
-  // フック(issue #72。usePageDirtyGuard 参照)。
+  // ページの未保存編集を確認するためのフック(issue #72。usePageDirtyGuard
+  // 参照)。唯一の呼び出し元だった dock のプロファイル切り替えはユーザー指示で
+  // 削除したため、現在これを呼ぶ箇所は無い(各ページの登録と合わせた後片付けは
+  // 別途行う)。
   const dirtyGuardRef = useRef<DirtyGuard | null>(null);
 
   useEffect(() => {
@@ -78,14 +78,13 @@ function Layout() {
     void getCurrentWindow().setTitle(title);
   }, [location.pathname, windowProfileId, profiles]);
 
-  // プロファイル一覧・アクティブIDはdockのクイック切り替え(吹き出し)表示に
-  // 使う。全画面共通のため Layout 自身が取得する(issue #72)。
+  // プロファイル一覧は別ウィンドウのタイトル(「<プロファイル名> - <ページ名>」)
+  // に使う。全画面共通のため Layout 自身が取得する(issue #72・#76)。
   useEffect(() => {
     const loadProfiles = () => {
       getSettings()
         .then((settings) => {
           setProfiles(settings.profiles);
-          setActiveProfileId(settings.active_profile_id);
         })
         .catch((e) => console.error(e));
     };
@@ -139,25 +138,10 @@ function Layout() {
         onClick: () => navigate("/claude"),
       });
     }
-    // プロファイルが1件のみの場合はトリガーを出さない(ノイズ回避。issue #72)。
-    if (profiles.length > 1) {
-      items.push({
-        id: "nav-profile",
-        label: PROFILE_ICON,
-        title: "プロファイル",
-        popup: profiles.map((p) => ({
-          label: p.name,
-          active: p.id === activeProfileId,
-          onSelect: () => {
-            if (p.id === activeProfileId) return;
-            if (dirtyGuardRef.current && !dirtyGuardRef.current()) return;
-            switchProfile(p.id).catch((e) => console.error(e));
-          },
-        })),
-      });
-    }
+    // dock のプロファイル切り替え(issue #72)はユーザー指示で削除した。
+    // アクティブプロファイルの切り替えは設定画面のプロファイル一覧で行う。
     return items;
-  }, [location.pathname, navigate, profiles, activeProfileId, windowProfileId]);
+  }, [location.pathname, navigate, windowProfileId]);
 
   const items = useMemo<DockItem[]>(
     () => [...navItems, ...pageItems],

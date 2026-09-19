@@ -25,7 +25,7 @@ import type {
   SessionDto,
 } from "../api";
 import { usePageDockItems } from "../DockItemsContext";
-import { LAYOUT_RESET_ICON, RELOAD_ICON } from "../icons";
+import { RELOAD_ICON } from "../icons";
 import { HUB_NODE_ICON_URIS } from "../hubNodeIcons";
 import HubInspector from "../HubInspector";
 import type { InspectorContent } from "../HubInspector";
@@ -857,14 +857,7 @@ function HubPage() {
   // するだけなので、後から selector が設定された時点で自動的に初回描画される。
   // `savedPositions` はGitRepository/GitBranchノードの位置(issue #224)に
   // 反映するため依存に含める。
-  // 「配置をリセット」でセッションノードも初期位置(格子)から動かし直すための
-  // 印(issue #226)。セッションは再描画のたびに現在位置を引き継ぐため、線の
-  // 無いセッションがゆっくり広がり続けた分も残る。リセット時だけは引き継がず、
-  // 格子の位置からシミュレーションをやり直す。`layoutResetSeq` はリセット時に
-  // 保存位置が元々空で `savedPositions` が変わらなくても再描画させるための値。
-  const [layoutResetSeq, setLayoutResetSeq] = useState(0);
-  const skipPositionCarryOverRef = useRef(false);
-  const dataKey = JSON.stringify({ pc, profiles, savedPositions, layoutResetSeq });
+  const dataKey = JSON.stringify({ pc, profiles, savedPositions });
   useEffect(() => {
     // NOTE: `@yanqirenshi/d3.network` の `Edges.js`(`draw()`)には、IDが
     // 一致した既存の辺要素(本来は「更新」として残すべきもの)まで無条件に
@@ -879,14 +872,10 @@ function HubPage() {
     // d3 のデータ結合は各 `g.ng-node` の `__data__` にノードのデータを載せる
     // (右クリックのインスペクタと同じ取り方。issue #226)。
     const currentPositions = new Map<string, NodePositionDto>();
-    if (skipPositionCarryOverRef.current) {
-      skipPositionCarryOverRef.current = false;
-    } else {
-      hubPageRef.current?.querySelectorAll("g.ng-node").forEach((el) => {
-        const datum = (el as Element & { __data__?: NodeDatum }).__data__;
-        if (datum) currentPositions.set(datum.id, { x: datum.x, y: datum.y });
-      });
-    }
+    hubPageRef.current?.querySelectorAll("g.ng-node").forEach((el) => {
+      const datum = (el as Element & { __data__?: NodeDatum }).__data__;
+      if (datum) currentPositions.set(datum.id, { x: datum.x, y: datum.y });
+    });
     const { nodes, edges, positionKeys } = buildGraphData(
       pc,
       profiles,
@@ -982,17 +971,6 @@ function HubPage() {
     window.addEventListener("mouseup", handleMouseUp);
   }, []);
 
-  // ドラッグ固定位置を全て破棄し、自動レイアウトへ戻す(issue #121)。
-  // 元に戻せない操作のため確認を挟む。
-  const handleResetLayout = useCallback(() => {
-    if (!window.confirm("ノードの配置をリセットしますか?")) return;
-    setSavedPositions({});
-    saveHubLayout({}).catch((e) => console.error(e));
-    // セッションノードも格子の初期位置からやり直す(issue #226)。
-    skipPositionCarryOverRef.current = true;
-    setLayoutResetSeq((seq) => seq + 1);
-  }, []);
-
   // 「再読み込み」操作。`reconcile_git_state` はGit台帳の再観測に加えて
   // 全プロジェクトの `Session` 一覧も組み立て直す(issue #193・#197)ため、
   // これを呼んでから `getPc` で取り直すとセッションの増減が反映される。
@@ -1006,6 +984,7 @@ function HubPage() {
     return Promise.all([reloadPc, loadProfiles()]).then(() => undefined);
   }, [loadPc, loadProfiles]);
 
+  // dock の「配置をリセット」(issue #121・#226)はユーザー指示で削除した。
   const dockItems = useMemo(
     () => [
       {
@@ -1014,14 +993,8 @@ function HubPage() {
         title: "再読み込み",
         onClick: handleReload,
       },
-      {
-        id: "hub-reset-layout",
-        label: LAYOUT_RESET_ICON,
-        title: "配置をリセット",
-        onClick: handleResetLayout,
-      },
     ],
-    [handleReload, handleResetLayout],
+    [handleReload],
   );
   usePageDockItems(dockItems);
 
