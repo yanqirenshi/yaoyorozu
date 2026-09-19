@@ -31,7 +31,7 @@ import type {
 import ClaudeMdEditor from "../ClaudeMdEditor";
 import type { ClaudeMdEditorHandle } from "../ClaudeMdEditor";
 import { createClaudeMdDockItems } from "../claudeMdDockItems";
-import { usePageDirtyGuard, usePageDockItems } from "../DockItemsContext";
+import { usePageDockItems } from "../DockItemsContext";
 import { MODE_ICON, RELOAD_ICON } from "../icons";
 import JsonFileEditor from "../JsonFileEditor";
 import type { JsonFileEditorHandle } from "../JsonFileEditor";
@@ -271,7 +271,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
     };
   }, [projectParam, sessionParam, loadSession]);
 
-  // プロファイル切り替え(dock等)で対象フォルダ・GitHubプロジェクトが変わった
+  // 設定の変更(設定画面でのプロファイル切り替え等)で対象フォルダ・GitHubプロジェクトが変わった
   // ことの通知。表示中のフォルダが新しいプロファイルの対象から外れた場合は
   // 選択を解除する(issue #72)。
   useEffect(() => {
@@ -385,10 +385,6 @@ function SessionsPage({ nav }: SessionsPageProps) {
     }
     return true;
   };
-
-  // プロファイル切り替え(dockの吹き出しトリガー)前に、このページの未保存の
-  // 編集を確認できるようにする(issue #72)。
-  usePageDirtyGuard(confirmDiscardIfDirty);
 
   const handleSelectSession = (project: string, id: string) => {
     if (!confirmDiscardIfDirty()) return;
