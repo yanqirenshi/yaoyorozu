@@ -102,6 +102,43 @@ body,
   pointer-events: none;
 }
 
+/* グラフ調整の吹き出し(issue #246)。dock(画面下部中央に浮くツールバー)の
+   すぐ上に、グラフへオーバーレイで被せる(再レイアウトを起こさない)。 */
+.hub-tuning {
+  position: absolute;
+  left: 50%;
+  bottom: 100px;
+  transform: translateX(-50%);
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  box-shadow: var(--elevation-3);
+}
+
+.hub-tuning-row {
+  display: grid;
+  grid-template-columns: 120px 200px 44px;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.hub-tuning-row input[type="range"] {
+  width: 100%;
+  accent-color: var(--color-primary);
+}
+
+.hub-tuning-value {
+  text-align: right;
+  color: var(--text-primary);
+}
+
 /* ノードの右クリックで表示するインスペクタ(issue #109)。オーバーレイで
    被せるだけでグラフの再レイアウトを起こさない。高さは画面いっぱい(top/
    bottom とも0)。dock(画面下部に浮くフローティングツールバー)との重なりは
