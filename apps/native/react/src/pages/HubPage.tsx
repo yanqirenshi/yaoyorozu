@@ -32,11 +32,23 @@ import type { InspectorContent } from "../HubInspector";
 
 // 伝統色パレット(App.css の :root/tokens.css と同じ値。issue #84・#93)。
 const COLOR_PEARL = "#fbfbf8"; // 真珠
-const COLOR_KYO_MURASAKI = "#9d5b8b"; // 京紫(session・profile)
-const COLOR_KINCHA = "#CE7A19"; // 金茶(GitRepository。issue #224)
-const COLOR_KUSAIRO = "#7b8d41"; // 苔色(GitBranch。issue #224)
+const COLOR_KYO_MURASAKI = "#9d5b8b"; // 京紫(profile)
 const COLOR_SUMI = "#373737"; // 墨
 const COLOR_BORDER = "#dbdbdb"; // tokens.css の --border-default(エッジの線)
+
+// リポジトリ・ブランチ・セッションのノードの円(ユーザー指示)。背景は透明、
+// 枠線はなしにして、アイコンとラベルだけが見えるようにする。背景を
+// 「なし」(`fill: none`)にしないのは、d3.network ではアイコン画像が
+// クリックを透過させ(`pointer-events: none`)、クリック・右クリック・
+// ドラッグを円(`circle.base`)が受けているため。SVG は塗りが `none` の
+// 部分ではマウス操作を拾わないので、ノードを操作できなくなる。`transparent`
+// なら見えないまま操作は拾える。枠線は `none`・太さ 0 で描かない。
+// プロファイルのノードは、枠の太さでウィンドウの開閉を表す(issue #229)ため
+// 対象外。
+const INVISIBLE_NODE_CIRCLE = {
+  fill: "transparent",
+  stroke: { color: "none", width: 0 },
+};
 
 // プロファイル/GitRepository/GitBranch ノードの配置(ハブ再構築 第2〜3段。
 // issue #224・#229)。左からプロファイル列・リポジトリ列・ブランチ列を縦に
@@ -329,7 +341,7 @@ function buildGraphData(
           font: { size: 12 },
           y: labelYBelowCircle(20),
         },
-        circle: { r: 20, fill: COLOR_PEARL, stroke: { color: COLOR_KUSAIRO, width: 2 } },
+        circle: { r: 20, ...INVISIBLE_NODE_CIRCLE },
         icon: { url: HUB_NODE_ICON_URIS.gitBranch },
         kind: "git-branch",
         positionKey: branchNodeId,
@@ -365,7 +377,7 @@ function buildGraphData(
         font: { size: 13 },
         y: labelYBelowCircle(26),
       },
-      circle: { r: 26, fill: COLOR_PEARL, stroke: { color: COLOR_KINCHA, width: 2 } },
+      circle: { r: 26, ...INVISIBLE_NODE_CIRCLE },
       icon: { url: HUB_NODE_ICON_URIS.gitRepository },
       kind: "git-repository",
       positionKey: repositoryNodeId,
@@ -486,7 +498,7 @@ function buildGraphData(
         font: { size: 12 },
         y: labelYBelowCircle(20),
       },
-      circle: { r: 20, fill: COLOR_PEARL, stroke: { color: COLOR_KYO_MURASAKI, width: 2 } },
+      circle: { r: 20, ...INVISIBLE_NODE_CIRCLE },
       icon: { url: HUB_NODE_ICON_URIS.session },
       kind: "session",
       sessionId: session.session_id,
