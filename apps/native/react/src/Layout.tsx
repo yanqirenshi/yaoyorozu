@@ -89,53 +89,65 @@ function Layout() {
     };
   }, []);
 
-  // ナビトリガーは即アクション型の丸アイコン。表示中のページ自身へのトリガーは
-  // 出す意味がないため表示しない(遷移先が1つだけなら1個だけ出る)。
-  // 常に先頭(ページ固有アイテムより前)に置き、ページ間で位置が揺れないようにする。
+  // ナビトリガーは即アクション型の丸アイコン。表示中のページ自身の分も含めて
+  // 常に同じ並び・位置で出す(issue #253。ページごとに項目がずれない=位置を
+  // 覚えられる)。表示中のページのものは背景を金茶-400 にして現在地を示し
+  // (`currentNavId`。AppDock 参照)、クリックしても何もしない(遷移済み)。
+  // 常に先頭(ページ固有アイテムより前)に置く。
+  // `windowProfileId` があるウィンドウ(ハブから開いたビューア。issue #76)
+  // は自分自身のビューアへのトリガーを、無いウィンドウ(メイン)はハブへの
+  // トリガーを出す(issue #84: メインウィンドウはハブが起点であり、ビューアは
+  // ハブから開いた別ウィンドウが担う)。
+  const onViewerRoute =
+    location.pathname === "/profiles" || location.pathname.startsWith("/profiles/");
+  const currentNavId = windowProfileId
+    ? onViewerRoute
+      ? "nav-sessions"
+      : location.pathname === "/settings"
+        ? "nav-settings"
+        : location.pathname === "/claude"
+          ? "nav-claude"
+          : null
+    : location.pathname === "/"
+      ? "nav-hub"
+      : location.pathname === "/settings"
+        ? "nav-settings"
+        : location.pathname === "/claude"
+          ? "nav-claude"
+          : null;
+
   const navItems = useMemo<DockItem[]>(() => {
+    // 表示中のページ自身のトリガーは何もしない(誤クリックで再遷移しない)。
+    const goto = (id: string, path: string) => () => {
+      if (id !== currentNavId) navigate(path);
+    };
     const items: DockItem[] = [];
-    // `windowProfileId` があるウィンドウ(ハブから開いたビューア。issue #76)
-    // は自分自身のビューアへ戻るトリガーを、無いウィンドウ(メイン)は
-    // ハブへ戻るトリガーを出す(issue #84: メインウィンドウはハブが起点で
-    // あり、ビューアはハブから開いた別ウィンドウが担う)。
-    const onViewerRoute = location.pathname === "/profiles" || location.pathname.startsWith("/profiles/");
     if (windowProfileId) {
-      if (!onViewerRoute) {
-        items.push({
-          id: "nav-sessions",
-          label: VIEWER_ICON,
-          title: "ビューア",
-          onClick: () => navigate(`/profiles/${encodeURIComponent(windowProfileId)}`),
-        });
-      }
-    } else if (location.pathname !== "/") {
       items.push({
-        id: "nav-hub",
-        label: HUB_ICON,
-        title: "ハブ",
-        onClick: () => navigate("/"),
+        id: "nav-sessions",
+        label: VIEWER_ICON,
+        title: "ビューア",
+        onClick: goto("nav-sessions", `/profiles/${encodeURIComponent(windowProfileId)}`),
       });
+    } else {
+      items.push({ id: "nav-hub", label: HUB_ICON, title: "ハブ", onClick: goto("nav-hub", "/") });
     }
-    if (location.pathname !== "/settings") {
-      items.push({
-        id: "nav-settings",
-        label: SETTINGS_ICON,
-        title: "設定",
-        onClick: () => navigate("/settings"),
-      });
-    }
-    if (location.pathname !== "/claude") {
-      items.push({
-        id: "nav-claude",
-        label: CLAUDE_SETTINGS_ICON,
-        title: "Claude",
-        onClick: () => navigate("/claude"),
-      });
-    }
+    items.push({
+      id: "nav-settings",
+      label: SETTINGS_ICON,
+      title: "設定",
+      onClick: goto("nav-settings", "/settings"),
+    });
+    items.push({
+      id: "nav-claude",
+      label: CLAUDE_SETTINGS_ICON,
+      title: "Claude",
+      onClick: goto("nav-claude", "/claude"),
+    });
     // dock のプロファイル切り替え(issue #72)はユーザー指示で削除した。
     // アクティブプロファイルの切り替えは設定画面のプロファイル一覧で行う。
     return items;
-  }, [location.pathname, navigate, windowProfileId]);
+  }, [currentNavId, navigate, windowProfileId]);
 
   const items = useMemo<DockItem[]>(
     () => [...navItems, ...pageItems],
@@ -152,7 +164,7 @@ function Layout() {
       <DockItemsProvider setItems={setPageItems}>
         <Outlet />
       </DockItemsProvider>
-      <AppDock items={items} pageItemIds={pageItemIds} />
+      <AppDock items={items} pageItemIds={pageItemIds} currentItemId={currentNavId} />
     </div>
   );
 }
