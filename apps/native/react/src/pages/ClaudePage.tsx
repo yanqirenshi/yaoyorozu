@@ -13,7 +13,7 @@ import type { ClaudeDirExplorerHandle } from "../ClaudeDirExplorer";
 import ClaudeMdEditor from "../ClaudeMdEditor";
 import type { ClaudeMdEditorHandle } from "../ClaudeMdEditor";
 import { createClaudeMdDockItems } from "../claudeMdDockItems";
-import { usePageDirtyGuard, usePageDockItems } from "../DockItemsContext";
+import { usePageDockItems } from "../DockItemsContext";
 import { RELOAD_ICON } from "../icons";
 import JsonFileEditor from "../JsonFileEditor";
 import type { JsonFileEditorHandle } from "../JsonFileEditor";
@@ -88,10 +88,6 @@ function ClaudePage() {
       return params;
     });
   };
-
-  // プロファイル切り替え(dockの吹き出しトリガー)前にも、未保存の編集を
-  // 確認できるようにする(issue #72)。
-  usePageDirtyGuard(confirmDiscardIfDirty);
 
   const dockItems = useMemo<DockItem[]>(() => {
     switch (tab) {

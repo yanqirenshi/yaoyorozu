@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { DockItem } from "command-dock";
@@ -6,7 +6,6 @@ import AppDock from "./AppDock";
 import { getSettings, onSettingsCorrupted, onSettingsUpdated } from "./api";
 import type { ProfileSummaryDto } from "./api";
 import { DockItemsProvider } from "./DockItemsContext";
-import type { DirtyGuard } from "./DockItemsContext";
 import {
   CLAUDE_SETTINGS_ICON,
   HUB_ICON,
@@ -49,11 +48,6 @@ function Layout() {
   const [pageItems, setPageItems] = useState<DockItem[]>([]);
   const [corruptionWarning, setCorruptionWarning] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<ProfileSummaryDto[]>([]);
-  // ページの未保存編集を確認するためのフック(issue #72。usePageDirtyGuard
-  // 参照)。唯一の呼び出し元だった dock のプロファイル切り替えはユーザー指示で
-  // 削除したため、現在これを呼ぶ箇所は無い(各ページの登録と合わせた後片付けは
-  // 別途行う)。
-  const dirtyGuardRef = useRef<DirtyGuard | null>(null);
 
   useEffect(() => {
     // 設定ファイルの破損は起動直後(まだ /settings にいるとは限らない)に
@@ -153,7 +147,7 @@ function Layout() {
       {corruptionWarning && (
         <p className="corruption-warning">{corruptionWarning}</p>
       )}
-      <DockItemsProvider setItems={setPageItems} dirtyGuardRef={dirtyGuardRef}>
+      <DockItemsProvider setItems={setPageItems}>
         <Outlet />
       </DockItemsProvider>
       <AppDock items={items} />
