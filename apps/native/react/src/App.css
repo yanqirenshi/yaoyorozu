@@ -617,6 +617,32 @@ body,
   margin-bottom: 20px;
 }
 
+/* 右ペイン上部のプロファイル名と名前変更ボタン。名前変更中は見出しが
+   入力欄に入れ替わるため、行の高さを固定して下のタブが動かないようにする。 */
+.settings-profile-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 40px;
+  margin-bottom: 12px;
+}
+
+/* 長い名前は省略して、名前変更ボタンを押し出さない。 */
+.settings-profile-header h2 {
+  margin: 0;
+  min-width: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-profile-header button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 /* 一覧が内側でスクロールするため、ペイン自体はスクロールさせない。
    dock(画面下部に浮くフローティングツールバー)との重なりは、この
    ペインの `padding-bottom` 1箇所だけで避ける(.claude-page-section と
@@ -818,21 +844,25 @@ body,
   gap: 8px;
 }
 
-/* 名前変更中の入力欄。行の見た目が変わって一覧が飛び跳ねないよう、
-   .project-item と同じ余白・角丸に揃える。 */
+/* 名前変更中の入力欄(右ペイン上部のプロファイル名の位置に出す)。見出しと
+   入れ替わっても文字の大きさが変わらないよう、見出しと同じ書体に揃え、
+   .settings-profile-header の高さに収める。 */
 .settings-profile-rename-input {
-  width: 100%;
+  flex: 0 1 320px;
+  min-width: 0;
   box-sizing: border-box;
   border: 1px solid var(--color-primary);
   border-radius: 4px;
   background: var(--surface-base);
   color: var(--text-primary);
-  padding: 10px 14px;
-  font-size: 0.95rem;
+  padding: 4px 10px;
+  font-size: 1.1rem;
+  font-weight: 600;
   font-family: inherit;
 }
 
-/* 名前変更・削除はアクティブな行の下にだけ出す(issue #74)。 */
+/* 一覧の各行の下に出す操作(新しいウィンドウで開く・削除)。削除は
+   アクティブな行にだけ出す(issue #74)。 */
 .settings-profile-actions {
   display: flex;
   gap: 8px;
