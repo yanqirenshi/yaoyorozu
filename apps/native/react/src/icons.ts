@@ -10,6 +10,20 @@ export const RELOAD_ICON = `
   <path d="M16 3v4h-4" />
 </svg>`;
 
+// ハブ(`/`)専用: domain データ(Git状態の再観測 + jsonl の再走査)の
+// 読み直し(issue #243)。他画面の汎用更新(RELOAD_ICON。円弧矢印だけ)と
+// 見分けられるよう、データベース(円筒)に円弧矢印を添えた形にする。
+export const DOMAIN_RELOAD_ICON = `
+<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor"
+     stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
+     xmlns="http://www.w3.org/2000/svg">
+  <ellipse cx="8" cy="4.2" rx="5" ry="2" />
+  <path d="M3 4.2v6c0 1.1 2.2 2 5 2 .3 0 .7 0 1-.05" />
+  <path d="M3 7.2c0 1.1 2.2 2 5 2 .4 0 .8-.02 1.2-.06" />
+  <path d="M17 15.2a3.1 3.1 0 1 1-1.1-2.37" />
+  <path d="M17.2 11.4v2.4h-2.4" />
+</svg>`;
+
 export const MODE_ICON = `
 <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor"
      stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
