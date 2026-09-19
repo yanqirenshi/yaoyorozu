@@ -18,7 +18,17 @@ declare module "@yanqirenshi/d3.network" {
   // 緩く宣言する。
   export type NodeDragHandler = (node: NodeDatum, event: unknown) => void;
 
+  // force シミュレーションの調整値(0.6 で追加された公開API
+  // `rectum.simulation.configure()`。指定した項目だけ上書きし、alpha(1) で
+  // 動かし直す)。`link.strength` の null は d3-force の既定(次数依存)。
+  export type SimulationOptions = {
+    link?: { distance?: number | null; strength?: number | null };
+    charge?: { strength?: number | null };
+    collide?: { radius?: number };
+  };
+
   export class Rectum {
+    simulation: { configure(options: SimulationOptions): unknown };
     constructor(params: {
       // 背景のグリッド線。`Rectum` は引数をそのまま `@yanqirenshi/assh0le` の
       // `Colon` に渡し、`draw: false` なら描かない(`Colon.drawGrids`)。

@@ -24,6 +24,20 @@ export const DOMAIN_RELOAD_ICON = `
   <path d="M17.2 11.4v2.4h-2.4" />
 </svg>`;
 
+// ハブ(`/`)専用: グラフ(force シミュレーション)の調整メニュー(issue #246)。
+// 3本のスライダーの線画。
+export const TUNING_ICON = `
+<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor"
+     stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
+     xmlns="http://www.w3.org/2000/svg">
+  <line x1="3" y1="5" x2="17" y2="5" />
+  <line x1="3" y1="10" x2="17" y2="10" />
+  <line x1="3" y1="15" x2="17" y2="15" />
+  <circle cx="7" cy="5" r="1.8" fill="var(--dock-bg, #fff)" />
+  <circle cx="13" cy="10" r="1.8" fill="var(--dock-bg, #fff)" />
+  <circle cx="8" cy="15" r="1.8" fill="var(--dock-bg, #fff)" />
+</svg>`;
+
 export const MODE_ICON = `
 <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor"
      stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"

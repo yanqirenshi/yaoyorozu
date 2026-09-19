@@ -141,6 +141,8 @@ function Layout() {
     () => [...navItems, ...pageItems],
     [navItems, pageItems],
   );
+  // ページ固有項目だけ背景色を変える(issue #246。AppDock 参照)。
+  const pageItemIds = useMemo(() => pageItems.map((item) => item.id), [pageItems]);
 
   return (
     <div className="app-shell">
@@ -150,7 +152,7 @@ function Layout() {
       <DockItemsProvider setItems={setPageItems}>
         <Outlet />
       </DockItemsProvider>
-      <AppDock items={items} />
+      <AppDock items={items} pageItemIds={pageItemIds} />
     </div>
   );
 }

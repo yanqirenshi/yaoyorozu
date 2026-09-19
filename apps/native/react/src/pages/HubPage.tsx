@@ -26,7 +26,9 @@ import type {
   SessionDto,
 } from "../api";
 import { usePageDockItems } from "../DockItemsContext";
-import { DOMAIN_RELOAD_ICON } from "../icons";
+import { DOMAIN_RELOAD_ICON, TUNING_ICON } from "../icons";
+import HubTuningPopover, { DEFAULT_HUB_TUNING } from "../HubTuningPopover";
+import type { HubTuning } from "../HubTuningPopover";
 import { HUB_NODE_ICON_URIS } from "../hubNodeIcons";
 import HubInspector from "../HubInspector";
 import type { InspectorContent } from "../HubInspector";
@@ -918,11 +920,40 @@ function HubPage() {
     return () => container.removeEventListener("contextmenu", handleContextMenu);
   }, []);
 
+  // グラフの調整メニュー(issue #246)。値は永続化しない(リロードで既定値に
+  // 戻る)ため、この画面の UI 状態としてだけ持つ。値の変更は即座に
+  // シミュレーションへ反映する(d3.network 0.6 の公開API
+  // `rectum.simulation.configure()`。指定した項目だけ上書きし alpha(1) で
+  // 動かし直すため、動きが見える)。
+  const [tuningOpen, setTuningOpen] = useState(false);
+  const [tuning, setTuning] = useState<HubTuning>(DEFAULT_HUB_TUNING);
+  const handleTuningChange = useCallback(
+    (key: keyof HubTuning, value: number) => {
+      setTuning((prev) => ({ ...prev, [key]: value }));
+      switch (key) {
+        case "linkDistance":
+          rectum.simulation.configure({ link: { distance: value } });
+          break;
+        case "linkStrength":
+          rectum.simulation.configure({ link: { strength: value } });
+          break;
+        case "chargeStrength":
+          rectum.simulation.configure({ charge: { strength: value } });
+          break;
+        case "collideRadius":
+          rectum.simulation.configure({ collide: { radius: value } });
+          break;
+      }
+    },
+    [rectum],
+  );
+
   // 閉じる: ×(HubInspector側)・グラフの空白部クリック・Esc(issue #109)。
   const handleHubPageClick = useCallback((e: ReactMouseEvent<HTMLDivElement>) => {
     const target = e.target as Element;
     if (target.closest("g.ng-node")) return;
     setInspectorCore(null);
+    setTuningOpen(false);
   }, []);
 
   useEffect(() => {
@@ -999,6 +1030,15 @@ function HubPage() {
         title: "domain データを再読み込み",
         onClick: handleReload,
       },
+      {
+        // グラフの調整メニュー(issue #246)。吹き出しは command-dock の
+        // `popup`(テキスト項目のみ)ではスライダーを置けないため、即アクション型
+        // にして、開閉するだけ。吹き出し自体は下の `HubTuningPopover`。
+        id: "hub-tuning",
+        label: TUNING_ICON,
+        title: "グラフの調整",
+        onClick: () => setTuningOpen((open) => !open),
+      },
     ],
     [handleReload],
   );
@@ -1013,6 +1053,7 @@ function HubPage() {
           マウントすると、そのたびにカメラ(パン/ズーム)がリセットされて
           しまう。 */}
       <D3Network rectum={rectum} />
+      {tuningOpen && <HubTuningPopover values={tuning} onChange={handleTuningChange} />}
       {inspectorContent && (
         <HubInspector
           content={inspectorContent}
