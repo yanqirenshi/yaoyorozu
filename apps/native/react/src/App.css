@@ -600,16 +600,36 @@ body,
   color: var(--text-secondary);
 }
 
+/* 設定画面の右ペイン。縦のflexにしておき、Claudeタブ(.is-fill)では対象
+   フォルダの一覧が残りの高さいっぱいに伸びるようにする。他のタブは従来
+   どおりペインごとスクロールする。 */
 .settings-page {
   flex: 1;
   min-width: 0;
   padding: 24px;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
 }
 
 .settings-page .pane-tabs {
   padding: 0;
   margin-bottom: 20px;
+}
+
+/* 一覧が内側でスクロールするため、ペイン自体はスクロールさせない。
+   dock(画面下部に浮くフローティングツールバー)との重なりは、この
+   ペインの `padding-bottom` 1箇所だけで避ける(.claude-page-section と
+   同じ値)。 */
+.settings-page.is-fill {
+  overflow-y: hidden;
+  padding-bottom: 96px;
+}
+
+.settings-page.is-fill .settings-form {
+  flex: 1;
+  min-height: 0;
+  max-width: none;
 }
 
 .corruption-warning {
@@ -636,6 +656,23 @@ body,
   font-size: 0.95rem;
   font-weight: 600;
   margin: 0 0 10px;
+}
+
+/* 見出しの右横に操作(保存ボタン等)を並べる行。 */
+.settings-section-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 10px;
+}
+
+.settings-section-header h3,
+.settings-section-header .settings-saved {
+  margin: 0;
+}
+
+.settings-section-header .settings-save {
+  align-self: auto;
 }
 
 .settings-folder-picker {
@@ -686,6 +723,14 @@ body,
   letter-spacing: 0.1em;
 }
 
+/* 対象フォルダ欄は残りの高さいっぱいに伸ばし、一覧を内側でスクロールさせる。 */
+.settings-folder-section {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .settings-folder-list {
   list-style: none;
   margin: 0;
@@ -693,7 +738,8 @@ body,
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-height: 320px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
 }
 
