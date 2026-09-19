@@ -1098,9 +1098,11 @@ function HubPage() {
         label: TUNING_ICON,
         title: "グラフの調整",
         onClick: () => setTuningOpen((open) => !open),
+        // 吹き出しの開閉状態(枠線・選択色に反映。issue #255。AppDock 参照)。
+        popupOpen: tuningOpen,
       },
     ],
-    [handleReload],
+    [handleReload, tuningOpen],
   );
   usePageDockItems(dockItems);
 
