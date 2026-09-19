@@ -7,7 +7,13 @@ import { getSettings, onSettingsCorrupted, onSettingsUpdated, switchProfile } fr
 import type { ProfileSummaryDto } from "./api";
 import { DockItemsProvider } from "./DockItemsContext";
 import type { DirtyGuard } from "./DockItemsContext";
-import { CLAUDE_SETTINGS_ICON, PROFILE_ICON, SETTINGS_ICON, VIEWER_ICON } from "./icons";
+import {
+  CLAUDE_SETTINGS_ICON,
+  HUB_ICON,
+  PROFILE_ICON,
+  SETTINGS_ICON,
+  VIEWER_ICON,
+} from "./icons";
 import { useWindowProfileId } from "./useWindowProfileId";
 import "./App.css";
 
@@ -112,7 +118,7 @@ function Layout() {
     } else if (location.pathname !== "/") {
       items.push({
         id: "nav-hub",
-        label: VIEWER_ICON,
+        label: HUB_ICON,
         title: "ハブ",
         onClick: () => navigate("/"),
       });
