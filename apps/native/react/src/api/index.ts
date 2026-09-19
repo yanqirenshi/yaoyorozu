@@ -211,6 +211,14 @@ export function onPcDataLoaded(callback: () => void): Promise<() => void> {
   return unlisten.then((fn) => fn);
 }
 
+// 手動の再読み込み(`reconcileGitState`)を開始したときに発火する
+// (issue #245)。`onPcDataLoaded` と対で、購読側が `getPc` で取り直すと
+// `data_loaded` が `false` に戻っている(「読み込み中」を表示できる)。
+export function onPcDataLoading(callback: () => void): Promise<() => void> {
+  const unlisten = listen("pc:data_loading", () => callback());
+  return unlisten.then((fn) => fn);
+}
+
 // ハブグラフのノード位置(ドラッグ固定)を取得する(issue #121)。
 export function getHubLayout(): Promise<HubLayoutDto> {
   return invoke<HubLayoutDto>("get_hub_layout");
