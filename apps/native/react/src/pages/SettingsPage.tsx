@@ -301,6 +301,8 @@ function SettingsPage() {
       .finally(() => setSaving(false));
   };
 
+  const activeProfile = profiles.find((p) => p.id === activeProfileId) ?? null;
+
   // 対象フォルダ一覧のインクリメンタルサーチ(大文字・小文字を区別しない
   // 部分一致)。表示を絞るだけで選択状態には影響しない(絞り込みで見えなく
   // なったフォルダの選択も、保存時にそのまま残る)。
@@ -332,58 +334,36 @@ function SettingsPage() {
   return (
     <>
       {/* 左ペイン: プロファイル一覧+追加。ビューア(`/`)の「左: 一覧 / 右: 内容」と
-          同じ画面骨格に揃える(issue #74)。名前変更・削除は全行に並べるとノイズに
-          なるため、アクティブな行にだけ出す。 */}
+          同じ画面骨格に揃える(issue #74)。削除は全行に並べるとノイズになるため、
+          アクティブな行にだけ出す。名前変更は右ペインのプロファイル名の横に置く。 */}
       <div className="settings-profile-pane">
         <h2>プロファイル</h2>
         <ul className="settings-profile-list">
           {profiles.map((p) => (
             <li key={p.id}>
-              {renamingProfileId === p.id ? (
-                <input
-                  type="text"
-                  className="settings-profile-rename-input"
-                  value={renameDraft}
-                  onChange={(e) => setRenameDraft(e.target.value)}
-                  onBlur={() => handleCommitRenameProfile(p.id)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleCommitRenameProfile(p.id);
-                    if (e.key === "Escape") setRenamingProfileId(null);
-                  }}
-                  autoFocus
-                />
-              ) : (
-                <button
-                  type="button"
-                  className={`project-item ${p.id === activeProfileId ? "selected" : ""}`}
-                  onClick={() => handleSwitchProfileFromList(p.id)}
-                >
-                  <span className="settings-profile-name">{p.name}</span>
+              <button
+                type="button"
+                className={`project-item ${p.id === activeProfileId ? "selected" : ""}`}
+                onClick={() => handleSwitchProfileFromList(p.id)}
+              >
+                <span className="settings-profile-name">{p.name}</span>
+              </button>
+              <div className="settings-profile-actions">
+                {/* 全行に常設(issue #76)。削除はノイズ回避のためアクティブな行に
+                    だけ出す(issue #74 からの既存方針)。 */}
+                <button type="button" onClick={() => handleOpenProfileWindow(p.id)}>
+                  新しいウィンドウで開く
                 </button>
-              )}
-              {renamingProfileId !== p.id && (
-                <div className="settings-profile-actions">
-                  {/* 全行に常設(issue #76)。名前変更・削除はノイズ回避のため
-                      アクティブな行にだけ出す(issue #74 からの既存方針)。 */}
-                  <button type="button" onClick={() => handleOpenProfileWindow(p.id)}>
-                    新しいウィンドウで開く
+                {p.id === activeProfileId && (
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteProfile(p.id)}
+                    disabled={profiles.length <= 1}
+                  >
+                    削除
                   </button>
-                  {p.id === activeProfileId && (
-                    <>
-                      <button type="button" onClick={() => handleStartRenameProfile(p)}>
-                        名前変更
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteProfile(p.id)}
-                        disabled={profiles.length <= 1}
-                      >
-                        削除
-                      </button>
-                    </>
-                  )}
-                </div>
-              )}
+                )}
+              </div>
             </li>
           ))}
         </ul>
@@ -402,11 +382,40 @@ function SettingsPage() {
       </div>
 
       <div className={`settings-page ${tab === "claude" ? "is-fill" : ""}`}>
+        {/* 表示中(アクティブ)のプロファイル名と名前変更ボタン。名前変更中は
+            見出しがこの位置で入力欄に入れ替わる(Enter・欄の外で確定、Esc で
+            取り消し)。 */}
+        {activeProfile && (
+          <div className="settings-profile-header">
+            {renamingProfileId === activeProfile.id ? (
+              <input
+                type="text"
+                className="settings-profile-rename-input"
+                value={renameDraft}
+                onChange={(e) => setRenameDraft(e.target.value)}
+                onBlur={() => handleCommitRenameProfile(activeProfile.id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleCommitRenameProfile(activeProfile.id);
+                  if (e.key === "Escape") setRenamingProfileId(null);
+                }}
+                aria-label="プロファイル名"
+                autoFocus
+              />
+            ) : (
+              <>
+                <h2 title={activeProfile.name}>{activeProfile.name}</h2>
+                <button type="button" onClick={() => handleStartRenameProfile(activeProfile)}>
+                  名前変更
+                </button>
+              </>
+            )}
+          </div>
+        )}
         <PaneTabs
           tabs={[
             {
               id: "profiles",
-              label: profiles.find((p) => p.id === activeProfileId)?.name ?? "プロファイル",
+              label: activeProfile?.name ?? "プロファイル",
             },
             { id: "github", label: "GitHub" },
             { id: "claude", label: "Claude" },
