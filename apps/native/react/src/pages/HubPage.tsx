@@ -104,10 +104,12 @@ const HUB_LAYOUT_SAVE_DEBOUNCE_MS = 500;
 // ションはやがて止まる。`Rectum.data()` はシミュレーションを再開しないので、
 // 止まった後の再描画(再読み込み・配置のリセット等)では tick が走らず、
 // 作り直した辺に線の形(`d`)が入らない(線が消える)うえ、`will` のノードも
-// 動かない。ライブラリに再開用の API が無いため、内部の d3 シミュレーション
+// 動かない。d3.network 0.6 で追加された `rectum.simulation.configure()` も
+// 再開はするが、常に `alpha(1)`(最大の強さ)で動かし直すため、再描画の
+// たびに全ノードが大きく動いてしまう。そこで内部の d3 シミュレーション
 // (`rectum.simulation.simulation`)を直接再開する。alphaTarget はライブラリの
-// 初期値(`makeSimuration` の 0.002)に戻し、alpha は再描画のたびにノードが
-// 大きく動き回らない程度の小さな値にする。
+// 既定値(0.6 の `Simulation.js` の `DEFAULT_OPTIONS.alpha.target` = 0.002)に
+// 戻し、alpha は再描画のたびにノードが大きく動き回らない程度の小さな値にする。
 const SIMULATION_RESTART_ALPHA = 0.1;
 const SIMULATION_DEFAULT_ALPHA_TARGET = 0.002;
 type D3SimulationLike = {
@@ -423,8 +425,9 @@ function buildGraphData(
       },
       // ウィンドウで開いているプロファイルは枠を太くして見分けられるようにする。
       // 旧プロファイルノード(issue #84)は円を京紫で塗っていたが、d3.network
-      // 0.5 の `makeDataCircle` は `circle.fill` を読まず常に白で塗るため、
-      // 塗りでは区別できない(issue #229 の実機確認で判明)。
+      // 0.5 までの `makeDataCircle` は `circle.fill` を読まず常に白で塗って
+      // いたため、枠の太さで区別することにした(issue #229)。0.6 で塗りも
+      // 効くようになったが、見分け方は枠の太さのまま変えていない。
       circle: {
         r: 24,
         fill: COLOR_PEARL,
