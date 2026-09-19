@@ -16,6 +16,7 @@ mod git_worktree;
 mod github_project;
 mod github_project_summary;
 mod hub_layout;
+mod hub_tuning;
 mod log_line;
 mod message;
 mod node_position;
@@ -57,6 +58,7 @@ pub use git_worktree::{reconcile_worktrees, GitWorktree};
 pub use github_project::GithubProject;
 pub use github_project_summary::GithubProjectSummary;
 pub use hub_layout::{HubLayout, CURRENT_HUB_LAYOUT_VERSION};
+pub use hub_tuning::{HubTuning, CURRENT_HUB_TUNING_VERSION};
 pub use log_line::{
     convert_json_line_to_log_line, convert_session_line, AssistantLogLine, AttachmentLogLine,
     LogLine, LogLineBase, LogLineConversionError, SystemLogLine, UserLogLine,

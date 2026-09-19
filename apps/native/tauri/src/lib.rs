@@ -7,15 +7,15 @@ use dto::{
     AgentKindDto, AgentModeDto, AppErrorDto, AppWarningDto, ClaudeDirPageDto, ClaudeMdDto,
     ClaudeSettingsDto, ConversationDto, DeviceCodeDto, GithubAuthFailedEventDto,
     GithubAuthStatusDto, GithubAuthenticatedEventDto, GithubProjectDto, GithubProjectSummaryDto,
-    HubLayoutDto, NodePositionDto, PcDto, ProfileSummaryDto, ProjectDto, ProjectItemsPageDto,
-    ProjectSettingsFileDto, RuleDto, RuleSummaryDto, SessionChangedEventDto, SessionSummaryDto,
-    SettingsCorruptedEventDto, SettingsDto, SettingsInputDto, SkillDto, SkillSummaryDto,
-    WindowStateDto, WindowTabDto,
+    HubLayoutDto, HubTuningDto, NodePositionDto, PcDto, ProfileSummaryDto, ProjectDto,
+    ProjectItemsPageDto, ProjectSettingsFileDto, RuleDto, RuleSummaryDto, SessionChangedEventDto,
+    SessionSummaryDto, SettingsCorruptedEventDto, SettingsDto, SettingsInputDto, SkillDto,
+    SkillSummaryDto, WindowStateDto, WindowTabDto,
 };
 use infra::{
     ClaudeCliAgent, FileClaudeDirStore, FileClaudeMdStore, FileClaudeSettingsStore,
-    FileHubLayoutStore, FileProjectSettingsStore, FileRulesStore, FileSettingsStore,
-    FileSkillsStore, FileSystemRepository, GithubApiClient, KeyringTokenStore,
+    FileHubLayoutStore, FileHubTuningStore, FileProjectSettingsStore, FileRulesStore,
+    FileSettingsStore, FileSkillsStore, FileSystemRepository, GithubApiClient, KeyringTokenStore,
 };
 use state::{resolve_effective_projects_dir, AppState};
 use std::path::PathBuf;
@@ -584,6 +584,51 @@ fn hub_layout_path(app: &tauri::AppHandle) -> Result<PathBuf, AppErrorDto> {
         .app_data_dir()
         .map(|dir| dir.join("hub-layout.json"))
         .map_err(|e| AppErrorDto::from(app::AppError::Io(e.to_string())))
+}
+
+/// `hub-tuning.json` の保存先パスを解決する(issue #249)。`hub-layout.json`
+/// と同じく `app_data_dir()` 配下の独立ファイルで、`AppState` には持たせない。
+fn hub_tuning_path(app: &tauri::AppHandle) -> Result<PathBuf, AppErrorDto> {
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join("hub-tuning.json"))
+        .map_err(|e| AppErrorDto::from(app::AppError::Io(e.to_string())))
+}
+
+/// ハブグラフの調整値を返す(issue #249)。ファイルが無い/壊れている場合は
+/// 既定値(`HubTuningStore` 実装のフォールバック)。
+#[tauri::command]
+async fn get_hub_tuning(app: tauri::AppHandle) -> Result<HubTuningDto, AppErrorDto> {
+    let path = hub_tuning_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || -> Result<HubTuningDto, app::AppError> {
+        let store = FileHubTuningStore::new(path);
+        Ok(app::load_hub_tuning(&store)?.into())
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
+}
+
+/// ハブグラフの調整値を保存する(issue #249)。フロントがデバウンスして
+/// 呼ぶ。
+#[tauri::command]
+async fn save_hub_tuning(app: tauri::AppHandle, tuning: HubTuningDto) -> Result<(), AppErrorDto> {
+    let path = hub_tuning_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), app::AppError> {
+        let store = FileHubTuningStore::new(path);
+        app::save_hub_tuning(&store, tuning.into())
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
 }
 
 /// ハブグラフのノード位置(ドラッグ固定)を返す(issue #121)。プロファイル
@@ -1423,6 +1468,8 @@ pub fn run() {
             reconcile_git_state,
             get_hub_layout,
             save_hub_layout,
+            get_hub_tuning,
+            save_hub_tuning,
             get_project_claude_md,
             save_project_claude_md,
             list_rules,

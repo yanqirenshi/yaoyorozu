@@ -187,6 +187,16 @@ export type NodePositionDto = {
   y: number;
 };
 
+// ハブグラフの force シミュレーションの調整値(issue #249)。`getHubTuning` の
+// 戻り値にも `saveHubTuning` の引数にも使う。`link_strength` の `null` は
+// d3-force の既定(次数依存)のまま(画面の「既定」表示)。
+export type HubTuningDto = {
+  link_distance: number;
+  link_strength: number | null;
+  charge_strength: number;
+  collide_radius: number;
+};
+
 // `getHubLayout` の戻り値。キーはノードの安定ID(positionKey)。
 export type HubLayoutDto = {
   positions: Record<string, NodePositionDto>;
