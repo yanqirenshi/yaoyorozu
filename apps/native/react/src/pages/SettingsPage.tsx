@@ -300,6 +300,17 @@ function SettingsPage() {
       .finally(() => setSaving(false));
   };
 
+  // 保存ボタンと保存結果・エラーの表示。Claudeタブでは対象フォルダの一覧が
+  // ペインの下端まで伸びてフォーム末尾が見えなくなるため「対象フォルダ」
+  // 見出しの右横に置き、他のタブではフォーム末尾に置く。
+  const saveButton = (
+    <button type="submit" className="settings-save" disabled={saving}>
+      {saving ? "保存中…" : "保存"}
+    </button>
+  );
+  const savedMessage = saved && <p className="settings-saved">保存しました。</p>;
+  const errorMessage = error && <p className="error">{error}</p>;
+
   if (loading) {
     return (
       <div className="settings-page">
@@ -380,7 +391,7 @@ function SettingsPage() {
         {profileError && <p className="error">{profileError}</p>}
       </div>
 
-      <div className="settings-page">
+      <div className={`settings-page ${tab === "claude" ? "is-fill" : ""}`}>
         <PaneTabs
           tabs={[
             {
@@ -521,8 +532,13 @@ function SettingsPage() {
                 </div>
               </section>
 
-              <section className="settings-section">
-                <h3>対象フォルダ</h3>
+              <section className="settings-section settings-folder-section">
+                <div className="settings-section-header">
+                  <h3>対象フォルダ</h3>
+                  {saveButton}
+                  {savedMessage}
+                </div>
+                {errorMessage}
                 {folders.length === 0 && <p>フォルダが見つかりません。</p>}
                 <ul className="settings-folder-list">
                   {folders.map((f) => (
@@ -546,11 +562,13 @@ function SettingsPage() {
             </>
           )}
 
-          {error && <p className="error">{error}</p>}
-          <button type="submit" className="settings-save" disabled={saving}>
-            {saving ? "保存中…" : "保存"}
-          </button>
-          {saved && <p className="settings-saved">保存しました。</p>}
+          {tab !== "claude" && (
+            <>
+              {errorMessage}
+              {saveButton}
+              {savedMessage}
+            </>
+          )}
         </form>
       </div>
     </>
