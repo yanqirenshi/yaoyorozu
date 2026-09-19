@@ -6,6 +6,7 @@ import AppDock from "./AppDock";
 import { getSettings, onSettingsCorrupted, onSettingsUpdated } from "./api";
 import type { ProfileSummaryDto } from "./api";
 import { DockItemsProvider } from "./DockItemsContext";
+import type { PageDockItem } from "./DockItemsContext";
 import {
   CLAUDE_SETTINGS_ICON,
   HUB_ICON,
@@ -45,7 +46,7 @@ function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
   const windowProfileId = useWindowProfileId();
-  const [pageItems, setPageItems] = useState<DockItem[]>([]);
+  const [pageItems, setPageItems] = useState<PageDockItem[]>([]);
   const [corruptionWarning, setCorruptionWarning] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<ProfileSummaryDto[]>([]);
 
@@ -149,7 +150,7 @@ function Layout() {
     return items;
   }, [currentNavId, navigate, windowProfileId]);
 
-  const items = useMemo<DockItem[]>(
+  const items = useMemo<PageDockItem[]>(
     () => [...navItems, ...pageItems],
     [navItems, pageItems],
   );
