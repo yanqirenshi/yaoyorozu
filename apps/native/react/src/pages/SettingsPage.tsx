@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { useSearchParams } from "react-router";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -46,6 +46,64 @@ function HighlightOffIcon() {
   );
 }
 
+// プロファイル削除の確認ダイアログ。`<dialog>` の showModal() で開くため、表示中は
+// 後ろの画面を操作できない(モーダル)。Esc・キャンセル・ダイアログの外側の
+// クリックで取り消す。誤操作で消さないよう、最初はキャンセルにフォーカスを置く
+// (DOM 上で先に置くと showModal がそこへフォーカスする)。
+function DeleteProfileDialog({
+  profileName,
+  onConfirm,
+  onCancel,
+}: {
+  profileName: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    // 開発時の StrictMode では effect が2回走るため、開いていなければ開く。
+    // (後始末で close すると close イベントで取り消し扱いになるため、しない)
+    const dialog = dialogRef.current;
+    if (dialog && !dialog.open) dialog.showModal();
+  }, []);
+
+  return (
+    // 閉じるときは close() を呼ばず、親の状態を戻して(アンマウントして)閉じる。
+    // close イベントは閉じた後に遅れて届くため、それに頼ると届かなかったときに
+    // 閉じたダイアログが残って二度と開けなくなる(確認中に実際に起きた)。
+    // onClose は、ほかの経路で閉じた場合の保険として残す。
+    <dialog
+      ref={dialogRef}
+      className="settings-dialog"
+      aria-labelledby="delete-profile-dialog-title"
+      onCancel={(e) => {
+        // Esc。ブラウザ既定の閉じ方を止め、親の状態で閉じる。
+        e.preventDefault();
+        onCancel();
+      }}
+      onClose={onCancel}
+      onClick={(e) => {
+        // 外側(背景)のクリックは、中身ではなくダイアログ要素そのものに届く。
+        if (e.target === e.currentTarget) onCancel();
+      }}
+    >
+      <div className="settings-dialog-body">
+        <h3 id="delete-profile-dialog-title">プロファイルを削除</h3>
+        <p>プロファイル「{profileName}」を削除しますか?この操作は取り消せません。</p>
+        <div className="settings-dialog-actions">
+          <button type="button" onClick={onCancel}>
+            キャンセル
+          </button>
+          <button type="button" className="settings-dialog-danger" onClick={onConfirm}>
+            削除する
+          </button>
+        </div>
+      </div>
+    </dialog>
+  );
+}
+
 function SettingsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get("tab");
@@ -72,6 +130,8 @@ function SettingsPage() {
   const [renamingProfileId, setRenamingProfileId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [profileError, setProfileError] = useState<string | null>(null);
+  // 削除の確認ダイアログを開いている対象(開いていなければ null)。
+  const [deleteTarget, setDeleteTarget] = useState<ProfileSummaryDto | null>(null);
   const [repositoryPath, setRepositoryPath] = useState<string | null>(null);
   const [claudeProjectsDir, setClaudeProjectsDir] = useState<string | null>(null);
   const [githubOwner, setGithubOwner] = useState("");
@@ -225,8 +285,11 @@ function SettingsPage() {
       .catch((e) => setProfileError(isAppError(e) ? e.message : String(e)));
   };
 
+  // 確認ダイアログ(DeleteProfileDialog)で「削除する」が押されてから呼ぶ。
+  // window.confirm はアプリのウィンドウ上で確認を出さずに削除が進んでしまった
+  // ため使わない。
   const handleDeleteProfile = (profileId: string) => {
-    if (!window.confirm("このプロファイルを削除しますか?")) return;
+    setDeleteTarget(null);
     setProfileError(null);
     deleteProfile(profileId)
       .then(() => loadSettingsData())
@@ -356,7 +419,7 @@ function SettingsPage() {
                 <button
                   type="button"
                   className="settings-profile-delete"
-                  onClick={() => handleDeleteProfile(p.id)}
+                  onClick={() => setDeleteTarget(p)}
                   disabled={profiles.length <= 1}
                   title="削除"
                   aria-label={`${p.name} を削除`}
@@ -380,6 +443,14 @@ function SettingsPage() {
         </div>
         {profileError && <p className="error">{profileError}</p>}
       </div>
+
+      {deleteTarget && (
+        <DeleteProfileDialog
+          profileName={deleteTarget.name}
+          onConfirm={() => handleDeleteProfile(deleteTarget.id)}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      )}
 
       <div className={`settings-page ${tab === "claude" ? "is-fill" : ""}`}>
         {/* 表示中(アクティブ)のプロファイル名と名前変更ボタン。名前変更中は

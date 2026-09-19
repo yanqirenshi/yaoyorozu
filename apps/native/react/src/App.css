@@ -900,6 +900,57 @@ body,
   cursor: default;
 }
 
+/* 確認用のモーダルダイアログ(プロファイル削除の確認)。`<dialog>` の
+   showModal() で画面中央に出る。 */
+.settings-dialog {
+  box-sizing: border-box;
+  padding: 0;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  box-shadow: var(--elevation-3);
+  max-width: min(420px, calc(100vw - 32px));
+}
+
+/* 後ろの画面を暗くして、操作できないことを示す。 */
+.settings-dialog::backdrop {
+  background: color-mix(in srgb, var(--text-primary) 40%, transparent);
+}
+
+.settings-dialog-body {
+  padding: 20px 24px;
+}
+
+.settings-dialog-body h3 {
+  margin: 0 0 12px;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+/* 長いプロファイル名でもダイアログの幅に収めて折り返す。 */
+.settings-dialog-body p {
+  margin: 0 0 20px;
+  overflow-wrap: anywhere;
+}
+
+.settings-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+/* 取り消せない操作のボタン。 */
+.settings-dialog-danger {
+  border: 1px solid var(--semantic-error-fg);
+  border-radius: 4px;
+  padding: 6px 16px;
+  font-family: inherit;
+  color: var(--surface-base);
+  background-color: var(--semantic-error-fg);
+  cursor: pointer;
+}
+
 .settings-profile-add {
   display: flex;
   align-items: center;
