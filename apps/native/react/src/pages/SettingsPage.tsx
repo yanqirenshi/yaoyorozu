@@ -66,6 +66,7 @@ function SettingsPage() {
   const [githubOwner, setGithubOwner] = useState("");
   const [githubNumber, setGithubNumber] = useState("");
   const [folders, setFolders] = useState<ProjectDto[]>([]);
+  const [folderQuery, setFolderQuery] = useState("");
   const [selectedProjectFolders, setSelectedProjectFolders] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -300,9 +301,18 @@ function SettingsPage() {
       .finally(() => setSaving(false));
   };
 
+  // 対象フォルダ一覧のインクリメンタルサーチ(大文字・小文字を区別しない
+  // 部分一致)。表示を絞るだけで選択状態には影響しない(絞り込みで見えなく
+  // なったフォルダの選択も、保存時にそのまま残る)。
+  const normalizedFolderQuery = folderQuery.trim().toLowerCase();
+  const visibleFolders = normalizedFolderQuery
+    ? folders.filter((f) => f.name.toLowerCase().includes(normalizedFolderQuery))
+    : folders;
+
   // 保存ボタンと保存結果・エラーの表示。Claudeタブでは対象フォルダの一覧が
-  // ペインの下端まで伸びてフォーム末尾が見えなくなるため「対象フォルダ」
-  // 見出しの右横に置き、他のタブではフォーム末尾に置く。
+  // ペインの下端まで伸びてフォーム末尾が見えなくなるため、保存ボタンを
+  // 「対象フォルダ」見出しの行の右端に、保存結果・エラーをその行の下に置く。
+  // 他のタブではフォーム末尾に置く。
   const saveButton = (
     <button type="submit" className="settings-save" disabled={saving}>
       {saving ? "保存中…" : "保存"}
@@ -535,13 +545,29 @@ function SettingsPage() {
               <section className="settings-section settings-folder-section">
                 <div className="settings-section-header">
                   <h3>対象フォルダ</h3>
+                  {/* フォーム内のテキスト欄で Enter を押すと暗黙の送信(保存)に
+                      なってしまうため、Enter は止める。 */}
+                  <input
+                    type="search"
+                    className="settings-folder-search"
+                    value={folderQuery}
+                    onChange={(e) => setFolderQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") e.preventDefault();
+                    }}
+                    placeholder="フォルダ名で絞り込み"
+                    aria-label="対象フォルダを絞り込む"
+                  />
                   {saveButton}
-                  {savedMessage}
                 </div>
+                {savedMessage}
                 {errorMessage}
                 {folders.length === 0 && <p>フォルダが見つかりません。</p>}
+                {folders.length > 0 && visibleFolders.length === 0 && (
+                  <p>「{folderQuery.trim()}」に一致するフォルダはありません。</p>
+                )}
                 <ul className="settings-folder-list">
-                  {folders.map((f) => (
+                  {visibleFolders.map((f) => (
                     <li key={f.name}>
                       <label
                         className={`settings-folder-item ${

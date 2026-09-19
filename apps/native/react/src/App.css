@@ -658,21 +658,55 @@ body,
   margin: 0 0 10px;
 }
 
-/* 見出しの右横に操作(保存ボタン等)を並べる行。 */
+/* 見出しの右横に操作(検索欄・保存ボタン等)を並べる行。ウィンドウが狭く
+   1行に収まらないときは、はみ出さずに折り返す。 */
 .settings-section-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 8px 12px;
   margin: 0 0 10px;
 }
 
-.settings-section-header h3,
-.settings-section-header .settings-saved {
+.settings-section-header h3 {
   margin: 0;
 }
 
+/* 保存ボタンは行の右端に寄せる。 */
 .settings-section-header .settings-save {
   align-self: auto;
+  margin-left: auto;
+}
+
+/* 見出しと保存ボタンは縮めない(日本語は1文字ごとに折り返せるため、縮むと
+   見出しが「対象フォル/ダ」のように割れる)。狭いときは検索欄が縮む。 */
+.settings-section-header h3,
+.settings-section-header .settings-save {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* 保存結果・エラーは見出しの行の下に出す(行の中に置くと、表示された瞬間に
+   検索欄が押し縮められたり、狭いウィンドウで保存ボタンが次の行へ飛んだり
+   するため)。 */
+.settings-folder-section > .settings-saved,
+.settings-folder-section > .error {
+  margin: 0 0 10px;
+}
+
+/* 対象フォルダの絞り込み欄。見出しのすぐ右に置き、幅は160px〜最大320px。 */
+.settings-folder-search {
+  flex: 1 1 160px;
+  max-width: 320px;
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: var(--surface-base);
+  color: var(--text-primary);
+  padding: 8px 12px;
+  font-size: 0.9rem;
+  font-family: inherit;
 }
 
 .settings-folder-picker {
