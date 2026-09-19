@@ -17,7 +17,6 @@ import {
   onGithubAuthenticated,
   onGithubLoggedOut,
   onSettingsUpdated,
-  openProfileWindow,
   renameProfile,
   switchProfile,
   updateSettings,
@@ -34,6 +33,18 @@ import PaneTabs from "../PaneTabs";
 type SettingsTab = "profiles" | "github" | "claude";
 
 const SETTINGS_TABS: SettingsTab[] = ["profiles", "github", "claude"];
+
+// プロファイルの削除ボタンのアイコン。Material Icons の「HighlightOff」
+// (ユーザー指示。MUI の `@mui/icons-material` v9.4.0 の
+// `material-icons/highlight_off_24px.svg` のパスをそのまま使う。MIT ライセンス)。
+// viewBox は MUI の 24×24 のまま。色は文字色(currentColor)を継承する。
+function HighlightOffIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true">
+      <path d="M14.59 8L12 10.59 9.41 8 8 9.41 10.59 12 8 14.59 9.41 16 12 13.41 14.59 16 16 14.59 13.41 12 16 9.41 14.59 8zM12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z" />
+    </svg>
+  );
+}
 
 function SettingsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -245,15 +256,6 @@ function SettingsPage() {
       .catch((e) => setProfileError(isAppError(e) ? e.message : String(e)));
   };
 
-  // 別ウィンドウでプロファイルを開く(マルチウィンドウ Phase 1。issue #76)。
-  // このウィンドウの状態には影響しないため、失敗時のエラー表示のみ行う。
-  const handleOpenProfileWindow = (profileId: string) => {
-    setProfileError(null);
-    openProfileWindow(profileId).catch((e) =>
-      setProfileError(isAppError(e) ? e.message : String(e)),
-    );
-  };
-
   const handleChooseFolder = async () => {
     const path = await open({ directory: true, multiple: false });
     if (typeof path === "string") {
@@ -335,12 +337,13 @@ function SettingsPage() {
     <>
       {/* 左ペイン: プロファイル一覧+追加。ビューア(`/`)の「左: 一覧 / 右: 内容」と
           同じ画面骨格に揃える(issue #74)。削除は全行に並べるとノイズになるため、
-          アクティブな行にだけ出す。名前変更は右ペインのプロファイル名の横に置く。 */}
+          アクティブな行にだけ、名前の右(行の右端)にアイコンで出す。名前変更は
+          右ペインのプロファイル名の横に置く。 */}
       <div className="settings-profile-pane">
         <h2>プロファイル</h2>
         <ul className="settings-profile-list">
           {profiles.map((p) => (
-            <li key={p.id}>
+            <li key={p.id} className="settings-profile-row">
               <button
                 type="button"
                 className={`project-item ${p.id === activeProfileId ? "selected" : ""}`}
@@ -348,22 +351,19 @@ function SettingsPage() {
               >
                 <span className="settings-profile-name">{p.name}</span>
               </button>
-              <div className="settings-profile-actions">
-                {/* 全行に常設(issue #76)。削除はノイズ回避のためアクティブな行に
-                    だけ出す(issue #74 からの既存方針)。 */}
-                <button type="button" onClick={() => handleOpenProfileWindow(p.id)}>
-                  新しいウィンドウで開く
+              {/* 行全体が切り替えボタンで入れ子にできないため、行の右端に重ねて置く。 */}
+              {p.id === activeProfileId && (
+                <button
+                  type="button"
+                  className="settings-profile-delete"
+                  onClick={() => handleDeleteProfile(p.id)}
+                  disabled={profiles.length <= 1}
+                  title="削除"
+                  aria-label={`${p.name} を削除`}
+                >
+                  <HighlightOffIcon />
                 </button>
-                {p.id === activeProfileId && (
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteProfile(p.id)}
-                    disabled={profiles.length <= 1}
-                  >
-                    削除
-                  </button>
-                )}
-              </div>
+              )}
             </li>
           ))}
         </ul>
