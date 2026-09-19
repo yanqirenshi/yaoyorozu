@@ -10,6 +10,7 @@ import {
   isAppError,
   listWindowStates,
   onPcDataLoaded,
+  onPcDataLoading,
   onSettingsUpdated,
   onWindowsChanged,
   openProfileWindow,
@@ -695,12 +696,14 @@ function HubPage() {
   // 起動後のバックグラウンド読み込み(Git台帳の観測・全プロジェクトの
   // jsonl走査。issue #212)が完了したら`pc`を取り直す(成否によらず発火
   // する。issue #218)。
+  // 手動の再読み込みの開始(`pc:data_loading`。issue #245)でも取り直し、
+  // `data_loaded` が `false` に戻った状態を反映して「読み込み中」を出す。
+  // 開始・完了のどちらも同じ `loadPc` を呼ぶだけで、状態の唯一の情報源は
+  // 引き続き `PcDto.data_loaded` (ポーリングは導入しない)。
   useEffect(() => {
-    const unlistenPromise = onPcDataLoaded(() => {
-      loadPc();
-    });
+    const unlistenPromises = [onPcDataLoaded(loadPc), onPcDataLoading(loadPc)];
     return () => {
-      unlistenPromise.then((unlisten) => unlisten());
+      unlistenPromises.forEach((p) => p.then((unlisten) => unlisten()));
     };
   }, [loadPc]);
 

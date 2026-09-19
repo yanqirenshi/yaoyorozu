@@ -539,11 +539,24 @@ async fn reload_git_ledger_and_sessions(app: &tauri::AppHandle) -> Result<(), ap
 /// ハブの「再読み込み」操作から呼ぶ想定(issue #193/#197)。明示操作のため
 /// 同期応答のままでよい(issue #212の注記)。実体は
 /// `reload_git_ledger_and_sessions` を共有する。
+///
+/// 手動実行中も「読み込み中」を表示できるよう(issue #245)、開始時に
+/// `pc_data_loaded` を`false`へ戻して`pc:data_loading`を発火し、完了時は
+/// 成否によらず(`reload_git_ledger_and_sessions`が`true`に戻す。issue #218の
+/// 「永久loading防止」の保証を維持)`pc:data_loaded`を発火する。起動時の
+/// バックグラウンド読み込み(`start_pc_data_background_load`)の挙動は
+/// 変えない。イベントはロックを離してから発火する(native.md §2)。
 #[tauri::command]
 async fn reconcile_git_state(app: tauri::AppHandle) -> Result<(), AppErrorDto> {
-    reload_git_ledger_and_sessions(&app)
-        .await
-        .map_err(Into::into)
+    {
+        let state = app.state::<Mutex<AppState>>();
+        state.lock().await.pc_data_loaded = false;
+    }
+    let _ = app.emit("pc:data_loading", ());
+
+    let result = reload_git_ledger_and_sessions(&app).await;
+    let _ = app.emit("pc:data_loaded", ());
+    result.map_err(Into::into)
 }
 
 /// 指定ラベルのウィンドウを前面化する(最小化されていれば復元してから)。
