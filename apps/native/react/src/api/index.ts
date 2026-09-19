@@ -14,6 +14,7 @@ import type {
   GithubAuthenticatedEvent,
   GithubProjectSummaryDto,
   HubLayoutDto,
+  HubTuningDto,
   NodePositionDto,
   PcDto,
   ProfileSummaryDto,
@@ -54,6 +55,7 @@ export type {
   GithubProjectDto,
   GithubProjectSummaryDto,
   HubLayoutDto,
+  HubTuningDto,
   MessageDto,
   NodePositionDto,
   PcDto,
@@ -230,6 +232,17 @@ export function saveHubLayout(
   positions: Record<string, NodePositionDto>,
 ): Promise<void> {
   return invoke<void>("save_hub_layout", { positions });
+}
+
+// ハブグラフの調整値(issue #249)を取得する。保存値が無い/壊れている場合は
+// 既定値が返る。
+export function getHubTuning(): Promise<HubTuningDto> {
+  return invoke<HubTuningDto>("get_hub_tuning");
+}
+
+// ハブグラフの調整値を保存する(issue #249)。呼び出し側でデバウンスする。
+export function saveHubTuning(tuning: HubTuningDto): Promise<void> {
+  return invoke<void>("save_hub_tuning", { tuning });
 }
 
 // レジストリが変わるたびに発火する(ウィンドウの状態報告・閉鎖のいずれでも。

@@ -4,8 +4,9 @@ use domain::{
     reconcile_worktrees, repositories_from_profiles, sort_claude_dir_entries,
     sort_projects_by_recency, sort_sessions_by_recency, ClaudeDirEntry, ClaudeDirPage,
     ClaudeMdFile, ClaudeSettingsFile, Conversation, GitLedger, GitRepositoryLedger, HubLayout,
-    LogLine, NodePosition, ParsedSession, Project, RuleSummary, SessionSummary, Settings,
-    SkillSummary, CURRENT_GIT_LEDGER_VERSION, CURRENT_HUB_LAYOUT_VERSION,
+    HubTuning, LogLine, NodePosition, ParsedSession, Project, RuleSummary, SessionSummary,
+    Settings, SkillSummary, CURRENT_GIT_LEDGER_VERSION, CURRENT_HUB_LAYOUT_VERSION,
+    CURRENT_HUB_TUNING_VERSION,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -201,6 +202,14 @@ pub struct LoadedSettings {
 pub trait HubLayoutStore {
     fn load(&self) -> Result<HubLayout, AppError>;
     fn save(&self, layout: &HubLayout) -> Result<(), AppError>;
+}
+
+/// ハブグラフの force シミュレーション調整値の永続化(port。issue #249)。
+/// `HubLayoutStore` と同じ流儀で、別ファイル(`hub-tuning.json`)に保存する
+/// (`domain::HubTuning` のドキュメントコメント参照)。
+pub trait HubTuningStore {
+    fn load(&self) -> Result<HubTuning, AppError>;
+    fn save(&self, tuning: &HubTuning) -> Result<(), AppError>;
 }
 
 /// 実行環境(このPC・ログインユーザー)の取得(port)。実体(レジストリ・
@@ -704,6 +713,22 @@ pub fn pc_with_user_sessions(mut pc: domain::Pc, parsed: Vec<ParsedSession>) -> 
         user.load_sessions(parsed.clone());
     }
     pc
+}
+
+/// ハブグラフの調整値を読み込む。ファイルが存在しない/壊れている場合の
+/// デフォルト値へのフォールバックは `HubTuningStore` 実装(infra)側の責務
+/// (issue #249)。
+pub fn load_hub_tuning(store: &dyn HubTuningStore) -> Result<HubTuning, AppError> {
+    store.load()
+}
+
+/// ハブグラフの調整値を保存する(issue #249)。`version` は呼び出し側の値に
+/// よらず現在のバージョンで書く。
+pub fn save_hub_tuning(store: &dyn HubTuningStore, tuning: HubTuning) -> Result<(), AppError> {
+    store.save(&HubTuning {
+        version: CURRENT_HUB_TUNING_VERSION,
+        ..tuning
+    })
 }
 
 /// ハブグラフのノード位置を丸ごと置き換えて保存する。マージではなく置き換え
@@ -3103,6 +3128,64 @@ mod tests {
             self.saved.borrow_mut().push(layout.clone());
             Ok(())
         }
+    }
+
+    struct FakeHubTuningStore {
+        loaded: HubTuning,
+        saved: std::cell::RefCell<Vec<HubTuning>>,
+    }
+
+    impl HubTuningStore for FakeHubTuningStore {
+        fn load(&self) -> Result<HubTuning, AppError> {
+            Ok(self.loaded.clone())
+        }
+
+        fn save(&self, tuning: &HubTuning) -> Result<(), AppError> {
+            self.saved.borrow_mut().push(tuning.clone());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn load_hub_tuning_returns_store_result_unchanged() {
+        let tuning = HubTuning {
+            link_strength: Some(0.4),
+            ..HubTuning::default()
+        };
+        let store = FakeHubTuningStore {
+            loaded: tuning.clone(),
+            saved: std::cell::RefCell::new(Vec::new()),
+        };
+
+        assert_eq!(load_hub_tuning(&store).expect("should load"), tuning);
+    }
+
+    #[test]
+    fn save_hub_tuning_writes_current_version_and_keeps_none_link_strength() {
+        let store = FakeHubTuningStore {
+            loaded: HubTuning::default(),
+            saved: std::cell::RefCell::new(Vec::new()),
+        };
+        let tuning = HubTuning {
+            version: 999,
+            link_distance: 120.0,
+            link_strength: None,
+            charge_strength: -200.0,
+            collide_radius: 40.0,
+        };
+
+        save_hub_tuning(&store, tuning).expect("should save");
+
+        let saved = store.saved.borrow();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].version, CURRENT_HUB_TUNING_VERSION);
+        assert_eq!(saved[0].link_distance, 120.0);
+        assert_eq!(
+            saved[0].link_strength, None,
+            "「既定」は None のまま保存する"
+        );
+        assert_eq!(saved[0].charge_strength, -200.0);
+        assert_eq!(saved[0].collide_radius, 40.0);
     }
 
     #[test]

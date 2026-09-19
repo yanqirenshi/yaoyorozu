@@ -608,6 +608,41 @@ impl From<NodePositionDto> for domain::NodePosition {
     }
 }
 
+/// ハブグラフの調整値(issue #249)。`get_hub_tuning` の戻り値にも
+/// `save_hub_tuning` の入力にも使う。`version` はフロントで使わないため
+/// 含めない(保存時は現在のバージョンで書く)。`link_strength` の `None` は
+/// d3-force の既定(次数依存)のまま。
+#[derive(Serialize, Deserialize, Clone, Copy)]
+pub struct HubTuningDto {
+    pub link_distance: f64,
+    pub link_strength: Option<f64>,
+    pub charge_strength: f64,
+    pub collide_radius: f64,
+}
+
+impl From<domain::HubTuning> for HubTuningDto {
+    fn from(tuning: domain::HubTuning) -> Self {
+        Self {
+            link_distance: tuning.link_distance,
+            link_strength: tuning.link_strength,
+            charge_strength: tuning.charge_strength,
+            collide_radius: tuning.collide_radius,
+        }
+    }
+}
+
+impl From<HubTuningDto> for domain::HubTuning {
+    fn from(dto: HubTuningDto) -> Self {
+        Self {
+            version: domain::CURRENT_HUB_TUNING_VERSION,
+            link_distance: dto.link_distance,
+            link_strength: dto.link_strength,
+            charge_strength: dto.charge_strength,
+            collide_radius: dto.collide_radius,
+        }
+    }
+}
+
 /// `get_hub_layout` の戻り値。`version` はフロントで使わないため含めない。
 #[derive(Serialize, Clone)]
 pub struct HubLayoutDto {

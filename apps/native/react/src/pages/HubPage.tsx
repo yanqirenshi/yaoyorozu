@@ -5,6 +5,7 @@ import type { NodeDatum } from "@yanqirenshi/d3.network";
 import {
   focusWindow,
   getHubLayout,
+  getHubTuning,
   getPc,
   getSettings,
   isAppError,
@@ -16,6 +17,7 @@ import {
   openProfileWindow,
   reconcileGitState,
   saveHubLayout,
+  saveHubTuning,
 } from "../api";
 import type {
   GitBranchDto,
@@ -112,6 +114,8 @@ const INSPECTOR_MAX_WIDTH = 888;
 // 連続した dragEnded 呼び出し(同一ドラッグでは1回だが、短時間に複数ノードを
 // 続けて動かした場合)をまとめて1回の保存にする。
 const HUB_LAYOUT_SAVE_DEBOUNCE_MS = 500;
+// グラフ調整値(issue #249)の保存のデバウンス間隔。ノード位置と同じ流儀。
+const HUB_TUNING_SAVE_DEBOUNCE_MS = 500;
 
 // `.data()` のたびに force シミュレーションを動かし直す(issue #226)。
 // d3.network の `dragEnded`(`Simulation.js`)はドラッグ終了時に
@@ -920,16 +924,70 @@ function HubPage() {
     return () => container.removeEventListener("contextmenu", handleContextMenu);
   }, []);
 
-  // グラフの調整メニュー(issue #246)。値は永続化しない(リロードで既定値に
-  // 戻る)ため、この画面の UI 状態としてだけ持つ。値の変更は即座に
-  // シミュレーションへ反映する(d3.network 0.6 の公開API
-  // `rectum.simulation.configure()`。指定した項目だけ上書きし alpha(1) で
-  // 動かし直すため、動きが見える)。
+  // グラフの調整メニュー(issue #246・#249)。値は `hub-tuning.json` に保存し
+  // (スライダー変更後に `HUB_TUNING_SAVE_DEBOUNCE_MS` でまとめて保存)、
+  // マウント時に読み込んで復元する。変更は即座にシミュレーションへ反映する
+  // (d3.network 0.6 の公開API `rectum.simulation.configure()`。指定した項目
+  // だけ上書きし alpha(1) で動かし直すため、動きが見える)。`link.strength` の
+  // 「既定」(`null`)は d3-force の既定(次数依存)のままにするため、
+  // シミュレーションへ渡さない。
   const [tuningOpen, setTuningOpen] = useState(false);
   const [tuning, setTuning] = useState<HubTuning>(DEFAULT_HUB_TUNING);
+  const tuningRef = useRef<HubTuning>(DEFAULT_HUB_TUNING);
+  const tuningSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const saveTuning = useCallback(() => {
+    tuningSaveTimerRef.current = null;
+    const t = tuningRef.current;
+    saveHubTuning({
+      link_distance: t.linkDistance,
+      link_strength: t.linkStrength,
+      charge_strength: t.chargeStrength,
+      collide_radius: t.collideRadius,
+    }).catch((e) => console.error(e));
+  }, []);
+
+  // 保存済みの調整値を復元して適用する。既定値のままなら何もしない
+  // (シミュレーションを無駄に動かし直さない)。
+  useEffect(() => {
+    getHubTuning()
+      .then((dto) => {
+        const restored: HubTuning = {
+          linkDistance: dto.link_distance,
+          linkStrength: dto.link_strength,
+          chargeStrength: dto.charge_strength,
+          collideRadius: dto.collide_radius,
+        };
+        if (JSON.stringify(restored) === JSON.stringify(DEFAULT_HUB_TUNING)) return;
+        tuningRef.current = restored;
+        setTuning(restored);
+        rectum.simulation.configure({
+          link: {
+            distance: restored.linkDistance,
+            ...(restored.linkStrength === null ? {} : { strength: restored.linkStrength }),
+          },
+          charge: { strength: restored.chargeStrength },
+          collide: { radius: restored.collideRadius },
+        });
+      })
+      .catch((e) => console.error(e));
+  }, [rectum]);
+
+  // 画面を離れるとき、デバウンス待ちの変更が残っていれば失わないよう保存する。
+  useEffect(() => {
+    return () => {
+      if (tuningSaveTimerRef.current) {
+        clearTimeout(tuningSaveTimerRef.current);
+        saveTuning();
+      }
+    };
+  }, [saveTuning]);
+
   const handleTuningChange = useCallback(
     (key: keyof HubTuning, value: number) => {
-      setTuning((prev) => ({ ...prev, [key]: value }));
+      const next = { ...tuningRef.current, [key]: value };
+      tuningRef.current = next;
+      setTuning(next);
       switch (key) {
         case "linkDistance":
           rectum.simulation.configure({ link: { distance: value } });
@@ -944,8 +1002,10 @@ function HubPage() {
           rectum.simulation.configure({ collide: { radius: value } });
           break;
       }
+      if (tuningSaveTimerRef.current) clearTimeout(tuningSaveTimerRef.current);
+      tuningSaveTimerRef.current = setTimeout(saveTuning, HUB_TUNING_SAVE_DEBOUNCE_MS);
     },
-    [rectum],
+    [rectum, saveTuning],
   );
 
   // 閉じる: ×(HubInspector側)・グラフの空白部クリック・Esc(issue #109)。

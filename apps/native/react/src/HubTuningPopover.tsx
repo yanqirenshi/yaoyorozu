@@ -1,7 +1,7 @@
 import type { MouseEvent as ReactMouseEvent } from "react";
 
 // ハブのグラフ(d3.network の force シミュレーション)の調整値(issue #246)。
-// 調整値は永続化しない(リロードで既定値に戻る)。
+// `hub-tuning.json` に保存し起動時に復元する(issue #249。`domain::HubTuning`)。
 export type HubTuning = {
   linkDistance: number;
   // `null` は d3-force の既定(リンクの両端の次数に応じた値。定数ではない)。
