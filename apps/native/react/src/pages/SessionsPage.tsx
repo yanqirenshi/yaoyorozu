@@ -34,6 +34,7 @@ import { createClaudeMdDockItems } from "../claudeMdDockItems";
 import { MODE_ICON, RELOAD_ICON } from "../icons";
 import JsonFileEditor from "../JsonFileEditor";
 import type { JsonFileEditorHandle } from "../JsonFileEditor";
+import { formatTimestamp } from "../formatTimestamp";
 import MessageText from "../MessageText";
 import PaneTabs from "../PaneTabs";
 import ViewerToolbar from "../ViewerToolbar";
@@ -592,11 +593,22 @@ function SessionsPage({ nav }: SessionsPageProps) {
               ) : (
                 <>
                   <div className="messages">
-                    {messages.map((m, i) => (
-                      <div key={i} className={`message message-${m.role}`}>
-                        <MessageText text={m.text} />
-                      </div>
-                    ))}
+                    {messages.map((m, i) => {
+                      // 吹き出しの横に、種類(role)と日時を小さく淡く出す
+                      // (issue #258)。timestamp が空・不正なら日時は出さない。
+                      const time = formatTimestamp(m.timestamp);
+                      return (
+                        <div key={i} className={`message-row message-row-${m.role}`}>
+                          <div className={`message-meta message-meta-${m.role}`}>
+                            <span className="message-meta-role">{m.role}</span>
+                            {time && <span className="message-meta-time">{time}</span>}
+                          </div>
+                          <div className={`message message-${m.role}`}>
+                            <MessageText text={m.text} />
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                   {hasMore && (
                     <button

@@ -1265,15 +1265,107 @@ body,
 }
 
 .message-user {
-  align-self: flex-start;
   background-color: color-mix(in srgb, var(--color-secondary) 10%, transparent);
 }
 
 .message-assistant {
-  align-self: flex-end;
-  width: 77%;
-  max-width: 77%;
   background-color: var(--state-hover);
+}
+
+/* 吹き出し(.message)とメタ情報(種類・日時。issue #258)を横に並べる行。
+   user は吹き出しの右、assistant は吹き出しの左にメタ情報を置く(吹き出しの
+   配置は従来どおり: user は左寄せ、assistant は右寄せの幅77%)。 */
+.message-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.message-row-user {
+  align-self: flex-start;
+  max-width: 100%;
+}
+
+.message-row-assistant {
+  align-self: stretch;
+  justify-content: flex-end;
+}
+
+.message-row .message {
+  min-width: 0;
+}
+
+.message-row-user .message {
+  flex: 0 1 auto;
+}
+
+.message-row-assistant .message {
+  flex: 0 1 77%;
+  max-width: none;
+}
+
+/* メタ情報は本文より小さく薄く。狭い幅では吹き出しを優先して縮み、日時は
+   折り返す(はみ出さない)。assistant のメタ情報は吹き出しの左(order)。 */
+.message-meta {
+  flex: 0 0 auto;
+  max-width: 11em;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 10px;
+  font-size: 0.7rem;
+  line-height: 1.2;
+  color: var(--text-placeholder);
+  overflow-wrap: anywhere;
+}
+
+.message-meta-assistant {
+  order: -1;
+  text-align: right;
+}
+
+/* user のメタ情報は吹き出しの右。 */
+.message-meta-user {
+  order: 1;
+}
+
+.message-meta-role {
+  font-weight: 600;
+}
+
+/* 幅が狭い(左の一覧ペインを除くと会話の幅が足りない)ときは、吹き出しが
+   細くなりすぎないよう、メタ情報を吹き出しの上に1行で置く。 */
+@media (max-width: 900px) {
+  .message-row {
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .message-row-user,
+  .message-row-assistant {
+    align-self: stretch;
+  }
+
+  .message-row .message,
+  .message-row-assistant .message {
+    flex: 0 1 auto;
+    align-self: stretch;
+    width: auto;
+  }
+
+  .message-meta,
+  .message-meta-user,
+  .message-meta-assistant {
+    order: 0;
+    flex-direction: row;
+    align-items: baseline;
+    gap: 8px;
+    max-width: none;
+    padding-top: 0;
+    text-align: left;
+  }
 }
 
 /* Claude画面(/claude)。タブ(CLAUDE.md / settings.json / Explorer)・対象
