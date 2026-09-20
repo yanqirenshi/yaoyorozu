@@ -165,7 +165,12 @@ function Layout() {
       <DockItemsProvider setItems={setPageItems}>
         <Outlet />
       </DockItemsProvider>
-      <AppDock items={items} pageItemIds={pageItemIds} currentItemId={currentNavId} />
+      {/* ビューア(`/profiles/:id`)では dock を表示しない(会話表示に重なって
+          邪魔になるため。issue #257)。ビューアの操作はページ内のツールバー
+          (ViewerToolbar)にある。 */}
+      {!onViewerRoute && (
+        <AppDock items={items} pageItemIds={pageItemIds} currentItemId={currentNavId} />
+      )}
     </div>
   );
 }
