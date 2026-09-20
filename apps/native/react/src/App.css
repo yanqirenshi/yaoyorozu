@@ -358,6 +358,92 @@ body,
   flex-direction: column;
 }
 
+/* ビューアの上部: タブ(左)とページ内ツールバー(右。issue #257)。 */
+.session-conversation-head {
+  display: flex;
+  align-items: flex-end;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.session-conversation-head .pane-tabs {
+  flex: 1;
+  min-width: 0;
+  border-bottom: none;
+}
+
+.viewer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  flex-shrink: 0;
+}
+
+.viewer-toolbar-item {
+  position: relative;
+}
+
+.viewer-toolbar-button {
+  box-sizing: border-box;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-default);
+  border-radius: 50%;
+  background: var(--surface-base);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.viewer-toolbar-button:hover:not(:disabled),
+.viewer-toolbar-button.open {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.viewer-toolbar-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.viewer-toolbar-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  min-width: 170px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  box-shadow: var(--elevation-3);
+}
+
+.viewer-toolbar-menu-item {
+  border: none;
+  background: none;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.viewer-toolbar-menu-item:hover {
+  background: var(--state-hover);
+}
+
+.viewer-toolbar-menu-item.active {
+  font-weight: 600;
+  color: var(--color-primary);
+}
+
 .pane-tabs {
   display: flex;
   gap: 4px;

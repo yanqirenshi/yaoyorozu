@@ -31,12 +31,12 @@ import type {
 import ClaudeMdEditor from "../ClaudeMdEditor";
 import type { ClaudeMdEditorHandle } from "../ClaudeMdEditor";
 import { createClaudeMdDockItems } from "../claudeMdDockItems";
-import { usePageDockItems } from "../DockItemsContext";
 import { MODE_ICON, RELOAD_ICON } from "../icons";
 import JsonFileEditor from "../JsonFileEditor";
 import type { JsonFileEditorHandle } from "../JsonFileEditor";
 import MessageText from "../MessageText";
 import PaneTabs from "../PaneTabs";
+import ViewerToolbar from "../ViewerToolbar";
 import { createProjectSettingsDockItems } from "../projectSettingsDockItems";
 import RulesPane from "../RulesPane";
 import SkillsPane from "../SkillsPane";
@@ -427,6 +427,8 @@ function SessionsPage({ nav }: SessionsPageProps) {
       .finally(() => setSending(false));
   };
 
+  // ビューアでは dock を表示しない(issue #257)ため、これらの操作は dock ではなく
+  // ページ内の `ViewerToolbar` に出す(内容・挙動は dock 時代のまま)。
   const dockItems = useMemo<DockItem[]>(() => {
     const items: DockItem[] = [
       {
@@ -501,7 +503,6 @@ function SessionsPage({ nav }: SessionsPageProps) {
     settingsJsonDirty,
     settingsLocalJsonDirty,
   ]);
-  usePageDockItems(dockItems);
 
   return (
     <>
@@ -542,6 +543,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
         )}
       </div>
       <div className="session-conversation">
+        <div className="session-conversation-head">
         <PaneTabs
           tabs={[
             { id: "chat", label: "会話" },
@@ -555,6 +557,8 @@ function SessionsPage({ nav }: SessionsPageProps) {
           active={view}
           onChange={(id) => handleSwitchView(id as PaneView)}
         />
+        <ViewerToolbar items={dockItems} />
+        </div>
         {view === "chat" ? (
           <>
             <form className="message-form" onSubmit={handleSubmit}>
