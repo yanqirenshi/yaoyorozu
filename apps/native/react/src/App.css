@@ -383,6 +383,15 @@ body,
   background: var(--surface-sunken);
 }
 
+/* 開(`.expanded`。issue #266)は幅を広げてアイコン+項目名を出す。会話
+   ペイン等は flex で縮んで追従する(セッション一覧ペインは固定幅のまま)。 */
+.viewer-sidemenu.expanded {
+  width: 188px;
+  align-items: stretch;
+  padding-left: 7px;
+  padding-right: 7px;
+}
+
 .viewer-sidemenu-item {
   width: 38px;
   height: 38px;
@@ -394,6 +403,61 @@ body,
   background: none;
   color: var(--text-secondary);
   cursor: pointer;
+}
+
+.viewer-sidemenu.expanded .viewer-sidemenu-item {
+  width: auto;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 0 9px;
+}
+
+.viewer-sidemenu-icon {
+  flex-shrink: 0;
+  display: flex;
+}
+
+.viewer-sidemenu-label {
+  min-width: 0;
+  font-family: inherit;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 開閉トグルは最下部(項目の残り高さを押しのけて下端へ)。 */
+.viewer-sidemenu-toggle {
+  margin-top: auto;
+}
+
+/* 幅が狭いときは、開いても会話ペイン等を押し縮めない(潰れて崩れるため)。
+   場所は閉のままの幅(52px)を確保し、開いたメニューはセッション一覧の上に
+   重ねて表示する(背景・枠線・影は疑似要素の面で描く)。 */
+@media (max-width: 900px) {
+  .viewer-sidemenu.expanded {
+    width: 52px;
+    position: relative;
+    z-index: 30;
+    overflow: visible;
+  }
+
+  .viewer-sidemenu.expanded::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 188px;
+    background: var(--surface-sunken);
+    border-right: 1px solid var(--border-default);
+    box-shadow: var(--elevation-3);
+  }
+
+  .viewer-sidemenu.expanded .viewer-sidemenu-item {
+    position: relative;
+    width: 174px;
+  }
 }
 
 .viewer-sidemenu-item:hover {

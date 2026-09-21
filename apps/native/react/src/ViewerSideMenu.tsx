@@ -1,8 +1,11 @@
+import { useState } from "react";
 import {
   CLAUDE_MD_ICON,
   GITHUB_PROJECT_ICON,
   RULES_ICON,
   SETTINGS_JSON_ICON,
+  SIDEMENU_COLLAPSE_ICON,
+  SIDEMENU_EXPAND_ICON,
   SETTINGS_LOCAL_JSON_ICON,
   SKILLS_ICON,
   VIEWER_ICON,
@@ -20,6 +23,11 @@ type ViewerSideMenuProps = {
 // (`title`)とスクリーンリーダー用の `aria-label` で示す。切り替えの挙動・
 // 各ビューの中身は変えない(見た目と置き場所だけ)。アイコンは icons.ts の
 // 固定の SVG 文字列(dock・ViewerToolbar と同様に innerHTML で描く)。
+//
+// 最下部の開閉トグル(issue #266)で「アイコンのみ(既定)」と「アイコン+
+// 項目名テキスト」を切り替える。開閉状態はこのウィンドウ内の UI 状態
+// (`useState`)だけで、永続化しない(リロード・再オープンで既定の閉に戻る)。
+// 閉のときだけツールチップを付ける(開のときはラベルが見えるため不要)。
 const ITEMS: { id: PaneView; label: string; icon: string }[] = [
   { id: "chat", label: "会話", icon: VIEWER_ICON },
   { id: "github-project", label: "GitHub Project", icon: GITHUB_PROJECT_ICON },
@@ -31,20 +39,45 @@ const ITEMS: { id: PaneView; label: string; icon: string }[] = [
 ];
 
 function ViewerSideMenu({ active, onChange }: ViewerSideMenuProps) {
+  const [expanded, setExpanded] = useState(false);
   return (
-    <nav className="viewer-sidemenu" aria-label="ビューの切り替え">
+    <nav
+      className={`viewer-sidemenu${expanded ? " expanded" : ""}`}
+      aria-label="ビューの切り替え"
+    >
       {ITEMS.map((item) => (
         <button
           key={item.id}
           type="button"
           className={`viewer-sidemenu-item${item.id === active ? " active" : ""}`}
-          title={item.label}
+          title={expanded ? undefined : item.label}
           aria-label={item.label}
           aria-current={item.id === active ? "page" : undefined}
           onClick={() => onChange(item.id)}
-          dangerouslySetInnerHTML={{ __html: item.icon }}
-        />
+        >
+          <span
+            className="viewer-sidemenu-icon"
+            dangerouslySetInnerHTML={{ __html: item.icon }}
+          />
+          {expanded && <span className="viewer-sidemenu-label">{item.label}</span>}
+        </button>
       ))}
+      <button
+        type="button"
+        className="viewer-sidemenu-item viewer-sidemenu-toggle"
+        title={expanded ? undefined : "メニューを開く"}
+        aria-label={expanded ? "メニューを閉じる" : "メニューを開く"}
+        aria-expanded={expanded}
+        onClick={() => setExpanded((open) => !open)}
+      >
+        <span
+          className="viewer-sidemenu-icon"
+          dangerouslySetInnerHTML={{
+            __html: expanded ? SIDEMENU_COLLAPSE_ICON : SIDEMENU_EXPAND_ICON,
+          }}
+        />
+        {expanded && <span className="viewer-sidemenu-label">閉じる</span>}
+      </button>
     </nav>
   );
 }
