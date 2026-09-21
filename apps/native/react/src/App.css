@@ -559,44 +559,78 @@ body,
   color: var(--color-primary);
 }
 
-.pane-tabs {
+/* 共通部品「タブ」(issue #287。仕様の正は apps/web の uiTab.ts)。
+   値は tokens.css の変数で参照する。太さは全状態で同じ(選択で幅が揺れない)。 */
+.tabs {
   display: flex;
-  gap: 4px;
-  padding: 8px 16px 0;
+  gap: var(--space-1);
+  padding: 0 var(--space-4);
   border-bottom: 1px solid var(--border-default);
-  /* タブの本数が幅に収まらない場合は折り返さず横スクロールさせる
-     (issue #79。他のペイン同様、overflow-x はペイン自身が管理する)。 */
+  /* 収まらないときは折り返さず横スクロール(issue #79)。 */
   overflow-x: auto;
 }
 
-.pane-tab {
-  border: none;
-  background: none;
-  font-family: inherit;
-  font-size: 0.9rem;
-  color: var(--text-secondary);
-  padding: 8px 12px;
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-  /* 長いラベルで折り返してタブ列の高さが変わらないよう、1行に収めて
-     省略表示する(全体は title 属性のツールチップで確認できる。issue #79)。
-     flex-shrink: 0 で、幅が足りない場合に個々のタブが潰れず横スクロールに
-     回るようにする。 */
+.tab {
+  box-sizing: border-box;
   flex-shrink: 0;
+  display: block;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  cursor: pointer;
+  /* 選択中の下線(3px)を、タブ列の下罫線(1px)に重ねる。 */
+  margin-bottom: -1px;
+  border-bottom: 3px solid transparent;
+  /* 1行に収め、200px を超えるラベルは末尾を省略(全体は title で確認できる)。 */
   max-width: 200px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.pane-tab:hover {
+.tabs-small .tab {
+  height: 40px;
+  padding: 0 var(--space-3);
+  font-size: var(--text-ui-14m-100-size);
+  font-weight: var(--text-ui-14m-100-weight);
+  line-height: 40px;
+  letter-spacing: var(--text-ui-14m-100-tracking);
+}
+
+.tabs-medium .tab {
+  height: 48px;
+  padding: 0 var(--space-4);
+  font-size: var(--text-ui-16m-100-size);
+  font-weight: var(--text-ui-16m-100-weight);
+  line-height: 48px;
+  letter-spacing: var(--text-ui-16m-100-tracking);
+}
+
+.tab:hover:not(:disabled) {
+  background: var(--color-kusairo-50);
   color: var(--text-primary);
 }
 
-.pane-tab.active {
-  color: var(--color-primary);
-  border-bottom-color: var(--color-primary);
-  font-weight: 600;
+.tab:active:not(:disabled):not([aria-selected="true"]) {
+  background: var(--color-kusairo-100);
+  color: var(--text-primary);
+}
+
+.tab[aria-selected="true"] {
+  color: var(--color-kusairo-800);
+  border-bottom-color: var(--color-kusairo-600);
+}
+
+.tab:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.tab:disabled {
+  background: transparent;
+  color: var(--text-disabled);
+  cursor: not-allowed;
 }
 
 .claude-md-pane {
@@ -850,7 +884,7 @@ body,
   flex-direction: column;
 }
 
-.settings-page .pane-tabs {
+.settings-page .tabs {
   padding: 0;
   margin-bottom: 20px;
 }
@@ -1610,7 +1644,7 @@ body,
   padding: 24px 24px 0;
 }
 
-.claude-page .pane-tabs {
+.claude-page .tabs {
   flex-shrink: 0;
   padding: 0;
   margin-bottom: 12px;

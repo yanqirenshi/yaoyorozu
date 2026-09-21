@@ -17,7 +17,7 @@ import { usePageDockItems } from "../DockItemsContext";
 import { RELOAD_ICON } from "../icons";
 import JsonFileEditor from "../JsonFileEditor";
 import type { JsonFileEditorHandle } from "../JsonFileEditor";
-import PaneTabs from "../PaneTabs";
+import Tabs, { tabPanelProps } from "../Tabs";
 import { createProjectSettingsDockItems } from "../projectSettingsDockItems";
 
 type ClaudeTab = "claude-md" | "settings" | "explorer";
@@ -128,9 +128,16 @@ function ClaudePage() {
 
   return (
     <div className="claude-page">
-      <PaneTabs tabs={TAB_DEFS} active={tab} onChange={handleChangeTab} />
+      <Tabs
+        id="claude-tabs"
+        aria-label="Claudeの設定の切り替え"
+        size="small"
+        items={TAB_DEFS}
+        value={tab}
+        onChange={handleChangeTab}
+      />
       <p className="claude-page-path">{TAB_TARGET_PATH[tab]}</p>
-      <section className="claude-page-section">
+      <section className="claude-page-section" {...tabPanelProps("claude-tabs", tab)}>
         {tab === "claude-md" && (
           <ClaudeMdEditor
             ref={claudeMdEditorRef}

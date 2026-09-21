@@ -29,7 +29,7 @@ import type {
   ProfileSummaryDto,
   ProjectDto,
 } from "../api";
-import PaneTabs from "../PaneTabs";
+import Tabs, { tabPanelProps } from "../Tabs";
 
 type SettingsTab = "profiles" | "github" | "claude";
 
@@ -481,8 +481,11 @@ function SettingsPage() {
             )}
           </div>
         )}
-        <PaneTabs
-          tabs={[
+        <Tabs
+          id="settings-tabs"
+          aria-label="設定の切り替え"
+          size="small"
+          items={[
             {
               id: "profiles",
               label: activeProfile?.name ?? "プロファイル",
@@ -490,11 +493,15 @@ function SettingsPage() {
             { id: "github", label: "GitHub" },
             { id: "claude", label: "Claude" },
           ]}
-          active={tab}
+          value={tab}
           onChange={handleChangeTab}
         />
 
-        <form className="settings-form" onSubmit={handleSave}>
+        <form
+          className="settings-form"
+          onSubmit={handleSave}
+          {...tabPanelProps("settings-tabs", tab)}
+        >
           {/* プロファイル管理(一覧・追加・名前変更・削除)は左ペインへ移した
               ため、このタブには対象リポジトリの設定だけを残す(issue #74)。 */}
           {tab === "profiles" && (
