@@ -36,7 +36,14 @@ fn assistant_content_text(blocks: &[AssistantContentBlock]) -> String {
 /// (表示対象の抽出ルールは従来と同じ。issue #39)。
 pub fn extract_message(value: &serde_json::Value) -> Option<Message> {
     let line: SessionLine = serde_json::from_value(value.clone()).ok()?;
-    let (role, text, timestamp) = match &line {
+    message_from_line(&line)
+}
+
+/// 構築済みの `SessionLine` から、会話として表示すべきメッセージを取り出す。
+/// `extract_message`(`&Value` 版)と `ScannedLine::message`(issue #302)が
+/// 共有する、抽出ルールの唯一の実装。
+pub(super) fn message_from_line(line: &SessionLine) -> Option<Message> {
+    let (role, text, timestamp) = match line {
         SessionLine::User(l) => (
             Role::User,
             user_content_text(&l.message.content),

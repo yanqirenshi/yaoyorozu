@@ -99,5 +99,5 @@ pub use window_tab::WindowTab;
 pub use session_line::{
     extract_ai_title, extract_custom_title, extract_cwd, extract_git_branch, extract_last_prompt,
     extract_message, extract_mode, extract_session_id, extract_slug, AssistantLine, AttachmentLine,
-    ChainLineBase, SessionLine, SystemLevel, UserLine,
+    ChainLineBase, ScannedLine, SessionLine, SystemLevel, UserLine,
 };

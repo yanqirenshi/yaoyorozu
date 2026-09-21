@@ -37,6 +37,7 @@ mod last_prompt_line;
 mod mode_line;
 mod pr_link_line;
 mod queue_operation_line;
+mod scanned_line;
 // `SessionLine` 型のファイル名を型名のsnake_caseにする規約(native.md §1)に
 // 従うと、モジュール名(`session_line`)と同名になる(clippyの
 // module_inception は通常アンチパターンとして検出するが、本クレートでは
@@ -80,6 +81,7 @@ pub use last_prompt_line::LastPromptLine;
 pub use mode_line::ModeLine;
 pub use pr_link_line::PrLinkLine;
 pub use queue_operation_line::QueueOperationLine;
+pub use scanned_line::ScannedLine;
 pub use session_line::SessionLine;
 pub use stop_hook_summary_line::StopHookSummaryLine;
 pub use system_level::SystemLevel;
