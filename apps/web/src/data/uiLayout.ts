@@ -112,7 +112,11 @@ export const SHELL_METRICS: ShellMetric[] = [
   { item: "ペインの区切り", value: "1px の罫線(border.default)", note: "影は使わない。" },
   { item: "タブ列の高さ", value: "48px", note: "タブのラベルは UI-16M-100。" },
   { item: "一覧の行の高さ", value: "40px", note: "高密度な一覧では 32px。" },
-  { item: "操作要素の最小高さ", value: "40px", note: "クリック領域として確保する。" },
+  {
+    item: "操作要素の最小高さ",
+    value: "40px",
+    note: "クリック領域として確保する。表やツールバーなど高密度な領域に限り 32px まで下げてよい(ボタンの small)。",
+  },
 ];
 
 export type PaneLayout = {

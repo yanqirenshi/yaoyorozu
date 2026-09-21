@@ -16,6 +16,8 @@ import ElevationPage from "./UiDesign/ElevationPage";
 import FramePage from "./UiDesign/FramePage";
 import LayoutIndexPage from "./UiDesign/LayoutIndexPage";
 import PagePage from "./UiDesign/PagePage";
+import ButtonPage from "./UiDesign/ButtonPage";
+import PartIndexPage from "./UiDesign/PartIndexPage";
 import PartsIndexPage from "./UiDesign/PartsIndexPage";
 import IconPage from "./UiDesign/IconPage";
 import LayoutPage from "./UiDesign/LayoutPage";
@@ -93,6 +95,10 @@ function Content({
       return <PagePage />;
     case "frame":
       return <FramePage />;
+    case "part":
+      return <PartIndexPage onSelect={onSelect} />;
+    case "part-button":
+      return <ButtonPage />;
     case "parts":
       return <PartsIndexPage onSelect={onSelect} />;
     case "basic":

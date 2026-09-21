@@ -18,6 +18,8 @@ src/app/<route>/page.tsx   ルーティングのみ(薄いラッパー。Server 
 src/app/tabs/              画面本体("use client"。1画面 = 1ファイル)
 src/app/AppShell.tsx       全画面共通の枠(左メニュー)
 src/app/DiagramPage.tsx    図/WBS タブ切り替えの共通コンポーネント
+src/components/            画面をまたいで使う共通コンポーネント(/ui で定義したもの)
+  frames/ products/ assemblies/ parts/   フレーム / 製品 / 中間品 / 部品
 src/data/                  プロダクト情報(SSoT)
 src/app/tokens.css         デザイントークンの CSS カスタムプロパティ(自動生成。直接編集しない)
 src/theme.ts               MUI テーマ(COLOR_PALETTE から生成)
@@ -28,6 +30,8 @@ src/types/                 型定義を同梱しない外部パッケージの�
 - MUST: `page.tsx` に `"use client"` を書かない。クライアント処理は `tabs/` 以下に置く。
 - MUST: 図表描画(`@yanqirenshi/*`)はクライアント専用。SSR で動かそうとしない。
 - SHOULD: `tabs/` のコンポーネントが肥大化したら、その画面専用の子コンポーネントは `tabs/<画面名>/` ディレクトリに分割する。
+- MUST: `src/components/` には `/ui` で定義したコンポーネントだけを置く。仕様(寸法・色・状態)は `src/data/ui*.ts` に持ち、コンポーネントは値を持たない。画面専用のものは従来どおり `tabs/<画面名>/` に置く。
+- MUST: `parts/`(部品)と `assemblies/`(中間品)はデータを取得せず、props だけで描画する。
 
 ## 2. データ管理(SSoT = リポジトリ内の静的 TypeScript)
 
@@ -84,7 +88,7 @@ npm run lint --workspace=web
 | 兆候 | 移行先 |
 |---|---|
 | `tabs/` の1ファイルが肥大化する | `tabs/<画面名>/` に画面専用コンポーネントを分割(§1 で許可済み) |
-| 画面横断の共通ロジック・部品が増える | フィーチャーベース構成へ再編(`features/<機能>/{components,hooks,types}` + `shared/`) |
+| 画面横断の共通ロジック・部品が増える | フィーチャーベース構成へ再編(`features/<機能>/{components,hooks,types}` + `shared/`)。※`/ui` で定義する共通コンポーネントは `src/components/`(§1)として限定適用済み |
 | Web からの編集機能(Route Handlers / Server Actions)を導入する | データアクセス層を分離し、ビジネスロジックはフレームワーク非依存の純粋 TS(`src/core/`)に置く(native の B型と同じ発想の部分適用)。※レイアウト保存 API(§2)として限定適用済み。プロダクト情報本体の編集に広げる段階で `core/` 分離を行う |
 
 - MUST: 上記の移行はいずれも「規約(本ファイル)の改定 → 実装」の順で行う。実装が先行して規約と乖離した状態を作らない。

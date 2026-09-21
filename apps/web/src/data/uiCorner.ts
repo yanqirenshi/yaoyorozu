@@ -35,7 +35,7 @@ export const CORNER_SCALE: CornerToken[] = [
     px: 4,
     label: "小",
     tailwind: "rounded",
-    usage: "ボタン、入力欄、メニュー項目。高さ 32〜40px の操作要素の既定値。",
+    usage: "ボタン、入力欄、メニュー項目。高さ 32〜48px の操作要素の既定値。",
   },
   {
     token: "radius-8",

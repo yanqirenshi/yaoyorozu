@@ -4,7 +4,9 @@
  */
 
 import { roleColor } from "@/data/uiDesign";
-import { FONT_WEIGHTS, TEXT_STYLE_GROUPS } from "@/data/uiTypography";
+
+// テキストスタイルの解決は部品(src/components/)と共用する。
+export { textStyle, type TextStyleSx } from "@/components/tokens";
 
 export const BORDER = roleColor("border.default");
 export const BORDER_STRONG = roleColor("border.strong");
@@ -17,26 +19,3 @@ export const TEXT_INVERSE = roleColor("text.inverse");
 export const LINK_COLOR = roleColor("link.default");
 export const FOCUS_RING = roleColor("focus.ring");
 export const STATE_HOVER = roleColor("state.hover");
-
-export type TextStyleSx = {
-  fontSize: string;
-  fontWeight: number;
-  lineHeight: string;
-  letterSpacing: string;
-  fontFamily?: string;
-};
-
-/** テキストスタイル名から sx に渡せるスタイルを作る。 */
-export function textStyle(name: string): TextStyleSx {
-  const style = TEXT_STYLE_GROUPS.flatMap((g) => g.styles).find(
-    (s) => s.name === name,
-  );
-  if (!style) throw new Error("未定義のテキストスタイルです: " + name);
-  const weight = FONT_WEIGHTS.find((w) => w.level === style.weight);
-  return {
-    fontSize: style.sizePx + "px",
-    fontWeight: weight ? weight.value : 400,
-    lineHeight: style.lineHeight,
-    letterSpacing: style.tracking,
-  };
-}

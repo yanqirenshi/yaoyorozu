@@ -84,7 +84,7 @@ export const COLOR_SCALES: ColorScale[] = [
     reading: "きんちゃ",
     role: "セカンダリー",
     description:
-      "注意を引くための副色。フォーカスリング、警告、進行中の状態など「止まって確認してほしい」箇所に使う。面積が増えると主色を殺すため、配色比率は10%を上限とする。",
+      "注意を引くための副色。操作ボタン(追加・変更)、フォーカスリング、警告、進行中の状態など「ここを押す・止まって確認する」箇所に使う。面積が増えると主色を殺すため、配色比率は10%を上限とする。",
     tones: [
       { step: 50, hex: "#fbf8f4", contrast: 1.02 },
       { step: 100, hex: "#f5eee5", contrast: 1.11 },
@@ -196,7 +196,7 @@ export const KEY_COLORS: RoleColor[] = [
     label: "セカンダリー",
     value: tone("金茶", 600),
     source: "金茶-600",
-    usage: "フォーカスリング、警告、進行中インジケータ。",
+    usage: "操作ボタン(追加・変更。塗りに使うときの文字は墨-900)、フォーカスリング、警告、進行中インジケータ。",
     contrast: 3.15,
   },
   {
@@ -383,6 +383,32 @@ export function roleColor(token: string): string {
   return found.value;
 }
 
+export type ResolvedColor = {
+  /** CSS カラー値。 */
+  value: string;
+  /** tokens.css 上のカスタムプロパティ名(apps/native など CSS から参照する場合に使う)。 */
+  cssVar: string;
+};
+
+/**
+ * 色の参照を解決する。
+ * 参照は「京紫-500」のようなプリミティブ(名前-段階)か、
+ * 「state.hover」のような役割トークン名のどちらかで書く。
+ * 部品の仕様を、値ではなくトークン名で持つための入口。
+ */
+export function resolveColor(ref: string): ResolvedColor {
+  const primitive = ref.match(/^(.+)-(\d+)$/);
+  if (primitive) {
+    const scale = COLOR_SCALES.find((s) => s.name === primitive[1]);
+    if (!scale) throw new Error("未定義の色です: " + ref);
+    return {
+      value: tone(primitive[1], Number(primitive[2])),
+      cssVar: "--color-" + scale.slug + "-" + primitive[2],
+    };
+  }
+  return { value: roleColor(ref), cssVar: "--" + ref.replace(/\./g, "-") };
+}
+
 export type SemanticColor = {
   token: string;
   label: string;
@@ -463,7 +489,11 @@ export const COMPONENT_NAV: NavItem[] = [
     children: [
       { key: "products", label: "製品" },
       { key: "subassembly", label: "中間品" },
-      { key: "part", label: "部品" },
+      {
+        key: "part",
+        label: "部品",
+        children: [{ key: "part-button", label: "ボタン" }],
+      },
     ],
   },
   {
