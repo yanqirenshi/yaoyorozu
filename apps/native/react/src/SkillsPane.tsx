@@ -6,14 +6,15 @@ import { getSkill, isAppError, listSkills } from "./api";
 import type { SkillSummaryDto } from "./api";
 
 type SkillsPaneProps = {
-  project: string;
+  // 対象プロファイル(backend がそのリポジトリを解決する。issue #269)。
+  profileId: string | null;
   selectedName: string | null;
   onSelectSkill: (name: string) => void;
 };
 
 // `.claude/skills/<name>/SKILL.md` の一覧+表示(issue #65)。RulesPane
 // (issue #61)と同じ流儀。表示のみで編集は行わない。
-function SkillsPane({ project, selectedName, onSelectSkill }: SkillsPaneProps) {
+function SkillsPane({ profileId, selectedName, onSelectSkill }: SkillsPaneProps) {
   const [skills, setSkills] = useState<SkillSummaryDto[]>([]);
   const [loadingList, setLoadingList] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
@@ -26,11 +27,11 @@ function SkillsPane({ project, selectedName, onSelectSkill }: SkillsPaneProps) {
   useEffect(() => {
     setLoadingList(true);
     setListError(null);
-    listSkills(project)
+    listSkills(profileId)
       .then(setSkills)
       .catch((e) => setListError(isAppError(e) ? e.message : String(e)))
       .finally(() => setLoadingList(false));
-  }, [project]);
+  }, [profileId]);
 
   useEffect(() => {
     if (!selectedName) {
@@ -41,11 +42,11 @@ function SkillsPane({ project, selectedName, onSelectSkill }: SkillsPaneProps) {
     setContent(null);
     setLoadingContent(true);
     setContentError(null);
-    getSkill(project, selectedName)
+    getSkill(profileId, selectedName)
       .then((dto) => setContent(dto.content))
       .catch((e) => setContentError(isAppError(e) ? e.message : String(e)))
       .finally(() => setLoadingContent(false));
-  }, [project, selectedName]);
+  }, [profileId, selectedName]);
 
   // viewerは選択中スキルがある間だけDOMに存在するため、その都度sanitize
   // フックを設定し直す。既定は素通しのため必須設定(issue #57と同じ理由)。

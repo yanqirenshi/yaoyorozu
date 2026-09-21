@@ -263,36 +263,39 @@ export function onSettingsUpdated(callback: () => void): Promise<() => void> {
   return unlisten.then((fn) => fn);
 }
 
-export function getProjectClaudeMd(project: string): Promise<ClaudeMdDto> {
-  return invoke<ClaudeMdDto>("get_project_claude_md", { project });
+// ビューアの CLAUDE.md / Rules / Skills / settings 系(以下 6 組)は、対象リポジトリを
+// backend がプロファイルの `repository_path` から解決する(issue #269)。パスは
+// 渡さない。`profileId` が `null` ならアクティブプロファイル。
+export function getProjectClaudeMd(profileId: string | null): Promise<ClaudeMdDto> {
+  return invoke<ClaudeMdDto>("get_project_claude_md", { profileId });
 }
 
 export function saveProjectClaudeMd(
-  project: string,
+  profileId: string | null,
   content: string,
   expectedModifiedAtMs: number | null,
 ): Promise<void> {
   return invoke<void>("save_project_claude_md", {
-    project,
+    profileId,
     content,
     expectedModifiedAtMs,
   });
 }
 
-export function listRules(project: string): Promise<RuleSummaryDto[]> {
-  return invoke<RuleSummaryDto[]>("list_rules", { project });
+export function listRules(profileId: string | null): Promise<RuleSummaryDto[]> {
+  return invoke<RuleSummaryDto[]>("list_rules", { profileId });
 }
 
-export function getRule(project: string, fileName: string): Promise<RuleDto> {
-  return invoke<RuleDto>("get_rule", { project, fileName });
+export function getRule(profileId: string | null, fileName: string): Promise<RuleDto> {
+  return invoke<RuleDto>("get_rule", { profileId, fileName });
 }
 
-export function listSkills(project: string): Promise<SkillSummaryDto[]> {
-  return invoke<SkillSummaryDto[]>("list_skills", { project });
+export function listSkills(profileId: string | null): Promise<SkillSummaryDto[]> {
+  return invoke<SkillSummaryDto[]>("list_skills", { profileId });
 }
 
-export function getSkill(project: string, name: string): Promise<SkillDto> {
-  return invoke<SkillDto>("get_skill", { project, name });
+export function getSkill(profileId: string | null, name: string): Promise<SkillDto> {
+  return invoke<SkillDto>("get_skill", { profileId, name });
 }
 
 export function getClaudeSettingsFile(): Promise<ClaudeSettingsDto> {
@@ -333,20 +336,20 @@ export function listClaudeDir(
 }
 
 export function getProjectSettingsFile(
-  project: string,
+  profileId: string | null,
   which: ProjectSettingsFileDto,
 ): Promise<ClaudeSettingsDto> {
-  return invoke<ClaudeSettingsDto>("get_project_settings_file", { project, which });
+  return invoke<ClaudeSettingsDto>("get_project_settings_file", { profileId, which });
 }
 
 export function saveProjectSettingsFile(
-  project: string,
+  profileId: string | null,
   which: ProjectSettingsFileDto,
   content: string,
   expectedModifiedAtMs: number | null,
 ): Promise<void> {
   return invoke<void>("save_project_settings_file", {
-    project,
+    profileId,
     which,
     content,
     expectedModifiedAtMs,
