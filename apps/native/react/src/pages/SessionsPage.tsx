@@ -92,6 +92,9 @@ function SessionsPage({ nav }: SessionsPageProps) {
   // ID。`windowProfileId` が `null`(`/profiles` に id 省略)の場合はアクティブ
   // プロファイルへフォールバックする(Rust側 `resolve_profile` と同じ規則)。
   const [resolvedProfileId, setResolvedProfileId] = useState<string | null>(null);
+  // このウィンドウのプロファイル名(ヘッダに表示。issue #275)。プロファイルの
+  // 名前変更に追従するため、設定の読み込み・`settings:updated` のたびに引き直す。
+  const [profileName, setProfileName] = useState<string | null>(null);
   const [targetFolders, setTargetFolders] = useState<string[]>([]);
   const [sessionGroups, setSessionGroups] = useState<SessionGroup[]>([]);
   const [messages, setMessages] = useState<MessageDto[]>([]);
@@ -154,7 +157,9 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const loadTargetFoldersAndSessions = useCallback((): Promise<void> => {
     return getSettings(windowProfileId)
       .then((settings) => {
-        setResolvedProfileId(windowProfileId ?? settings.active_profile_id);
+        const profileId = windowProfileId ?? settings.active_profile_id;
+        setResolvedProfileId(profileId);
+        setProfileName(settings.profiles.find((p) => p.id === profileId)?.name ?? null);
         setRepositoryPath(settings.repository_path);
         setTargetFolders(settings.selected_project_folders);
         setGithubProject(settings.github_project);
@@ -284,6 +289,8 @@ function SessionsPage({ nav }: SessionsPageProps) {
     const unlistenPromise = onSettingsUpdated(() => {
       getSettings(windowProfileId)
         .then((settings) => {
+          const profileId = windowProfileId ?? settings.active_profile_id;
+          setProfileName(settings.profiles.find((p) => p.id === profileId)?.name ?? null);
           setRepositoryPath(settings.repository_path);
           setTargetFolders(settings.selected_project_folders);
           setGithubProject(settings.github_project);
@@ -561,6 +568,11 @@ function SessionsPage({ nav }: SessionsPageProps) {
       </div>
       <div className="session-conversation">
         <div className="session-conversation-head">
+          {/* ヘッダ: 左にこのウィンドウのプロファイル名(表示のみ。issue #275)、
+              右に既存のツールバー(issue #257)。 */}
+          <h2 className="session-conversation-title" title={profileName ?? undefined}>
+            {profileName}
+          </h2>
           <ViewerToolbar items={dockItems} />
         </div>
         {view === "chat" ? (
