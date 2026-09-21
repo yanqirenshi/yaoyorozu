@@ -32,6 +32,11 @@ export type SitemapInspectorTarget = {
   ports: Record<string, number>;
   /** 角度の目安。Colonoscope の readonly 項目は対象から値を読むため、ここに置く。 */
   angleGuide: string;
+  /**
+   * 画面のパス(sitemap.ts の SITE_DETAILS)。固有のパスを持たないアプリ・タブは空。
+   * 角度の目安と同じく、readonly 項目に見せるため対象に持たせる。
+   */
+  sitePath: string;
 };
 
 type NodeCore = {
@@ -118,18 +123,33 @@ export function buildInspectorTarget(
       ]),
     ),
     angleGuide: ANGLE_GUIDE,
+    sitePath: findSitemapSite(core.id)?.path ?? "",
   };
 }
 
+/** 画面のパス。表示だけ(編集はしない)。 */
+const PATH_FIELD: ColonoscopeField = {
+  path: "sitePath",
+  label: "パス",
+  type: "readonly",
+};
+
 /**
- * 「基本」(位置・サイズ)と「結線」(このノード側の端点の角度)の2タブ。
- * 結線の無いノード(ページ内のタブを表す子ノード等)には「結線」タブを出さない。
+ * 「基本」(パス・位置・サイズ)と「結線」(このノード側の端点の角度)の2タブ。
+ * パスは固有のパスを持つ画面のときだけ「基本」の先頭に出す(アプリ・ページ内の
+ * タブには出さない)。結線の無いノード(ページ内のタブを表す子ノード等)には
+ * 「結線」タブを出さない。
  */
 export function buildInspectorTabs(
   nodeId: number,
 ): ColonoscopeTab<SitemapInspectorTarget>[] {
+  const hasPath = Boolean(findSitemapSite(nodeId)?.path);
   const tabs: ColonoscopeTab<SitemapInspectorTarget>[] = [
-    { key: "basic", label: "基本", fields: BASIC_FIELDS },
+    {
+      key: "basic",
+      label: "基本",
+      fields: hasPath ? [PATH_FIELD, ...BASIC_FIELDS] : BASIC_FIELDS,
+    },
   ];
 
   const entries = portEntries(nodeId);
