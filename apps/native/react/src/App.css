@@ -359,9 +359,28 @@ body,
 }
 
 /* ビューアの上部: タブ(左)とページ内ツールバー(右。issue #257)。 */
-/* ビューアの上部: ページ内ツールバー(右寄せ。issue #257)。ビュー切り替えの
-   タブは左端のサイドメニューへ移した(issue #263)。 */
+/* ビューアの全体(issue #291): 最上段の全幅ヘッダ / その下に本体(サイドメニュー |
+   セッション一覧 | コンテンツ)の2段構成。 */
+.viewer-page {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.viewer-body {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+}
+
+/* ビューアの上部: プロファイル名(左)とページ内ツールバー(右。issue #257)。
+   ウィンドウの左端から右端まで届き、下罫線も全幅で通る(issue #291)。 */
 .session-conversation-head {
+  position: relative;
+  z-index: 40;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
