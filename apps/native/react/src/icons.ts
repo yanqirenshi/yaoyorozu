@@ -165,3 +165,15 @@ export const SETTINGS_LOCAL_JSON_ICON = `${SIDEMENU_SVG_OPEN}
   <path d="M12 4c2 0 2 1 2 2.5V8c0 1 1 2 2 2-1 0-2 1-2 2v1.5c0 1.5 0 2.5-2 2.5" />
   <circle cx="10" cy="10" r="1.1" fill="currentColor" stroke="none" />
 </svg>`;
+
+// サイドメニューの開閉トグル(issue #266)。閉のとき「開く」(»)、開のとき
+// 「閉じる」(«)。
+export const SIDEMENU_EXPAND_ICON = `${SIDEMENU_SVG_OPEN}
+  <path d="M5 5l5 5-5 5" />
+  <path d="M11 5l5 5-5 5" />
+</svg>`;
+
+export const SIDEMENU_COLLAPSE_ICON = `${SIDEMENU_SVG_OPEN}
+  <path d="M15 5l-5 5 5 5" />
+  <path d="M9 5l-5 5 5 5" />
+</svg>`;
