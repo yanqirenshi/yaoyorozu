@@ -11,6 +11,12 @@ export const PART_ITEMS: IndexItem[] = [
     summary:
       "追加ボタン(塗り)と変更ボタン(線)。サイズは small / medium / large の3段階。",
   },
+  {
+    key: "part-tab",
+    label: "タブ",
+    summary:
+      "同じ領域の中で表示する内容を切り替える。選択色は草色。サイズは small / medium の2段階。",
+  },
 ];
 
 export default function PartIndexPage({

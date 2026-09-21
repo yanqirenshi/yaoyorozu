@@ -17,6 +17,7 @@ import FramePage from "./UiDesign/FramePage";
 import LayoutIndexPage from "./UiDesign/LayoutIndexPage";
 import PagePage from "./UiDesign/PagePage";
 import ButtonPage from "./UiDesign/ButtonPage";
+import TabPage from "./UiDesign/TabPage";
 import PartIndexPage from "./UiDesign/PartIndexPage";
 import PartsIndexPage from "./UiDesign/PartsIndexPage";
 import IconPage from "./UiDesign/IconPage";
@@ -99,6 +100,8 @@ function Content({
       return <PartIndexPage onSelect={onSelect} />;
     case "part-button":
       return <ButtonPage />;
+    case "part-tab":
+      return <TabPage />;
     case "parts":
       return <PartsIndexPage onSelect={onSelect} />;
     case "basic":

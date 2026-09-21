@@ -397,6 +397,8 @@ export type ResolvedColor = {
  * 部品の仕様を、値ではなくトークン名で持つための入口。
  */
 export function resolveColor(ref: string): ResolvedColor {
+  // 「塗らない」ことを表す参照。CSS のキーワードをそのまま使う。
+  if (ref === "transparent") return { value: "transparent", cssVar: "transparent" };
   const primitive = ref.match(/^(.+)-(\d+)$/);
   if (primitive) {
     const scale = COLOR_SCALES.find((s) => s.name === primitive[1]);
@@ -492,7 +494,10 @@ export const COMPONENT_NAV: NavItem[] = [
       {
         key: "part",
         label: "部品",
-        children: [{ key: "part-button", label: "ボタン" }],
+        children: [
+          { key: "part-button", label: "ボタン" },
+          { key: "part-tab", label: "タブ" },
+        ],
       },
     ],
   },
