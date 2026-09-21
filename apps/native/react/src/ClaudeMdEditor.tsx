@@ -1,3 +1,4 @@
+import AddButton from "./AddButton";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import DOMPurify from "dompurify";
 import "@yanqirenshi/markdown.sitter";
@@ -145,15 +146,13 @@ const ClaudeMdEditor = forwardRef<ClaudeMdEditorHandle, ClaudeMdEditorProps>(
       return (
         <div className="claude-md-editor">
           <p>{emptyMessage}</p>
-          <button
-            type="button"
+          <AddButton
+            label={createLabel}
             onClick={() => {
               setCreating(true);
               onCreate?.();
             }}
-          >
-            {createLabel}
-          </button>
+          />
           {error && <p className="error">{error}</p>}
         </div>
       );

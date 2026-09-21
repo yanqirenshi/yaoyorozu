@@ -1189,6 +1189,118 @@ body,
   cursor: pointer;
 }
 
+/* 共通部品「追加ボタン」「変更ボタン」(issue #277)。仕様の正は apps/web の
+   `src/data/uiButton.ts`(`/ui?item=part-button`)。値は書き写さず、tokens.css の
+   CSS 変数だけで参照する(hex の直書きなし)。アイコンは付けず文字だけ。 */
+.action-button {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid;
+  border-radius: var(--radius-4);
+  padding-top: 0;
+  padding-bottom: 0;
+  font-family: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 120ms,
+    border-color 120ms;
+}
+
+.action-button-small {
+  height: 32px;
+  padding-left: var(--space-3);
+  padding-right: var(--space-3);
+  font-size: var(--text-ui-14m-100-size);
+  font-weight: var(--text-ui-14m-100-weight);
+  line-height: var(--text-ui-14m-100-line-height);
+  letter-spacing: var(--text-ui-14m-100-tracking);
+}
+
+.action-button-medium {
+  height: 40px;
+  padding-left: var(--space-4);
+  padding-right: var(--space-4);
+  font-size: var(--text-ui-16m-100-size);
+  font-weight: var(--text-ui-16m-100-weight);
+  line-height: var(--text-ui-16m-100-line-height);
+  letter-spacing: var(--text-ui-16m-100-tracking);
+}
+
+.action-button-large {
+  height: 48px;
+  padding-left: var(--space-6);
+  padding-right: var(--space-6);
+  font-size: var(--text-ui-18m-100-size);
+  font-weight: var(--text-ui-18m-100-weight);
+  line-height: var(--text-ui-18m-100-line-height);
+  letter-spacing: var(--text-ui-18m-100-tracking);
+}
+
+/* 追加ボタン(塗り)。文字が暗い(墨)ため、ホバー・押下中は背景を明るくする
+   方向に変える(一般的な「押すと濃くなる」とは逆)。文字の陰は読みやすさの
+   ためのもので、無効では付けない。 */
+.action-button-add {
+  background-color: var(--color-kincha-500);
+  color: var(--text-primary);
+  border-color: var(--color-kincha-500);
+  text-shadow: 0 0 2px var(--text-inverse);
+}
+
+.action-button-add:hover:not(:disabled) {
+  background-color: var(--color-kincha-400);
+  border-color: var(--color-kincha-400);
+}
+
+.action-button-add:active:not(:disabled) {
+  background-color: var(--color-kincha-300);
+  border-color: var(--color-kincha-300);
+}
+
+.action-button-add:disabled {
+  background-color: var(--state-disabled);
+  color: var(--text-disabled);
+  border-color: var(--state-disabled);
+  text-shadow: none;
+}
+
+/* 変更ボタン(線)。文字(金茶-500 on 白)はコントラスト基準に届かないが、
+   ユーザー判断で採用された仕様のためそのまま(直さない)。 */
+.action-button-edit {
+  background-color: var(--surface-raised);
+  color: var(--color-kincha-500);
+  border-color: var(--color-kincha-600);
+}
+
+.action-button-edit:hover:not(:disabled) {
+  background-color: var(--color-kincha-50);
+  border-color: var(--color-kincha-700);
+}
+
+.action-button-edit:active:not(:disabled) {
+  background-color: var(--color-kincha-100);
+  border-color: var(--color-kincha-800);
+}
+
+.action-button-edit:disabled {
+  background-color: var(--surface-raised);
+  color: var(--text-disabled);
+  border-color: var(--border-default);
+}
+
+/* 操作できないときはカーソルを not-allowed に。フォーカスはキーボード操作
+   (`:focus-visible`)のときだけ出し、ポインタで押したときには出さない。 */
+.action-button:disabled {
+  cursor: not-allowed;
+}
+
+.action-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .settings-profile-add {
   display: flex;
   align-items: center;
