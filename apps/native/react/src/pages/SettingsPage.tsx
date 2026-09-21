@@ -1,3 +1,4 @@
+import AddButton from "../AddButton";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { useSearchParams } from "react-router";
@@ -437,9 +438,7 @@ function SettingsPage() {
             onChange={(e) => setNewProfileName(e.target.value)}
             placeholder="新しいプロファイル名(省略可)"
           />
-          <button type="button" onClick={handleCreateProfile}>
-            追加
-          </button>
+          <AddButton size="small" onClick={handleCreateProfile} />
         </div>
         {profileError && <p className="error">{profileError}</p>}
       </div>

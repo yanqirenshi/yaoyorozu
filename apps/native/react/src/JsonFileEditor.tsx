@@ -1,3 +1,4 @@
+import AddButton from "./AddButton";
 import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
 import { isAppError } from "./api";
 
@@ -89,9 +90,7 @@ const JsonFileEditor = forwardRef<JsonFileEditorHandle, JsonFileEditorProps>(
       return (
         <div className="json-file-editor">
           <p>{emptyMessage}</p>
-          <button type="button" onClick={() => setCreating(true)}>
-            {createLabel}
-          </button>
+          <AddButton label={createLabel} onClick={() => setCreating(true)} />
           {error && <p className="error">{error}</p>}
         </div>
       );
