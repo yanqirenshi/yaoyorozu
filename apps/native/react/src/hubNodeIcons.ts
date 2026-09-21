@@ -15,6 +15,13 @@ function toDataUri(svg: string): string {
 const SVG_OPEN = `<svg viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="${ICON_STROKE_COLOR}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">`;
 const SVG_CLOSE = `</svg>`;
 
+// PC(モニタ)。ハブ再構築 第4段(issue #283)で、#215 で一度削除した線画を
+// git 履歴から復活させた。
+const PC_ICON_SVG = `${SVG_OPEN}<rect x="3" y="4" width="14" height="9" rx="1.2"/><line x1="7" y1="16.5" x2="13" y2="16.5"/><line x1="10" y1="13" x2="10" y2="16.5"/>${SVG_CLOSE}`;
+
+// User(人物)。PC と同じく issue #283 で git 履歴から復活させた。
+const USER_ICON_SVG = `${SVG_OPEN}<circle cx="10" cy="7" r="3.2"/><path d="M4 16.5c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/>${SVG_CLOSE}`;
+
 // セッション(吹き出し)。dockのVIEWER_ICONと同じ形状。
 const SESSION_ICON_SVG = `${SVG_OPEN}<rect x="3" y="4" width="14" height="9" rx="1.5"/><path d="M7 13v3l4-3"/>${SVG_CLOSE}`;
 
@@ -38,6 +45,8 @@ const GIT_REPOSITORY_ICON_SVG = `<svg viewBox="0 0 24 24" xmlns="http://www.w3.o
 const GIT_BRANCH_ICON_SVG = `<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="${ICON_STROKE_COLOR}" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"><circle cx="150" cy="105" r="42"/><circle cx="350" cy="105" r="42"/><circle cx="150" cy="405" r="42"/><line x1="150" y1="147" x2="150" y2="363"/><path d="M150 300C150 258 184 235 228 235H268C310 235 340 205 340 150"/></svg>`;
 
 export const HUB_NODE_ICON_URIS = {
+  pc: toDataUri(PC_ICON_SVG),
+  user: toDataUri(USER_ICON_SVG),
   session: toDataUri(SESSION_ICON_SVG),
   profile: toDataUri(PROFILE_ICON_SVG),
   gitRepository: toDataUri(GIT_REPOSITORY_ICON_SVG),

@@ -57,16 +57,19 @@ const INVISIBLE_NODE_CIRCLE = {
   stroke: { color: "none", width: 0 },
 };
 
-// プロファイル/GitRepository/GitBranch ノードの配置(ハブ再構築 第2〜3段。
-// issue #224・#229)。左からプロファイル列・リポジトリ列・ブランチ列を縦に
-// 並べ、セッションのグリッドはその右側から始める。位置は並び順
-// (`buildGraphData`参照)で決まるだけの簡易な整列で、ドラッグで動かせる
-// (`move: "support"`)ため実装時点では見やすさよりも「エッジが追える」ことを
-// 優先する。第3段でプロファイル列を一番左に足したため、他の列は1列ぶん右へ
-// ずらした(保存済みの位置があるノードはその位置のまま)。
-const PROFILE_COLUMN_X = 80;
-const REPOSITORY_COLUMN_X = 320;
-const BRANCH_COLUMN_X = 560;
+// Pc/User/プロファイル/GitRepository/GitBranch ノードの配置(ハブ再構築
+// 第2〜4段。issue #224・#229・#283)。左から Pc 列・User 列・プロファイル列・
+// リポジトリ列・ブランチ列を縦に並べ、セッションのグリッドはその右側から
+// 始める。位置は並び順(`buildGraphData`参照)で決まるだけの簡易な整列で、
+// ドラッグで動かせる(`move: "support"`)ため実装時点では見やすさよりも
+// 「エッジが追える」ことを優先する。第3段でプロファイル列、第4段で Pc・User
+// 列を一番左に足したため、そのたびに他の列を右へずらした(保存済みの位置が
+// あるノードはその位置のまま)。
+const PC_COLUMN_X = 80;
+const USER_COLUMN_X = 320;
+const PROFILE_COLUMN_X = 560;
+const REPOSITORY_COLUMN_X = 800;
+const BRANCH_COLUMN_X = 1040;
 // プロファイルノードの枠の太さ。ウィンドウで開いているものを太くする
 // (issue #229。`buildGraphData` 参照)。
 const PROFILE_OPEN_STROKE_WIDTH = 6;
@@ -80,9 +83,9 @@ const GIT_NODE_ROW_HEIGHT = 90;
 // 集まるようになったため)。ここで決めるのはシミュレーション開始時の位置で、
 // 第1段(issue #214)の格子の計算をそのまま流用する。列数は横長の画面に
 // 合わせて「行数 × 1.5 ≒ 列数」になるよう決める(141件なら15列 × 10行)。
-// 原点のxはプロファイル/GitRepository/GitBranch列(issue #224・#229)と
-// 重ならない位置まで右へ寄せる。
-const SESSION_GRID_ORIGIN = { x: 800, y: 70 };
+// 原点のxは Pc/User/プロファイル/GitRepository/GitBranch列(issue #224・
+// #229・#283)と重ならない位置まで右へ寄せる。
+const SESSION_GRID_ORIGIN = { x: 1280, y: 70 };
 const SESSION_GRID_ASPECT = 1.5;
 // 格子の間隔。横はラベル(12px × 最大16文字 ≒ 192px)が隣と重ならない幅、
 // 縦は円(半径20)+ ラベル1行が収まる高さ。
@@ -149,16 +152,25 @@ function restartSimulation(rectum: Rectum): void {
 
 // 右クリック時に何を表示するかを判定するための、ノードの元データ(`_core`)。
 // 第1段(issue #214)はセッションノードのみだったが、第2段(issue #224)で
-// GitRepository/GitBranch ノードを、第3段(issue #229)でプロファイルノードを
-// 戻した。フィールドはインスペクタ(issue #109)の表示と、プロファイルノードの
-// 左クリック(ウィンドウの前面化/新規オープン)に使う。
+// GitRepository/GitBranch ノードを、第3段(issue #229)でプロファイルノードを、
+// 第4段(issue #283)で Pc/User ノードを戻した。フィールドはインスペクタ
+// (issue #109)の表示と、プロファイルノードの左クリック(ウィンドウの
+// 前面化/新規オープン)に使う。
 type HubNodeCore = {
-  kind: "session" | "git-repository" | "git-branch" | "profile";
+  kind: "pc" | "user" | "session" | "git-repository" | "git-branch" | "profile";
   // ドラッグ位置の永続化(issue #121)に使う安定キー。位置を保存する
   // ノードにのみ設定する(セッションノードは force シミュレーションに委ねる
   // ため保存しない。issue #226)。GitRepository/GitBranch ノード(issue #224)は
   // 台帳の個体指定子(repository_path/branch_id)由来のキーで保存する。
   positionKey?: string;
+  // Pc(`domain::Pc`。issue #182・#283)
+  pcName?: string;
+  systemUuid?: string;
+  pcDescription?: string;
+  // User(`domain::User`。issue #182・#283)
+  userId?: string;
+  userName?: string;
+  homeDirectory?: string;
   // session(`domain::Session` のモデル属性。issue #197)
   sessionId?: string;
   sessionTitle?: string;
@@ -289,13 +301,13 @@ function gitBranchNodeId(branchId: string): string {
   return `git-branch:${branchId}`;
 }
 
-// `pc`(`get_pc`)と settings のプロファイルから、プロファイルノード(ハブ
-// 再構築 第3段。issue #229)、GitRepository/GitBranch ノード(第2段。
-// issue #224)、セッションノード(第1段。issue #214)を組み立てる。表示対象は
-// 全プロファイル、登録済みリポジトリ(`User.repositories`)とその現存ブランチ
-// (削除済みはバックエンド側で除外済み)、および全セッション(`User.sessions`。
-// `~/.claude/projects` 全体で、プロファイルの対象フォルダ設定とは無関係)。
-// Pc・User ノードは引き続き表示しない。backend は全ユーザーに同じ一覧を
+// `pc`(`get_pc`)と settings のプロファイルから、Pc/User ノード(ハブ再構築
+// 第4段。issue #283)、プロファイルノード(第3段。issue #229)、GitRepository/
+// GitBranch ノード(第2段。issue #224)、セッションノード(第1段。issue #214)を
+// 組み立てる。表示対象は Pc・先頭ユーザー、全プロファイル、登録済みリポジトリ
+// (`User.repositories`)とその現存ブランチ(削除済みはバックエンド側で除外
+// 済み)、および全セッション(`User.sessions`。`~/.claude/projects` 全体で、
+// プロファイルの対象フォルダ設定とは無関係)。backend は全ユーザーに同じ一覧を
 // 割り当てる(`app::pc_with_user_sessions`/`app::current_pc_with_repositories`)
 // ため、重複させないよう先頭ユーザーの分だけを使う。d3.network はノードに
 // x/y が必須のため、座標は列・格子の位置として自前で計算する。
@@ -407,6 +419,76 @@ function buildGraphData(
       });
     });
   });
+
+  // Pc / User ノード(ハブ再構築 第4段。issue #283)。プロファイル列のさらに
+  // 左に Pc → User の順で並べる。線は Pc → User(コンポジション users)と、
+  // User → 各 GitRepository(コンポジション repositories)の2種。User →
+  // セッション(コンポジション sessions)はモデル上の所有だが、全セッションへ
+  // 何十本もの線を引くとノイズになるため引かない(issue #283 の設計)。
+  // `pc` が未取得の間は描かない(取得後の再描画で現れる)。
+  if (pc) {
+    const pcNodeId = "pc";
+    positionKeys.add(pcNodeId);
+    const pcPosition = resolvePosition(pcNodeId, PC_COLUMN_X, GIT_NODE_ORIGIN_Y);
+    nodes.push({
+      id: pcNodeId,
+      x: pcPosition.x,
+      y: pcPosition.y,
+      move: "support",
+      label: {
+        text: truncate(pc.pc_name, SESSION_LABEL_MAX_CHARS),
+        fill: COLOR_SUMI,
+        font: { size: 14 },
+        y: labelYBelowCircle(28),
+      },
+      circle: { r: 28, ...INVISIBLE_NODE_CIRCLE },
+      icon: { url: HUB_NODE_ICON_URIS.pc },
+      kind: "pc",
+      positionKey: pcNodeId,
+      pcName: pc.pc_name,
+      systemUuid: pc.system_uuid,
+      pcDescription: pc.description,
+    });
+
+    if (user) {
+      const userNodeId = `user:${user.user_id}`;
+      positionKeys.add(userNodeId);
+      const userPosition = resolvePosition(userNodeId, USER_COLUMN_X, GIT_NODE_ORIGIN_Y);
+      nodes.push({
+        id: userNodeId,
+        x: userPosition.x,
+        y: userPosition.y,
+        move: "support",
+        label: {
+          text: truncate(user.user_name, SESSION_LABEL_MAX_CHARS),
+          fill: COLOR_SUMI,
+          font: { size: 13 },
+          y: labelYBelowCircle(26),
+        },
+        circle: { r: 26, ...INVISIBLE_NODE_CIRCLE },
+        icon: { url: HUB_NODE_ICON_URIS.user },
+        kind: "user",
+        positionKey: userNodeId,
+        userId: user.user_id,
+        userName: user.user_name,
+        homeDirectory: user.home_directory,
+      });
+      edges.push({
+        id: `e${edgeSeq++}`,
+        source: pcNodeId,
+        target: userNodeId,
+        line: { width: 2, color: COLOR_BORDER },
+      });
+      repositoryNodeByPath.forEach((repository) => {
+        edges.push({
+          id: `e${edgeSeq++}`,
+          source: userNodeId,
+          target: repository.nodeId,
+          line: { width: 2, color: COLOR_BORDER },
+        });
+      });
+    }
+  }
 
   // プロファイルノード(issue #229)。GitRepository 列の左に並べる。
   // `repository_path` が登録リポジトリと一致するものは、そのリポジトリと同じ
@@ -554,10 +636,38 @@ function buildInspectorContent(
   core: HubNodeCore,
   onOpenProfile: (core: HubNodeCore) => void,
 ): InspectorContent {
+  if (core.kind === "pc") return buildPcInspectorContent(core);
+  if (core.kind === "user") return buildUserInspectorContent(core);
   if (core.kind === "profile") return buildProfileInspectorContent(core, onOpenProfile);
   if (core.kind === "git-repository") return buildRepositoryInspectorContent(core);
   if (core.kind === "git-branch") return buildBranchInspectorContent(core);
   return buildSessionInspectorContent(core);
+}
+
+// Pc(issue #283)。`domain::Pc` のモデル属性(#182 当時の表示と同じ)。
+function buildPcInspectorContent(core: HubNodeCore): InspectorContent {
+  return {
+    title: truncate(core.pcName ?? "PC", SESSION_TITLE_MAX_CHARS),
+    fields: [
+      { label: "pc_name", value: core.pcName ?? "" },
+      { label: "system_uuid", value: core.systemUuid ?? "" },
+      { label: "description", value: core.pcDescription || "(未設定)" },
+    ],
+    action: null,
+  };
+}
+
+// User(issue #283)。`domain::User` のモデル属性。
+function buildUserInspectorContent(core: HubNodeCore): InspectorContent {
+  return {
+    title: truncate(core.userName ?? "ユーザー", SESSION_TITLE_MAX_CHARS),
+    fields: [
+      { label: "user_name", value: core.userName ?? "" },
+      { label: "user_id", value: core.userId ?? "" },
+      { label: "home_directory", value: core.homeDirectory ?? "" },
+    ],
+    action: null,
+  };
 }
 
 // プロファイル(issue #229)。settings の内容とウィンドウの開閉状態を表示し、
@@ -666,8 +776,9 @@ function buildBranchInspectorContent(core: HubNodeCore): InspectorContent {
 // (issue #214)は `get_pc` で読み込んだ全セッション(User.sessions)のノード
 // だけを描いた。第2段(issue #224)で GitRepository/GitBranch のノードと、
 // GitRepository→GitBranch・セッション→GitBranch の線を、第3段(issue #229)で
-// プロファイルのノードとプロファイル→GitRepository の線を戻した(Pc・Userの
-// ノードは引き続き表示しない)。セッション一覧・Git台帳は起動後のバック
+// プロファイルのノードとプロファイル→GitRepository の線を、第4段(issue #283)で
+// Pc・User のノードと Pc→User・User→GitRepository の線を戻した。セッション
+// 一覧・Git台帳は起動後のバック
 // グラウンド読み込み(issue #212)で揃うため、`pc:data_loaded` までは空のまま
 // 「読み込み中」を表示する。ノードの右クリックでインスペクタを表示する。
 // 左クリックはプロファイルノードだけが持つ(開いていれば前面化、無ければ
@@ -679,12 +790,19 @@ function buildBranchInspectorContent(core: HubNodeCore): InspectorContent {
 // しても、既定(位置なし・視点なし)で描く。
 function HubPage() {
   const [layout, setLayout] = useState<HubLayoutDto | null>(null);
+  // 最初に届いた結果だけを使う(`prev ?? next`)。開発時の StrictMode では
+  // この effect が2回走り、`getHubLayout` の応答も2回届く。2回目で別の
+  // オブジェクトに差し替えると、`initialLayout` に依存する Rectum が
+  // (`HubGraphPage` の useMemo で)作り直される。一方、描画部品(assh0le の
+  // `Asshole`)はマウント時の Rectum にしか `selector()` を呼ばないため、
+  // 作り直された Rectum は画面にマウントされず、ノードが1つも描かれなく
+  // なっていた(issue #283 の実機確認で判明)。
   useEffect(() => {
     getHubLayout()
-      .then(setLayout)
+      .then((next) => setLayout((prev) => prev ?? next))
       .catch((e) => {
         console.error(e);
-        setLayout({ positions: {}, camera: null });
+        setLayout((prev) => prev ?? { positions: {}, camera: null });
       });
   }, []);
   if (!layout) return <div className="hub-page" />;
