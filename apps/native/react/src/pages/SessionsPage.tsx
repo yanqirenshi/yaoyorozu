@@ -530,42 +530,50 @@ function SessionsPage({ nav }: SessionsPageProps) {
       {/* ビュー切り替えは上部のタブではなく、画面の最左端のサイドメニュー
           (issue #263)。切り替えの挙動(`handleSwitchView`)は従来のまま。 */}
       <ViewerSideMenu active={view} onChange={handleSwitchView} />
-      <div className="project-list">
-        {targetFolders.length === 0 ? (
-          <p>設定のClaudeタブで対象フォルダを選択してください。</p>
-        ) : (
-          sessionGroups.map((group) => {
-            const { prefix, tail } = splitFolderNameForDisplay(group.folder);
-            return (
-              <div key={group.folder} className="session-group">
-                <h3 className="session-group-heading" title={group.folder}>
-                  <span className="session-group-heading-prefix">{prefix}</span>
-                  <strong>{tail}</strong>
-                </h3>
-                {group.sessions.length === 0 && (
-                  <p className="session-group-empty">セッションがありません。</p>
-                )}
-                {group.sessions.map((s) => (
-                  <button
-                    key={s.id}
-                    className={`project-item ${
-                      group.folder === projectParam && s.id === sessionParam
-                        ? "selected"
-                        : ""
-                    }`}
-                    onClick={() => handleSelectSession(group.folder, s.id)}
-                  >
-                    <span className="session-item-title">{s.title}</span>
-                    <span className="session-item-updated">
-                      {new Date(s.modified_at).toLocaleString()}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            );
-          })
-        )}
-      </div>
+      {/* セッション一覧ペインは「会話」ビューのときだけ表示する(issue #279)。
+          CLAUDE.md / Rules / Skills / settings 系は #269 でセッション不要になり、
+          GitHub Project も元々プロファイル基準のため、それ以外のビューでは
+          一覧を出さずコンテンツ領域を広げる。選択中のセッション・会話の表示は
+          このコンポーネントの状態と URL(`project`/`session`)に持っており、
+          一覧を出し入れしても破棄されない(会話に戻ればそのまま)。 */}
+      {view === "chat" && (
+        <div className="project-list">
+          {targetFolders.length === 0 ? (
+            <p>設定のClaudeタブで対象フォルダを選択してください。</p>
+          ) : (
+            sessionGroups.map((group) => {
+              const { prefix, tail } = splitFolderNameForDisplay(group.folder);
+              return (
+                <div key={group.folder} className="session-group">
+                  <h3 className="session-group-heading" title={group.folder}>
+                    <span className="session-group-heading-prefix">{prefix}</span>
+                    <strong>{tail}</strong>
+                  </h3>
+                  {group.sessions.length === 0 && (
+                    <p className="session-group-empty">セッションがありません。</p>
+                  )}
+                  {group.sessions.map((s) => (
+                    <button
+                      key={s.id}
+                      className={`project-item ${
+                        group.folder === projectParam && s.id === sessionParam
+                          ? "selected"
+                          : ""
+                      }`}
+                      onClick={() => handleSelectSession(group.folder, s.id)}
+                    >
+                      <span className="session-item-title">{s.title}</span>
+                      <span className="session-item-updated">
+                        {new Date(s.modified_at).toLocaleString()}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
       <div className="session-conversation">
         <div className="session-conversation-head">
           {/* ヘッダ: 左にこのウィンドウのプロファイル名(表示のみ。issue #275)、
