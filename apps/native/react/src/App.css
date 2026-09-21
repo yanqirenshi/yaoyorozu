@@ -1589,6 +1589,8 @@ body,
 }
 
 .message-user {
+  /* user の背景だけ墨-50(assistant は白のまま。issue #303)。 */
+  background-color: var(--color-sumi-50);
   border: 1px solid var(--surface-raised);
 }
 
