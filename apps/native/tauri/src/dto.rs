@@ -643,10 +643,40 @@ impl From<HubTuningDto> for domain::HubTuning {
     }
 }
 
+/// ハブグラフの視点(パン・ズーム。issue #268)。d3-zoom の transform。
+/// `save_hub_layout` の入力にも `get_hub_layout` の出力にも使う。
+#[derive(Serialize, Deserialize, Clone, Copy)]
+pub struct CameraDto {
+    pub x: f64,
+    pub y: f64,
+    pub k: f64,
+}
+
+impl From<domain::Camera> for CameraDto {
+    fn from(camera: domain::Camera) -> Self {
+        Self {
+            x: camera.x,
+            y: camera.y,
+            k: camera.k,
+        }
+    }
+}
+
+impl From<CameraDto> for domain::Camera {
+    fn from(dto: CameraDto) -> Self {
+        Self {
+            x: dto.x,
+            y: dto.y,
+            k: dto.k,
+        }
+    }
+}
+
 /// `get_hub_layout` の戻り値。`version` はフロントで使わないため含めない。
 #[derive(Serialize, Clone)]
 pub struct HubLayoutDto {
     pub positions: std::collections::HashMap<String, NodePositionDto>,
+    pub camera: Option<CameraDto>,
 }
 
 impl From<domain::HubLayout> for HubLayoutDto {
@@ -657,6 +687,7 @@ impl From<domain::HubLayout> for HubLayoutDto {
                 .into_iter()
                 .map(|(key, position)| (key, NodePositionDto::from(position)))
                 .collect(),
+            camera: layout.camera.map(CameraDto::from),
         }
     }
 }

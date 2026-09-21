@@ -4,8 +4,8 @@ mod state;
 
 use app::{SessionSource, SettingsStore, TokenStore};
 use dto::{
-    AgentKindDto, AgentModeDto, AppErrorDto, AppWarningDto, ClaudeDirPageDto, ClaudeMdDto,
-    ClaudeSettingsDto, ConversationDto, DeviceCodeDto, GithubAuthFailedEventDto,
+    AgentKindDto, AgentModeDto, AppErrorDto, AppWarningDto, CameraDto, ClaudeDirPageDto,
+    ClaudeMdDto, ClaudeSettingsDto, ConversationDto, DeviceCodeDto, GithubAuthFailedEventDto,
     GithubAuthStatusDto, GithubAuthenticatedEventDto, GithubProjectDto, GithubProjectSummaryDto,
     HubLayoutDto, HubTuningDto, NodePositionDto, PcDto, ProfileSummaryDto, ProjectDto,
     ProjectItemsPageDto, ProjectSettingsFileDto, RuleDto, RuleSummaryDto, SessionChangedEventDto,
@@ -654,11 +654,13 @@ async fn get_hub_layout(app: tauri::AppHandle) -> Result<HubLayoutDto, AppErrorD
 
 /// ハブグラフのノード位置を丸ごと置き換えて保存する(issue #121)。マージ
 /// ではなく置き換えなので、呼び出し側は現在有効な全ノード分の位置を渡す
-/// こと(存在しないノードの残骸は自然に消える)。
+/// こと(存在しないノードの残骸は自然に消える)。視点(`camera`。issue #268)も
+/// 同じく丸ごと置き換える(`None` は視点なし)。
 #[tauri::command]
 async fn save_hub_layout(
     app: tauri::AppHandle,
     positions: std::collections::HashMap<String, NodePositionDto>,
+    camera: Option<CameraDto>,
 ) -> Result<(), AppErrorDto> {
     let path = hub_layout_path(&app)?;
     tauri::async_runtime::spawn_blocking(move || -> Result<(), app::AppError> {
@@ -667,7 +669,7 @@ async fn save_hub_layout(
             .into_iter()
             .map(|(key, position)| (key, position.into()))
             .collect();
-        app::save_hub_layout(&store, positions)
+        app::save_hub_layout(&store, positions, camera.map(Into::into))
     })
     .await
     .unwrap_or_else(|_| {
