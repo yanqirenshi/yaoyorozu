@@ -6,13 +6,14 @@ import { getRule, isAppError, listRules } from "./api";
 import type { RuleSummaryDto } from "./api";
 
 type RulesPaneProps = {
-  project: string;
+  // 対象プロファイル(backend がそのリポジトリを解決する。issue #269)。
+  profileId: string | null;
   selectedFileName: string | null;
   onSelectFile: (fileName: string) => void;
 };
 
 // `.claude/rules/*.md` の一覧+表示(issue #61)。表示のみで編集は行わない。
-function RulesPane({ project, selectedFileName, onSelectFile }: RulesPaneProps) {
+function RulesPane({ profileId, selectedFileName, onSelectFile }: RulesPaneProps) {
   const [rules, setRules] = useState<RuleSummaryDto[]>([]);
   const [loadingList, setLoadingList] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
@@ -25,11 +26,11 @@ function RulesPane({ project, selectedFileName, onSelectFile }: RulesPaneProps) 
   useEffect(() => {
     setLoadingList(true);
     setListError(null);
-    listRules(project)
+    listRules(profileId)
       .then(setRules)
       .catch((e) => setListError(isAppError(e) ? e.message : String(e)))
       .finally(() => setLoadingList(false));
-  }, [project]);
+  }, [profileId]);
 
   useEffect(() => {
     if (!selectedFileName) {
@@ -40,11 +41,11 @@ function RulesPane({ project, selectedFileName, onSelectFile }: RulesPaneProps) 
     setContent(null);
     setLoadingContent(true);
     setContentError(null);
-    getRule(project, selectedFileName)
+    getRule(profileId, selectedFileName)
       .then((dto) => setContent(dto.content))
       .catch((e) => setContentError(isAppError(e) ? e.message : String(e)))
       .finally(() => setLoadingContent(false));
-  }, [project, selectedFileName]);
+  }, [profileId, selectedFileName]);
 
   // viewerは選択中ファイルがある間だけDOMに存在するため、その都度sanitize
   // フックを設定し直す。既定は素通しのため必須設定(issue #57と同じ理由)。

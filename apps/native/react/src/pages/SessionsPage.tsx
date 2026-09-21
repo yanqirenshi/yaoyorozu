@@ -116,6 +116,10 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const settingsJsonEditorRef = useRef<JsonFileEditorHandle>(null);
   const [settingsLocalJsonDirty, setSettingsLocalJsonDirty] = useState(false);
   const settingsLocalJsonEditorRef = useRef<JsonFileEditorHandle>(null);
+  // プロファイルの対象リポジトリ(`repository_path`。issue #269)。CLAUDE.md /
+  // Rules / Skills / settings 系ビューはセッションではなくこのリポジトリが対象。
+  // `undefined` は設定の読み込み前、`null` は未設定。
+  const [repositoryPath, setRepositoryPath] = useState<string | null | undefined>(undefined);
   const [githubAuthenticated, setGithubAuthenticated] = useState(false);
   const [githubProject, setGithubProject] = useState<{ owner: string; number: number } | null>(
     null,
@@ -151,6 +155,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
     return getSettings(windowProfileId)
       .then((settings) => {
         setResolvedProfileId(windowProfileId ?? settings.active_profile_id);
+        setRepositoryPath(settings.repository_path);
         setTargetFolders(settings.selected_project_folders);
         setGithubProject(settings.github_project);
         return loadSessionGroups(settings.selected_project_folders);
@@ -279,6 +284,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
     const unlistenPromise = onSettingsUpdated(() => {
       getSettings(windowProfileId)
         .then((settings) => {
+          setRepositoryPath(settings.repository_path);
           setTargetFolders(settings.selected_project_folders);
           setGithubProject(settings.github_project);
           if (projectParam && !settings.selected_project_folders.includes(projectParam)) {
@@ -505,6 +511,13 @@ function SessionsPage({ nav }: SessionsPageProps) {
     settingsLocalJsonDirty,
   ]);
 
+  // CLAUDE.md / Rules / Skills / settings 系ビューの、リポジトリ未設定時の案内
+  // (issue #269)。読み込み前(`undefined`)は何も出さない。
+  const repositoryGuide =
+    repositoryPath === null ? (
+      <p>リポジトリが設定されていません。設定画面で対象リポジトリを指定してください。</p>
+    ) : null;
+
   return (
     <>
       {/* ビュー切り替えは上部のタブではなく、画面の最左端のサイドメニュー
@@ -615,22 +628,22 @@ function SessionsPage({ nav }: SessionsPageProps) {
             </div>
           </>
         ) : view === "claude-md" ? (
-          projectParam ? (
+          repositoryPath ? (
             <div className="claude-md-pane">
               <ClaudeMdEditor
                 ref={claudeMdEditorRef}
-                load={() => getProjectClaudeMd(projectParam)}
+                load={() => getProjectClaudeMd(windowProfileId)}
                 save={(content, expectedModifiedAtMs) =>
-                  saveProjectClaudeMd(projectParam, content, expectedModifiedAtMs)
+                  saveProjectClaudeMd(windowProfileId, content, expectedModifiedAtMs)
                 }
-                reloadKey={projectParam}
+                reloadKey={repositoryPath}
                 mode={claudeMdMode}
                 onDirtyChange={setClaudeMdDirty}
                 onCreate={() => setClaudeMdMode("split")}
               />
             </div>
           ) : (
-            <p>先にセッションを選択してください。</p>
+            repositoryGuide
           )
         ) : view === "github-project" ? (
           <div className="github-project-pane">
@@ -712,67 +725,67 @@ function SessionsPage({ nav }: SessionsPageProps) {
             )}
           </div>
         ) : view === "rules" ? (
-          projectParam ? (
+          repositoryPath ? (
             <RulesPane
-              project={projectParam}
+              profileId={windowProfileId}
               selectedFileName={ruleParam}
               onSelectFile={handleSelectRule}
             />
           ) : (
-            <p>先にセッションを選択してください。</p>
+            repositoryGuide
           )
         ) : view === "skills" ? (
-          projectParam ? (
+          repositoryPath ? (
             <SkillsPane
-              project={projectParam}
+              profileId={windowProfileId}
               selectedName={skillParam}
               onSelectSkill={handleSelectSkill}
             />
           ) : (
-            <p>先にセッションを選択してください。</p>
+            repositoryGuide
           )
         ) : view === "settings-json" ? (
-          projectParam ? (
+          repositoryPath ? (
             <div className="json-settings-pane">
               <JsonFileEditor
                 ref={settingsJsonEditorRef}
-                load={() => getProjectSettingsFile(projectParam, "settings")}
+                load={() => getProjectSettingsFile(windowProfileId, "settings")}
                 save={(content, expectedModifiedAtMs) =>
                   saveProjectSettingsFile(
-                    projectParam,
+                    windowProfileId,
                     "settings",
                     content,
                     expectedModifiedAtMs,
                   )
                 }
-                reloadKey={projectParam}
+                reloadKey={repositoryPath}
                 emptyMessage="settings.jsonがありません。"
                 onDirtyChange={setSettingsJsonDirty}
               />
             </div>
           ) : (
-            <p>先にセッションを選択してください。</p>
+            repositoryGuide
           )
-        ) : projectParam ? (
+        ) : repositoryPath ? (
           <div className="json-settings-pane">
             <JsonFileEditor
               ref={settingsLocalJsonEditorRef}
-              load={() => getProjectSettingsFile(projectParam, "settings_local")}
+              load={() => getProjectSettingsFile(windowProfileId, "settings_local")}
               save={(content, expectedModifiedAtMs) =>
                 saveProjectSettingsFile(
-                  projectParam,
+                  windowProfileId,
                   "settings_local",
                   content,
                   expectedModifiedAtMs,
                 )
               }
-              reloadKey={projectParam}
+              reloadKey={repositoryPath}
               emptyMessage="settings.local.jsonがありません。"
               onDirtyChange={setSettingsLocalJsonDirty}
             />
           </div>
         ) : (
-          <p>先にセッションを選択してください。</p>
+          repositoryGuide
         )}
       </div>
     </>

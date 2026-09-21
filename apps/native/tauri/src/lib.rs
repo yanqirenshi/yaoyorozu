@@ -2,7 +2,7 @@ mod dto;
 mod local_api;
 mod state;
 
-use app::{SessionSource, SettingsStore, TokenStore};
+use app::{SettingsStore, TokenStore};
 use dto::{
     AgentKindDto, AgentModeDto, AppErrorDto, AppWarningDto, CameraDto, ClaudeDirPageDto,
     ClaudeMdDto, ClaudeSettingsDto, ConversationDto, DeviceCodeDto, GithubAuthFailedEventDto,
@@ -680,19 +680,32 @@ async fn save_hub_layout(
     .map_err(Into::into)
 }
 
-/// `project`(`~/.claude/projects/` 配下のフォルダ名)の最新セッションが
-/// 記録している作業ディレクトリ(cwd)を、CLAUDE.md の対象ディレクトリとして
-/// 使う(issue #27: ビューア側のCLAUDE.md編集はプロジェクトの作業ディレクトリ
-/// 直下を対象とする)。
+/// ビューアの CLAUDE.md / Rules / Skills / settings 系ビュー(issue #269)の
+/// 対象リポジトリを、プロファイルの `repository_path` から解決する。以前は
+/// セッションの project フォルダ(最新セッションの cwd)から解決していたが、
+/// これらはセッションではなくリポジトリ(プロファイル)のコンテンツのため
+/// 改めた。フロントからパスは受け取らず、backend が settings から引く
+/// (`app::resolve_repository_dir`。未設定は `invalid_input`)。`profile_id` が
+/// `None` ならアクティブプロファイル。
+async fn repository_dir_for_profile(
+    state: &tauri::State<'_, Mutex<AppState>>,
+    profile_id: Option<&str>,
+) -> Result<PathBuf, AppErrorDto> {
+    let settings = {
+        let guard = state.lock().await;
+        guard.settings.clone()
+    };
+    app::resolve_repository_dir(&settings, profile_id).map_err(Into::into)
+}
+
+/// プロファイルのリポジトリ直下の CLAUDE.md を読む(issue #27・#269)。
 #[tauri::command]
 async fn get_project_claude_md(
     state: tauri::State<'_, Mutex<AppState>>,
-    project: String,
+    profile_id: Option<String>,
 ) -> Result<ClaudeMdDto, AppErrorDto> {
-    let root = effective_projects_dir_from_state(&state).await?;
+    let repo_dir = repository_dir_for_profile(&state, profile_id.as_deref()).await?;
     tauri::async_runtime::spawn_blocking(move || -> Result<ClaudeMdDto, app::AppError> {
-        let source = FileSystemRepository::new(root);
-        let repo_dir = source.latest_session_cwd(&project)?;
         let store = FileClaudeMdStore::new();
         let file = app::read_claude_md(&store, &repo_dir)?;
         Ok(file.into())
@@ -709,14 +722,12 @@ async fn get_project_claude_md(
 #[tauri::command]
 async fn save_project_claude_md(
     state: tauri::State<'_, Mutex<AppState>>,
-    project: String,
+    profile_id: Option<String>,
     content: String,
     expected_modified_at_ms: Option<u64>,
 ) -> Result<(), AppErrorDto> {
-    let root = effective_projects_dir_from_state(&state).await?;
+    let repo_dir = repository_dir_for_profile(&state, profile_id.as_deref()).await?;
     tauri::async_runtime::spawn_blocking(move || -> Result<(), app::AppError> {
-        let source = FileSystemRepository::new(root);
-        let repo_dir = source.latest_session_cwd(&project)?;
         let store = FileClaudeMdStore::new();
         app::save_claude_md(&store, &repo_dir, &content, expected_modified_at_ms)
     })
@@ -729,17 +740,15 @@ async fn save_project_claude_md(
     .map_err(Into::into)
 }
 
-/// `project` の作業ディレクトリ(CLAUDE.mdと同じcwd解決)配下の
-/// `.claude/rules/*.md` を一覧する(Rulesタブ用。issue #61)。
+/// プロファイルのリポジトリ配下の `.claude/rules/*.md` を一覧する
+/// (Rulesタブ用。issue #61・#269)。
 #[tauri::command]
 async fn list_rules(
     state: tauri::State<'_, Mutex<AppState>>,
-    project: String,
+    profile_id: Option<String>,
 ) -> Result<Vec<RuleSummaryDto>, AppErrorDto> {
-    let root = effective_projects_dir_from_state(&state).await?;
+    let repo_dir = repository_dir_for_profile(&state, profile_id.as_deref()).await?;
     tauri::async_runtime::spawn_blocking(move || -> Result<Vec<RuleSummaryDto>, app::AppError> {
-        let source = FileSystemRepository::new(root);
-        let repo_dir = source.latest_session_cwd(&project)?;
         let store = FileRulesStore::new();
         let rules = app::list_rules(&store, &repo_dir)?;
         Ok(rules.into_iter().map(RuleSummaryDto::from).collect())
@@ -757,13 +766,11 @@ async fn list_rules(
 #[tauri::command]
 async fn get_rule(
     state: tauri::State<'_, Mutex<AppState>>,
-    project: String,
+    profile_id: Option<String>,
     file_name: String,
 ) -> Result<RuleDto, AppErrorDto> {
-    let root = effective_projects_dir_from_state(&state).await?;
+    let repo_dir = repository_dir_for_profile(&state, profile_id.as_deref()).await?;
     tauri::async_runtime::spawn_blocking(move || -> Result<RuleDto, app::AppError> {
-        let source = FileSystemRepository::new(root);
-        let repo_dir = source.latest_session_cwd(&project)?;
         let store = FileRulesStore::new();
         let content = app::get_rule(&store, &repo_dir, &file_name)?;
         Ok(RuleDto { content })
@@ -777,17 +784,15 @@ async fn get_rule(
     .map_err(Into::into)
 }
 
-/// `project` の作業ディレクトリ配下の `.claude/skills/` にある(`SKILL.md`
-/// を持つ)スキルを一覧する(Skillsタブ用。issue #65)。
+/// プロファイルのリポジトリ配下の `.claude/skills/` にある(`SKILL.md`
+/// を持つ)スキルを一覧する(Skillsタブ用。issue #65・#269)。
 #[tauri::command]
 async fn list_skills(
     state: tauri::State<'_, Mutex<AppState>>,
-    project: String,
+    profile_id: Option<String>,
 ) -> Result<Vec<SkillSummaryDto>, AppErrorDto> {
-    let root = effective_projects_dir_from_state(&state).await?;
+    let repo_dir = repository_dir_for_profile(&state, profile_id.as_deref()).await?;
     tauri::async_runtime::spawn_blocking(move || -> Result<Vec<SkillSummaryDto>, app::AppError> {
-        let source = FileSystemRepository::new(root);
-        let repo_dir = source.latest_session_cwd(&project)?;
         let store = FileSkillsStore::new();
         let skills = app::list_skills(&store, &repo_dir)?;
         Ok(skills.into_iter().map(SkillSummaryDto::from).collect())
@@ -805,13 +810,11 @@ async fn list_skills(
 #[tauri::command]
 async fn get_skill(
     state: tauri::State<'_, Mutex<AppState>>,
-    project: String,
+    profile_id: Option<String>,
     name: String,
 ) -> Result<SkillDto, AppErrorDto> {
-    let root = effective_projects_dir_from_state(&state).await?;
+    let repo_dir = repository_dir_for_profile(&state, profile_id.as_deref()).await?;
     tauri::async_runtime::spawn_blocking(move || -> Result<SkillDto, app::AppError> {
-        let source = FileSystemRepository::new(root);
-        let repo_dir = source.latest_session_cwd(&project)?;
         let store = FileSkillsStore::new();
         let content = app::get_skill(&store, &repo_dir, &name)?;
         Ok(SkillDto { content })
@@ -825,20 +828,18 @@ async fn get_skill(
     .map_err(Into::into)
 }
 
-/// プロジェクトの `.claude/settings.json` / `settings.local.json` を読む
-/// (issue #70)。`~/.claude/settings.json`(ユーザーレベル)対象の
+/// プロファイルのリポジトリの `.claude/settings.json` / `settings.local.json` を
+/// 読む(issue #70・#269)。`~/.claude/settings.json`(ユーザーレベル)対象の
 /// `get_claude_settings_file` とは別コマンド。`which` で対象ファイルを選ぶ
 /// (フロントからファイル名の自由入力は受けない。native.md §4)。
 #[tauri::command]
 async fn get_project_settings_file(
     state: tauri::State<'_, Mutex<AppState>>,
-    project: String,
+    profile_id: Option<String>,
     which: ProjectSettingsFileDto,
 ) -> Result<ClaudeSettingsDto, AppErrorDto> {
-    let root = effective_projects_dir_from_state(&state).await?;
+    let repo_dir = repository_dir_for_profile(&state, profile_id.as_deref()).await?;
     tauri::async_runtime::spawn_blocking(move || -> Result<ClaudeSettingsDto, app::AppError> {
-        let source = FileSystemRepository::new(root);
-        let repo_dir = source.latest_session_cwd(&project)?;
         let store = FileProjectSettingsStore::new();
         let file = app::read_project_settings_file(&store, &repo_dir, which.into())?;
         Ok(file.into())
@@ -855,15 +856,13 @@ async fn get_project_settings_file(
 #[tauri::command]
 async fn save_project_settings_file(
     state: tauri::State<'_, Mutex<AppState>>,
-    project: String,
+    profile_id: Option<String>,
     which: ProjectSettingsFileDto,
     content: String,
     expected_modified_at_ms: Option<u64>,
 ) -> Result<(), AppErrorDto> {
-    let root = effective_projects_dir_from_state(&state).await?;
+    let repo_dir = repository_dir_for_profile(&state, profile_id.as_deref()).await?;
     tauri::async_runtime::spawn_blocking(move || -> Result<(), app::AppError> {
-        let source = FileSystemRepository::new(root);
-        let repo_dir = source.latest_session_cwd(&project)?;
         let store = FileProjectSettingsStore::new();
         app::save_project_settings_file(
             &store,

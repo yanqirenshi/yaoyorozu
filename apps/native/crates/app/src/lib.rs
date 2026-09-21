@@ -881,6 +881,27 @@ pub fn resolve_profile<'a>(
     }
 }
 
+/// プロファイルの `repository_path`(対象リポジトリ)を解決する(issue #269)。
+/// ビューアの CLAUDE.md / Rules / Skills / settings 系ビューは、セッションの
+/// project フォルダではなくプロファイルのリポジトリを対象にする。パスは
+/// フロントから受け取らず、必ず settings のプロファイルから引く(native.md §4・
+/// §7 と同じ安全側の作り)。`profile_id` が `None` ならアクティブプロファイル
+/// (`resolve_profile`)。未設定なら `InvalidInput`。
+pub fn resolve_repository_dir(
+    settings: &Settings,
+    profile_id: Option<&str>,
+) -> Result<PathBuf, AppError> {
+    resolve_profile(settings, profile_id)?
+        .repository_path
+        .clone()
+        .ok_or_else(|| {
+            AppError::InvalidInput(
+                "リポジトリが設定されていません。設定画面で対象リポジトリを指定してください"
+                    .to_string(),
+            )
+        })
+}
+
 /// アクティブプロファイルを切り替える。`profile_id` が存在しなければ
 /// `NotFound`(issue #72)。永続化・イベント通知は呼び出し側(tauri層)の
 /// 責務(native.md §3.1)。
@@ -3212,6 +3233,58 @@ mod tests {
 
         let loaded = load_hub_layout(&store).expect("should load hub layout");
         assert_eq!(loaded, layout);
+    }
+
+    fn settings_with_repositories(
+        active: (&str, Option<&str>),
+        other: (&str, Option<&str>),
+    ) -> Settings {
+        let mut settings = Settings::default();
+        let mut first = domain::Profile::new(active.0.to_string(), active.0.to_string());
+        first.repository_path = active.1.map(PathBuf::from);
+        let mut second = domain::Profile::new(other.0.to_string(), other.0.to_string());
+        second.repository_path = other.1.map(PathBuf::from);
+        settings.active_profile_id = first.id.clone();
+        settings.profiles = vec![first, second];
+        settings
+    }
+
+    #[test]
+    fn resolve_repository_dir_uses_the_given_profiles_repository_path() {
+        let settings = settings_with_repositories(("a", Some("/repo/a")), ("b", Some("/repo/b")));
+
+        assert_eq!(
+            resolve_repository_dir(&settings, Some("b")).expect("should resolve"),
+            PathBuf::from("/repo/b")
+        );
+    }
+
+    #[test]
+    fn resolve_repository_dir_falls_back_to_the_active_profile() {
+        let settings = settings_with_repositories(("a", Some("/repo/a")), ("b", Some("/repo/b")));
+
+        assert_eq!(
+            resolve_repository_dir(&settings, None).expect("should resolve"),
+            PathBuf::from("/repo/a")
+        );
+    }
+
+    #[test]
+    fn resolve_repository_dir_rejects_a_profile_without_a_repository_path() {
+        let settings = settings_with_repositories(("a", Some("/repo/a")), ("b", None));
+
+        let error = resolve_repository_dir(&settings, Some("b")).expect_err("should reject");
+
+        assert!(matches!(error, AppError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn resolve_repository_dir_rejects_an_unknown_profile() {
+        let settings = settings_with_repositories(("a", Some("/repo/a")), ("b", None));
+
+        let error = resolve_repository_dir(&settings, Some("nope")).expect_err("should reject");
+
+        assert!(matches!(error, AppError::NotFound(_)));
     }
 
     #[test]
