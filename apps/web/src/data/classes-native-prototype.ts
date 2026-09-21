@@ -26,11 +26,11 @@
  * 【対象・ファイル対応】native.md §1 の「1型(クラス)= 1ファイル」(issue #184、
  * PR #185)により、domain クレートは各型が型名 snake_case のファイルに分かれて
  * いる(例: `Settings` → `settings.rs`)。`lib.rs` は `mod` 宣言と `pub use` のみ。
- * 本図の29クラスのうち、`ProjectItemKind` は `ProjectItem` と同じ `project_item.rs`
+ * 本図の30クラスのうち、`ProjectItemKind` は `ProjectItem` と同じ `project_item.rs`
  * に、`ClaudeDirEntryKind` は `ClaudeDirEntry` と同じ `claude_dir_entry.rs` に、
  * `GitRepositoryLedger` は `GitLedger` と同じ `git_ledger.rs` に、`ObservedWorktree`
  * は `ObservedGitState` と同じ `observed_git_state.rs` に同居する(native.md 曰く
- * 「その型専用の小さな補助enum」だが、補助structも同じ扱いにしている)。ほかの25
+ * 「その型専用の小さな補助enum」だが、補助structも同じ扱いにしている)。ほかの26
  * クラスはそれぞれ単独のファイル(型名 snake_case)。掲載対象は `classes-domain.ts`
  * に掲載済みの Pc・User・Profile と、`session_line/`(33型。かつては
  * `classes-session-line.ts` で描いていたが、不要になったため図ごと削除した)を
@@ -254,6 +254,7 @@ const DEFS: ClassDef[] = [
     attributes: [
       attr("version", "u32"),
       attr("positions", "HashMap<String, NodePosition>"),
+      attr("camera", "Option<Camera>"), // v2 で追加(issue #268)
     ],
     position: { x: 2100, y: 1650 },
     filePath: "apps/native/crates/domain/src/hub_layout.rs",
@@ -265,6 +266,13 @@ const DEFS: ClassDef[] = [
     attributes: [attr("x", "f64"), attr("y", "f64")],
     position: { x: 2450, y: 1650 },
     filePath: "apps/native/crates/domain/src/node_position.rs",
+  },
+  {
+    name: { physical: "Camera", logical: "Camera", description: "ハブのグラフの視点(パン・ズーム)。d3-zoom の transform に対応する(screen = world * k + (x, y))。HubLayout.camera として hub-layout.json に保存する。issue #268" },
+    attributes: [attr("x", "f64"), attr("y", "f64"), attr("k", "f64")],
+    // HubLayout の斜め下(HubTuning の右)に置く。
+    position: { x: 2450, y: 1950 },
+    filePath: "apps/native/crates/domain/src/camera.rs",
   },
   {
     name: { physical: "HubTuning", logical: "HubTuning", description: "ハブのグラフ(force シミュレーション)の調整値の永続化(hub-tuning.json)。ノード位置(hub-layout.json)とは関心が違うため別ファイル。issue #246・#249" },
@@ -369,6 +377,7 @@ const RELATIONSHIPS = [
   // ウィンドウ・ハブ
   rel("association", "WindowState", "WindowTab", "tabs", "right", "left"),
   rel("association", "HubLayout", "NodePosition", "positions", "right", "left"),
+  rel("association", "HubLayout", "Camera", "camera", "bottom", "top"),
   // /claude 画面(Explorer)
   rel("association", "ClaudeDirPage", "ClaudeDirEntry", "entries", "right", "left"),
   rel("composition", "ClaudeDirEntry", "ClaudeDirEntryKind", "kind", "bottom", "top"),
