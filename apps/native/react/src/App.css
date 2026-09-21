@@ -1194,6 +1194,9 @@ body,
    CSS 変数だけで参照する(hex の直書きなし)。アイコンは付けず文字だけ。 */
 .action-button {
   box-sizing: border-box;
+  /* 幅はラベルの文字に合わせる。親(縦並びの flex 等)の幅いっぱいに伸ばさない
+     ため、置き場所ごとの左寄せ指定は要らない(仕様: uiButton.ts の BUTTON_WIDTH)。 */
+  width: fit-content;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1765,12 +1768,4 @@ button.claude-explorer-name {
 
 .claude-explorer-more:hover {
   background: var(--state-hover);
-}
-
-/* ファイルが無いときの「作成」ボタン。共通エディタ(ClaudeMdEditor /
-   JsonFileEditor)は縦並びのflexのため、そのままでは横幅いっぱいに伸びる。
-   共通部品は変えず、この画面でだけ左寄せの通常幅にする。 */
-.claude-page-section > .claude-md-editor > button,
-.claude-page-section > .json-file-editor > button {
-  align-self: flex-start;
 }
