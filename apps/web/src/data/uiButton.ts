@@ -54,6 +54,16 @@ export const BUTTON_SIZES: ButtonSizeSpec[] = [
   },
 ];
 
+/**
+ * 幅の決め方。すべてのサイズ・種類で共通。
+ * fit-content にしておくと、縦並びの flex(align-items: stretch)の中に置いても
+ * 横に伸びない。置き場所ごとに左寄せの指定を足す必要がなくなる。
+ */
+export const BUTTON_WIDTH = {
+  value: "fit-content",
+  note: "幅はラベルの文字に合わせる。親の幅に合わせて横いっぱいに伸ばさない。",
+};
+
 export type ButtonState = "default" | "hover" | "active" | "disabled";
 
 export type ButtonColors = {
@@ -188,6 +198,10 @@ export const BUTTON_RULES = [
     body: "追加ボタン(塗り)は、その領域で最も押されるべき操作を示す。同じ領域に塗りのボタンを並べると、どれが主要な操作か読み取れなくなる。",
   },
   {
+    title: "幅は文字に合わせる",
+    body: "ボタンの幅はラベルの文字に合わせ(width: fit-content)、置き場所の幅に合わせて伸ばさない。縦並びのレイアウトの中でも、横いっぱいのボタンにはしない。",
+  },
+  {
     title: "サイズは領域で選ぶ",
     body: "既定は medium。表やツールバーなど高密度な領域だけ small、画面の主要な操作を1つ目立たせる場合だけ large を使う。同じ並びの中でサイズを混ぜない。",
   },
@@ -207,6 +221,13 @@ export const BUTTON_ANTIPATTERNS = [
     pattern: "記号だけのボタン(+ や ✎ のみ)",
     problem: "何をするボタンかが伝わらない。支援技術では名前のないボタンになる。",
     instead: "文字のラベルにする。場所が狭いときは size: small にする。",
+  },
+  {
+    pattern: "横幅いっぱいに伸びたボタン",
+    problem:
+      "画面ごとにボタンの大きさが変わり、同じ操作が同じ見た目に見えなくなる。縦並びの flex に置くと、既定(align-items: stretch)でこうなる。",
+    instead:
+      "部品側で width: fit-content を持たせる。置き場所ごとに左寄せの指定を足して回避しない。",
   },
   {
     pattern: "変更ボタンを塗りにする",
