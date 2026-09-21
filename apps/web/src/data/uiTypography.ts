@@ -244,6 +244,14 @@ export const TEXT_STYLE_GROUPS: TextStyleGroup[] = [
       "折り返さない1行の UI テキスト。上下の余白はコンポーネント側のパディングで確保する。",
     styles: [
       {
+        name: "UI-18M-100",
+        sizePx: 18,
+        weight: "M",
+        lineHeight: "100%",
+        tracking: "0.02em",
+        usage: "大きなボタン(size: large)。画面の主要な操作を1つだけ目立たせたいとき。",
+      },
+      {
         name: "UI-16M-100",
         sizePx: 16,
         weight: "M",

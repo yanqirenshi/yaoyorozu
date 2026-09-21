@@ -383,6 +383,32 @@ export function roleColor(token: string): string {
   return found.value;
 }
 
+export type ResolvedColor = {
+  /** CSS カラー値。 */
+  value: string;
+  /** tokens.css 上のカスタムプロパティ名(apps/native など CSS から参照する場合に使う)。 */
+  cssVar: string;
+};
+
+/**
+ * 色の参照を解決する。
+ * 参照は「京紫-500」のようなプリミティブ(名前-段階)か、
+ * 「state.hover」のような役割トークン名のどちらかで書く。
+ * 部品の仕様を、値ではなくトークン名で持つための入口。
+ */
+export function resolveColor(ref: string): ResolvedColor {
+  const primitive = ref.match(/^(.+)-(\d+)$/);
+  if (primitive) {
+    const scale = COLOR_SCALES.find((s) => s.name === primitive[1]);
+    if (!scale) throw new Error("未定義の色です: " + ref);
+    return {
+      value: tone(primitive[1], Number(primitive[2])),
+      cssVar: "--color-" + scale.slug + "-" + primitive[2],
+    };
+  }
+  return { value: roleColor(ref), cssVar: "--" + ref.replace(/\./g, "-") };
+}
+
 export type SemanticColor = {
   token: string;
   label: string;
@@ -463,7 +489,11 @@ export const COMPONENT_NAV: NavItem[] = [
     children: [
       { key: "products", label: "製品" },
       { key: "subassembly", label: "中間品" },
-      { key: "part", label: "部品" },
+      {
+        key: "part",
+        label: "部品",
+        children: [{ key: "part-button", label: "ボタン" }],
+      },
     ],
   },
   {

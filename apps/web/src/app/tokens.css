@@ -183,6 +183,10 @@
   --text-dns-14b-150-tracking: 0.02em;
 
   /* UI(Oneline) */
+  --text-ui-18m-100-size: 18px;
+  --text-ui-18m-100-weight: 500;
+  --text-ui-18m-100-line-height: 100%;
+  --text-ui-18m-100-tracking: 0.02em;
   --text-ui-16m-100-size: 16px;
   --text-ui-16m-100-weight: 500;
   --text-ui-16m-100-line-height: 100%;

@@ -106,5 +106,9 @@ export const SPACING_APPLICATIONS: SpacingApplication[] = [
   { target: "見出し(第1階層)の上", token: "sp-12", note: "見出しの下は sp-4。" },
   { target: "見出し(第2階層)の上", token: "sp-8", note: "見出しの下は sp-3。" },
   { target: "本文の段落間", token: "sp-4", note: "" },
-  { target: "ボタンの左右", token: "sp-3", note: "上下は高さで決める(40px 時は 10px)。" },
+  {
+    target: "ボタンの左右",
+    token: "sp-4",
+    note: "medium の値。small は sp-3、large は sp-6。上下は高さで決める(部品「ボタン」)。",
+  },
 ];
