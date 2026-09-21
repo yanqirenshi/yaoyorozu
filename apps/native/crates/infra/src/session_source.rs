@@ -1,9 +1,8 @@
 use app::{AppError, SessionSource};
 use domain::{
-    convert_json_line_to_log_line, extract_ai_title, extract_custom_title, extract_cwd,
-    extract_git_branch, extract_last_prompt, extract_message, extract_mode, extract_session_id,
-    extract_slug, resolve_session_title, AgentKind, Conversation, LogLine, ParsedSession, Project,
-    Role, SessionSummary,
+    convert_json_line_to_log_line, extract_cwd, extract_message, extract_session_id,
+    resolve_session_title, AgentKind, Conversation, LogLine, ParsedSession, Project, ScannedLine,
+    SessionSummary,
 };
 use notify::RecursiveMode;
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
@@ -504,6 +503,7 @@ fn list_subagent_file_paths(project_dir: &Path, session_id: &str) -> Vec<PathBuf
 /// (tauri層)ため、インスタンスのフィールドではなくモジュール静的な領域に
 /// 置く。
 #[derive(Clone)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
 struct CachedSessionSummary {
     modified_at_ms: u64,
     id: String,
@@ -577,43 +577,42 @@ fn scan_session_summary(path: &Path) -> Result<CachedSessionSummary, AppError> {
     let mut slug: Option<String> = None;
     let mut last_prompt: Option<String> = None;
 
-    for value in BufReader::new(file)
-        .lines()
-        .map_while(Result::ok)
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
-    {
+    // 1行につき `SessionLine` を1回だけ構築し、各値をそのフィールドから直接読む
+    // (issue #302。従来は `extract_*` を最大9回呼び、そのたびに `Value` の
+    // ディープコピーと型付き構築をやり直していた)。抽出ルールは `extract_*`
+    // と同じ(`domain::ScannedLine`)。
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        let Some(scanned) = ScannedLine::parse(&line) else {
+            continue;
+        };
         if id.is_none() {
-            id = extract_session_id(&value);
+            id = scanned.session_id().map(String::from);
         }
-        if let Some(title) = extract_custom_title(&value) {
-            last_custom_title = Some(title);
+        if let Some(title) = scanned.custom_title() {
+            last_custom_title = Some(title.to_string());
         }
         if first_user_message.is_none() {
-            if let Some(message) = extract_message(&value) {
-                if message.role == Role::User {
-                    first_user_message = Some(message.text);
-                }
-            }
+            first_user_message = scanned.user_message_text();
         }
         if !cwd_selector.is_settled() {
-            if let Some(cwd) = extract_cwd(&value) {
-                cwd_selector.push(cwd);
+            if let Some(cwd) = scanned.cwd() {
+                cwd_selector.push(cwd.to_string());
             }
         }
-        if let Some(branch) = extract_git_branch(&value) {
-            git_branch = Some(branch);
+        if let Some(branch) = scanned.git_branch() {
+            git_branch = Some(branch.to_string());
         }
-        if let Some(value) = extract_ai_title(&value) {
-            ai_title = Some(value);
+        if let Some(value) = scanned.ai_title() {
+            ai_title = Some(value.to_string());
         }
-        if let Some(value) = extract_mode(&value) {
-            mode = Some(value);
+        if let Some(value) = scanned.mode() {
+            mode = Some(value.to_string());
         }
-        if let Some(value) = extract_slug(&value) {
-            slug = Some(value);
+        if let Some(value) = scanned.slug() {
+            slug = Some(value.to_string());
         }
-        if let Some(value) = extract_last_prompt(&value) {
-            last_prompt = Some(value);
+        if let Some(value) = scanned.last_prompt() {
+            last_prompt = Some(value.to_string());
         }
     }
 
@@ -642,8 +641,92 @@ fn scan_session_summary(path: &Path) -> Result<CachedSessionSummary, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use domain::Role;
+    use domain::{
+        extract_ai_title, extract_custom_title, extract_git_branch, extract_last_prompt,
+        extract_mode, extract_slug,
+    };
     use std::fs::File;
     use std::io::Write;
+
+    /// issue #302 以前の走査(`extract_*` を行ごとに最大9回呼ぶ方式)の、挙動を
+    /// 変えない写し。新しい `scan_session_summary` との同一性の確認・計測用。
+    fn scan_session_summary_reference(path: &Path) -> Result<CachedSessionSummary, AppError> {
+        let file = fs::File::open(path)
+            .map_err(|e| AppError::Io(format!("{} を開けませんでした: {}", path.display(), e)))?;
+
+        let mut id: Option<String> = None;
+        let mut last_custom_title: Option<String> = None;
+        let mut first_user_message: Option<String> = None;
+        let mut cwd_selector = SessionCwdSelector::for_session_file(path);
+        let mut git_branch: Option<String> = None;
+        let mut ai_title: Option<String> = None;
+        let mut mode: Option<String> = None;
+        let mut slug: Option<String> = None;
+        let mut last_prompt: Option<String> = None;
+
+        for value in BufReader::new(file)
+            .lines()
+            .map_while(Result::ok)
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
+        {
+            if id.is_none() {
+                id = extract_session_id(&value);
+            }
+            if let Some(title) = extract_custom_title(&value) {
+                last_custom_title = Some(title);
+            }
+            if first_user_message.is_none() {
+                if let Some(message) = extract_message(&value) {
+                    if message.role == Role::User {
+                        first_user_message = Some(message.text);
+                    }
+                }
+            }
+            if !cwd_selector.is_settled() {
+                if let Some(cwd) = extract_cwd(&value) {
+                    cwd_selector.push(cwd);
+                }
+            }
+            if let Some(branch) = extract_git_branch(&value) {
+                git_branch = Some(branch);
+            }
+            if let Some(value) = extract_ai_title(&value) {
+                ai_title = Some(value);
+            }
+            if let Some(value) = extract_mode(&value) {
+                mode = Some(value);
+            }
+            if let Some(value) = extract_slug(&value) {
+                slug = Some(value);
+            }
+            if let Some(value) = extract_last_prompt(&value) {
+                last_prompt = Some(value);
+            }
+        }
+
+        let id =
+            id.ok_or_else(|| AppError::Io("セッションIDを取得できませんでした".to_string()))?;
+        let title = resolve_session_title(
+            last_custom_title.as_deref(),
+            first_user_message.as_deref(),
+            &id,
+        );
+        Ok(CachedSessionSummary {
+            // 呼び出し側(`cached_or_scanned_summary`)が上書きする。走査直後の
+            // 値が未確定なことを型で示すため、ここでは仮に0を入れる。
+            modified_at_ms: 0,
+            id,
+            title,
+            cwd: cwd_selector.finish(),
+            git_branch,
+            custom_title: last_custom_title,
+            ai_title,
+            mode,
+            slug,
+            last_prompt,
+        })
+    }
 
     fn write_session_file(dir: &Path, id: &str, cwd: &Path) {
         let mut file = File::create(dir.join(format!("{id}.jsonl"))).unwrap();
@@ -1204,5 +1287,126 @@ mod tests {
         for example in &examples {
             println!("  例: {example}");
         }
+    }
+
+    /// 新しい走査(1行1回のパース)が、従来の走査(`extract_*` を行ごとに最大9回)と
+    /// 同じ結果になること(issue #302 の同一性の保証)。ID・タイトル・cwd・ブランチ・
+    /// メタ行(custom-title / ai-title / mode / last-prompt)・slug が複数回現れる、
+    /// 壊れた行・未知の行が混ざる、といった実データの形を含む。
+    #[test]
+    fn scan_session_summary_matches_reference_implementation() {
+        let dir = tempfile::tempdir().unwrap();
+        let cases: &[&[&str]] = &[
+            &[
+                r#"{"type":"mode","mode":"plan","sessionId":"s1"}"#,
+                r#"{"type":"user","uuid":"u1","sessionId":"s1","cwd":"/work/a","gitBranch":"main","slug":"quiet-fox","timestamp":"2026-01-01T00:00:00.000Z","message":{"role":"user","content":"最初の発言"}}"#,
+                "not json",
+                r#"{"type":"assistant","uuid":"u2","sessionId":"s1","cwd":"/work/a","gitBranch":"feature/x","message":{"role":"assistant","content":[{"type":"text","text":"返答"}]}}"#,
+                r#"{"type":"custom-title","customTitle":"一つ目","sessionId":"s1"}"#,
+                r#"{"type":"custom-title","customTitle":"二つ目","sessionId":"s1"}"#,
+                r#"{"type":"ai-title","aiTitle":"AI","sessionId":"s1"}"#,
+                r#"{"type":"last-prompt","lastPrompt":"最後","sessionId":"s1"}"#,
+                r#"{"type":"future-type","sessionId":"s1"}"#,
+            ],
+            // タイトルなし: 最初のユーザー発言(空白のみ・tool_result のみの行は飛ばす)
+            &[
+                r#"{"type":"user","sessionId":"s2","message":{"role":"user","content":"   "}}"#,
+                r#"{"type":"user","sessionId":"s2","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"x"}]}}"#,
+                r#"{"type":"assistant","sessionId":"s2","message":{"role":"assistant","content":[{"type":"text","text":"先に来る返答"}]}}"#,
+                r#"{"type":"user","sessionId":"s2","message":{"role":"user","content":[{"type":"text","text":"ブロック形式"}]}}"#,
+                r#"{"type":"user","sessionId":"s2","message":{"role":"user","content":"後の発言"}}"#,
+            ],
+            // メタ行のみ(会話なし)
+            &[r#"{"type":"custom-title","customTitle":"だけ","sessionId":"s3"}"#],
+            // セッションIDなし(どちらもエラー)
+            &[r#"{"type":"future-type"}"#, "[1,2]", ""],
+        ];
+
+        for (i, lines) in cases.iter().enumerate() {
+            let path = dir.path().join(format!("case{i}.jsonl"));
+            fs::write(
+                &path,
+                lines.join(
+                    "
+",
+                ),
+            )
+            .unwrap();
+
+            let new = scan_session_summary(&path);
+            let old = scan_session_summary_reference(&path);
+            match (new, old) {
+                (Ok(new), Ok(old)) => assert_eq!(new, old, "case {i}"),
+                (Err(_), Err(_)) => {}
+                (new, old) => panic!("case {i}: {:?} vs {:?}", new.is_ok(), old.is_ok()),
+            }
+        }
+    }
+
+    /// 実データ(`~/.claude/projects/`。読み取りのみ)の全 `.jsonl` で、新旧の走査結果が
+    /// 一致することの確認と、走査時間の計測。実データに依存するため通常は走らせない:
+    /// `cargo test -p infra --release -- --ignored --nocapture real_data_scan`
+    #[test]
+    #[ignore]
+    fn real_data_scan_matches_reference_and_reports_timing() {
+        fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
+            let Ok(entries) = fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    collect(&path, out);
+                } else if path.extension().is_some_and(|e| e == "jsonl") {
+                    out.push(path);
+                }
+            }
+        }
+
+        let root = FileSystemRepository::default_projects_dir().expect("projects dir");
+        let mut files = Vec::new();
+        collect(&root, &mut files);
+        let bytes: u64 = files
+            .iter()
+            .filter_map(|p| fs::metadata(p).ok())
+            .map(|m| m.len())
+            .sum();
+
+        // OS のファイルキャッシュを温めてから、新旧を同じ条件で計測する。
+        for p in &files {
+            let _ = fs::read(p);
+        }
+        let started = std::time::Instant::now();
+        let old: Vec<_> = files
+            .iter()
+            .map(|p| scan_session_summary_reference(p))
+            .collect();
+        let old_elapsed = started.elapsed();
+        let started = std::time::Instant::now();
+        let new: Vec<_> = files.iter().map(|p| scan_session_summary(p)).collect();
+        let new_elapsed = started.elapsed();
+
+        let mut mismatches = 0;
+        for ((p, o), n) in files.iter().zip(&old).zip(&new) {
+            let same = match (o, n) {
+                (Ok(o), Ok(n)) => o == n,
+                (Err(_), Err(_)) => true,
+                _ => false,
+            };
+            if !same {
+                mismatches += 1;
+                eprintln!("MISMATCH: {}", p.display());
+            }
+        }
+        eprintln!(
+            "files={} bytes={:.1}MB old={:.2}s new={:.2}s ratio={:.2}x mismatches={}",
+            files.len(),
+            bytes as f64 / 1_048_576.0,
+            old_elapsed.as_secs_f64(),
+            new_elapsed.as_secs_f64(),
+            old_elapsed.as_secs_f64() / new_elapsed.as_secs_f64(),
+            mismatches
+        );
+        assert_eq!(mismatches, 0);
     }
 }
