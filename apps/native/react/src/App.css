@@ -565,7 +565,10 @@ body,
   display: flex;
   gap: var(--space-1);
   padding: 0 var(--space-4);
-  border-bottom: 1px solid var(--border-default);
+  /* 下罫線は影で描き、選択中の下線をその上に重ねる。border + margin-bottom: -1px だと
+     overflow-x: auto で縦スクロールバーが出て下線が欠ける(issue #289)。 */
+  border-bottom: none;
+  box-shadow: inset 0 -1px 0 var(--border-default);
   /* 収まらないときは折り返さず横スクロール(issue #79)。 */
   overflow-x: auto;
 }
@@ -579,8 +582,7 @@ body,
   color: var(--text-secondary);
   font-family: inherit;
   cursor: pointer;
-  /* 選択中の下線(3px)を、タブ列の下罫線(1px)に重ねる。 */
-  margin-bottom: -1px;
+  margin-bottom: 0;
   border-bottom: 3px solid transparent;
   /* 1行に収め、200px を超えるラベルは末尾を省略(全体は title で確認できる)。 */
   max-width: 200px;
@@ -620,6 +622,11 @@ body,
 .tab[aria-selected="true"] {
   color: var(--color-kusairo-800);
   border-bottom-color: var(--color-kusairo-600);
+}
+
+/* :hover(詳細度が上)に負けず、選択中・ホバーも文字は草色-800(issue #289)。 */
+.tab[aria-selected="true"]:hover:not(:disabled) {
+  color: var(--color-kusairo-800);
 }
 
 .tab:focus-visible {
