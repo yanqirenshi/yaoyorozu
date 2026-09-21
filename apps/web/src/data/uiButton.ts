@@ -110,16 +110,16 @@ export const BUTTON_KINDS: ButtonKindSpec[] = [
     usage:
       "新しい対象を作る操作。一覧の上部やパネルのヘッダに置き、その画面の主要な操作として扱う。",
     colors: {
-      default: { bg: "京紫-500", fg: "text.inverse", border: "京紫-500" },
-      hover: { bg: "京紫-600", fg: "text.inverse", border: "京紫-600" },
-      active: { bg: "京紫-700", fg: "text.inverse", border: "京紫-700" },
+      default: { bg: "金茶-700", fg: "text.inverse", border: "金茶-700" },
+      hover: { bg: "金茶-800", fg: "text.inverse", border: "金茶-800" },
+      active: { bg: "金茶-900", fg: "text.inverse", border: "金茶-900" },
       disabled: {
         bg: "state.disabled",
         fg: "text.disabled",
         border: "state.disabled",
       },
     },
-    contrast: "4.88:1 / 5.74:1 / 7.66:1(白の文字に対して)",
+    contrast: "4.89:1 / 7.38:1 / 10.83:1(通常 / ホバー / 押下中。白の文字に対して)",
   },
   {
     key: "edit",
@@ -131,16 +131,16 @@ export const BUTTON_KINDS: ButtonKindSpec[] = [
     usage:
       "既存の対象の内容を変える操作。対象の近く(行の末尾、詳細の見出しの横)に置く。追加ボタンより目立たせない。",
     colors: {
-      default: { bg: "surface.raised", fg: "京紫-700", border: "京紫-500" },
-      hover: { bg: "state.hover", fg: "京紫-700", border: "京紫-600" },
-      active: { bg: "state.selected", fg: "京紫-800", border: "京紫-700" },
+      default: { bg: "surface.raised", fg: "金茶-700", border: "金茶-700" },
+      hover: { bg: "金茶-50", fg: "金茶-800", border: "金茶-800" },
+      active: { bg: "金茶-100", fg: "金茶-900", border: "金茶-900" },
       disabled: {
         bg: "surface.raised",
         fg: "text.disabled",
         border: "border.default",
       },
     },
-    contrast: "7.66:1(白の背景に対して)。境界は 4.88:1",
+    contrast: "4.89:1 / 6.97:1 / 9.40:1(通常 / ホバー / 押下中。文字と背景)。境界は真珠に対して 4.71:1",
   },
 ];
 
