@@ -36,7 +36,7 @@ import JsonFileEditor from "../JsonFileEditor";
 import type { JsonFileEditorHandle } from "../JsonFileEditor";
 import { formatTimestamp } from "../formatTimestamp";
 import MessageText from "../MessageText";
-import PaneTabs from "../PaneTabs";
+import ViewerSideMenu from "../ViewerSideMenu";
 import ViewerToolbar from "../ViewerToolbar";
 import { createProjectSettingsDockItems } from "../projectSettingsDockItems";
 import RulesPane from "../RulesPane";
@@ -507,6 +507,9 @@ function SessionsPage({ nav }: SessionsPageProps) {
 
   return (
     <>
+      {/* ビュー切り替えは上部のタブではなく、画面の最左端のサイドメニュー
+          (issue #263)。切り替えの挙動(`handleSwitchView`)は従来のまま。 */}
+      <ViewerSideMenu active={view} onChange={handleSwitchView} />
       <div className="project-list">
         {targetFolders.length === 0 ? (
           <p>設定のClaudeタブで対象フォルダを選択してください。</p>
@@ -545,20 +548,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
       </div>
       <div className="session-conversation">
         <div className="session-conversation-head">
-        <PaneTabs
-          tabs={[
-            { id: "chat", label: "会話" },
-            { id: "github-project", label: "GitHub Project" },
-            { id: "claude-md", label: "CLAUDE.md" },
-            { id: "rules", label: "Rules" },
-            { id: "skills", label: "Skills" },
-            { id: "settings-json", label: "settings.json" },
-            { id: "settings-local-json", label: "settings.local.json" },
-          ]}
-          active={view}
-          onChange={(id) => handleSwitchView(id as PaneView)}
-        />
-        <ViewerToolbar items={dockItems} />
+          <ViewerToolbar items={dockItems} />
         </div>
         {view === "chat" ? (
           <>

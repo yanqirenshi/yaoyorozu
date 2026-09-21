@@ -359,16 +359,52 @@ body,
 }
 
 /* ビューアの上部: タブ(左)とページ内ツールバー(右。issue #257)。 */
+/* ビューアの上部: ページ内ツールバー(右寄せ。issue #257)。ビュー切り替えの
+   タブは左端のサイドメニューへ移した(issue #263)。 */
 .session-conversation-head {
   display: flex;
-  align-items: flex-end;
+  justify-content: flex-end;
   border-bottom: 1px solid var(--border-default);
 }
 
-.session-conversation-head .pane-tabs {
-  flex: 1;
-  min-width: 0;
-  border-bottom: none;
+/* ビューアの最左端のサイドメニュー(issue #263)。アイコンのみ(名前は
+   ツールチップ)で幅を取らない。選択中の項目はセッション一覧の選択中
+   (`.project-item.selected`)と同じ配色。 */
+.viewer-sidemenu {
+  width: 52px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 0;
+  border-right: 1px solid var(--border-default);
+  background: var(--surface-sunken);
+}
+
+.viewer-sidemenu-item {
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.viewer-sidemenu-item:hover {
+  background-color: var(--state-hover);
+  color: var(--text-primary);
+}
+
+.viewer-sidemenu-item.active {
+  background-color: color-mix(in srgb, var(--color-primary) 16%, transparent);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
 }
 
 .viewer-toolbar {
