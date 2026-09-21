@@ -89,11 +89,16 @@ const DEFS: ClassDef[] = [
       attr("home_directory", "PathBuf"),
     ],
     methods: [
-      // parsed は読み込み済みのパース結果(1セッション分。具体的な型は実装側
-      // (issue #208)が決める)。ファイルI/O・jsonl のパース自体はこのメソッドの
-      // 責務ではない(port が担う。「メソッドを書く基準」を参照)。組み立てるのは
-      // Session とその配下の SessionFile まで。LogLine は遅延読み込みのため、
-      // ここでは組み立てない(セッションを開いたときに別途構築する。issue #207)。
+      // parsed は port が読み込み済みのパース結果(jsonl ファイル1つが1件。
+      // 具体的な型は実装側(issue #208)が決める)。ファイルI/O・jsonl のパース自体は
+      // このメソッドの責務ではない(port が担う。「メソッドを書く基準」を参照)。
+      // 組み立てるのは Session とその配下の SessionFile まで。LogLine は遅延読み込みの
+      // ため、ここでは組み立てない(セッションを開いたときに別途構築する。issue #207)。
+      // parsed は port がそこまでに読み終えた分で、全件でも一部でもよい(走査が
+      // ファイル単位で逐次進むため。issue #295・#305)。呼ばれるたびに、受け取った
+      // 分から Session を組み立て直して保持中のものと置き換える。同じ session_id の
+      // 複数件は1つの Session に集約する(issue #217)。呼び出しのタイミングは
+      // 実行制御であり、図には描かない。
       method("load_sessions", ["parsed: Vec<ParsedSession>"], "()"),
     ],
     // Pc の真下に置く(Pc と Session にはさまれた列)。
