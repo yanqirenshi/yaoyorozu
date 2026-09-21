@@ -13,7 +13,7 @@ const GRAPHQL_URL: &str = "https://api.github.com/graphql";
 /// のみ)だったが、かんばんのStatus変更(書き込みmutation)に必要なため
 /// 拡張した(issue #50)。既存ログイン済みユーザーの旧スコープトークンは
 /// 書き込み時に `GithubScopeInsufficient` となり、再ログインを促す。
-const DEVICE_FLOW_SCOPE: &str = "project";
+pub const DEVICE_FLOW_SCOPE: &str = "project";
 
 /// GitHub OAuth(デバイスフロー)+ GraphQL(Projects v2) を叩く `GithubGateway` 実装。
 /// `client_id` は秘密情報ではない(デバイスフローは `client_secret` 不要)ため、
@@ -94,9 +94,15 @@ impl GithubApiClient {
             AppError::GithubApiFailed(format!("GitHub APIへのリクエストに失敗しました: {e}"))
         })?;
         if is_token_expired_status(response.status()) {
-            return Err(AppError::GithubAuthExpired(
-                "GitHubの認証が無効です。再度ログインしてください".to_string(),
-            ));
+            // 診断用(issue #261): HTTP ステータスと GitHub が返した error message
+            // (例: "Bad credentials")をメッセージへ含め、認証診断ログに残す。
+            // 応答本文は認証情報を含まない(トークンは送信側)。
+            let status = response.status().as_u16();
+            let body = response.text().unwrap_or_default();
+            return Err(AppError::GithubAuthExpired(format!(
+                "GitHubの認証が無効です。再度ログインしてください(HTTP {status}: {})",
+                extract_github_error_message(&body)
+            )));
         }
         response
             .error_for_status()
@@ -106,6 +112,25 @@ impl GithubApiClient {
                 AppError::GithubApiFailed(format!("GitHub APIの応答を解釈できませんでした: {e}"))
             })
     }
+}
+
+/// GitHub API のエラー応答本文(`{"message": "Bad credentials", ...}`)から
+/// `message` を取り出す(診断ログ用。issue #261)。JSON でない/`message` が
+/// 無い場合は本文の先頭を使い、長すぎる場合は切り詰める。
+fn extract_github_error_message(body: &str) -> String {
+    const MAX_CHARS: usize = 200;
+    let message = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| {
+            v.get("message")
+                .and_then(|m| m.as_str().map(str::to_string))
+        })
+        .unwrap_or_else(|| body.to_string());
+    let message = message.trim();
+    if message.is_empty() {
+        return "(応答本文なし)".to_string();
+    }
+    message.chars().take(MAX_CHARS).collect()
 }
 
 /// HTTPステータスがGitHub側でのトークン失効(401 Unauthorized)を示すかを
@@ -553,6 +578,20 @@ impl GithubGateway for GithubApiClient {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn extract_github_error_message_reads_message_field() {
+        let body = r#"{"message":"Bad credentials","documentation_url":"https://docs.github.com/graphql"}"#;
+        assert_eq!(extract_github_error_message(body), "Bad credentials");
+    }
+
+    #[test]
+    fn extract_github_error_message_falls_back_to_body_and_truncates() {
+        assert_eq!(extract_github_error_message("plain text"), "plain text");
+        assert_eq!(extract_github_error_message("  "), "(応答本文なし)");
+        let long = "x".repeat(500);
+        assert_eq!(extract_github_error_message(&long).chars().count(), 200);
+    }
 
     #[test]
     fn build_device_code_request_includes_client_id_and_scope() {

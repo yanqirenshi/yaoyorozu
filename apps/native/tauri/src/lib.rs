@@ -15,7 +15,8 @@ use dto::{
 use infra::{
     ClaudeCliAgent, FileClaudeDirStore, FileClaudeMdStore, FileClaudeSettingsStore,
     FileHubLayoutStore, FileHubTuningStore, FileProjectSettingsStore, FileRulesStore,
-    FileSettingsStore, FileSkillsStore, FileSystemRepository, GithubApiClient, KeyringTokenStore,
+    FileSettingsStore, FileSkillsStore, FileSystemRepository, GithubApiClient, GithubAuthLog,
+    KeyringTokenStore,
 };
 use state::{resolve_effective_projects_dir, AppState};
 use std::path::PathBuf;
@@ -1018,7 +1019,7 @@ async fn get_github_auth_status(
     if let (Some(token), None) = (token, &login) {
         let app_for_retry = app.clone();
         tauri::async_runtime::spawn(async move {
-            resolve_and_apply_github_login(&app_for_retry, token, &[]).await;
+            resolve_and_apply_github_login(&app_for_retry, token, &[], "auth_status").await;
         });
     }
 
@@ -1063,8 +1064,20 @@ async fn github_login_start(app: tauri::AppHandle) -> Result<DeviceCodeDto, AppE
         });
 
         let token = match poll_outcome {
-            Ok(token) => token,
+            Ok(token) => {
+                log_github_auth(
+                    &app,
+                    "login_success",
+                    &format!(
+                        "token={} requested_scope={}",
+                        infra::token_fingerprint(&token),
+                        infra::DEVICE_FLOW_SCOPE
+                    ),
+                );
+                token
+            }
             Err(e) => {
+                log_github_auth(&app, "login_failed", &format!("message={e}"));
                 let _ = app.emit(
                     "github:auth_failed",
                     GithubAuthFailedEventDto {
@@ -1101,6 +1114,7 @@ async fn github_login_start(app: tauri::AppHandle) -> Result<DeviceCodeDto, AppE
                 );
             }
             Err(e) => {
+                log_github_auth(&app, "login_viewer_failed", &format!("message={e}"));
                 let _ = app.emit(
                     "github:auth_failed",
                     GithubAuthFailedEventDto {
@@ -1119,16 +1133,29 @@ async fn github_logout(
     app: tauri::AppHandle,
     state: tauri::State<'_, Mutex<AppState>>,
 ) -> Result<(), AppErrorDto> {
-    tauri::async_runtime::spawn_blocking(|| {
+    let (token_before, deleted) = tauri::async_runtime::spawn_blocking(|| {
         let store = KeyringTokenStore::new();
-        store.delete()
+        let token_before = describe_stored_token(&store);
+        (token_before, store.delete())
     })
     .await
     .unwrap_or_else(|_| {
-        Err(app::AppError::Io(
-            "バックグラウンド処理に失敗しました".to_string(),
-        ))
-    })?;
+        (
+            "unknown".to_string(),
+            Err(app::AppError::Io(
+                "バックグラウンド処理に失敗しました".to_string(),
+            )),
+        )
+    });
+    log_github_auth(
+        &app,
+        "token_deleted",
+        &format!(
+            "trigger=logout token_before={token_before} delete_result={}",
+            describe_result(&deleted)
+        ),
+    );
+    deleted?;
 
     {
         let mut guard = state.lock().await;
@@ -1163,7 +1190,7 @@ async fn list_github_projects(
             "バックグラウンド処理に失敗しました".to_string(),
         ))
     });
-    finish_github_command(&app, result).await
+    finish_github_command(&app, "list_github_projects", result).await
 }
 
 /// 設定済みのGitHubプロジェクトのアイテムを1ページ分取得する(ビューアの
@@ -1212,7 +1239,7 @@ async fn list_github_project_items(
             "バックグラウンド処理に失敗しました".to_string(),
         ))
     });
-    finish_github_command(&app, result).await
+    finish_github_command(&app, "list_github_project_items", result).await
 }
 
 /// GitHub Projectアイテムのステータス(かんばんのカラム)を変更する
@@ -1250,7 +1277,7 @@ async fn update_github_project_item_status(
             "バックグラウンド処理に失敗しました".to_string(),
         ))
     });
-    finish_github_command(&app, result).await
+    finish_github_command(&app, "update_github_project_item_status", result).await
 }
 
 /// `root` の変更監視を(再)開始し、`session:changed` イベントとしてフロントへ
@@ -1328,8 +1355,13 @@ fn start_github_session_check(app: &tauri::App) {
         .flatten();
 
         if let Some(token) = token {
-            resolve_and_apply_github_login(&app_handle, token, &STARTUP_VIEWER_RETRY_BACKOFF_SECS)
-                .await;
+            resolve_and_apply_github_login(
+                &app_handle,
+                token,
+                &STARTUP_VIEWER_RETRY_BACKOFF_SECS,
+                "startup",
+            )
+            .await;
         }
     });
 }
@@ -1364,7 +1396,9 @@ async fn resolve_and_apply_github_login(
     app_handle: &tauri::AppHandle,
     token: String,
     backoff_secs: &'static [u64],
+    source: &'static str,
 ) {
+    let token_fingerprint = infra::token_fingerprint(&token);
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         let gateway = GithubApiClient::new(GITHUB_CLIENT_ID);
         app::resolve_github_login_with_retry(&gateway, &token, backoff_secs, |secs| {
@@ -1376,6 +1410,14 @@ async fn resolve_and_apply_github_login(
 
     match outcome {
         app::ViewerCheckOutcome::Resolved(viewer) => {
+            log_github_auth(
+                app_handle,
+                "startup_check",
+                &format!(
+                    "source={source} result=resolved login={} token={token_fingerprint}",
+                    viewer.login
+                ),
+            );
             let state = app_handle.state::<Mutex<AppState>>();
             {
                 let mut guard = state.lock().await;
@@ -1388,10 +1430,32 @@ async fn resolve_and_apply_github_login(
                 },
             );
         }
-        app::ViewerCheckOutcome::TokenExpired => {
-            handle_confirmed_github_auth_expiry(app_handle).await;
+        app::ViewerCheckOutcome::TokenExpired(message) => {
+            log_github_auth(
+                app_handle,
+                "startup_check",
+                &format!("source={source} result=401 token={token_fingerprint}"),
+            );
+            log_github_auth(
+                app_handle,
+                "http_401",
+                &format!("operation=viewer_check({source}) message={message}"),
+            );
+            handle_confirmed_github_auth_expiry(
+                app_handle,
+                &format!("401 operation=viewer_check({source})"),
+            )
+            .await;
         }
-        app::ViewerCheckOutcome::GaveUp => {}
+        app::ViewerCheckOutcome::GaveUp => {
+            log_github_auth(
+                app_handle,
+                "startup_check",
+                &format!(
+                    "source={source} result=transient_failure_gave_up token={token_fingerprint}"
+                ),
+            );
+        }
     }
 }
 
@@ -1399,12 +1463,31 @@ async fn resolve_and_apply_github_login(
 /// (既に無ければ何もしない)、`AppState.github_login` をクリアして
 /// `github:logged_out` を通知する。一時的な通信失敗はこの経路に来ない
 /// (`AppError::GithubAuthExpired` は確定的な失効のみを表す。issue #54)。
-async fn handle_confirmed_github_auth_expiry(app_handle: &tauri::AppHandle) {
-    let _ = tauri::async_runtime::spawn_blocking(|| {
+async fn handle_confirmed_github_auth_expiry(app_handle: &tauri::AppHandle, trigger: &str) {
+    let deleted = tauri::async_runtime::spawn_blocking(|| {
         let store = KeyringTokenStore::new();
-        store.delete()
+        let token_before = describe_stored_token(&store);
+        (token_before, store.delete())
     })
     .await;
+    // 診断用(issue #261): 何が削除されたか(削除前のキーチェーンのトークン
+    // の印。ログイン時・起動時チェックの印と突き合わせて、別インスタンスが
+    // 差し替えたトークンかを見分ける)。
+    match &deleted {
+        Ok((token_before, result)) => log_github_auth(
+            app_handle,
+            "token_deleted",
+            &format!(
+                "trigger={trigger} token_before={token_before} delete_result={}",
+                describe_result(result)
+            ),
+        ),
+        Err(_) => log_github_auth(
+            app_handle,
+            "token_deleted",
+            &format!("trigger={trigger} delete_result=task_failed"),
+        ),
+    }
 
     let state = app_handle.state::<Mutex<AppState>>();
     {
@@ -1419,12 +1502,56 @@ async fn handle_confirmed_github_auth_expiry(app_handle: &tauri::AppHandle) {
 /// 通知してから、通常どおりDTOへ変換する(issue #54)。
 async fn finish_github_command<T>(
     app: &tauri::AppHandle,
+    operation: &str,
     result: Result<T, app::AppError>,
 ) -> Result<T, AppErrorDto> {
-    if let Err(app::AppError::GithubAuthExpired(_)) = &result {
-        handle_confirmed_github_auth_expiry(app).await;
+    if let Err(app::AppError::GithubAuthExpired(message)) = &result {
+        log_github_auth(
+            app,
+            "http_401",
+            &format!("operation={operation} message={message}"),
+        );
+        handle_confirmed_github_auth_expiry(app, &format!("401 operation={operation}")).await;
     }
     result.map_err(Into::into)
+}
+
+/// GitHub 認証の診断ログ(`github-auth.log`。issue #261)へ1行追記する。
+/// ベストエフォート: 保存先を解決できない・書き込めない場合も何もしない
+/// (アプリの動作を妨げない)。トークン全文・機微情報は渡さないこと。
+fn log_github_auth(app: &tauri::AppHandle, event: &str, detail: &str) {
+    let Ok(dir) = app.path().app_data_dir() else {
+        return;
+    };
+    // 複数インスタンス(dev / リリース / worktree 検証)がキーチェーンを共有
+    // しているため、書いたインスタンスが分かる印(PID・identifier・実行パス)を
+    // 各行に含める。
+    let exe = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+    let instance = format!(
+        "pid={} id={} exe={exe}",
+        std::process::id(),
+        app.config().identifier
+    );
+    GithubAuthLog::new(dir.join("github-auth.log"), instance).record(event, detail);
+}
+
+/// キーチェーンに保存されているトークンの識別用の印(全文は出さない)。
+fn describe_stored_token(store: &KeyringTokenStore) -> String {
+    match store.load() {
+        Ok(Some(token)) => infra::token_fingerprint(&token),
+        Ok(None) => "none".to_string(),
+        Err(_) => "load_failed".to_string(),
+    }
+}
+
+fn describe_result<T>(result: &Result<T, app::AppError>) -> &'static str {
+    if result.is_ok() {
+        "ok"
+    } else {
+        "err"
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

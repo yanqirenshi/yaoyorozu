@@ -1178,7 +1178,9 @@ pub enum ViewerCheckOutcome {
     /// ログイン名を解決できた。
     Resolved(GithubViewer),
     /// 確定的な認証失効(401)。呼び出し側でトークン削除等の後始末をする。
-    TokenExpired,
+    /// 中身は失効時のエラーメッセージ(HTTP ステータス・GitHub の error
+    /// message を含む。認証診断ログ用。issue #261)。
+    TokenExpired(String),
     /// `backoff_secs` を使い切っても一時的な失敗が続いた。トークン自体は
     /// 無効と確定していないため、呼び出し側は何もせずログイン名未確定の
     /// ままにしてよい(次の機会に再試行される)。
@@ -1199,7 +1201,9 @@ pub fn resolve_github_login_with_retry(
 ) -> ViewerCheckOutcome {
     match gateway.fetch_viewer(token) {
         Ok(viewer) => return ViewerCheckOutcome::Resolved(viewer),
-        Err(AppError::GithubAuthExpired(_)) => return ViewerCheckOutcome::TokenExpired,
+        Err(AppError::GithubAuthExpired(message)) => {
+            return ViewerCheckOutcome::TokenExpired(message)
+        }
         Err(_) => {}
     }
 
@@ -1207,7 +1211,9 @@ pub fn resolve_github_login_with_retry(
         sleep(secs);
         match gateway.fetch_viewer(token) {
             Ok(viewer) => return ViewerCheckOutcome::Resolved(viewer),
-            Err(AppError::GithubAuthExpired(_)) => return ViewerCheckOutcome::TokenExpired,
+            Err(AppError::GithubAuthExpired(message)) => {
+                return ViewerCheckOutcome::TokenExpired(message)
+            }
             Err(_) => {}
         }
     }
@@ -2928,7 +2934,10 @@ mod tests {
             sleeps.borrow_mut().push(secs);
         });
 
-        assert_eq!(outcome, ViewerCheckOutcome::TokenExpired);
+        assert_eq!(
+            outcome,
+            ViewerCheckOutcome::TokenExpired("失効".to_string())
+        );
         assert!(sleeps.borrow().is_empty());
     }
 
