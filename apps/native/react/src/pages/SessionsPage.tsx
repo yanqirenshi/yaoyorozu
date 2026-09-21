@@ -526,7 +526,18 @@ function SessionsPage({ nav }: SessionsPageProps) {
     ) : null;
 
   return (
-    <>
+    <div className="viewer-page">
+      {/* 最上段は左端まで届く全幅のヘッダ(issue #291)。その下に
+          サイドメニュー | セッション一覧 | コンテンツ を並べる。 */}
+      <div className="session-conversation-head">
+        {/* ヘッダ: 左にこのウィンドウのプロファイル名(表示のみ。issue #275)、
+            右に既存のツールバー(issue #257)。 */}
+        <h2 className="session-conversation-title" title={profileName ?? undefined}>
+          {profileName}
+        </h2>
+        <ViewerToolbar items={dockItems} />
+      </div>
+      <div className="viewer-body">
       {/* ビュー切り替えは上部のタブではなく、画面の最左端のサイドメニュー
           (issue #263)。切り替えの挙動(`handleSwitchView`)は従来のまま。 */}
       <ViewerSideMenu active={view} onChange={handleSwitchView} />
@@ -575,14 +586,6 @@ function SessionsPage({ nav }: SessionsPageProps) {
         </div>
       )}
       <div className="session-conversation">
-        <div className="session-conversation-head">
-          {/* ヘッダ: 左にこのウィンドウのプロファイル名(表示のみ。issue #275)、
-              右に既存のツールバー(issue #257)。 */}
-          <h2 className="session-conversation-title" title={profileName ?? undefined}>
-            {profileName}
-          </h2>
-          <ViewerToolbar items={dockItems} />
-        </div>
         {view === "chat" ? (
           <>
             <form className="message-form" onSubmit={handleSubmit}>
@@ -808,7 +811,8 @@ function SessionsPage({ nav }: SessionsPageProps) {
           repositoryGuide
         )}
       </div>
-    </>
+      </div>
+    </div>
   );
 }
 
