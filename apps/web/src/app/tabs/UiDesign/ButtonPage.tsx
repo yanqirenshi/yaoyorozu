@@ -30,6 +30,7 @@ import FoundationPage, {
   type DocSection,
 } from "./FoundationPage";
 import { BORDER, TEXT_SECONDARY, textStyle } from "./tokens";
+import ColorRef from "./ColorRef";
 
 const COMPONENTS: Record<ButtonKind, typeof AddButton> = {
   add: AddButton,
@@ -43,36 +44,6 @@ const STATES: { key: ButtonState | "focus"; label: string }[] = [
   { key: "focus", label: "フォーカス" },
   { key: "disabled", label: "無効" },
 ];
-
-/** 色の参照を「トークン名 / CSS 変数 / 値」で表示する。 */
-function ColorRef({ refName }: { refName: string }) {
-  const c = resolveColor(refName);
-  return (
-    <span className="inline-flex items-center gap-2">
-      <Box
-        component="span"
-        sx={{
-          display: "inline-block",
-          width: "14px",
-          height: "14px",
-          borderRadius: "2px",
-          border: "1px solid " + BORDER,
-          backgroundColor: c.value,
-          flexShrink: 0,
-        }}
-      />
-      <span>
-        {refName}
-        <Box
-          component="span"
-          sx={{ color: TEXT_SECONDARY, display: "block", fontSize: "12px" }}
-        >
-          {c.cssVar}
-        </Box>
-      </span>
-    </span>
-  );
-}
 
 const SECTIONS: DocSection[] = [
   {
