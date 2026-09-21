@@ -363,8 +363,23 @@ body,
    タブは左端のサイドメニューへ移した(issue #263)。 */
 .session-conversation-head {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   border-bottom: 1px solid var(--border-default);
+}
+
+/* ヘッダ左のプロファイル名(issue #275)。表示のみ。長い名前は省略する。 */
+.session-conversation-title {
+  min-width: 0;
+  margin: 0;
+  padding: 0 0 0 16px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ビューアの最左端のサイドメニュー(issue #263)。アイコンのみ(名前は
