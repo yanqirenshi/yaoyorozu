@@ -715,6 +715,32 @@ pub fn pc_with_user_sessions(mut pc: domain::Pc, parsed: Vec<ParsedSession>) -> 
     pc
 }
 
+/// 走査キュー(セッション一覧の逐次読み込み。PoC)の1件完了を
+/// `AppState.user_sessions` へ反映する。キーは会話ファイルパス
+/// (同一パスは置換・無ければ追加)。同一 `session_id` の別ファイル
+/// (worktree移動。issue #214)は別エントリのまま保持し、`Session` への
+/// 集約は従来どおり `User::load_sessions`(issue #217)が行う。
+pub fn upsert_parsed_session(sessions: &mut Vec<ParsedSession>, parsed: ParsedSession) {
+    if let Some(existing) = sessions
+        .iter_mut()
+        .find(|p| p.conversation_file_path == parsed.conversation_file_path)
+    {
+        *existing = parsed;
+    } else {
+        sessions.push(parsed);
+    }
+}
+
+/// 走査キュー(PoC)の全件完了時に、今回の列挙に存在しなかった会話ファイルの
+/// `ParsedSession` を取り除く(走行中に削除されたファイル・前回走査の残骸の
+/// 後始末)。
+pub fn retain_enumerated_parsed_sessions(
+    sessions: &mut Vec<ParsedSession>,
+    enumerated_paths: &std::collections::HashSet<PathBuf>,
+) {
+    sessions.retain(|p| enumerated_paths.contains(&p.conversation_file_path));
+}
+
 /// ハブグラフの調整値を読み込む。ファイルが存在しない/壊れている場合の
 /// デフォルト値へのフォールバックは `HubTuningStore` 実装(infra)側の責務
 /// (issue #249)。
@@ -1588,6 +1614,33 @@ mod tests {
             cwd: None,
             git_branch: None,
         }
+    }
+
+    #[test]
+    fn upsert_parsed_session_replaces_same_path_and_appends_new_path() {
+        let mut sessions = vec![sample_parsed_session("a")];
+
+        // 同じパス(sample のパスは session_id から決まる)は置換される
+        let mut updated_a = sample_parsed_session("a");
+        updated_a.custom_title = Some("新タイトル".to_string());
+        upsert_parsed_session(&mut sessions, updated_a);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].custom_title.as_deref(), Some("新タイトル"));
+
+        // 別のパスは追加される
+        upsert_parsed_session(&mut sessions, sample_parsed_session("b"));
+        assert_eq!(sessions.len(), 2);
+    }
+
+    #[test]
+    fn retain_enumerated_parsed_sessions_drops_paths_missing_from_enumeration() {
+        let mut sessions = vec![sample_parsed_session("a"), sample_parsed_session("b")];
+        let enumerated = std::collections::HashSet::from([PathBuf::from("/tmp/a.jsonl")]);
+
+        retain_enumerated_parsed_sessions(&mut sessions, &enumerated);
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, "a");
     }
 
     #[test]

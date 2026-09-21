@@ -12,6 +12,7 @@ import {
   listWindowStates,
   onPcDataLoaded,
   onPcDataLoading,
+  onPcDataProgress,
   onSettingsUpdated,
   onWindowsChanged,
   openProfileWindow,
@@ -823,6 +824,12 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
   // 両方から同じ`loadPc`を呼ぶだけにする(イベントとポーリングの二重化は
   // しない)。
   const [pcDataLoaded, setPcDataLoaded] = useState(false);
+  // 走査キュー(PoC)の進捗(読み込み中の「n/m」表示用)。null は
+  // 進捗が一度も届いていない状態(従来どおり件数なしの表示)。
+  const [scanProgress, setScanProgress] = useState<{
+    completed: number;
+    total: number;
+  } | null>(null);
 
   const loadPc = useCallback((): Promise<void> => {
     return getPc()
@@ -845,10 +852,31 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
   // `data_loaded` が `false` に戻った状態を反映して「読み込み中」を出す。
   // 開始・完了のどちらも同じ `loadPc` を呼ぶだけで、状態の唯一の情報源は
   // 引き続き `PcDto.data_loaded` (ポーリングは導入しない)。
+  // 走査キュー(PoC)の進捗イベントでは、完了したセッションから逐次表示する
+  // ため `pc` も取り直す。イベントは1ファイル完了ごとに届き短時間に連発する
+  // ため、取り直しは末尾デバウンス(300ms)でまとめる(最終状態は
+  // `pc:data_loaded` 側の `loadPc` でも取り直されるため取りこぼさない)。
+  const progressReloadTimer = useRef<number | null>(null);
   useEffect(() => {
-    const unlistenPromises = [onPcDataLoaded(loadPc), onPcDataLoading(loadPc)];
+    const unlistenPromises = [
+      onPcDataLoaded(loadPc),
+      onPcDataLoading(loadPc),
+      onPcDataProgress((progress) => {
+        setScanProgress(progress);
+        if (progressReloadTimer.current === null) {
+          progressReloadTimer.current = window.setTimeout(() => {
+            progressReloadTimer.current = null;
+            loadPc();
+          }, 300);
+        }
+      }),
+    ];
     return () => {
       unlistenPromises.forEach((p) => p.then((unlisten) => unlisten()));
+      if (progressReloadTimer.current !== null) {
+        window.clearTimeout(progressReloadTimer.current);
+        progressReloadTimer.current = null;
+      }
     };
   }, [loadPc]);
 
@@ -1295,7 +1323,12 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
   return (
     <div className="hub-page" ref={hubPageRef} onClick={handleHubPageClick}>
       {error && <p className="error">{error}</p>}
-      {!pcDataLoaded && <p className="hub-loading">セッションを読み込み中…</p>}
+      {!pcDataLoaded && (
+        <p className="hub-loading">
+          セッションを読み込み中…
+          {scanProgress && ` (${scanProgress.completed}/${scanProgress.total})`}
+        </p>
+      )}
       {/* `rectum` はマウント中ずっと同一インスタンス(上記参照)なので、
           `key` は付けない。`key` を付けて`dataKey`が変わるたびに強制再
           マウントすると、そのたびにカメラ(パン/ズーム)がリセットされて

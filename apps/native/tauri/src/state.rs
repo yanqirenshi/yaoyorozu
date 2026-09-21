@@ -77,6 +77,11 @@ pub struct AppState {
     /// 応答にもこの値を載せ、マウント時の問い合わせだけで正しい状態が
     /// 分かるようにする(イベント購読と併用。ポーリングはしない)。
     pub pc_data_loaded: bool,
+    /// 走査キュー(PoC。`session_scan_queue`)の世代番号。キュー開始のたびに
+    /// インクリメントし、走行中のワーカーは適用前に自分の世代と比較する。
+    /// 再読み込み・プロファイル切替等でキューが再開始された場合に、旧世代の
+    /// 走査結果が新しい`user_sessions`を上書きしないようにするための値。
+    pub session_scan_generation: u64,
 }
 
 /// エポック秒からのミリ秒。`GitBranch`/`GitWorktree`の
@@ -127,23 +132,6 @@ pub fn reconcile_and_save_git_ledger(
     result.ledger
 }
 
-/// 全プロジェクトから`ParsedSession`一覧を組み立てる(issue #197/#208)。
-/// 起動時(`AppState::load`)とハブの再読み込み操作(`reconcile_git_state`
-/// command。第3弾のGit台帳と同じタイミングで呼ぶ)の両方から使う共通処理。
-/// プロジェクト単位で読み取りに失敗しても他のプロジェクトの結果は失わない
-/// (fail-safe。`app::build_user_sessions`参照)。永続化対象ではない
-/// (真実の源は常にjsonlファイル自体であり、`GitLedger`のような独自の
-/// 台帳・IDは持たない)ため、ロード/セーブは無い。
-pub fn build_and_report_user_sessions(settings: &Settings) -> Result<Vec<ParsedSession>, AppError> {
-    let projects_dir = resolve_effective_projects_dir(settings)?;
-    let source = FileSystemRepository::new(projects_dir);
-    let result = app::build_user_sessions(&source)?;
-    for failed_project in &result.failed_projects {
-        eprintln!("セッションの読み取りに失敗したため、{failed_project} は含めませんでした");
-    }
-    Ok(result.parsed)
-}
-
 /// [`AppState::load`] の結果。設定ファイルの破損から復旧した場合、呼び出し側
 /// (`run()`)が `settings:corrupted` イベントを emit するかどうかの判断に使う。
 pub struct LoadResult {
@@ -184,6 +172,7 @@ impl AppState {
                 user_sessions: Vec::new(),
                 loaded_log_lines: HashMap::new(),
                 pc_data_loaded: false,
+                session_scan_generation: 0,
             },
             recovered_from_corruption: loaded.recovered_from_corruption,
         })
