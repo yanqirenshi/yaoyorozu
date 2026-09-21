@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   CLAUDE_MD_ICON,
   GITHUB_PROJECT_ICON,
+  PROFILE_SETTINGS_ICON,
   RULES_ICON,
   SETTINGS_JSON_ICON,
   SIDEMENU_COLLAPSE_ICON,
@@ -38,6 +39,13 @@ const ITEMS: { id: PaneView; label: string; icon: string }[] = [
   { id: "settings-local-json", label: "settings.local.json", icon: SETTINGS_LOCAL_JSON_ICON },
 ];
 
+// 下部(開閉トグルの上)の「設定」(issue #299)。ビュー切り替えの項目とは区切って置く。
+const SETTINGS_ITEM: { id: PaneView; label: string; icon: string } = {
+  id: "profile-settings",
+  label: "設定",
+  icon: PROFILE_SETTINGS_ICON,
+};
+
 function ViewerSideMenu({ active, onChange }: ViewerSideMenuProps) {
   const [expanded, setExpanded] = useState(false);
   return (
@@ -45,11 +53,13 @@ function ViewerSideMenu({ active, onChange }: ViewerSideMenuProps) {
       className={`viewer-sidemenu${expanded ? " expanded" : ""}`}
       aria-label="ビューの切り替え"
     >
-      {ITEMS.map((item) => (
+      {[...ITEMS, SETTINGS_ITEM].map((item) => (
         <button
           key={item.id}
           type="button"
-          className={`viewer-sidemenu-item${item.id === active ? " active" : ""}`}
+          className={`viewer-sidemenu-item${item.id === active ? " active" : ""}${
+            item === SETTINGS_ITEM ? " viewer-sidemenu-settings" : ""
+          }`}
           title={expanded ? undefined : item.label}
           aria-label={item.label}
           aria-current={item.id === active ? "page" : undefined}
