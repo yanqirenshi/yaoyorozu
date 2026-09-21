@@ -2,7 +2,7 @@ use domain::{
     is_valid_claude_dir_path, is_valid_json, is_valid_rule_file_name, is_valid_session_id,
     is_valid_skill_name, order_messages_newest_first, paginate_messages, reconcile_branches,
     reconcile_worktrees, repositories_from_profiles, sort_claude_dir_entries,
-    sort_projects_by_recency, sort_sessions_by_recency, ClaudeDirEntry, ClaudeDirPage,
+    sort_projects_by_recency, sort_sessions_by_recency, Camera, ClaudeDirEntry, ClaudeDirPage,
     ClaudeMdFile, ClaudeSettingsFile, Conversation, GitLedger, GitRepositoryLedger, HubLayout,
     HubTuning, LogLine, NodePosition, ParsedSession, Project, RuleSummary, SessionSummary,
     Settings, SkillSummary, CURRENT_GIT_LEDGER_VERSION, CURRENT_HUB_LAYOUT_VERSION,
@@ -736,10 +736,12 @@ pub fn save_hub_tuning(store: &dyn HubTuningStore, tuning: HubTuning) -> Result<
 pub fn save_hub_layout(
     store: &dyn HubLayoutStore,
     positions: HashMap<String, NodePosition>,
+    camera: Option<Camera>,
 ) -> Result<(), AppError> {
     let layout = HubLayout {
         version: CURRENT_HUB_LAYOUT_VERSION,
         positions,
+        camera,
     };
     store.save(&layout)
 }
@@ -3204,11 +3206,28 @@ mod tests {
         let layout = HubLayout {
             version: CURRENT_HUB_LAYOUT_VERSION,
             positions,
+            camera: None,
         };
         let store = FakeHubLayoutStore::new(layout.clone());
 
         let loaded = load_hub_layout(&store).expect("should load hub layout");
         assert_eq!(loaded, layout);
+    }
+
+    #[test]
+    fn save_hub_layout_writes_the_camera_with_the_current_version() {
+        let store = FakeHubLayoutStore::new(HubLayout::default());
+        let camera = Camera {
+            x: 10.0,
+            y: -20.0,
+            k: 2.0,
+        };
+
+        save_hub_layout(&store, HashMap::new(), Some(camera)).expect("should save hub layout");
+
+        let saved = store.saved.borrow();
+        assert_eq!(saved[0].version, CURRENT_HUB_LAYOUT_VERSION);
+        assert_eq!(saved[0].camera, Some(camera));
     }
 
     #[test]
@@ -3218,11 +3237,12 @@ mod tests {
         let store = FakeHubLayoutStore::new(HubLayout {
             version: CURRENT_HUB_LAYOUT_VERSION,
             positions: initial_positions,
+            camera: None,
         });
 
         let mut new_positions = HashMap::new();
         new_positions.insert("cwd:fresh".to_string(), NodePosition { x: 9.0, y: 9.0 });
-        save_hub_layout(&store, new_positions.clone()).expect("should save hub layout");
+        save_hub_layout(&store, new_positions.clone(), None).expect("should save hub layout");
 
         let saved = store.saved.borrow();
         assert_eq!(saved.len(), 1);
