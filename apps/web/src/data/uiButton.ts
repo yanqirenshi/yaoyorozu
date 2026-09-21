@@ -15,10 +15,6 @@ export type ButtonSizeSpec = {
   heightPx: number;
   /** 左右のパディング(余白トークン)。 */
   paddingX: string;
-  /** アイコンとラベルの間隔(余白トークン)。 */
-  gap: string;
-  /** アイコンのサイズ(アイコンのトークン)。 */
-  icon: string;
   /** ラベルのテキストスタイル。 */
   textStyle: string;
   /** 角の形状(角丸トークン)。 */
@@ -32,8 +28,6 @@ export const BUTTON_SIZES: ButtonSizeSpec[] = [
     label: "small",
     heightPx: 32,
     paddingX: "sp-3",
-    gap: "sp-1",
-    icon: "icon-16",
     textStyle: "UI-14M-100",
     radius: "radius-4",
     usage:
@@ -44,8 +38,6 @@ export const BUTTON_SIZES: ButtonSizeSpec[] = [
     label: "medium",
     heightPx: 40,
     paddingX: "sp-4",
-    gap: "sp-2",
-    icon: "icon-20",
     textStyle: "UI-16M-100",
     radius: "radius-4",
     usage: "既定値。フォームの送信、パネルのヘッダ、ダイアログの操作。",
@@ -55,8 +47,6 @@ export const BUTTON_SIZES: ButtonSizeSpec[] = [
     label: "large",
     heightPx: 48,
     paddingX: "sp-6",
-    gap: "sp-2",
-    icon: "icon-20",
     textStyle: "UI-18M-100",
     radius: "radius-4",
     usage:
@@ -69,10 +59,18 @@ export type ButtonState = "default" | "hover" | "active" | "disabled";
 export type ButtonColors = {
   /** 背景。 */
   bg: string;
-  /** 文字とアイコン。 */
+  /** 文字。 */
   fg: string;
   /** 境界。 */
   border: string;
+};
+
+/** ラベルの文字に付ける陰。無効の状態には付けない。 */
+export type ButtonTextShadow = {
+  /** 陰の色(色の参照)。 */
+  color: string;
+  /** ぼかしの半径。 */
+  blur: string;
 };
 
 export type ButtonKind = "add" | "edit";
@@ -84,13 +82,12 @@ export type ButtonKindSpec = {
   component: string;
   /** 既定のラベル。 */
   defaultLabel: string;
-  /** アイコン(uiIcon.ts の ICON_SAMPLES のキー)。 */
-  icon: string;
   /** 強調の度合い。 */
   emphasis: "filled" | "outlined";
   usage: string;
   colors: Record<ButtonState, ButtonColors>;
-  /** 各状態の文字色の、背景に対するコントラスト比(無効を除く)。 */
+  textShadow?: ButtonTextShadow;
+  /** 文字の読みやすさ(コントラスト比と、基準を満たすかどうか)。 */
   contrast: string;
 };
 
@@ -105,7 +102,6 @@ export const BUTTON_KINDS: ButtonKindSpec[] = [
     label: "追加ボタン",
     component: "AddButton",
     defaultLabel: "追加",
-    icon: "add",
     emphasis: "filled",
     usage:
       "新しい対象を作る操作。一覧の上部やパネルのヘッダに置き、その画面の主要な操作として扱う。",
@@ -121,29 +117,33 @@ export const BUTTON_KINDS: ButtonKindSpec[] = [
         border: "state.disabled",
       },
     },
-    contrast: "4.56:1 / 5.83:1 / 7.23:1(通常 / ホバー / 押下中。墨-900 の文字に対して)",
+    // 金茶の地の上で墨の文字の輪郭を立たせるため、白い陰を付ける。
+    textShadow: { color: "text.inverse", blur: "2px" },
+    contrast:
+      "墨-900 の文字に対して 4.56:1 / 5.83:1 / 7.23:1(通常 / ホバー / 押下中)。本文の基準(4.5:1)を満たす。文字には白い陰を付けて、金茶の地から輪郭を立たせている。",
   },
   {
     key: "edit",
     label: "変更ボタン",
     component: "EditButton",
     defaultLabel: "変更",
-    icon: "edit",
     emphasis: "outlined",
     usage:
       "既存の対象の内容を変える操作。対象の近く(行の末尾、詳細の見出しの横)に置く。追加ボタンより目立たせない。",
     colors: {
       // 金茶-500 の境界は 2.52:1 で境界の基準(3:1)に届かないため、1段濃い 金茶-600 にする。
-      default: { bg: "surface.raised", fg: "text.primary", border: "金茶-600" },
-      hover: { bg: "金茶-50", fg: "text.primary", border: "金茶-700" },
-      active: { bg: "金茶-100", fg: "text.primary", border: "金茶-800" },
+      // 文字は色味を優先して金茶-500 とする(基準は満たさない。下の contrast を参照)。
+      default: { bg: "surface.raised", fg: "金茶-500", border: "金茶-600" },
+      hover: { bg: "金茶-50", fg: "金茶-500", border: "金茶-700" },
+      active: { bg: "金茶-100", fg: "金茶-500", border: "金茶-800" },
       disabled: {
         bg: "surface.raised",
         fg: "text.disabled",
         border: "border.default",
       },
     },
-    contrast: "11.90:1 / 11.24:1 / 10.34:1(通常 / ホバー / 押下中。文字と背景)。境界は真珠に対して 3.15:1 以上",
+    contrast:
+      "金茶-500 の文字は白の背景に対して 2.61:1 で、本文の基準(4.5:1)を満たさない。色味を優先して採用している(2026-09-21 決定)。境界は真珠に対して 3.15:1 以上で、境界の基準(3:1)は満たす。",
   },
 ];
 
@@ -171,23 +171,17 @@ export const BUTTON_ANATOMY: ButtonAnatomyPart[] = [
   },
   {
     no: 2,
-    name: "アイコン",
-    description:
-      "操作の種類を示す先頭のアイコン。色はラベルと同じ(currentColor)。支援技術からは隠す(aria-hidden)。",
-  },
-  {
-    no: 3,
     name: "ラベル",
     description:
-      "操作の内容を表す文言。省略しない。アイコンだけのボタンにはしない。",
+      "操作の内容を表す文言。アイコンは付けず、文字だけで操作を伝える。",
   },
 ];
 
 /** ボタンの運用ルール。 */
 export const BUTTON_RULES = [
   {
-    title: "ラベルは省略しない",
-    body: "追加・変更のボタンは、アイコンだけにせず必ずラベルを付ける。何を追加するかが周囲から分からない場合は「プロファイルを追加」のように対象を書く。",
+    title: "ラベルだけで構成する",
+    body: "追加・変更のボタンはアイコンを付けず、文字だけで操作を伝える。何を追加するかが周囲から分からない場合は「プロファイルを追加」のように対象を書く。",
   },
   {
     title: "塗りのボタンは1つの領域に1つ",
@@ -210,9 +204,9 @@ export const BUTTON_RULES = [
 /** 使わない書き方。 */
 export const BUTTON_ANTIPATTERNS = [
   {
-    pattern: "アイコンだけの追加ボタン(+ のみ)",
-    problem: "何を追加するのかが伝わらない。支援技術では名前のないボタンになる。",
-    instead: "ラベルを付ける。場所が狭いときは size: small にする。",
+    pattern: "記号だけのボタン(+ や ✎ のみ)",
+    problem: "何をするボタンかが伝わらない。支援技術では名前のないボタンになる。",
+    instead: "文字のラベルにする。場所が狭いときは size: small にする。",
   },
   {
     pattern: "変更ボタンを塗りにする",

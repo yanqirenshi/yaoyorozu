@@ -5,7 +5,6 @@
  */
 
 import { CORNER_SCALE } from "@/data/uiCorner";
-import { ICON_SIZES } from "@/data/uiIcon";
 import { SPACING_SCALE } from "@/data/uiSpacing";
 import { FONT_WEIGHTS, TEXT_STYLE_GROUPS } from "@/data/uiTypography";
 
@@ -21,13 +20,6 @@ export function radiusCss(token: string): string {
   const found = CORNER_SCALE.find((c) => c.token === token);
   if (!found) throw new Error("未定義の角丸トークンです: " + token);
   return found.px >= 9999 ? "9999px" : found.px + "px";
-}
-
-/** アイコンのサイズトークン(icon-20 など)を px の数値にする。 */
-export function iconPx(token: string): number {
-  const found = ICON_SIZES.find((i) => i.token === token);
-  if (!found) throw new Error("未定義のアイコンサイズです: " + token);
-  return found.px;
 }
 
 export type TextStyleSx = {

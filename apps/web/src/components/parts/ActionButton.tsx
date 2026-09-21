@@ -11,8 +11,7 @@ import {
   type ButtonState,
 } from "@/data/uiButton";
 import { resolveColor } from "@/data/uiDesign";
-import { iconPx, radiusCss, spacePx, textStyle } from "@/components/tokens";
-import Icon from "./Icon";
+import { radiusCss, spacePx, textStyle } from "@/components/tokens";
 
 /**
  * 追加ボタン・変更ボタンの共通の土台。
@@ -53,7 +52,17 @@ export function buttonColors(kind: ButtonKind, state: ButtonState) {
 
 function colorSx(kind: ButtonKind, state: ButtonState) {
   const c = buttonColors(kind, state);
-  return { backgroundColor: c.bg, color: c.fg, borderColor: c.border };
+  const shadow = kindSpec(kind).textShadow;
+  return {
+    backgroundColor: c.bg,
+    color: c.fg,
+    borderColor: c.border,
+    // 陰は文字を読みやすくするためのもの。無効の状態では付けない。
+    textShadow:
+      shadow && state !== "disabled"
+        ? "0 0 " + shadow.blur + " " + resolveColor(shadow.color).value
+        : "none",
+  };
 }
 
 /** 寸法(サイズ)の sx。 */
@@ -63,7 +72,6 @@ function sizeSx(size: ButtonSize) {
     ...textStyle(s.textStyle),
     height: s.heightPx + "px",
     px: spacePx(s.paddingX) + "px",
-    gap: spacePx(s.gap) + "px",
     borderRadius: radiusCss(s.radius),
   };
 }
@@ -95,23 +103,15 @@ export function buttonStaticSx(
   };
 }
 
-/** ボタンの中身(アイコン + ラベル)。 */
+/** ボタンの中身(ラベルのみ。アイコンは付けない)。 */
 export function ButtonContent({
   kind,
-  size,
   label,
 }: {
   kind: ButtonKind;
-  size: ButtonSize;
   label?: string;
 }) {
-  const spec = kindSpec(kind);
-  return (
-    <>
-      <Icon name={spec.icon} size={iconPx(sizeSpec(size).icon)} />
-      <span>{label ?? spec.defaultLabel}</span>
-    </>
-  );
+  return <span>{label ?? kindSpec(kind).defaultLabel}</span>;
 }
 
 export default function ActionButton({
@@ -142,7 +142,7 @@ export default function ActionButton({
         },
       }}
     >
-      <ButtonContent kind={kind} size={size} label={label} />
+      <ButtonContent kind={kind} label={label} />
     </ButtonBase>
   );
 }

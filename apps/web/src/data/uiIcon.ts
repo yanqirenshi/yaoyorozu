@@ -165,9 +165,4 @@ export const ICON_SAMPLES: IconSample[] = [
     label: "追加",
     body: '<path d="M10 4v12M4 10h12" />',
   },
-  {
-    key: "edit",
-    label: "変更",
-    body: '<path d="M13.5 3.5l3 3L7 16H4v-3z" /><path d="M11.5 5.5l3 3" />',
-  },
 ];

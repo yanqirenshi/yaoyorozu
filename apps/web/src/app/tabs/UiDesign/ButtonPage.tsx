@@ -18,7 +18,7 @@ import {
   ButtonContent,
   buttonStaticSx,
 } from "@/components/parts/ActionButton";
-import { iconPx, radiusCss, spacePx } from "@/components/tokens";
+import { radiusCss, spacePx } from "@/components/tokens";
 import FoundationPage, {
   Code,
   Note,
@@ -84,7 +84,7 @@ const SECTIONS: DocSection[] = [
         </Para>
         <Para>
           いまは「追加」と「変更」の2種類を定義している。
-          どちらも先頭にアイコン、続けてラベルを置く同じ構成で、強調の度合いだけが違う。
+          どちらもアイコンを付けず文字だけのラベルで構成し、強調の度合いだけが違う。
         </Para>
         <Sample caption="追加ボタン(塗り)と変更ボタン(線)。実際に押せる。">
           <div className="flex flex-wrap items-center gap-4">
@@ -123,7 +123,7 @@ const SECTIONS: DocSection[] = [
               columns={[
                 { key: "state", label: "状態", width: "100px" },
                 { key: "bg", label: "背景" },
-                { key: "fg", label: "文字・アイコン" },
+                { key: "fg", label: "文字" },
                 { key: "border", label: "境界" },
               ]}
               rows={(["default", "hover", "active", "disabled"] as ButtonState[]).map(
@@ -136,7 +136,7 @@ const SECTIONS: DocSection[] = [
               )}
             />
             <Note>
-              コントラスト比: {kind.contrast}。いずれも本文の基準(4.5:1)を満たす。
+              {kind.contrast}
             </Note>
           </>
         ),
@@ -157,8 +157,6 @@ const SECTIONS: DocSection[] = [
             { key: "size", label: "サイズ", mono: true, width: "90px" },
             { key: "height", label: "高さ", mono: true, width: "70px" },
             { key: "paddingX", label: "左右の余白", mono: true },
-            { key: "gap", label: "アイコンとの間隔", mono: true },
-            { key: "icon", label: "アイコン", mono: true },
             { key: "text", label: "ラベル", mono: true },
             { key: "radius", label: "角丸", mono: true },
           ]}
@@ -166,8 +164,6 @@ const SECTIONS: DocSection[] = [
             size: s.key,
             height: s.heightPx + "px",
             paddingX: s.paddingX + " (" + spacePx(s.paddingX) + "px)",
-            gap: s.gap + " (" + spacePx(s.gap) + "px)",
-            icon: s.icon + " (" + iconPx(s.icon) + "px)",
             text: s.textStyle,
             radius: s.radius + " (" + radiusCss(s.radius) + ")",
           }))}
@@ -191,17 +187,16 @@ const SECTIONS: DocSection[] = [
     title: "構成",
     body: (
       <>
-        <Para>ボタンは3つの部位でできている。</Para>
+        <Para>ボタンは2つの部位でできている。アイコンは付けない。</Para>
         <Sample caption="番号は下の表と対応する。">
           <div className="flex items-center gap-6">
             <Box sx={{ position: "relative", display: "inline-block" }}>
               <Box component="span" sx={buttonStaticSx("add", "large", "default")}>
-                <ButtonContent kind="add" size="large" />
+                <ButtonContent kind="add" />
               </Box>
               {[
                 { no: 1, left: "-10px", top: "-10px" },
-                { no: 2, left: "20px", top: "-22px" },
-                { no: 3, left: "64px", top: "-22px" },
+                { no: 2, left: "34px", top: "-22px" },
               ].map((mark) => (
                 <Box
                   key={mark.no}
@@ -271,7 +266,7 @@ const SECTIONS: DocSection[] = [
                       component="span"
                       sx={buttonStaticSx(kind.key, "medium", state.key)}
                     >
-                      <ButtonContent kind={kind.key} size="medium" />
+                      <ButtonContent kind={kind.key} />
                     </Box>
                     <Box
                       sx={{ ...textStyle("Dns-14N-150"), color: TEXT_SECONDARY }}
