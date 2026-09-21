@@ -6,6 +6,7 @@ import {
   BUTTON_FOCUS,
   BUTTON_KINDS,
   BUTTON_SIZES,
+  BUTTON_WIDTH,
   type ButtonKind,
   type ButtonSize,
   type ButtonState,
@@ -95,6 +96,8 @@ export function buttonStaticSx(
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
+    // 置き場所の幅に合わせて伸ばさない(縦並びの flex の中でも文字の幅のまま)。
+    width: BUTTON_WIDTH.value,
     border: "1px solid",
     whiteSpace: "nowrap",
     ...sizeSx(size),

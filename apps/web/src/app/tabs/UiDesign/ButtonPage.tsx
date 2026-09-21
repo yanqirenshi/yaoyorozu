@@ -8,6 +8,7 @@ import {
   BUTTON_KINDS,
   BUTTON_RULES,
   BUTTON_SIZES,
+  BUTTON_WIDTH,
   type ButtonKind,
   type ButtonState,
 } from "@/data/uiButton";
@@ -179,6 +180,30 @@ const SECTIONS: DocSection[] = [
           small(32px)は、基本デザイン「レイアウト」の操作要素の最小高さ(40px)より低い。
           表やツールバーなど高密度な領域に限って使い、WCAG 2.2 の操作対象サイズ(24px 以上)は満たしている。
         </Note>
+        <Para>
+          幅はすべてのサイズで共通で、<Code>{"width: " + BUTTON_WIDTH.value}</Code> とする。
+          {BUTTON_WIDTH.note}
+        </Para>
+        <Sample
+          surface="base"
+          caption="縦並びの flex(align-items: stretch)の中に置いた追加ボタン。部品が幅を持つので、横に伸びない。"
+        >
+          <Box
+            data-testid="button-width-demo"
+            sx={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "12px",
+              border: "1px dashed " + BORDER,
+              p: "12px",
+            }}
+          >
+            <Box sx={{ ...textStyle("Body-14N-170"), color: TEXT_SECONDARY }}>
+              CLAUDE.md がありません。
+            </Box>
+            <AddButton label="CLAUDE.md を作成" />
+          </Box>
+        </Sample>
       </>
     ),
   },
