@@ -36,6 +36,7 @@ import JsonFileEditor from "../JsonFileEditor";
 import type { JsonFileEditorHandle } from "../JsonFileEditor";
 import { formatTimestamp } from "../formatTimestamp";
 import MessageText from "../MessageText";
+import ProfileSettingsPane from "../ProfileSettingsPane";
 import ViewerSideMenu from "../ViewerSideMenu";
 import ViewerToolbar from "../ViewerToolbar";
 import { createProjectSettingsDockItems } from "../projectSettingsDockItems";
@@ -650,6 +651,10 @@ function SessionsPage({ nav }: SessionsPageProps) {
               )}
             </div>
           </>
+        ) : view === "profile-settings" ? (
+          // /settings と同じプロファイル設定(共有コンポーネント)を、このウィンドウの
+          // プロファイルに固定して表示する(issue #299)。
+          <ProfileSettingsPane profileId={nav.windowProfileId} />
         ) : view === "claude-md" ? (
           repositoryPath ? (
             <div className="claude-md-pane">

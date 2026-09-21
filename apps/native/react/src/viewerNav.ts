@@ -10,7 +10,9 @@ export type PaneView =
   | "rules"
   | "skills"
   | "settings-json"
-  | "settings-local-json";
+  | "settings-local-json"
+  // サイドメニュー下部の歯車。/settings と同じプロファイル設定(issue #299)。
+  | "profile-settings";
 
 export const PANE_VIEWS: PaneView[] = [
   "chat",
@@ -20,6 +22,7 @@ export const PANE_VIEWS: PaneView[] = [
   "skills",
   "settings-json",
   "settings-local-json",
+  "profile-settings",
 ];
 
 // ビューアの「今どこを見ているか」を表す最小限のナビゲーション状態。
