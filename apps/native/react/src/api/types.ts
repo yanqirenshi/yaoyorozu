@@ -197,9 +197,20 @@ export type HubTuningDto = {
   collide_radius: number;
 };
 
-// `getHubLayout` の戻り値。キーはノードの安定ID(positionKey)。
+// ハブグラフの視点(パン・ズーム。issue #268)。d3-zoom の transform
+// (`screen = world * k + (x, y)`)。`saveHubLayout` の引数にも `getHubLayout` の
+// 戻り値にも使う。
+export type CameraDto = {
+  x: number;
+  y: number;
+  k: number;
+};
+
+// `getHubLayout` の戻り値。キーはノードの安定ID(positionKey)。`camera` は保存された
+// 視点(`null` はまだ動かしていない)。
 export type HubLayoutDto = {
   positions: Record<string, NodePositionDto>;
+  camera: CameraDto | null;
 };
 
 // `GitRepository.branches` の1件分(オブジェクトモデル実装 第3弾。

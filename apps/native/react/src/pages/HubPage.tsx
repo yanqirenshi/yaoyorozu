@@ -20,9 +20,11 @@ import {
   saveHubTuning,
 } from "../api";
 import type {
+  CameraDto,
   GitBranchDto,
   GitRepositoryDto,
   GithubProjectDto,
+  HubLayoutDto,
   NodePositionDto,
   PcDto,
   SessionDto,
@@ -670,7 +672,26 @@ function buildBranchInspectorContent(core: HubNodeCore): InspectorContent {
 // 「読み込み中」を表示する。ノードの右クリックでインスペクタを表示する。
 // 左クリックはプロファイルノードだけが持つ(開いていれば前面化、無ければ
 // ウィンドウを開く。issue #229)。
+// 保存済みのハブのレイアウト(ノード位置・視点。`get_hub_layout`)を読み込んでから
+// グラフを描く(issue #268)。視点の復元は Rectum のコンストラクタの `transform`
+// (公開されたオプション)で行うため、Rectum を作る前にレイアウトが必要になる
+// (Rectum は作ったあと視点を後から設定する公開APIを持たない)。読み込みに失敗
+// しても、既定(位置なし・視点なし)で描く。
 function HubPage() {
+  const [layout, setLayout] = useState<HubLayoutDto | null>(null);
+  useEffect(() => {
+    getHubLayout()
+      .then(setLayout)
+      .catch((e) => {
+        console.error(e);
+        setLayout({ positions: {}, camera: null });
+      });
+  }, []);
+  if (!layout) return <div className="hub-page" />;
+  return <HubGraphPage initialLayout={layout} />;
+}
+
+function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
   const [error, setError] = useState<string | null>(null);
   // セッション一覧の取得元(オブジェクトモデル実装。issue #182・#197)。
   const [pc, setPc] = useState<PcDto | null>(null);
@@ -794,14 +815,15 @@ function HubPage() {
     [openOrFocusProfile],
   );
 
-  // ノードのドラッグ固定位置(issue #121)。起動時に一度だけ読み込み、以後は
-  // ドラッグのたびに更新する。キーは `positionKey`(`buildGraphData` 参照)。
-  const [savedPositions, setSavedPositions] = useState<Record<string, NodePositionDto>>({});
-  useEffect(() => {
-    getHubLayout()
-      .then((layout) => setSavedPositions(layout.positions))
-      .catch((e) => console.error(e));
-  }, []);
+  // ノードのドラッグ固定位置(issue #121)。起動時に読み込んだ値(`HubPage` が
+  // 渡す `initialLayout`)から始め、ドラッグのたびに更新する。キーは
+  // `positionKey`(`buildGraphData` 参照)。`positionsRef`/`cameraRef` は、
+  // デバウンス保存(下記)が常に最新の値を参照するための ref。
+  const [savedPositions, setSavedPositions] = useState<Record<string, NodePositionDto>>(
+    initialLayout.positions,
+  );
+  const positionsRef = useRef<Record<string, NodePositionDto>>(initialLayout.positions);
+  const cameraRef = useRef<CameraDto | null>(initialLayout.camera);
 
   // `buildGraphData` が直近に払い出した positionKey の集合(issue #121)。
   // 保存時、既に存在しないノードの位置情報をここでフィルタして落とす
@@ -810,22 +832,33 @@ function HubPage() {
   // (ドラッグ終了時・デバウンス後)で常に最新の集合を参照したいため。
   const validPositionKeysRef = useRef<Set<string>>(new Set());
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    return () => {
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    };
+
+  // ノード位置と視点(パン・ズーム。issue #268)をまとめて保存する
+  // (`save_hub_layout` は丸ごと置き換えのため、どちらか一方だけの保存で
+  // もう一方を消さないよう、常に最新の両方を渡す)。
+  const saveHubLayoutNow = useCallback(() => {
+    saveTimerRef.current = null;
+    const validKeys = validPositionKeysRef.current;
+    const filtered = Object.fromEntries(
+      Object.entries(positionsRef.current).filter(([key]) => validKeys.has(key)),
+    );
+    saveHubLayout(filtered, cameraRef.current).catch((e) => console.error(e));
   }, []);
 
-  const scheduleSaveHubLayout = useCallback((positions: Record<string, NodePositionDto>) => {
+  const scheduleSaveHubLayout = useCallback(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
-      const validKeys = validPositionKeysRef.current;
-      const filtered = Object.fromEntries(
-        Object.entries(positions).filter(([key]) => validKeys.has(key)),
-      );
-      saveHubLayout(filtered).catch((e) => console.error(e));
-    }, HUB_LAYOUT_SAVE_DEBOUNCE_MS);
-  }, []);
+    saveTimerRef.current = setTimeout(saveHubLayoutNow, HUB_LAYOUT_SAVE_DEBOUNCE_MS);
+  }, [saveHubLayoutNow]);
+
+  // 画面を離れるとき、デバウンス待ちの変更が残っていれば失わないよう保存する。
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+        saveHubLayoutNow();
+      }
+    };
+  }, [saveHubLayoutNow]);
 
   // ノードのドラッグ終了時、位置を `savedPositions` に反映しつつ
   // デバウンス保存する(issue #121)。`positionKey` が無いノード(永続化
@@ -835,11 +868,10 @@ function HubPage() {
       const core = node._core as HubNodeCore;
       const positionKey = core.positionKey;
       if (!positionKey) return;
-      setSavedPositions((prev) => {
-        const next = { ...prev, [positionKey]: { x: node.x, y: node.y } };
-        scheduleSaveHubLayout(next);
-        return next;
-      });
+      const next = { ...positionsRef.current, [positionKey]: { x: node.x, y: node.y } };
+      positionsRef.current = next;
+      setSavedPositions(next);
+      scheduleSaveHubLayout();
     },
     [scheduleSaveHubLayout],
   );
@@ -853,12 +885,48 @@ function HubPage() {
   // リセットされる。`handleNodeDragEnded` は安定しているため、このRectumは
   // `HubPage` のマウント中ずっと同一インスタンスのままになる。
   // 背景のグリッド線は描かない(ユーザー指示)。
+  // 保存済みの視点(パン・ズーム。issue #268)は、コンストラクタの `transform`
+  // (公開されたオプション)で復元する。d3.svg は初期変換を
+  // `d3.zoomIdentity.scale(k).translate(x, y)` で作る(translate は scale の
+  // 後なので実際の平行移動は k 倍になる)ため、保存した実際の変換
+  // (`onZoom` が渡す `screen = world * k + {x, y}`)を再現するには x/y を k で
+  // 割って渡す。
   const rectum = useMemo(() => {
+    const camera = initialLayout.camera;
     return new Rectum({
       grid: { draw: false },
+      ...(camera ? { transform: { k: camera.k, x: camera.x / camera.k, y: camera.y / camera.k } } : {}),
       callbacks: { node: { click: handleNodeClick, dragEnded: handleNodeDragEnded } },
     });
-  }, [handleNodeClick, handleNodeDragEnded]);
+  }, [handleNodeClick, handleNodeDragEnded, initialLayout]);
+
+  // パン・ズームのたびに現在の視点を控え、デバウンス保存する(issue #268。
+  // ノード位置と同じ 500ms の流儀。操作が続く間は保存を延ばし、終わったら
+  // 1回だけ保存する)。d3.network(assh0le)の公開メソッド `d3svg().onZoom()` を
+  // 使う。`d3svg()` は `Asshole` のマウント(`selector()`)前に呼ぶと例外に
+  // なる(マウントは子の描画・サイズ計測の後)ため、公開メソッド `d3Element()`
+  // でマウントを待ってから登録する。復元時の初期変換はマウント中(登録前)に
+  // 適用済みのため、保存は走らない。
+  useEffect(() => {
+    let frame = 0;
+    let cancelled = false;
+    const register = () => {
+      if (cancelled) return;
+      if (!rectum.d3Element()) {
+        frame = requestAnimationFrame(register);
+        return;
+      }
+      rectum.d3svg().onZoom((transform) => {
+        cameraRef.current = { x: transform.x, y: transform.y, k: transform.k };
+        scheduleSaveHubLayout();
+      });
+    };
+    register();
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+    };
+  }, [rectum, scheduleSaveHubLayout]);
 
   // データが変わるたびに同じRectumインスタンスへ `.data()` を呼んで更新
   // する。`Asshole` の `rectum.selector()` 呼び出しより先にこのeffectが

@@ -120,3 +120,60 @@ export const VIEW_MODE_ICON = `
   <rect x="3" y="4" width="14" height="12" rx="1.5" />
   <line x1="10" y1="4" x2="10" y2="16" />
 </svg>`;
+
+// ビューアの左端サイドメニュー(issue #263)の各ビューのアイコン。他と同じ
+// 線画(細線・丸端・viewBox 0 0 20 20)。会話は VIEWER_ICON(吹き出し)を使う。
+const SIDEMENU_SVG_OPEN = `<svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor"
+     stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
+     xmlns="http://www.w3.org/2000/svg">`;
+
+// GitHub Project(かんばん: 3列)。
+export const GITHUB_PROJECT_ICON = `${SIDEMENU_SVG_OPEN}
+  <rect x="3" y="3" width="14" height="14" rx="2" />
+  <line x1="7" y1="6.5" x2="7" y2="11" />
+  <line x1="10" y1="6.5" x2="10" y2="9" />
+  <line x1="13" y1="6.5" x2="13" y2="13" />
+</svg>`;
+
+// CLAUDE.md(文書)。
+export const CLAUDE_MD_ICON = `${SIDEMENU_SVG_OPEN}
+  <path d="M6 3h5l4 4v10a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" />
+  <path d="M11 3v4h4" />
+  <path d="M7.5 11h5M7.5 14h5" />
+</svg>`;
+
+// Rules(チェックリスト)。
+export const RULES_ICON = `${SIDEMENU_SVG_OPEN}
+  <path d="M3.5 5l1.5 1.5L7.5 4M3.5 11l1.5 1.5L7.5 10" />
+  <path d="M10.5 5h6M10.5 11h6M10.5 16h6M3.5 16h4" />
+</svg>`;
+
+// Skills(稲妻)。
+export const SKILLS_ICON = `${SIDEMENU_SVG_OPEN}
+  <path d="M11 2.5 5 11h4l-1 6.5L15 9h-4z" />
+</svg>`;
+
+// settings.json(波括弧)。
+export const SETTINGS_JSON_ICON = `${SIDEMENU_SVG_OPEN}
+  <path d="M8 4c-2 0-2 1-2 2.5V8c0 1-1 2-2 2 1 0 2 1 2 2v1.5C6 15 6 16 8 16" />
+  <path d="M12 4c2 0 2 1 2 2.5V8c0 1 1 2 2 2-1 0-2 1-2 2v1.5c0 1.5 0 2.5-2 2.5" />
+</svg>`;
+
+// settings.local.json(波括弧+中央の点でローカル用と見分ける)。
+export const SETTINGS_LOCAL_JSON_ICON = `${SIDEMENU_SVG_OPEN}
+  <path d="M8 4c-2 0-2 1-2 2.5V8c0 1-1 2-2 2 1 0 2 1 2 2v1.5C6 15 6 16 8 16" />
+  <path d="M12 4c2 0 2 1 2 2.5V8c0 1 1 2 2 2-1 0-2 1-2 2v1.5c0 1.5 0 2.5-2 2.5" />
+  <circle cx="10" cy="10" r="1.1" fill="currentColor" stroke="none" />
+</svg>`;
+
+// サイドメニューの開閉トグル(issue #266)。閉のとき「開く」(»)、開のとき
+// 「閉じる」(«)。
+export const SIDEMENU_EXPAND_ICON = `${SIDEMENU_SVG_OPEN}
+  <path d="M5 5l5 5-5 5" />
+  <path d="M11 5l5 5-5 5" />
+</svg>`;
+
+export const SIDEMENU_COLLAPSE_ICON = `${SIDEMENU_SVG_OPEN}
+  <path d="M15 5l-5 5 5 5" />
+  <path d="M9 5l-5 5 5 5" />
+</svg>`;

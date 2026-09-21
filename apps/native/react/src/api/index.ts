@@ -13,6 +13,7 @@ import type {
   GithubAuthStatusDto,
   GithubAuthenticatedEvent,
   GithubProjectSummaryDto,
+  CameraDto,
   HubLayoutDto,
   HubTuningDto,
   NodePositionDto,
@@ -54,6 +55,7 @@ export type {
   GithubAuthenticatedEvent,
   GithubProjectDto,
   GithubProjectSummaryDto,
+  CameraDto,
   HubLayoutDto,
   HubTuningDto,
   MessageDto,
@@ -230,8 +232,9 @@ export function getHubLayout(): Promise<HubLayoutDto> {
 // ではなく置き換えなので、呼び出し側は現在有効な全ノード分の位置を渡すこと。
 export function saveHubLayout(
   positions: Record<string, NodePositionDto>,
+  camera: CameraDto | null,
 ): Promise<void> {
-  return invoke<void>("save_hub_layout", { positions });
+  return invoke<void>("save_hub_layout", { positions, camera });
 }
 
 // ハブグラフの調整値(issue #249)を取得する。保存値が無い/壊れている場合は

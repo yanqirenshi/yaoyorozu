@@ -55,14 +55,28 @@ impl HubLayoutStore for FileHubLayoutStore {
             return Ok(HubLayout::default());
         };
 
-        if layout.version != CURRENT_HUB_LAYOUT_VERSION {
-            // 未知のバージョン(将来のアプリが書いたファイルを古いアプリが
-            // 読む場合など)は解釈できないため、破損扱いとして退避する。
-            self.evacuate_corrupt_file();
-            return Ok(HubLayout::default());
+        match layout.version {
+            CURRENT_HUB_LAYOUT_VERSION => Ok(layout),
+            // v1 -> v2(issue #268): 視点(`camera`)が増えただけ。v1 のファイルは
+            // 視点を持たない(`None`)ので、positions はそのままバージョンだけ
+            // 上げ、すぐに書き戻す(`FileSettingsStore` と同じ流儀)。書き戻しに
+            // 失敗しても、読み込んだ内容は使える。
+            1 => {
+                let migrated = HubLayout {
+                    version: CURRENT_HUB_LAYOUT_VERSION,
+                    positions: layout.positions,
+                    camera: None,
+                };
+                let _ = self.save(&migrated);
+                Ok(migrated)
+            }
+            _ => {
+                // 未知のバージョン(将来のアプリが書いたファイルを古いアプリが
+                // 読む場合など)は解釈できないため、破損扱いとして退避する。
+                self.evacuate_corrupt_file();
+                Ok(HubLayout::default())
+            }
         }
-
-        Ok(layout)
     }
 
     fn save(&self, layout: &HubLayout) -> Result<(), AppError> {
@@ -103,7 +117,7 @@ impl HubLayoutStore for FileHubLayoutStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use domain::NodePosition;
+    use domain::{Camera, NodePosition};
     use std::collections::HashMap;
 
     #[test]
@@ -126,6 +140,11 @@ mod tests {
         let layout = HubLayout {
             version: CURRENT_HUB_LAYOUT_VERSION,
             positions,
+            camera: Some(Camera {
+                x: 12.5,
+                y: -40.0,
+                k: 1.5,
+            }),
         };
 
         store.save(&layout).expect("should save");
@@ -184,5 +203,33 @@ mod tests {
         let loaded = store.load().expect("should recover with default");
 
         assert_eq!(loaded, HubLayout::default());
+    }
+
+    #[test]
+    fn load_migrates_v1_layout_keeping_positions_and_persisting_v2() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hub-layout.json");
+        fs::write(
+            &path,
+            r#"{"version":1,"positions":{"git-branch:b1":{"x":1.5,"y":2.5}}}"#,
+        )
+        .unwrap();
+        let store = FileHubLayoutStore::new(path.clone());
+
+        let loaded = store.load().expect("should migrate");
+
+        assert_eq!(loaded.version, CURRENT_HUB_LAYOUT_VERSION);
+        assert_eq!(loaded.camera, None, "v1 は視点を持たない");
+        assert_eq!(
+            loaded.positions.get("git-branch:b1"),
+            Some(&NodePosition { x: 1.5, y: 2.5 }),
+            "positions は不変"
+        );
+        // 移行結果がすぐ書き戻され、再読み込みでも同じ内容(退避されない)。
+        assert!(path.is_file());
+        assert!(fs::read_to_string(&path)
+            .unwrap()
+            .contains("\"version\": 2"));
+        assert_eq!(store.load().expect("should load again"), loaded);
     }
 }

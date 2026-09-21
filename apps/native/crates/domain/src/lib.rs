@@ -4,6 +4,7 @@
 //! 見たパス(`domain::Pc` 等)は分割前と変えない。
 
 mod agent_kind;
+mod camera;
 mod claude_dir_entry;
 mod claude_dir_page;
 mod claude_md_file;
@@ -44,6 +45,7 @@ mod window_state;
 mod window_tab;
 
 pub use agent_kind::AgentKind;
+pub use camera::Camera;
 pub use claude_dir_entry::{
     join_claude_dir_path, sort_claude_dir_entries, ClaudeDirEntry, ClaudeDirEntryKind,
 };
