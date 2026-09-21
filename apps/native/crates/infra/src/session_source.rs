@@ -82,6 +82,81 @@ impl FileSystemRepository {
     }
 }
 
+/// 走査キュー(セッション一覧の逐次読み込み。PoC)の対象1件。列挙時点では
+/// ファイルの中身を読まず、パスとメタデータだけで組み立てる軽量な参照。
+/// `session_id` はファイル名(`<セッションID>.jsonl`)から取り、中身の
+/// `sessionId` とは照合しない(中身は走査(`parse_session_file`)が正とする)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionFileRef {
+    /// プロジェクトフォルダ名(`projects_dir` 直下)。
+    pub project: String,
+    /// 会話ファイルの絶対パス。
+    pub file_path: PathBuf,
+    /// ファイル名由来のセッションID。
+    pub session_id: String,
+    /// ファイルの最終更新時刻(キューの実行優先度に使う)。
+    pub modified_at_ms: u64,
+}
+
+impl FileSystemRepository {
+    /// 全プロジェクトの会話ファイルを列挙する(走査キューの入力。PoC)。
+    /// ディレクトリ列挙と `fs::metadata` のみで、**ファイルの中身は読まない**
+    /// (中身を読むのは `parse_session_file`)。サブエージェントのファイルは
+    /// 会話ファイルの従属物のため列挙しない(走査時に
+    /// `list_subagent_file_paths` が解決する)。
+    pub fn enumerate_session_file_refs(&self) -> Result<Vec<SessionFileRef>, AppError> {
+        let entries = fs::read_dir(&self.projects_dir).map_err(|e| {
+            AppError::Io(format!(
+                "{} の読み込みに失敗しました: {}",
+                self.projects_dir.display(),
+                e
+            ))
+        })?;
+        let mut refs = Vec::new();
+        for project_dir in entries
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+        {
+            let Some(project) = project_dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(String::from)
+            else {
+                continue;
+            };
+            for file_path in session_files_by_recency(&project_dir) {
+                let Some(session_id) = file_path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(String::from)
+                else {
+                    continue;
+                };
+                let modified_at_ms = to_millis(fs::metadata(&file_path).and_then(|m| m.modified()));
+                refs.push(SessionFileRef {
+                    project: project.clone(),
+                    file_path,
+                    session_id,
+                    modified_at_ms,
+                });
+            }
+        }
+        Ok(refs)
+    }
+
+    /// 会話ファイル1件を走査して `ParsedSession` を組み立てる(走査キューの
+    /// 実行単位。PoC)。一括版(`list_parsed_sessions`)と同じ組み立て・
+    /// 同じ走査キャッシュ(`cached_or_scanned_summary`)を共有する。
+    pub fn parse_session_file(
+        &self,
+        reference: &SessionFileRef,
+    ) -> Result<ParsedSession, AppError> {
+        let project_dir = self.projects_dir.join(&reference.project);
+        build_parsed_session(&project_dir, &reference.file_path)
+    }
+}
+
 /// `path` が `projects_dir` 配下のとき、直下のプロジェクトフォルダ名を返す。
 fn project_name_from_path(projects_dir: &Path, path: &Path) -> Option<String> {
     let relative = path.strip_prefix(projects_dir).ok()?;
@@ -368,29 +443,35 @@ impl SessionSource for FileSystemRepository {
         let project_dir = self.projects_dir.join(project);
         session_files_by_recency(&project_dir)
             .iter()
-            .map(|path| {
-                let modified_at_ms = to_millis(fs::metadata(path).and_then(|m| m.modified()));
-                let scanned = cached_or_scanned_summary(path, modified_at_ms)?;
-                let subagent_file_paths = list_subagent_file_paths(&project_dir, &scanned.id);
-                Ok(ParsedSession {
-                    session_id: scanned.id,
-                    custom_title: scanned.custom_title,
-                    ai_title: scanned.ai_title,
-                    mode: scanned.mode,
-                    slug: scanned.slug,
-                    last_prompt: scanned.last_prompt,
-                    conversation_file_path: path.clone(),
-                    subagent_file_paths,
-                    modified_at_ms,
-                    // ハブのグラフ表示用の表示補助データ(issue #224)。走査
-                    // キャッシュ(`CachedSessionSummary`)に既に抽出済みの値
-                    // をそのまま使う(新たなファイル読み直しはしない)。
-                    cwd: scanned.cwd,
-                    git_branch: scanned.git_branch,
-                })
-            })
+            .map(|path| build_parsed_session(&project_dir, path))
             .collect()
     }
+}
+
+/// 会話ファイル1件から `ParsedSession` を組み立てる。走査キャッシュ
+/// (`cached_or_scanned_summary`)に相乗りするため、一括版
+/// (`list_parsed_sessions`)と1件版(`parse_session_file`。走査キューの
+/// 実行単位。PoC)の両方から使う。
+fn build_parsed_session(project_dir: &Path, path: &Path) -> Result<ParsedSession, AppError> {
+    let modified_at_ms = to_millis(fs::metadata(path).and_then(|m| m.modified()));
+    let scanned = cached_or_scanned_summary(path, modified_at_ms)?;
+    let subagent_file_paths = list_subagent_file_paths(project_dir, &scanned.id);
+    Ok(ParsedSession {
+        session_id: scanned.id,
+        custom_title: scanned.custom_title,
+        ai_title: scanned.ai_title,
+        mode: scanned.mode,
+        slug: scanned.slug,
+        last_prompt: scanned.last_prompt,
+        conversation_file_path: path.to_path_buf(),
+        subagent_file_paths,
+        modified_at_ms,
+        // ハブのグラフ表示用の表示補助データ(issue #224)。走査キャッシュ
+        // (`CachedSessionSummary`)に既に抽出済みの値をそのまま使う
+        // (新たなファイル読み直しはしない)。
+        cwd: scanned.cwd,
+        git_branch: scanned.git_branch,
+    })
 }
 
 /// `<project_dir>/<session_id>/subagents/agent-*.jsonl` を列挙する

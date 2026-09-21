@@ -223,6 +223,19 @@ export function onPcDataLoading(callback: () => void): Promise<() => void> {
   return unlisten.then((fn) => fn);
 }
 
+// 走査キュー(PoC)の進捗。会話ファイル1件の走査が完了するたびに発火する。
+// ペイロードは進捗表示用の件数のみで、データ本体は購読側が `getPc` で
+// 取り直す(`onPcDataLoaded` と同じ流儀)。
+export type ScanProgress = { completed: number; total: number };
+export function onPcDataProgress(
+  callback: (progress: ScanProgress) => void,
+): Promise<() => void> {
+  const unlisten = listen<ScanProgress>("pc:data_progress", (event) =>
+    callback(event.payload),
+  );
+  return unlisten.then((fn) => fn);
+}
+
 // ハブグラフのノード位置(ドラッグ固定)を取得する(issue #121)。
 export function getHubLayout(): Promise<HubLayoutDto> {
   return invoke<HubLayoutDto>("get_hub_layout");

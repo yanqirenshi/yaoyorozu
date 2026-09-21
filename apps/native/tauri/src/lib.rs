@@ -1,5 +1,6 @@
 mod dto;
 mod local_api;
+mod session_scan_queue;
 mod state;
 
 use app::{SettingsStore, TokenStore};
@@ -495,14 +496,16 @@ fn apply_session_display_hints(dto: &mut PcDto, parsed: &[domain::ParsedSession]
 }
 
 /// 登録済み全リポジトリのGit状態(ブランチ・worktree)を再観測して台帳を
-/// 更新し、あわせて全プロジェクトから`Session`一覧も再構築して
-/// `AppState`へ書き込む(オブジェクトモデル実装 第3弾。issue #193/
-/// 第4弾。issue #197)。起動後のバックグラウンドタスク
-/// (`start_pc_data_background_load`)と `reconcile_git_state` command の
-/// 両方から使う共通処理(issue #212)。ロックは設定値取得時と書き込み時の
-/// 短時間だけ保持し、git実行・jsonl走査の間は保持しない(UI操作を
-/// ブロックしないため)。
-async fn reload_git_ledger_and_sessions(app: &tauri::AppHandle) -> Result<(), app::AppError> {
+/// 更新する(オブジェクトモデル実装 第3弾。issue #193)。起動後の
+/// バックグラウンドタスク(`start_pc_data_background_load`)と
+/// `reconcile_git_state` command の両方から使う共通処理(issue #212)。
+/// ロックは設定値取得時と書き込み時の短時間だけ保持し、git実行の間は
+/// 保持しない(UI操作をブロックしないため)。
+///
+/// セッション一覧の走査はここでは行わない(走査キューPoC:
+/// `session_scan_queue::start` がjsonlファイル単位で逐次実行する。
+/// `pc_data_loaded` を `true` に戻すのもキュー側の責務)。
+async fn reload_git_ledger(app: &tauri::AppHandle) -> Result<(), app::AppError> {
     let (settings, previous_ledger, git_ledger_path) = {
         let state = app.state::<Mutex<AppState>>();
         let guard = state.lock().await;
@@ -514,39 +517,27 @@ async fn reload_git_ledger_and_sessions(app: &tauri::AppHandle) -> Result<(), ap
     };
 
     let spawn_result = tauri::async_runtime::spawn_blocking(move || {
-        let ledger =
-            state::reconcile_and_save_git_ledger(&settings, &previous_ledger, &git_ledger_path);
-        let sessions = state::build_and_report_user_sessions(&settings);
-        (ledger, sessions)
+        state::reconcile_and_save_git_ledger(&settings, &previous_ledger, &git_ledger_path)
     })
     .await;
 
-    let state = app.state::<Mutex<AppState>>();
-    let mut guard = state.lock().await;
-    // 成否によらずここまで来たら「読み込み完了」扱いにする(issue #218:
-    // 観測・走査が失敗しても`pc_data_loaded`が永久に`false`のままにならない
-    // ようにする。失敗の詳細はこの後の`?`で呼び出し元へ伝わり、既存の
-    // fail-safe・ログ出力(`reconcile_and_save_git_ledger`/
-    // `build_and_report_user_sessions`)に委ねる)。
-    guard.pc_data_loaded = true;
-
-    let (new_ledger, new_sessions) = spawn_result
+    let new_ledger = spawn_result
         .map_err(|_| app::AppError::Io("バックグラウンド処理に失敗しました".to_string()))?;
-    guard.git_ledger = new_ledger;
-    guard.user_sessions = new_sessions?;
+    let state = app.state::<Mutex<AppState>>();
+    state.lock().await.git_ledger = new_ledger;
     Ok(())
 }
 
 /// ハブの「再読み込み」操作から呼ぶ想定(issue #193/#197)。明示操作のため
-/// 同期応答のままでよい(issue #212の注記)。実体は
-/// `reload_git_ledger_and_sessions` を共有する。
+/// 同期応答のままでよい(issue #212の注記)。
 ///
 /// 手動実行中も「読み込み中」を表示できるよう(issue #245)、開始時に
-/// `pc_data_loaded` を`false`へ戻して`pc:data_loading`を発火し、完了時は
-/// 成否によらず(`reload_git_ledger_and_sessions`が`true`に戻す。issue #218の
-/// 「永久loading防止」の保証を維持)`pc:data_loaded`を発火する。起動時の
-/// バックグラウンド読み込み(`start_pc_data_background_load`)の挙動は
-/// 変えない。イベントはロックを離してから発火する(native.md §2)。
+/// `pc_data_loaded` を`false`へ戻して`pc:data_loading`を発火する。
+/// セッション一覧は走査キュー(PoC。`session_scan_queue::start`)が
+/// jsonlファイル単位で再走査し、完了したものから`pc:data_progress`で
+/// 逐次通知、全件完了時に成否によらず`pc_data_loaded`を`true`へ戻して
+/// `pc:data_loaded`を発火する(issue #218の「永久loading防止」の保証は
+/// キュー側が引き継ぐ)。イベントはロックを離してから発火する(native.md §2)。
 #[tauri::command]
 async fn reconcile_git_state(app: tauri::AppHandle) -> Result<(), AppErrorDto> {
     {
@@ -555,8 +546,8 @@ async fn reconcile_git_state(app: tauri::AppHandle) -> Result<(), AppErrorDto> {
     }
     let _ = app.emit("pc:data_loading", ());
 
-    let result = reload_git_ledger_and_sessions(&app).await;
-    let _ = app.emit("pc:data_loaded", ());
+    let result = reload_git_ledger(&app).await;
+    session_scan_queue::start(app.clone()).await;
     result.map_err(Into::into)
 }
 
@@ -1381,10 +1372,14 @@ fn start_github_session_check(app: &tauri::App) {
 fn start_pc_data_background_load(app: &tauri::App) {
     let app_handle = app.handle().clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = reload_git_ledger_and_sessions(&app_handle).await {
-            eprintln!("起動後のPCデータ読み込みに失敗しました: {e}");
+        if let Err(e) = reload_git_ledger(&app_handle).await {
+            eprintln!("起動後のGit台帳の読み込みに失敗しました: {e}");
         }
-        let _ = app_handle.emit("pc:data_loaded", ());
+        // セッション一覧は走査キュー(PoC)がjsonlファイル単位で読み込み、
+        // 完了したものから`pc:data_progress`で逐次通知する。全件完了時に
+        // `pc_data_loaded`を`true`へ戻して`pc:data_loaded`を発火するのも
+        // キュー側の責務(issue #218の保証を引き継ぐ)。
+        session_scan_queue::start(app_handle).await;
     });
 }
 
