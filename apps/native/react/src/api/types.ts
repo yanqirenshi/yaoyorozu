@@ -18,6 +18,8 @@ export type MessageDto = {
   role: RoleDto;
   text: string;
   timestamp: string;
+  // 元の jsonl 行の uuid(「データ」表示用。issue #313)。行に無ければ null。
+  uuid: string | null;
 };
 
 // 表示中の会話(issue #197でRust側`Session`→`Conversation`に改名したのに

@@ -1260,6 +1260,70 @@ body,
   cursor: pointer;
 }
 
+/* 元データ(jsonl の1行)のモーダル(issue #313)。プロファイル削除の確認と同じ
+   `settings-dialog` を土台に、幅を広げ、長い行は中身の枠の中でスクロールさせる。 */
+.raw-line-dialog {
+  width: min(880px, calc(100vw - 32px));
+  max-width: none;
+}
+
+.raw-line-dialog-body {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 96px);
+  box-sizing: border-box;
+}
+
+.raw-line-dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.raw-line-dialog-head h3 {
+  margin: 0;
+}
+
+.raw-line-dialog-close {
+  border: none;
+  background: none;
+  font-size: 1.4rem;
+  line-height: 1;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.raw-line-dialog-close:hover {
+  color: var(--text-primary);
+}
+
+.raw-line-dialog-body .raw-line-dialog-uuid {
+  margin: 0 0 12px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.raw-line-dialog-pre {
+  flex: 1;
+  min-height: 0;
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  overflow: auto;
+  background-color: var(--surface-sunken);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* 共通部品「追加ボタン」「変更ボタン」(issue #277)。仕様の正は apps/web の
    `src/data/uiButton.ts`(`/ui?item=part-button`)。値は書き写さず、tokens.css の
    CSS 変数だけで参照する(hex の直書きなし)。アイコンは付けず文字だけ。 */
@@ -1646,6 +1710,32 @@ body,
   /* 墨-100 の背景上でも読めるよう、placeholder(約4.2:1)より濃い secondary にする(issue #297)。 */
   color: var(--text-secondary);
   overflow-wrap: anywhere;
+}
+
+/* 「データ」ボタン(issue #313)。メタ情報と同じ淡いトーンの小さなテキストボタン。 */
+.message-meta-data {
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--text-secondary);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.message-meta-assistant .message-meta-data {
+  align-self: flex-end;
+}
+
+.message-meta-data:hover {
+  color: var(--text-primary);
+}
+
+.message-meta-data:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .message-meta-assistant {

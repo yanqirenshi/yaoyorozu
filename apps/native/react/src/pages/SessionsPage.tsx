@@ -37,6 +37,7 @@ import type { JsonFileEditorHandle } from "../JsonFileEditor";
 import { formatTimestamp } from "../formatTimestamp";
 import MessageText from "../MessageText";
 import ProfileSettingsPane from "../ProfileSettingsPane";
+import RawLineDialog from "../RawLineDialog";
 import ViewerSideMenu from "../ViewerSideMenu";
 import ViewerToolbar from "../ViewerToolbar";
 import { createProjectSettingsDockItems } from "../projectSettingsDockItems";
@@ -102,6 +103,8 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 「データ」ボタンで開いているメッセージの uuid(閉じていれば null。issue #313)。
+  const [rawLineUuid, setRawLineUuid] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [mode, setMode] = useState<AgentModeDto>("chat");
@@ -619,6 +622,14 @@ function SessionsPage({ nav }: SessionsPageProps) {
                 <p>左の一覧からセッションを選択してください。</p>
               ) : (
                 <>
+                  {rawLineUuid && (
+                    <RawLineDialog
+                      project={projectParam}
+                      sessionId={sessionParam}
+                      uuid={rawLineUuid}
+                      onClose={() => setRawLineUuid(null)}
+                    />
+                  )}
                   <div className="messages">
                     {messages.map((m, i) => {
                       // 吹き出しの横に、種類(role)と日時を小さく淡く出す
@@ -629,6 +640,16 @@ function SessionsPage({ nav }: SessionsPageProps) {
                           <div className={`message-meta message-meta-${m.role}`}>
                             <span className="message-meta-role">{m.role}</span>
                             {time && <span className="message-meta-time">{time}</span>}
+                            {/* 元の jsonl 行をモーダルで見る(issue #313)。uuid の無い行は出さない。 */}
+                            {m.uuid && (
+                              <button
+                                type="button"
+                                className="message-meta-data"
+                                onClick={() => setRawLineUuid(m.uuid)}
+                              >
+                                データ
+                              </button>
+                            )}
                           </div>
                           <div className={`message message-${m.role}`}>
                             <MessageText text={m.text} />

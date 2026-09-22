@@ -5,6 +5,9 @@ pub struct Message {
     pub role: Role,
     pub text: String,
     pub timestamp: String,
+    /// メッセージの組み立て元の会話チェーン行の `uuid`(issue #313)。元の jsonl 行を
+    /// 引き当てるためのキー。行に `uuid` が無ければ `None`。
+    pub uuid: Option<String>,
 }
 
 /// 会話ログは記録順(古い順)で保持されるため、表示直前に反転して新しい順にする。
@@ -29,11 +32,13 @@ mod tests {
                 role: Role::User,
                 text: "first".to_string(),
                 timestamp: "1".to_string(),
+                uuid: None,
             },
             Message {
                 role: Role::Assistant,
                 text: "second".to_string(),
                 timestamp: "2".to_string(),
+                uuid: None,
             },
         ];
 
@@ -48,6 +53,7 @@ mod tests {
             role: Role::User,
             text: text.to_string(),
             timestamp: String::new(),
+            uuid: None,
         }
     }
 

@@ -1,7 +1,7 @@
 use domain::{
-    is_valid_claude_dir_path, is_valid_json, is_valid_rule_file_name, is_valid_session_id,
-    is_valid_skill_name, order_messages_newest_first, paginate_messages, reconcile_branches,
-    reconcile_worktrees, repositories_from_profiles, sort_claude_dir_entries,
+    is_valid_claude_dir_path, is_valid_json, is_valid_project_dir_name, is_valid_rule_file_name,
+    is_valid_session_id, is_valid_skill_name, order_messages_newest_first, paginate_messages,
+    reconcile_branches, reconcile_worktrees, repositories_from_profiles, sort_claude_dir_entries,
     sort_projects_by_recency, sort_sessions_by_recency, Camera, ClaudeDirEntry, ClaudeDirPage,
     ClaudeMdFile, ClaudeSettingsFile, Conversation, GitLedger, GitRepositoryLedger, HubLayout,
     HubTuning, LogLine, NodePosition, ParsedSession, Project, RuleSummary, SessionSummary,
@@ -106,6 +106,17 @@ pub trait SessionSource {
     /// ある点に注意。行の変換に失敗した行(uuid/timestamp欠損等)は
     /// 実装側でスキップし、警告ログを出すこと(issue本文の指示)。
     fn session_lines(&self, project: &str, session_id: &str) -> Result<Vec<LogLine>, AppError>;
+
+    /// 指定セッションの会話ファイルから、`uuid` が一致する行の**生のテキスト**を返す
+    /// (ビューアの「データ」表示。issue #313)。読み取りのみ。見つからなければ
+    /// `AppError::NotFound`。メッセージ一覧には生の行を載せず、必要なときだけ
+    /// この問い合わせで取る(tool 結果などで行が非常に大きいことがあるため)。
+    fn session_line_raw(
+        &self,
+        project: &str,
+        session_id: &str,
+        uuid: &str,
+    ) -> Result<String, AppError>;
 }
 
 /// アプリ設定の永続化(port)。実体(ファイル形式・保存先の解決)は infra に
@@ -385,6 +396,31 @@ pub fn get_session(
     order_messages_newest_first(&mut session.messages);
     session.messages = paginate_messages(&session.messages, offset, limit);
     Ok(session)
+}
+
+/// 指定メッセージ(会話チェーン行の `uuid`)の元の jsonl 行を、生のテキストで
+/// 返す(issue #313)。フロントから受け取った値はパスの構築に使うため、ここで
+/// 検証する(native.md §4)。
+pub fn get_session_line_raw(
+    source: &dyn SessionSource,
+    project: &str,
+    session_id: &str,
+    uuid: &str,
+) -> Result<String, AppError> {
+    if !is_valid_project_dir_name(project) {
+        return Err(AppError::InvalidInput(
+            "不正なプロジェクト名です".to_string(),
+        ));
+    }
+    if !is_valid_session_id(session_id) {
+        return Err(AppError::InvalidInput("不正なセッションIDです".to_string()));
+    }
+    // uuid はファイルパスには使わないが、行の照合キーとして想定外の値
+    // (空など)を弾く。形式は session_id と同じ(英数字とハイフン)。
+    if !is_valid_session_id(uuid) {
+        return Err(AppError::InvalidInput("不正なメッセージIDです".to_string()));
+    }
+    source.session_line_raw(project, session_id, uuid)
 }
 
 /// 指定セッションの会話ファイルを`LogLine`一覧として読み込む(オブジェクト
@@ -1446,6 +1482,8 @@ mod tests {
         sessions: Vec<SessionSummary>,
         parsed_sessions: HashMap<String, Result<Vec<ParsedSession>, ()>>,
         log_lines: Result<Vec<LogLine>, ()>,
+        /// `session_line_raw` が返す生の行。`None` は見つからない(`NotFound`)。
+        raw_line: Option<String>,
     }
 
     impl FakeSessionSource {
@@ -1461,6 +1499,7 @@ mod tests {
                 sessions: Vec::new(),
                 parsed_sessions: HashMap::new(),
                 log_lines: Ok(Vec::new()),
+                raw_line: None,
             }
         }
     }
@@ -1519,6 +1558,17 @@ mod tests {
                 .clone()
                 .map_err(|()| AppError::Io("boom".to_string()))
         }
+
+        fn session_line_raw(
+            &self,
+            _project: &str,
+            _session_id: &str,
+            _uuid: &str,
+        ) -> Result<String, AppError> {
+            self.raw_line
+                .clone()
+                .ok_or_else(|| AppError::NotFound("該当する行が見つかりませんでした".to_string()))
+        }
     }
 
     #[derive(Default)]
@@ -1575,11 +1625,13 @@ mod tests {
                     role: Role::User,
                     text: "first".to_string(),
                     timestamp: "".to_string(),
+                    uuid: None,
                 },
                 Message {
                     role: Role::Assistant,
                     text: "second".to_string(),
                     timestamp: "".to_string(),
+                    uuid: None,
                 },
             ],
         );
@@ -1601,6 +1653,7 @@ mod tests {
                     role: Role::User,
                     text: text.to_string(),
                     timestamp: "".to_string(),
+                    uuid: None,
                 })
                 .collect(),
         );
@@ -1680,6 +1733,44 @@ mod tests {
         // 別のパスは追加される
         upsert_parsed_session(&mut sessions, sample_parsed_session("b"));
         assert_eq!(sessions.len(), 2);
+    }
+
+    #[test]
+    fn get_session_line_raw_returns_raw_text_and_maps_not_found() {
+        let mut source = FakeSessionSource::new("s1", vec![]);
+        source.raw_line = Some(r#"{"uuid":"u-1"}"#.to_string());
+        assert_eq!(
+            get_session_line_raw(&source, "proj", "s1", "u-1").unwrap(),
+            r#"{"uuid":"u-1"}"#
+        );
+
+        source.raw_line = None;
+        assert!(matches!(
+            get_session_line_raw(&source, "proj", "s1", "u-1"),
+            Err(AppError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn get_session_line_raw_rejects_unsafe_inputs_before_touching_the_source() {
+        let mut source = FakeSessionSource::new("s1", vec![]);
+        source.raw_line = Some("x".to_string());
+        for (project, session_id, uuid) in [
+            ("..", "s1", "u-1"),
+            ("a/b", "s1", "u-1"),
+            ("", "s1", "u-1"),
+            ("proj", "../s1", "u-1"),
+            ("proj", "s1", ""),
+            ("proj", "s1", "u 1"),
+        ] {
+            assert!(
+                matches!(
+                    get_session_line_raw(&source, project, session_id, uuid),
+                    Err(AppError::InvalidInput(_))
+                ),
+                "should reject ({project:?}, {session_id:?}, {uuid:?})"
+            );
+        }
     }
 
     #[test]

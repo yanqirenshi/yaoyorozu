@@ -163,7 +163,7 @@ mod tests {
                 "{text}"
             );
 
-            let parts = |m: Message| (m.role, m.text, m.timestamp);
+            let parts = |m: Message| (m.role, m.text, m.timestamp, m.uuid);
             let old_message = value.as_ref().and_then(extract_message);
             let new_message = scanned.as_ref().and_then(ScannedLine::message);
             assert_eq!(

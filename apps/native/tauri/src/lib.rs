@@ -93,6 +93,30 @@ async fn list_projects(
 /// 実装上は別読み込みだが、セッションを開いた操作に相乗りする形で
 /// 「開いたときに組み立てる」意図を満たす)。LogLine側の読み込みに
 /// 失敗しても会話表示自体は妨げない(fail-safe。警告ログのみ)。
+/// メッセージ(会話チェーン行の `uuid`)の元の jsonl 行を、生のテキストで返す
+/// (ビューアの「データ」表示。issue #313)。読み取りのみ。行が見つからなければ
+/// `NOT_FOUND`。メッセージ一覧(`get_session`)には生の行を載せない。
+#[tauri::command]
+async fn get_session_line_raw(
+    state: tauri::State<'_, Mutex<AppState>>,
+    project: String,
+    session_id: String,
+    uuid: String,
+) -> Result<String, AppErrorDto> {
+    let root = effective_projects_dir_from_state(&state).await?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let source = FileSystemRepository::new(root);
+        app::get_session_line_raw(&source, &project, &session_id, &uuid)
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(AppErrorDto::from)
+}
+
 #[tauri::command]
 async fn get_session(
     state: tauri::State<'_, Mutex<AppState>>,
@@ -1602,6 +1626,7 @@ pub fn run() {
             get_rule,
             list_skills,
             get_skill,
+            get_session_line_raw,
             get_project_settings_file,
             save_project_settings_file,
             get_claude_settings_file,

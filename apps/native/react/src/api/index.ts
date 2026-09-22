@@ -98,6 +98,15 @@ export function getSession(
   return invoke<ConversationDto>("get_session", { project, sessionId, offset, limit });
 }
 
+// メッセージの元の jsonl 行(生のテキスト)。オンデマンドで取る(issue #313)。
+export function getSessionLineRaw(
+  project: string,
+  sessionId: string,
+  uuid: string,
+): Promise<string> {
+  return invoke<string>("get_session_line_raw", { project, sessionId, uuid });
+}
+
 export function listSessions(project: string): Promise<SessionSummaryDto[]> {
   return invoke<SessionSummaryDto[]>("list_sessions", { project });
 }

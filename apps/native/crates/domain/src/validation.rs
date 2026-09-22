@@ -17,6 +17,17 @@ pub fn is_valid_session_id(id: &str) -> bool {
     !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
+/// プロジェクトフォルダ名(`~/.claude/projects/` 直下の1階層)がパスの構築に
+/// 使って安全な形式かを検証する(issue #313)。フロントから受け取った値を
+/// そのままパスに使わないための入力検証(native.md §4)。空・`.`・`..`・
+/// パス区切り(`/` `\`)・NUL を含むものは拒否する。
+pub fn is_valid_project_dir_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.chars().any(|c| c == '/' || c == '\\' || c == '\0')
+}
+
 /// ルールファイル名がパスの構築に使って安全な形式かを検証する。フロントから
 /// 受け取った値をそのままパスに使わないための入力検証(native.md §4)。
 /// パス区切り(`/` `\`)・`..` を含まず、`.md` で終わる単一セグメントのみ
@@ -88,6 +99,20 @@ mod tests {
     fn is_valid_session_id_rejects_path_traversal_attempts() {
         for bad in ["../../etc/passwd", "a/b", "a\\b", "a.jsonl", "a b"] {
             assert!(!is_valid_session_id(bad), "should reject {bad:?}");
+        }
+    }
+
+    #[test]
+    fn is_valid_project_dir_name_accepts_claude_code_folder_names() {
+        for good in ["C--Users-yanqi-prj-yaoyorozu", "-home-user-proj", "a.b"] {
+            assert!(is_valid_project_dir_name(good), "should accept {good:?}");
+        }
+    }
+
+    #[test]
+    fn is_valid_project_dir_name_rejects_path_traversal_attempts() {
+        for bad in ["", ".", "..", "a/b", "a\\b", "../x", "a\0b"] {
+            assert!(!is_valid_project_dir_name(bad), "should reject {bad:?}");
         }
     }
 
