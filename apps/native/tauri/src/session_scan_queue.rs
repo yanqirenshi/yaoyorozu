@@ -11,9 +11,12 @@
 //!   取得のみで、ファイルの中身は読まない(キューの実行優先度は mtime で
 //!   近似する。timestamp を使う機能が無く近似で足りるため、正確な値は取らない。
 //!   issue #296 のスコープ再評価で「やらない」と判断した)
-//! - 段階2(`Session`への組み立て)は従来どおり `get_pc` 時の純粋変換、
-//!   段階3(`LogLine`)は従来どおり遅延読み込みのままで、このキューは
-//!   触らない(全行を常駐させない)
+//! - 段階2(`Session`/`SessionFile`への組み立て)は**常駐化**した(Session常駐化
+//!   PoC): 素材(`user_sessions`)を変更した箇所が `app::refresh_user_sessions` で
+//!   `AppState.pc` 内の保持ツリーを更新し、`get_pc` は組み立てをしない
+//! - 段階3(`LogLine`)は従来どおり遅延読み込み(開いたときに読む)だが、
+//!   読み込み済みファイルに変更があれば差分再走査が行も自動で読み直す
+//!   (`rescan_batch`)
 //! - 並列度は既定6。環境変数 `YAOYOROZU_SCAN_CONCURRENCY` での上書きのみ対応する。
 //!   走査のパース高速化(issue #302)後の実測で、並列度は4〜6で頭打ち(52ファイルの
 //!   全件が 4並列0.89s / 6並列0.81s / 8並列0.74s / 12並列0.80s)のため、設定
@@ -29,7 +32,7 @@
 //!   (`AppState.session_scan_generation`)で防ぐ(旧世代の結果は適用しない)
 
 use crate::state::{self, AppState};
-use domain::ParsedSession;
+use domain::{LogLine, ParsedSession};
 use infra::{FileSystemRepository, SessionFileRef};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -142,7 +145,12 @@ pub async fn start(app_handle: tauri::AppHandle) {
                 return; // 旧世代: 適用しない
             }
             match parsed {
-                Ok(Ok(parsed)) => app::upsert_parsed_session(&mut guard.user_sessions, parsed),
+                Ok(Ok(parsed)) => {
+                    let state_mut = &mut *guard;
+                    app::upsert_parsed_session(&mut state_mut.user_sessions, parsed);
+                    // 常駐化: 素材の変更を保持ツリー(AppState.pc)へ反映する
+                    app::refresh_user_sessions(&mut state_mut.pc, &state_mut.user_sessions);
+                }
                 Ok(Err(e)) => eprintln!(
                     "走査キュー: {} の走査に失敗したためスキップします: {e}",
                     file_path.display()
@@ -184,7 +192,14 @@ async fn finish(
         }
         if let Some(paths) = enumerated_paths {
             app::retain_enumerated_parsed_sessions(&mut guard.user_sessions, &paths);
+            // 常駐化: 列挙に無かった(消えた)ファイルは行キャッシュも後始末する
+            guard
+                .loaded_log_lines
+                .retain(|path, _| paths.contains(path));
         }
+        // 常駐化: 後始末の結果を保持ツリーへ反映する
+        let state_mut = &mut *guard;
+        app::refresh_user_sessions(&mut state_mut.pc, &state_mut.user_sessions);
         guard.pc_data_loaded = true;
     }
     let _ = app_handle.emit("pc:data_loaded", ());
@@ -252,15 +267,18 @@ async fn run_rescan_worker(app_handle: tauri::AppHandle) {
     }
 }
 
-/// 差分再走査の結果1件。
+/// 差分再走査の結果1件。`Parsed` の第2要素は再読込した行(`LogLine`)。
+/// 行を読み直すのは「読み込み済み(ビューアで開いたことがある)ファイル」の
+/// 変更時のみで、それ以外は `None`(遅延読み込みの原則は変えない。常駐化 PoC)。
 enum RescanOutcome {
-    Parsed(Box<ParsedSession>),
+    Parsed(Box<ParsedSession>, Option<Vec<LogLine>>),
     Removed(PathBuf),
     Failed(PathBuf, String),
 }
 
-/// 変更のあった会話ファイルを走査して `user_sessions` へ反映する。何か反映したら
-/// `true`(通知が必要)。
+/// 変更のあった会話ファイルを走査して `user_sessions` と保持ツリー
+/// (`AppState.pc`)へ反映する。読み込み済みファイルは行(`LogLine`)も
+/// 読み直す(常駐化 PoC)。何か反映したら `true`(通知が必要)。
 async fn rescan_batch(
     app_handle: &tauri::AppHandle,
     generation: u64,
@@ -275,17 +293,48 @@ async fn rescan_batch(
         }
     };
 
+    // 行の再読込対象(読み込み済みファイル)かどうかを先に確定する
+    // (I/O前の短いロック。native.md §2)
+    let loaded_paths: HashSet<PathBuf> = {
+        let state = app_handle.state::<Mutex<AppState>>();
+        let guard = state.lock().await;
+        batch
+            .iter()
+            .filter(|path| guard.loaded_log_lines.contains_key(*path))
+            .cloned()
+            .collect()
+    };
+
     // 走査(ファイルI/O)はロックの外で行う(native.md §2)
     let mut outcomes = Vec::with_capacity(batch.len());
     for path in batch {
         let dir = projects_dir.clone();
         let target = path.clone();
+        let reload_lines = loaded_paths.contains(&path);
         let outcome = tauri::async_runtime::spawn_blocking(move || {
             let repo = FileSystemRepository::new(dir);
             match repo.session_file_ref(&target) {
                 None => RescanOutcome::Removed(target),
                 Some(reference) => match repo.parse_session_file(&reference) {
-                    Ok(parsed) => RescanOutcome::Parsed(Box::new(parsed)),
+                    Ok(parsed) => {
+                        let lines = if reload_lines {
+                            app::load_session_lines(
+                                &repo,
+                                &reference.project,
+                                &reference.session_id,
+                            )
+                            .inspect_err(|e| {
+                                eprintln!(
+                                    "差分再走査: {} の行の再読込に失敗しました(行キャッシュは前回のまま): {e}",
+                                    target.display()
+                                )
+                            })
+                            .ok()
+                        } else {
+                            None
+                        };
+                        RescanOutcome::Parsed(Box::new(parsed), lines)
+                    }
                     Err(e) => RescanOutcome::Failed(target, e.to_string()),
                 },
             }
@@ -308,18 +357,32 @@ async fn rescan_batch(
     let mut changed = false;
     for outcome in outcomes {
         match outcome {
-            RescanOutcome::Parsed(parsed) => {
+            RescanOutcome::Parsed(parsed, lines) => {
+                if let Some(lines) = lines {
+                    guard
+                        .loaded_log_lines
+                        .insert(parsed.conversation_file_path.clone(), lines);
+                }
                 app::upsert_parsed_session(&mut guard.user_sessions, *parsed);
                 changed = true;
             }
             RescanOutcome::Removed(path) => {
                 changed |= app::remove_parsed_session(&mut guard.user_sessions, &path);
+                // 常駐化: 削除されたファイルの行キャッシュも後始末する
+                if guard.loaded_log_lines.remove(&path).is_some() {
+                    changed = true;
+                }
             }
             RescanOutcome::Failed(path, message) => eprintln!(
                 "差分再走査: {} の走査に失敗したためスキップします: {message}",
                 path.display()
             ),
         }
+    }
+    if changed {
+        // 常駐化: 素材の変更を保持ツリー(AppState.pc)へ反映する
+        let state_mut = &mut *guard;
+        app::refresh_user_sessions(&mut state_mut.pc, &state_mut.user_sessions);
     }
     changed
 }
