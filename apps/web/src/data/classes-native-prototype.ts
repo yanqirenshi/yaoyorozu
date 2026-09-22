@@ -116,6 +116,9 @@ const DEFS: ClassDef[] = [
       attr("role", "Role"),
       attr("text", "String"),
       attr("timestamp", "String"),
+      // 組み立て元の会話チェーン行の uuid(issue #313)。元の jsonl 行を引き当てる
+      // ためのキー。行に uuid が無ければ None。
+      attr("uuid", "Option<String>"),
     ],
     position: { x: 2450, y: 150 },
     filePath: "apps/native/crates/domain/src/message.rs",
