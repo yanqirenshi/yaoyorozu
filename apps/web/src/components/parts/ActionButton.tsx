@@ -53,16 +53,10 @@ export function buttonColors(kind: ButtonKind, state: ButtonState) {
 
 function colorSx(kind: ButtonKind, state: ButtonState) {
   const c = buttonColors(kind, state);
-  const shadow = kindSpec(kind).textShadow;
   return {
     backgroundColor: c.bg,
     color: c.fg,
     borderColor: c.border,
-    // 陰は文字を読みやすくするためのもの。無効の状態では付けない。
-    textShadow:
-      shadow && state !== "disabled"
-        ? "0 0 " + shadow.blur + " " + resolveColor(shadow.color).value
-        : "none",
   };
 }
 

@@ -75,14 +75,6 @@ export type ButtonColors = {
   border: string;
 };
 
-/** ラベルの文字に付ける陰。無効の状態には付けない。 */
-export type ButtonTextShadow = {
-  /** 陰の色(色の参照)。 */
-  color: string;
-  /** ぼかしの半径。 */
-  blur: string;
-};
-
 export type ButtonKind = "add" | "edit";
 
 export type ButtonKindSpec = {
@@ -96,7 +88,6 @@ export type ButtonKindSpec = {
   emphasis: "filled" | "outlined";
   usage: string;
   colors: Record<ButtonState, ButtonColors>;
-  textShadow?: ButtonTextShadow;
   /** 文字の読みやすさ(コントラスト比と、基準を満たすかどうか)。 */
   contrast: string;
 };
@@ -116,21 +107,20 @@ export const BUTTON_KINDS: ButtonKindSpec[] = [
     usage:
       "新しい対象を作る操作。一覧の上部やパネルのヘッダに置き、その画面の主要な操作として扱う。",
     colors: {
-      // 金茶-500 は白い文字と 2.61:1 で基準を満たさないため、文字は墨-900 にする。
-      // 文字が暗いので、ホバー・押下中は背景を明るくする方向に変える。
-      default: { bg: "金茶-500", fg: "text.primary", border: "金茶-500" },
-      hover: { bg: "金茶-400", fg: "text.primary", border: "金茶-400" },
-      active: { bg: "金茶-300", fg: "text.primary", border: "金茶-300" },
+      // 文字は白、陰なし(2026-09-23 決定)。見た目を優先した判断であり、
+      // コントラストは基準を満たさない(下の contrast を参照)。
+      // ホバー・押下中に背景を明るくするのは、文字が墨-900 だった時期の名残である。
+      default: { bg: "金茶-500", fg: "text.inverse", border: "金茶-500" },
+      hover: { bg: "金茶-400", fg: "text.inverse", border: "金茶-400" },
+      active: { bg: "金茶-300", fg: "text.inverse", border: "金茶-300" },
       disabled: {
         bg: "state.disabled",
         fg: "text.disabled",
         border: "state.disabled",
       },
     },
-    // 金茶の地の上で墨の文字の輪郭を立たせるため、白い陰を付ける。
-    textShadow: { color: "text.inverse", blur: "2px" },
     contrast:
-      "墨-900 の文字に対して 4.56:1 / 5.83:1 / 7.23:1(通常 / ホバー / 押下中)。本文の基準(4.5:1)を満たす。文字には白い陰を付けて、金茶の地から輪郭を立たせている。",
+      "白の文字は 金茶-500 に対して 2.61:1(ホバーの 金茶-400 で 2.04:1、押下中の 金茶-300 で 1.65:1)で、本文の基準(4.5:1)も大きな文字・UI の基準(3:1)も満たさない。色味を優先して採用している(2026-09-23 決定)。",
   },
   {
     key: "edit",
