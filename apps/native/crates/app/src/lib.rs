@@ -751,6 +751,21 @@ pub fn pc_with_user_sessions(mut pc: domain::Pc, parsed: Vec<ParsedSession>) -> 
     pc
 }
 
+/// 保持中の`Pc`ツリーへ、素材(`ParsedSession`)から`Session`/`SessionFile`を
+/// 組み立て直して反映する(Session常駐化 PoC)。
+///
+/// 従来は`get_pc`のたびに`pc_with_user_sessions`で使い捨てのツリーを組み立てて
+/// いたが、常駐化後は**素材が変わったとき**(走査キューの完了・差分再走査)に
+/// この関数で保持ツリーを更新し、クエリ時はDTO変換だけにする。
+/// 組み立て(`User::load_sessions`)はI/Oを伴わない純粋変換のため、変更のたびに
+/// 全ユーザー分を再構築しても走査は発生しない(`session_id`単位の部分再集約は
+/// 現状のセッション件数では不要と判断。必要になれば`User`側に部分更新を足す)。
+pub fn refresh_user_sessions(pc: &mut domain::Pc, parsed: &[ParsedSession]) {
+    for user in &mut pc.users {
+        user.load_sessions(parsed.to_vec());
+    }
+}
+
 /// 走査キュー(セッション一覧の逐次読み込み。PoC)の1件完了を
 /// `AppState.user_sessions` へ反映する。キーは会話ファイルパス
 /// (同一パスは置換・無ければ追加)。同一 `session_id` の別ファイル
@@ -1717,6 +1732,31 @@ mod tests {
             cwd: None,
             git_branch: None,
         }
+    }
+
+    #[test]
+    fn refresh_user_sessions_populates_and_replaces_held_sessions() {
+        let mut pc = domain::Pc {
+            system_uuid: "uuid".to_string(),
+            pc_name: "pc".to_string(),
+            description: String::new(),
+            users: vec![domain::User {
+                user_id: "yanqi".to_string(),
+                user_name: "yanqi".to_string(),
+                home_directory: PathBuf::from("C:/Users/yanqi"),
+                repositories: Vec::new(),
+                sessions: Vec::new(),
+            }],
+        };
+
+        refresh_user_sessions(&mut pc, &[sample_parsed_session("a")]);
+        assert_eq!(pc.users[0].sessions.len(), 1);
+        assert_eq!(pc.users[0].sessions[0].session_id, "a");
+
+        // 素材の変化で保持ツリーが置き換わる(古いセッションは残らない)
+        refresh_user_sessions(&mut pc, &[sample_parsed_session("b")]);
+        assert_eq!(pc.users[0].sessions.len(), 1);
+        assert_eq!(pc.users[0].sessions[0].session_id, "b");
     }
 
     #[test]

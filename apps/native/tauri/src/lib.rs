@@ -475,9 +475,10 @@ async fn list_window_states(
 /// 再読み込み操作時にのみ突き合わせ済みのもの)を差し込むだけで、ここでは
 /// gitコマンドを実行しない(issue #193。`app::reconcile_git_ledger` の
 /// ドキュメントコメント参照: 都度実行するには重すぎるため)。
-/// `User.sessions` も同様に `AppState.user_sessions`(起動時と再読み込み
-/// 操作時にのみ組み立て済みのもの)を差し込むだけで、ここではjsonlを
-/// 走査しない(issue #197)。`Session.conversation_files[].lines`(`LogLine`)は
+/// `User.sessions` は `AppState.pc` に**常駐**している(Session常駐化 PoC。
+/// 素材`user_sessions`が変わったとき(走査キュー完了・差分再走査)に
+/// `app::refresh_user_sessions`で更新済み)ため、ここでは組み立ても走査も
+/// しない。`Session.conversation_files[].lines`(`LogLine`)は
 /// `AppState.loaded_log_lines`(`get_session`でセッションを開いたときに
 /// キャッシュ済みのもの)を差し込むだけで、ここでは行の読み込みをしない
 /// (issue #208。未読み込みのセッションは空Vecのまま)。
@@ -495,7 +496,6 @@ async fn get_pc(state: tauri::State<'_, Mutex<AppState>>) -> Result<PcDto, AppEr
     let guard = state.lock().await;
     let pc = app::current_pc_with_repositories(guard.pc.clone(), &guard.settings);
     let pc = app::pc_with_git_ledger(pc, &guard.git_ledger);
-    let pc = app::pc_with_user_sessions(pc, guard.user_sessions.clone());
     let pc = app::pc_with_loaded_lines(pc, &guard.loaded_log_lines);
     let mut dto = PcDto::from(pc);
     dto.data_loaded = guard.pc_data_loaded;

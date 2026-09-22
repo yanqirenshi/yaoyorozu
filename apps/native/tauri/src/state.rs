@@ -37,6 +37,12 @@ pub struct AppState {
     /// 現在のPC・ログインユーザー情報(オブジェクトモデル実装 第1弾。
     /// issue #182)。`window_states` と同様に設定ファイルには保存しない
     /// ランタイム状態で、真実の源はOSであるため起動のたびに組み立て直す。
+    ///
+    /// `users[].sessions`(`Session`/`SessionFile`)はここに**常駐**する
+    /// (Session常駐化 PoC)。素材の`user_sessions`が変わったとき(走査キュー
+    /// 完了・差分再走査)に`app::refresh_user_sessions`で更新され、`get_pc`は
+    /// 組み立てをせずこのツリーをDTO化するだけになる。起動直後は空で、
+    /// 走査キューが埋める。
     pub pc: Pc,
     /// `GitBranch`/`GitWorktree`台帳(オブジェクトモデル実装 第3弾。
     /// issue #193)。起動直後は`git-ledger.json`から読み込んだだけの値
@@ -54,20 +60,22 @@ pub struct AppState {
     /// 走査結果を書き込む。`git_ledger`と同じ理由(jsonl走査コスト)で、
     /// ファイル走査自体はクエリのたびに再実行せず、起動後のバックグラウンド
     /// タスクとハブ再読み込み時(`reconcile_git_state` command。第3弾と
-    /// 合わせて再観測する)にのみ更新する。実際の`Session`/`SessionFile`への
-    /// 組み立て(`domain::User::load_sessions`)はI/Oを伴わない純粋変換の
-    /// ため、クエリのたび(`get_pc`)に呼んでも構わない
-    /// (`app::pc_with_user_sessions`参照)。
+    /// 合わせて再観測する)にのみ更新する。`Session`/`SessionFile`への
+    /// 組み立ては常駐化した(Session常駐化 PoC): この一覧を変更した箇所が
+    /// `app::refresh_user_sessions`で`pc`内の保持ツリーへ反映する
+    /// (集約(#217)の再計算にファイル単位の値が必要なため、素材である
+    /// この一覧は常駐化後も保持し続ける)。
     pub user_sessions: Vec<ParsedSession>,
     /// セッションを開いたとき(`get_session` command)に組み立てた
     /// `LogLine`のキャッシュ(オブジェクトモデル実装 第6弾。issue #208)。
     /// キーは会話ファイルのパス(`Session.conversation_files[].file_path`と
     /// 一致)。`window_states`と同様、設定ファイルには保存しないランタイム
-    /// 状態で、起動時は常に空(遅延読み込み。行は読まない)。同じファイルを
-    /// 再度開いても読み直さないための唯一の目的のキャッシュのため、
-    /// エントリを削除する経路は無い(セッション数×平均行数程度で、
-    /// アプリの実行中に無制限膨張する心配は小さいという判断。issue本文の
-    /// スコープには含まれないため深追いしない)。
+    /// 状態で、起動時は常に空(遅延読み込み。行は読まない)。
+    /// Session常駐化 PoC で次の後始末・更新経路が加わった:
+    /// 読み込み済みファイルの変更時は差分再走査が行を自動で読み直し、
+    /// ファイルの削除時(差分再走査)・列挙から消えたとき(全件キュー完了)は
+    /// エントリを取り除く。容量上限は引き続き設けない(無制限膨張の心配は
+    /// 小さいという判断のまま)。
     pub loaded_log_lines: HashMap<PathBuf, Vec<LogLine>>,
     /// `git_ledger`/`user_sessions` の読み込みが完了したかどうか
     /// (issue #218)。起動時は`false`で、起動後のバックグラウンドタスク・
