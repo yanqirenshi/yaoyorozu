@@ -1573,75 +1573,24 @@ body,
   max-width: 720px;
 }
 
+/* 会話メッセージ本文(issue #319)。marked による自前描画から markdown-viewer
+   (markdown.sitter。Shadow DOM の Web Component)に置き換えたため、以前の
+   子孫セレクタ(.message-text p 等)はもう内部に届かない。テーマ契約の
+   CSS 変数(issue #57。:root の --md-* )は Shadow DOM を貫通するので、
+   このスコープだけ上書きして吹き出しに収める。色・見出しサイズ等は
+   :root の既定(ClaudeMdEditor/RulesPane と共通のテーマ)をそのまま使う。 */
 .message-text {
+  display: block;
+  /* word-break は継承プロパティとして Shadow DOM 内へも伝わる(#293 の見出し
+     行間は viewer 側が line-height: 1.35 を持つため、ここでの指定は不要)。
+     長い1トークン(URLやID)が吹き出しの幅(720px)をはみ出さないように。 */
   word-break: break-word;
-  /* :root の固定 `line-height: 24px` は子孫へ px のまま継承されるため、本文より
-     大きい文字(Markdown の見出し等)が折り返すと行が重なる(issue #293)。
-     単位なしにして文字サイズに比例させる(16px の本文は従来どおり 24px)。 */
-  line-height: 1.5;
-}
-
-.message-text h1,
-.message-text h2,
-.message-text h3,
-.message-text h4,
-.message-text h5,
-.message-text h6 {
-  line-height: 1.3;
-}
-
-.message-text > :first-child {
-  margin-top: 0;
-}
-
-.message-text > :last-child {
-  margin-bottom: 0;
-}
-
-.message-text p,
-.message-text ul,
-.message-text ol,
-.message-text blockquote,
-.message-text pre {
-  margin: 0 0 10px;
-}
-
-.message-text ul,
-.message-text ol {
-  padding-left: 1.4em;
-}
-
-/* コード表示の網掛けはブランドカラーではなく中立な黒の薄いオーバーレイと
-   するため、意図的にトークンを使わずリテラルのまま残す(issue #93)。 */
-.message-text code {
-  background-color: rgba(0, 0, 0, 0.06);
-  border-radius: 3px;
-  padding: 0.15em 0.35em;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.9em;
-}
-
-.message-text pre {
-  background-color: rgba(0, 0, 0, 0.06);
-  border-radius: 6px;
-  padding: 10px 12px;
-  overflow-x: auto;
-}
-
-.message-text pre code {
-  background: none;
-  padding: 0;
-}
-
-.message-text blockquote {
-  border-left: 3px solid var(--border-default);
-  margin-left: 0;
-  padding-left: 12px;
-  color: var(--text-placeholder);
-}
-
-.message-text a {
-  color: var(--color-primary);
+  --md-bg: transparent;
+  --md-padding: 0;
+  --md-max-width: none;
+  /* 本文の文字サイズは、他のUI要素と揃える(既定の15pxではなくアプリの
+     基準16pxに。実装時判断)。行間は viewer の既定(1.7)のまま。 */
+  --md-font-size: 1rem;
 }
 
 /* コメントは user / assistant とも白背景+影。枠線で描き分ける: user は白、
