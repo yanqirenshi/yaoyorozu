@@ -43,16 +43,18 @@ pub fn extract_message(value: &serde_json::Value) -> Option<Message> {
 /// `extract_message`(`&Value` 版)と `ScannedLine::message`(issue #302)が
 /// 共有する、抽出ルールの唯一の実装。
 pub(super) fn message_from_line(line: &SessionLine) -> Option<Message> {
-    let (role, text, timestamp) = match line {
+    let (role, text, timestamp, uuid) = match line {
         SessionLine::User(l) => (
             Role::User,
             user_content_text(&l.message.content),
             l.base.timestamp.clone().unwrap_or_default(),
+            l.base.uuid.clone(),
         ),
         SessionLine::Assistant(l) => (
             Role::Assistant,
             assistant_content_text(&l.message.content),
             l.base.timestamp.clone().unwrap_or_default(),
+            l.base.uuid.clone(),
         ),
         _ => return None,
     };
@@ -65,6 +67,7 @@ pub(super) fn message_from_line(line: &SessionLine) -> Option<Message> {
         role,
         text,
         timestamp,
+        uuid,
     })
 }
 
@@ -153,6 +156,31 @@ mod tests {
     use super::*;
     use crate::session_line::SystemLine;
     use serde_json::json;
+
+    #[test]
+    fn extract_message_carries_the_uuid_of_its_source_line() {
+        // 元の jsonl 行を引き当てるキー(issue #313)。ユーザー・アシスタントとも、
+        // 行に uuid が無ければ None。
+        let user = json!({
+            "type": "user", "uuid": "u-1",
+            "message": { "role": "user", "content": "hello" }
+        });
+        let assistant = json!({
+            "type": "assistant", "uuid": "a-1",
+            "message": { "role": "assistant", "content": [{ "type": "text", "text": "hi" }] }
+        });
+        let no_uuid = json!({
+            "type": "user",
+            "message": { "role": "user", "content": "hello" }
+        });
+
+        assert_eq!(extract_message(&user).unwrap().uuid.as_deref(), Some("u-1"));
+        assert_eq!(
+            extract_message(&assistant).unwrap().uuid.as_deref(),
+            Some("a-1")
+        );
+        assert_eq!(extract_message(&no_uuid).unwrap().uuid, None);
+    }
 
     #[test]
     fn extract_message_reads_string_content() {

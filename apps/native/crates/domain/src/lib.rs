@@ -86,8 +86,8 @@ pub use skill_summary::SkillSummary;
 pub use timestamp::parse_iso_timestamp_to_epoch_ms;
 pub use user::User;
 pub use validation::{
-    is_valid_claude_dir_path, is_valid_json, is_valid_rule_file_name, is_valid_session_id,
-    is_valid_skill_name,
+    is_valid_claude_dir_path, is_valid_json, is_valid_project_dir_name, is_valid_rule_file_name,
+    is_valid_session_id, is_valid_skill_name,
 };
 pub use window_state::WindowState;
 pub use window_tab::WindowTab;

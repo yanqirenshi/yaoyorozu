@@ -56,6 +56,8 @@ pub struct MessageDto {
     pub role: RoleDto,
     pub text: String,
     pub timestamp: String,
+    /// 元の jsonl 行の `uuid`(ビューアの「データ」表示用。issue #313)。行に無ければ null。
+    pub uuid: Option<String>,
 }
 
 impl From<domain::Message> for MessageDto {
@@ -64,6 +66,7 @@ impl From<domain::Message> for MessageDto {
             role: message.role.into(),
             text: message.text,
             timestamp: message.timestamp,
+            uuid: message.uuid,
         }
     }
 }

@@ -454,6 +454,39 @@ impl SessionSource for FileSystemRepository {
         })
     }
 
+    fn session_line_raw(
+        &self,
+        project: &str,
+        session_id: &str,
+        uuid: &str,
+    ) -> Result<String, AppError> {
+        // `project` / `session_id` は app 層で検証済みの前提(native.md §4)。
+        let path = self
+            .projects_dir
+            .join(project)
+            .join(format!("{session_id}.jsonl"));
+        let file = fs::File::open(&path)
+            .map_err(|e| AppError::Io(format!("{} を開けませんでした: {}", path.display(), e)))?;
+
+        // 巨大な行(tool 結果など)を毎行パースしないよう、uuid の文字列を含む
+        // 行だけを JSON として読んで、最上位の `uuid` が一致するかを確かめる
+        // (`parentUuid` など、他のフィールドに同じ値が現れる行を除くため)。
+        for line in BufReader::new(file).lines().map_while(Result::ok) {
+            if !line.contains(uuid) {
+                continue;
+            }
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+                continue;
+            };
+            if value.get("uuid").and_then(|v| v.as_str()) == Some(uuid) {
+                return Ok(line);
+            }
+        }
+        Err(AppError::NotFound(
+            "該当する行が見つかりませんでした(ファイルが変更された可能性があります)".to_string(),
+        ))
+    }
+
     fn session_lines(&self, project: &str, session_id: &str) -> Result<Vec<LogLine>, AppError> {
         // `session()`とは別にファイルを開く(issue #208。`app::SessionSource`
         // のドキュメントコメント参照: セッションを開いた瞬間の1回だけの
@@ -1634,5 +1667,41 @@ mod tests {
         }
         assert!(seen.contains(&project_dir.join("a.jsonl")), "{seen:?}");
         assert!(seen.contains(&project_dir.join("b.jsonl")), "{seen:?}");
+    }
+
+    #[test]
+    fn session_line_raw_returns_the_line_whose_own_uuid_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        // 2行目は parentUuid に u-1 を持つが、自身の uuid は u-2(こちらは返さない)
+        let first = r#"{"type":"user","uuid":"u-1","sessionId":"s1","message":{"role":"user","content":"hello"}}"#;
+        let second = r#"{"type":"assistant","uuid":"u-2","parentUuid":"u-1","sessionId":"s1","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}"#;
+        fs::write(
+            project_dir.join("s1.jsonl"),
+            [first, "not json u-3", second].join(
+                "
+",
+            ),
+        )
+        .unwrap();
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        assert_eq!(repo.session_line_raw("proj", "s1", "u-1").unwrap(), first);
+        assert_eq!(repo.session_line_raw("proj", "s1", "u-2").unwrap(), second);
+        // 存在しない uuid・JSON でない行に現れるだけの uuid は NotFound
+        assert!(matches!(
+            repo.session_line_raw("proj", "s1", "u-9"),
+            Err(AppError::NotFound(_))
+        ));
+        assert!(matches!(
+            repo.session_line_raw("proj", "s1", "u-3"),
+            Err(AppError::NotFound(_))
+        ));
+        // ファイルが無ければ IO エラー
+        assert!(matches!(
+            repo.session_line_raw("proj", "nope", "u-1"),
+            Err(AppError::Io(_))
+        ));
     }
 }
