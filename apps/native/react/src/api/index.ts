@@ -223,6 +223,15 @@ export function onPcDataLoading(callback: () => void): Promise<() => void> {
   return unlisten.then((fn) => fn);
 }
 
+// セッションファイル(.jsonl)の変更をファイル監視が検知し、変更のあった
+// ファイルだけを再走査して `AppState` へ反映したときに発火する(issue #311。
+// ハブの自動更新)。ペイロードは無し。購読側が `getPc` で取り直す
+// (`onPcDataLoaded` と同じ軽量通知+pull の流儀)。
+export function onPcSessionsUpdated(callback: () => void): Promise<() => void> {
+  const unlisten = listen("pc:sessions_updated", () => callback());
+  return unlisten.then((fn) => fn);
+}
+
 // 走査キュー(PoC)の進捗。会話ファイル1件の走査が完了するたびに発火する。
 // ペイロードは進捗表示用の件数のみで、データ本体は購読側が `getPc` で
 // 取り直す(`onPcDataLoaded` と同じ流儀)。

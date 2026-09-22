@@ -82,6 +82,9 @@ pub struct AppState {
     /// 再読み込み・プロファイル切替等でキューが再開始された場合に、旧世代の
     /// 走査結果が新しい`user_sessions`を上書きしないようにするための値。
     pub session_scan_generation: u64,
+    /// ファイル監視が検知した会話ファイルの変更の待ち行列(ハブの自動更新。
+    /// issue #311。`session_scan_queue::enqueue_changed`)。実行時状態で永続化しない。
+    pub session_rescan: app::RescanQueue,
 }
 
 /// エポック秒からのミリ秒。`GitBranch`/`GitWorktree`の
@@ -173,6 +176,7 @@ impl AppState {
                 loaded_log_lines: HashMap::new(),
                 pc_data_loaded: false,
                 session_scan_generation: 0,
+                session_rescan: app::RescanQueue::default(),
             },
             recovered_from_corruption: loaded.recovered_from_corruption,
         })
