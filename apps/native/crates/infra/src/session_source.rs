@@ -1409,4 +1409,50 @@ mod tests {
         );
         assert_eq!(mismatches, 0);
     }
+
+    /// 走査キュー(tauri 層の `session_scan_queue`)と同じ「mtime 降順・n 並列」で
+    /// 実データ全件を走査したときの所要時間を並列度ごとに計測する(issue #296 の
+    /// スコープ再評価用。読み取りのみ)。実データに依存するため通常は走らせない:
+    /// `cargo test -p infra --release -- --ignored --nocapture real_data_concurrency`
+    #[test]
+    #[ignore]
+    fn real_data_concurrency_timing() {
+        let root = FileSystemRepository::default_projects_dir().expect("projects dir");
+        let repo = FileSystemRepository::new(root);
+        let mut refs = repo.enumerate_session_file_refs().expect("enumerate");
+        refs.sort_by_key(|r| std::cmp::Reverse(r.modified_at_ms));
+        for p in &refs {
+            let _ = fs::read(&p.file_path);
+        }
+
+        for workers in [1usize, 2, 4, 6, 8, 12] {
+            // 走査結果は mtime 単位でキャッシュされるため、毎回空にして冷えた状態を測る。
+            session_summary_cache()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clear();
+            let next = std::sync::atomic::AtomicUsize::new(0);
+            let started = std::time::Instant::now();
+            // 先頭(最も新しいファイル)の完了までの時間も見る(体感の初回表示)。
+            let first_done = std::sync::Mutex::new(None::<std::time::Duration>);
+            std::thread::scope(|scope| {
+                for _ in 0..workers {
+                    scope.spawn(|| loop {
+                        let i = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let Some(r) = refs.get(i) else { break };
+                        let _ = repo.parse_session_file(r);
+                        if i == 0 {
+                            *first_done.lock().unwrap() = Some(started.elapsed());
+                        }
+                    });
+                }
+            });
+            eprintln!(
+                "workers={workers:2} files={} total={:.2}s first_file_done={:.3}s",
+                refs.len(),
+                started.elapsed().as_secs_f64(),
+                first_done.lock().unwrap().unwrap_or_default().as_secs_f64()
+            );
+        }
+    }
 }
