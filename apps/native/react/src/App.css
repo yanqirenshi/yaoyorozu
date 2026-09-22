@@ -1591,6 +1591,21 @@ body,
   /* 本文の文字サイズは、他のUI要素と揃える(既定の15pxではなくアプリの
      基準16pxに。実装時判断)。行間は viewer の既定(1.7)のまま。 */
   --md-font-size: 1rem;
+  /* アクセントを京紫(:root の既定。--color-primary 系)から草色に(issue #321)。
+     CLAUDE.md/Rules/Skills 等、他の markdown 表示は :root のテーマ(京紫)の
+     ままなので変わらない(このスコープだけの上書き)。
+     見出し・リンクは草色-800(白背景 6.87:1・墨-50 背景 6.41:1。ともに本文の
+     基準 4.5:1 を満たす。草色-700 は白 4.46:1・墨-50 4.16:1 で墨-50側が届かず、
+     草色-600 はどちらも届かないため不採用。リンクは hover でも同じ濃さのまま
+     とし、下線が破線→実線に変わることで差を示す(component 既定の挙動)。
+     引用線・コード網掛けは文字色ではなく面のため基準の対象外。淡い面の
+     トーンとして草色-50/100 を使う(#297 で assistant 枠に使った草色-100と
+     同系)。 */
+  --md-heading-fg: var(--color-kusairo-800);
+  --md-link: var(--color-kusairo-800);
+  --md-link-hover: var(--color-kusairo-800);
+  --md-quote-bg: var(--color-kusairo-50);
+  --md-code-bg: var(--color-kusairo-100);
 }
 
 /* コメントは user / assistant とも白背景+影。枠線で描き分ける: user は白、
