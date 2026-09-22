@@ -100,6 +100,13 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const [targetFolders, setTargetFolders] = useState<string[]>([]);
   const [sessionGroups, setSessionGroups] = useState<SessionGroup[]>([]);
   const [messages, setMessages] = useState<MessageDto[]>([]);
+  // `refreshSessionInPlace` が最新の読み込み件数を参照するための ref(issue #314)。
+  // state をそのまま依存配列に入れると、追記のたびに購読(`onSessionChanged` 等)の
+  // effect が再登録されてしまうため、ref 経由で読む。
+  const messagesRef = useRef(messages);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -195,6 +202,9 @@ function SessionsPage({ nav }: SessionsPageProps) {
     [windowProfileId],
   );
 
+  // 切替(セッション識別子が変わる)・整合性が疑わしいとき用: 一旦クリアしてから
+  // 1ページ目を取り直す(issue #314。従来はこの関数1つを全経路で使っていたため、
+  // 同一セッションへの追記のたびに全消し→再構築になりチラついていた)。
   const loadSession = useCallback((project: string, id: string): Promise<void> => {
     setMessages([]);
     setHasMore(false);
@@ -205,6 +215,26 @@ function SessionsPage({ nav }: SessionsPageProps) {
       })
       .catch((e) => setError(isAppError(e) ? e.message : String(e)));
   }, []);
+
+  // 同一セッションへの追記の反映(issue #314)。クリアせず、今読み込んでいる件数を
+  // そのまま `limit` にして offset 0 から取り直し、`setMessages` を1回だけ呼ぶ
+  // (新着はその中に自然に含まれる)。読み込み中に0件なら PAGE_SIZE を使う
+  // (初回読み込み前にこの経路が呼ばれることはない想定だが、保険として)。
+  // `key={m.uuid}`(下記)と組み合わせて、既存の吹き出しの DOM は保持され、
+  // 変化の無いメッセージは MessageText 内の useMemo によって Markdown の
+  // 再パースも起きない。
+  const refreshSessionInPlace = useCallback(
+    (project: string, id: string): Promise<void> => {
+      const limit = Math.max(messagesRef.current.length, PAGE_SIZE);
+      return getSession(project, id, 0, limit)
+        .then((session) => {
+          setMessages(session.messages);
+          setHasMore(session.messages.length === limit);
+        })
+        .catch((e) => setError(isAppError(e) ? e.message : String(e)));
+    },
+    [],
+  );
 
   const loadMore = useCallback(() => {
     if (!projectParam || !sessionParam || loadingMore) return;
@@ -265,13 +295,13 @@ function SessionsPage({ nav }: SessionsPageProps) {
         loadSessionGroups(targetFolders);
       }
       if (project === projectParam && sessionParam) {
-        loadSession(project, sessionParam);
+        refreshSessionInPlace(project, sessionParam);
       }
     });
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
     };
-  }, [targetFolders, projectParam, sessionParam, loadSessionGroups, loadSession]);
+  }, [targetFolders, projectParam, sessionParam, loadSessionGroups, refreshSessionInPlace]);
 
   useEffect(() => {
     const unlistenPromise = onAppWarning(({ project }) => {
@@ -432,10 +462,12 @@ function SessionsPage({ nav }: SessionsPageProps) {
     sendMessage(projectParam, sessionParam, draft, mode)
       .then(() => {
         setDraft("");
-        loadSession(projectParam, sessionParam);
+        // 送信成功: 同一セッションへの追記(issue #314)。差分再読込でチラつかせない。
+        refreshSessionInPlace(projectParam, sessionParam);
       })
       .catch((e) => {
         if (isAppError(e) && e.code === "session_stale") {
+          // 表示中セッションが最新でない疑い: 安全側で全クリアして取り直す。
           setError("表示中の会話が最新ではありません。再読み込みします。");
           loadSession(projectParam, sessionParam);
           return;
@@ -632,11 +664,14 @@ function SessionsPage({ nav }: SessionsPageProps) {
                   )}
                   <div className="messages">
                     {messages.map((m, i) => {
+                      // uuid をキーにして、追記のたびの DOM の作り直しを避ける
+                      // (issue #314)。行に uuid が無ければ従来どおり位置キー。
+                      const key = m.uuid ?? `i-${i}`;
                       // 吹き出しの横に、種類(role)と日時を小さく淡く出す
                       // (issue #258)。timestamp が空・不正なら日時は出さない。
                       const time = formatTimestamp(m.timestamp);
                       return (
-                        <div key={i} className={`message-row message-row-${m.role}`}>
+                        <div key={key} className={`message-row message-row-${m.role}`}>
                           <div className={`message-meta message-meta-${m.role}`}>
                             <span className="message-meta-role">{m.role}</span>
                             {time && <span className="message-meta-time">{time}</span>}
