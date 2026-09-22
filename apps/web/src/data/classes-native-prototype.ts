@@ -26,11 +26,11 @@
  * 【対象・ファイル対応】native.md §1 の「1型(クラス)= 1ファイル」(issue #184、
  * PR #185)により、domain クレートは各型が型名 snake_case のファイルに分かれて
  * いる(例: `Settings` → `settings.rs`)。`lib.rs` は `mod` 宣言と `pub use` のみ。
- * 本図の30クラスのうち、`ProjectItemKind` は `ProjectItem` と同じ `project_item.rs`
+ * 本図の31クラスのうち、`ProjectItemKind` は `ProjectItem` と同じ `project_item.rs`
  * に、`ClaudeDirEntryKind` は `ClaudeDirEntry` と同じ `claude_dir_entry.rs` に、
  * `GitRepositoryLedger` は `GitLedger` と同じ `git_ledger.rs` に、`ObservedWorktree`
  * は `ObservedGitState` と同じ `observed_git_state.rs` に同居する(native.md 曰く
- * 「その型専用の小さな補助enum」だが、補助structも同じ扱いにしている)。ほかの26
+ * 「その型専用の小さな補助enum」だが、補助structも同じ扱いにしている)。ほかの27
  * クラスはそれぞれ単独のファイル(型名 snake_case)。掲載対象は `classes-domain.ts`
  * に掲載済みの Pc・User・Profile と、`session_line/`(33型。かつては
  * `classes-session-line.ts` で描いていたが、不要になったため図ごと削除した)を
@@ -58,6 +58,19 @@
  * (`GitRepositoryLedger.branches`/`worktrees` と同じ方針)。`GithubProject`・
  * `GithubProjectSummary` はまだ `Profile` の実装をそのまま写したこの図側に残す
  * (`Profile.github_project` からも同じ方針で線を引かない)。
+ *
+ * 【ScannedLine】`session_line/scanned_line.rs`(issue #302・#308)。`session_line/`
+ * の33型は図から外しているが、`ScannedLine` は実装済みの domain の型で、走査
+ * (.jsonl 全行の読み取り)が実際に使うため、この図に1つだけ載せる(「session_line
+ * 群の近く」に置く先は無いので、独立した節にした)。
+ * - フィールド `line: SessionLine` は private。宣言をそのまま写す方針なので属性として
+ *   描き、可視性は `-` で表す。`SessionLine` は図に無いので線は引かない。
+ * - メソッド(`parse` と、`SessionLine` から値を取り出すだけの `session_id`・`cwd`・
+ *   `git_branch`・`slug`・`custom_title`・`ai_title`・`mode`・`last_prompt`・`message`・
+ *   `user_message_text` 等)は描かない。この図はフィールドを写す図で(メソッドを載せるのは
+ *   オブジェクトモデルと port(infra の図)だけ)、これらは `extract_*` と同じ値を返す
+ *   だけの薄い取り出し口であり、型の形を決めるのは private な `line` 1つのため。
+ *   一覧は説明(description)に書いた。
  */
 import type { DiagramInput } from "@yanqirenshi/d3.classes";
 import {
@@ -357,6 +370,16 @@ const DEFS: ClassDef[] = [
     position: { x: 4500, y: 150 },
     filePath: "apps/native/crates/domain/src/observed_git_state.rs",
     size: { w: 300, h: 0 },
+  },
+  // ============ 走査(.jsonl 全行の読み取り) ============
+  {
+    name: { physical: "ScannedLine", logical: "ScannedLine", description: "走査(.jsonl 全行の読み取り)用の、1行分の型付きビュー。SessionLine を1回だけ構築し、session_id / cwd / git_branch / custom_title / ai_title / mode / slug / last_prompt / timestamp / message などをメソッドで直接返す(抽出結果は extract_* と一致)。フィールドは private で、メソッド(parse と値の取り出し)は図に描かない(冒頭の【ScannedLine】を参照)。issue #302" },
+    attributes: [
+      // private なので `- ` で描く。SessionLine(session_line/ の型)は図に載せていないため線は引かない。
+      { ...attr("line", "SessionLine"), visibility: "private" },
+    ],
+    position: { x: 4100, y: 450 },
+    filePath: "apps/native/crates/domain/src/session_line/scanned_line.rs",
   },
 ];
 
