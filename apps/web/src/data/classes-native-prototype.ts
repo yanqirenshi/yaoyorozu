@@ -26,11 +26,11 @@
  * 【対象・ファイル対応】native.md §1 の「1型(クラス)= 1ファイル」(issue #184、
  * PR #185)により、domain クレートは各型が型名 snake_case のファイルに分かれて
  * いる(例: `Settings` → `settings.rs`)。`lib.rs` は `mod` 宣言と `pub use` のみ。
- * 本図の31クラスのうち、`ProjectItemKind` は `ProjectItem` と同じ `project_item.rs`
+ * 本図の32クラスのうち、`ProjectItemKind` は `ProjectItem` と同じ `project_item.rs`
  * に、`ClaudeDirEntryKind` は `ClaudeDirEntry` と同じ `claude_dir_entry.rs` に、
  * `GitRepositoryLedger` は `GitLedger` と同じ `git_ledger.rs` に、`ObservedWorktree`
  * は `ObservedGitState` と同じ `observed_git_state.rs` に同居する(native.md 曰く
- * 「その型専用の小さな補助enum」だが、補助structも同じ扱いにしている)。ほかの27
+ * 「その型専用の小さな補助enum」だが、補助structも同じ扱いにしている)。ほかの28
  * クラスはそれぞれ単独のファイル(型名 snake_case)。掲載対象は `classes-domain.ts`
  * に掲載済みの Pc・User・Profile と、`session_line/`(33型。かつては
  * `classes-session-line.ts` で描いていたが、不要になったため図ごと削除した)を
@@ -71,6 +71,11 @@
  *   オブジェクトモデルと port(infra の図)だけ)、これらは `extract_*` と同じ値を返す
  *   だけの薄い取り出し口であり、型の形を決めるのは private な `line` 1つのため。
  *   一覧は説明(description)に書いた。
+ *
+ * 【ParsedSession】`parsed_session.rs`(issue #208・#214・#217)。`User::load_sessions`
+ * (オブジェクトモデル側。`classes-domain.ts`)への入力で、`GitLedger` の
+ * `ObservedGitState` と同じ「ただの運搬型」。`ScannedLine` と同じ節に置く
+ * (走査からセッション組み立てまでの一連の型のため)。
  */
 import type { DiagramInput } from "@yanqirenshi/d3.classes";
 import {
@@ -374,7 +379,7 @@ const DEFS: ClassDef[] = [
     filePath: "apps/native/crates/domain/src/observed_git_state.rs",
     size: { w: 300, h: 0 },
   },
-  // ============ 走査(.jsonl 全行の読み取り) ============
+  // ============ 走査(.jsonl の読み取り・組み立て) ============
   {
     name: { physical: "ScannedLine", logical: "ScannedLine", description: "走査(.jsonl 全行の読み取り)用の、1行分の型付きビュー。SessionLine を1回だけ構築し、session_id / cwd / git_branch / custom_title / ai_title / mode / slug / last_prompt / timestamp / message などをメソッドで直接返す(抽出結果は extract_* と一致)。フィールドは private で、メソッド(parse と値の取り出し)は図に描かない(冒頭の【ScannedLine】を参照)。issue #302" },
     attributes: [
@@ -383,6 +388,26 @@ const DEFS: ClassDef[] = [
     ],
     position: { x: 4100, y: 450 },
     filePath: "apps/native/crates/domain/src/session_line/scanned_line.rs",
+  },
+  {
+    name: { physical: "ParsedSession", logical: "ParsedSession", description: "User::load_sessions(オブジェクトモデル側)への入力。Session/SessionFile を組み立てるための、ただの運搬型(GitLedger の ObservedGitState と同じ設計)。issue #208・#214・#217" },
+    attributes: [
+      attr("session_id", "String"),
+      attr("custom_title", "Option<String>"),
+      attr("ai_title", "Option<String>"),
+      attr("mode", "Option<String>"),
+      attr("slug", "Option<String>"),
+      attr("last_prompt", "Option<String>"),
+      attr("conversation_file_path", "PathBuf"),
+      attr("subagent_file_paths", "Vec<PathBuf>"),
+      attr("modified_at_ms", "u64"),
+      attr("cwd", "Option<String>"),
+      attr("git_branch", "Option<String>"),
+    ],
+    position: { x: 4450, y: 450 },
+    filePath: "apps/native/crates/domain/src/parsed_session.rs",
+    // 名前と型の列が重なるので広げる(LogLine の size の説明を参照)。
+    size: { w: 280, h: 0 },
   },
 ];
 

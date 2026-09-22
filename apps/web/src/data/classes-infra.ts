@@ -31,8 +31,8 @@
  * 【対象・ファイル対応】infra クレートは domain と違い、まだ1型=1ファイルに
  * 揃っている(型名 snake_case のファイル。例外: `FileClaudeDirStore` は
  * `claude_dir_store.rs`、`SessionWatcher`/`FileSystemRepository` は
- * `session_source.rs` に同居)。全19型(実装18 + SessionWatcher)と、
- * app の port 18個を載せた。
+ * `session_source.rs` に同居)。全20型(実装19 + SessionWatcher)と、
+ * app の port 19個を載せた。
  *
  * 【GitLedgerStore・GitStateSource への参照】メソッドの戻り値・引数に出てくる
  * `domain::GitLedger`・`domain::ObservedGitState` は、`classes-native-prototype.ts`
@@ -200,6 +200,24 @@ const DEFS: ClassDef[] = [
     attributes: [attr("path", "PathBuf")],
     position: { x: 4050, y: 3150 },
     filePath: "apps/native/crates/infra/src/hub_layout_store.rs",
+  },
+  {
+    name: { physical: "HubTuningStore", logical: "HubTuningStore", description: "ハブグラフの force シミュレーション調整値(domain::HubTuning)の永続化(port)。app::lib.rs" },
+    stereotype: "interface",
+    methods: [
+      method("load", [], "Result<domain::HubTuning, AppError>"),
+      method("save", ["tuning: &domain::HubTuning"], "Result<(), AppError>"),
+    ],
+    position: { x: 4400, y: 2800 },
+    filePath: "apps/native/crates/app/src/lib.rs",
+    // save の引数が長く、戻り値型の列と重なるので広げる(GitLedgerStore と同じ理由)。
+    size: { w: 430, h: 0 },
+  },
+  {
+    name: { physical: "FileHubTuningStore", logical: "FileHubTuningStore", description: "HubTuning をJSONファイルとして永続化。FileHubLayoutStore と同じ実装パターン(hub_tuning_store.rs)" },
+    attributes: [attr("path", "PathBuf")],
+    position: { x: 4400, y: 3150 },
+    filePath: "apps/native/crates/infra/src/hub_tuning_store.rs",
   },
   // ============ 実行環境・GitHub連携・エージェント ============
   {
@@ -378,6 +396,7 @@ const RELATIONSHIPS = [
   rel("realization", "FileSkillsStore", "SkillsStore", undefined, "top", "bottom"),
   rel("realization", "FileProjectSettingsStore", "ProjectSettingsStore", undefined, "top", "bottom"),
   rel("realization", "FileHubLayoutStore", "HubLayoutStore", undefined, "top", "bottom"),
+  rel("realization", "FileHubTuningStore", "HubTuningStore", undefined, "top", "bottom"),
   rel("realization", "WindowsExecutionEnvironmentSource", "ExecutionEnvironmentSource", undefined, "top", "bottom"),
   rel("realization", "GithubApiClient", "GithubGateway", undefined, "top", "bottom"),
   rel("realization", "KeyringTokenStore", "TokenStore", undefined, "top", "bottom"),
