@@ -6,7 +6,7 @@ use domain::{
 };
 use notify::RecursiveMode;
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -42,28 +42,48 @@ impl FileSystemRepository {
     }
 
     /// プロジェクトディレクトリ配下の変更を監視し、変更のあったプロジェクト
-    /// (直下のフォルダ名)を `on_change` に通知する。
+    /// (直下のフォルダ名)と、変更のあった会話ファイルを `on_change` に通知する
+    /// (プロジェクトごとに、デバウンス1回分の変更をまとめて1回)。
     ///
     /// 戻り値の `Debouncer` を drop すると監視が止まるため、呼び出し側は
     /// 監視を続けたい間、値を保持し続ける必要がある(呼び出し元の tauri 層で
     /// アプリの状態として保持する想定)。
     pub fn watch_projects<F>(&self, on_change: F) -> Result<SessionWatcher, AppError>
     where
-        F: Fn(String) + Send + 'static,
+        F: Fn(SessionFsChange) + Send + 'static,
     {
         let watch_root = self.projects_dir.clone();
         let mut debouncer =
             new_debouncer(WATCH_DEBOUNCE, None, move |result: DebounceEventResult| {
                 let Ok(events) = result else { return };
-                let mut notified = HashSet::new();
+                // プロジェクト名の初出順を保ったまま、プロジェクトごとに変更のあった
+                // 会話ファイルを集める(同じファイルの重複は1件にする)。
+                let mut changes: Vec<SessionFsChange> = Vec::new();
                 for event in events {
                     for path in &event.paths {
-                        if let Some(project) = project_name_from_path(&watch_root, path) {
-                            if notified.insert(project.clone()) {
-                                on_change(project);
+                        let Some(project) = project_name_from_path(&watch_root, path) else {
+                            continue;
+                        };
+                        let index = match changes.iter().position(|c| c.project == project) {
+                            Some(index) => index,
+                            None => {
+                                changes.push(SessionFsChange {
+                                    project: project.clone(),
+                                    conversation_files: Vec::new(),
+                                });
+                                changes.len() - 1
+                            }
+                        };
+                        if let Some(file) = conversation_file_from_change(&watch_root, path) {
+                            let files = &mut changes[index].conversation_files;
+                            if !files.contains(&file) {
+                                files.push(file);
                             }
                         }
                     }
+                }
+                for change in changes {
+                    on_change(change);
                 }
             })
             .map_err(|e| AppError::Io(format!("ファイル監視の初期化に失敗しました: {e}")))?;
@@ -79,6 +99,18 @@ impl FileSystemRepository {
 
         Ok(debouncer)
     }
+}
+
+/// ファイル監視が通知する1プロジェクト分の変更(`watch_projects`)。
+/// `project` は従来どおり(ビューアの `session:changed` 用)。
+/// `conversation_files` は、変更のあった会話ファイル(`<プロジェクト>/<セッションID>.jsonl`)
+/// の絶対パス。サブエージェントのファイル(`<プロジェクト>/<セッションID>/…`)の
+/// 変更は、その持ち主の会話ファイルとして数える(issue #311。ハブの差分再走査用)。
+/// 会話ファイルに結びつかない変更(ディレクトリ自体の変更等)は含まない。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionFsChange {
+    pub project: String,
+    pub conversation_files: Vec<PathBuf>,
 }
 
 /// 走査キュー(セッション一覧の逐次読み込み。PoC)の対象1件。列挙時点では
@@ -144,6 +176,30 @@ impl FileSystemRepository {
         Ok(refs)
     }
 
+    /// 会話ファイル1件分の参照を、そのファイルのメタデータから組み立てる
+    /// (差分再走査用。issue #311)。ファイルが無い(削除された)・会話ファイルでない
+    /// パスは `None`。
+    pub fn session_file_ref(&self, file_path: &Path) -> Option<SessionFileRef> {
+        let relative = file_path.strip_prefix(&self.projects_dir).ok()?;
+        let project = relative
+            .components()
+            .next()?
+            .as_os_str()
+            .to_str()?
+            .to_string();
+        if !file_path.is_file() || file_path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            return None;
+        }
+        let session_id = file_path.file_stem()?.to_str()?.to_string();
+        let modified_at_ms = to_millis(fs::metadata(file_path).and_then(|m| m.modified()));
+        Some(SessionFileRef {
+            project,
+            file_path: file_path.to_path_buf(),
+            session_id,
+            modified_at_ms,
+        })
+    }
+
     /// 会話ファイル1件を走査して `ParsedSession` を組み立てる(走査キューの
     /// 実行単位。PoC)。一括版(`list_parsed_sessions`)と同じ組み立て・
     /// 同じ走査キャッシュ(`cached_or_scanned_summary`)を共有する。
@@ -154,6 +210,33 @@ impl FileSystemRepository {
         let project_dir = self.projects_dir.join(&reference.project);
         build_parsed_session(&project_dir, &reference.file_path)
     }
+}
+
+/// `projects_dir` 配下で変更のあった `path` が属する会話ファイルを返す。
+/// `<プロジェクト>/<ID>.jsonl` はそのもの、`<プロジェクト>/<ID>/…`(サブエージェント等)は
+/// `<プロジェクト>/<ID>.jsonl`。それ以外(プロジェクト直下の他のファイル等)は `None`。
+fn conversation_file_from_change(projects_dir: &Path, path: &Path) -> Option<PathBuf> {
+    let relative = path.strip_prefix(projects_dir).ok()?;
+    let mut components = relative.components();
+    let project = components.next()?.as_os_str();
+    let second = components.next()?.as_os_str().to_str()?;
+    let third = components.next();
+    let id = match third {
+        // <プロジェクト>/<ID>.jsonl
+        None => {
+            let name = Path::new(second);
+            if name.extension().is_none_or(|e| e != "jsonl") {
+                return None;
+            }
+            name.file_stem()?.to_str()?
+        }
+        // <プロジェクト>/<ID>/…(サブエージェント等)
+        Some(_) => second,
+    };
+    if id.is_empty() {
+        return None;
+    }
+    Some(projects_dir.join(project).join(format!("{id}.jsonl")))
 }
 
 /// `path` が `projects_dir` 配下のとき、直下のプロジェクトフォルダ名を返す。
@@ -952,8 +1035,8 @@ mod tests {
         let repo = FileSystemRepository::new(dir.path().to_path_buf());
         let (tx, rx) = std::sync::mpsc::channel();
         let _debouncer = repo
-            .watch_projects(move |project| {
-                let _ = tx.send(project);
+            .watch_projects(move |change| {
+                let _ = tx.send(change.project);
             })
             .expect("should start watching");
 
@@ -1454,5 +1537,102 @@ mod tests {
                 first_done.lock().unwrap().unwrap_or_default().as_secs_f64()
             );
         }
+    }
+
+    #[test]
+    fn conversation_file_from_change_maps_paths_to_owning_conversation_file() {
+        let root = Path::new("/root");
+        let of = |p: &str| conversation_file_from_change(root, Path::new(p));
+
+        // 会話ファイルそのもの
+        assert_eq!(
+            of("/root/proj/abc.jsonl"),
+            Some(PathBuf::from("/root/proj/abc.jsonl"))
+        );
+        // サブエージェント等(セッションIDのディレクトリ配下)は持ち主の会話ファイル
+        assert_eq!(
+            of("/root/proj/abc/subagents/agent-1.jsonl"),
+            Some(PathBuf::from("/root/proj/abc.jsonl"))
+        );
+        assert_eq!(of("/root/proj/abc"), None);
+        // 会話ファイルに結びつかない変更
+        assert_eq!(of("/root/proj"), None);
+        assert_eq!(of("/root/proj/notes.txt"), None);
+        assert_eq!(of("/elsewhere/proj/abc.jsonl"), None);
+    }
+
+    #[test]
+    fn session_file_ref_builds_from_existing_file_and_returns_none_otherwise() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        let file = project_dir.join("abc.jsonl");
+        fs::write(&file, "{}").unwrap();
+        fs::write(project_dir.join("notes.txt"), "x").unwrap();
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let reference = repo.session_file_ref(&file).expect("should build ref");
+        assert_eq!(reference.project, "proj");
+        assert_eq!(reference.session_id, "abc");
+        assert_eq!(reference.file_path, file);
+
+        assert!(repo
+            .session_file_ref(&project_dir.join("gone.jsonl"))
+            .is_none());
+        assert!(repo
+            .session_file_ref(&project_dir.join("notes.txt"))
+            .is_none());
+    }
+
+    /// ファイル監視が、会話ファイルの追記・新規作成・サブエージェントの変更を
+    /// 会話ファイル単位でまとめて通知する(issue #311)。
+    #[test]
+    fn watch_projects_reports_changed_conversation_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        fs::write(
+            project_dir.join("a.jsonl"),
+            "{}
+",
+        )
+        .unwrap();
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _watcher = repo
+            .watch_projects(move |change| {
+                let _ = tx.send(change);
+            })
+            .expect("should watch");
+
+        // 既存ファイルへの追記と新規ファイル
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(project_dir.join("a.jsonl"))
+            .unwrap();
+        writeln!(file, "{{}}").unwrap();
+        // Windows では書き込みハンドルを閉じるまで変更が通知されないことがあるため閉じる。
+        drop(file);
+        fs::write(
+            project_dir.join("b.jsonl"),
+            "{}
+",
+        )
+        .unwrap();
+
+        let mut seen: Vec<PathBuf> = Vec::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::time::Instant::now() < deadline
+            && !(seen.contains(&project_dir.join("a.jsonl"))
+                && seen.contains(&project_dir.join("b.jsonl")))
+        {
+            if let Ok(change) = rx.recv_timeout(std::time::Duration::from_millis(500)) {
+                assert_eq!(change.project, "proj");
+                seen.extend(change.conversation_files);
+            }
+        }
+        assert!(seen.contains(&project_dir.join("a.jsonl")), "{seen:?}");
+        assert!(seen.contains(&project_dir.join("b.jsonl")), "{seen:?}");
     }
 }

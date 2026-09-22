@@ -36,6 +36,6 @@ pub use layout_store::FileLayoutStore;
 pub use local_api_token_store::FileLocalApiTokenStore;
 pub use project_settings_store::FileProjectSettingsStore;
 pub use rules_store::FileRulesStore;
-pub use session_source::{FileSystemRepository, SessionFileRef, SessionWatcher};
+pub use session_source::{FileSystemRepository, SessionFileRef, SessionFsChange, SessionWatcher};
 pub use settings_store::FileSettingsStore;
 pub use skills_store::FileSkillsStore;

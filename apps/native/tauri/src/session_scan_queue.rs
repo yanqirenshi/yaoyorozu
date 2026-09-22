@@ -21,15 +21,21 @@
 //! - 進捗イベント(`pc:data_progress`)はファイル完了ごとに発火する。全件が1秒
 //!   未満で終わり、ハブ側は末尾デバウンス(300ms)で取り直すため、送信側での
 //!   間引きはしない(同上)
+//! - ファイル監視との接続(issue #311): `SessionWatcher` が検知した会話ファイルの
+//!   変更だけを `enqueue_changed` で差分再走査し、`user_sessions` へ upsert /
+//!   削除して `pc:sessions_updated` で通知する(全件再走査はしない)。詳細は
+//!   `enqueue_changed` を参照
 //! - 再読み込み・プロファイル切替との競合は世代番号
 //!   (`AppState.session_scan_generation`)で防ぐ(旧世代の結果は適用しない)
 
 use crate::state::{self, AppState};
+use domain::ParsedSession;
 use infra::{FileSystemRepository, SessionFileRef};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tauri::{Emitter, Manager};
 use tokio::sync::{Mutex, Semaphore};
 
@@ -182,4 +188,138 @@ async fn finish(
         guard.pc_data_loaded = true;
     }
     let _ = app_handle.emit("pc:data_loaded", ());
+}
+
+/// 差分再走査の最短間隔。書き込み中の jsonl は頻繁に更新され、ファイル監視側の
+/// デバウンス(400ms)だけでは 0.4 秒ごとに走査が走りうる。1回の処理が終わるたびに
+/// この時間だけ待ってから、その間に溜まった変更を(同じファイルは1件に畳んで)
+/// まとめて処理する。よって 1ファイルの走査は最短間隔+走査時間に1回まで。
+const RESCAN_MIN_INTERVAL: Duration = Duration::from_secs(1);
+
+/// `pc:sessions_updated` のペイロードは無し。軽量な通知に留め、データ本体は
+/// 購読側が `get_pc` で取り直す(native.md §3.2)。
+const SESSIONS_UPDATED_EVENT: &str = "pc:sessions_updated";
+
+/// ファイル監視が検知した会話ファイル(`paths`)の変更を、差分再走査の待ち行列へ
+/// 入れる(issue #311)。ワーカーは高々1つで、動いていなければここで起動する
+/// (`app::RescanQueue`)。ワーカーは溜まった変更を取り出して次のとおり処理する。
+///
+/// - 存在するファイル: 1件だけ走査(`parse_session_file`。走査キャッシュは mtime 単位)
+///   して `user_sessions` へ upsert する
+/// - 削除されたファイル: `user_sessions` から取り除く(同 `session_id` の別ファイルが
+///   残れば、集約(#217)の結果 `Session` は残る)
+///
+/// 反映があれば `pc:sessions_updated` を1回発火する(ハブが `get_pc` を取り直す)。
+///
+/// 起動時・手動再読み込みの全件キュー(`start`)との整合: 差分の走査結果は、走査の
+/// 開始時点と適用時点で世代番号(`session_scan_generation`)が変わっていれば適用しない
+/// (全件キューが開始されると世代が上がり、その全件走査が同じファイルを読み直すため)。
+/// 差分再走査は `pc_data_loaded` を変えない(#218 の保証は全件キュー側の責務のまま)。
+/// Git 台帳の再観測は行わない。
+pub fn enqueue_changed(app_handle: tauri::AppHandle, paths: Vec<PathBuf>) {
+    if paths.is_empty() {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        let should_start_worker = {
+            let state = app_handle.state::<Mutex<AppState>>();
+            let mut guard = state.lock().await;
+            guard.session_rescan.push(paths)
+        };
+        if should_start_worker {
+            run_rescan_worker(app_handle).await;
+        }
+    });
+}
+
+/// 差分再走査のワーカー。待ち行列が空になるまで「取り出す → 処理 → 最短間隔待つ」を
+/// 繰り返し、空を確認した時点(取り出しと同じロックの中)で止まる。
+async fn run_rescan_worker(app_handle: tauri::AppHandle) {
+    loop {
+        let (batch, generation, settings) = {
+            let state = app_handle.state::<Mutex<AppState>>();
+            let mut guard = state.lock().await;
+            match guard.session_rescan.take_or_stop() {
+                Some(batch) => (batch, guard.session_scan_generation, guard.settings.clone()),
+                None => return,
+            }
+        };
+
+        if rescan_batch(&app_handle, generation, &settings, batch).await {
+            let _ = app_handle.emit(SESSIONS_UPDATED_EVENT, ());
+        }
+        tokio::time::sleep(RESCAN_MIN_INTERVAL).await;
+    }
+}
+
+/// 差分再走査の結果1件。
+enum RescanOutcome {
+    Parsed(Box<ParsedSession>),
+    Removed(PathBuf),
+    Failed(PathBuf, String),
+}
+
+/// 変更のあった会話ファイルを走査して `user_sessions` へ反映する。何か反映したら
+/// `true`(通知が必要)。
+async fn rescan_batch(
+    app_handle: &tauri::AppHandle,
+    generation: u64,
+    settings: &domain::Settings,
+    batch: Vec<PathBuf>,
+) -> bool {
+    let projects_dir = match state::resolve_effective_projects_dir(settings) {
+        Ok(dir) => dir,
+        Err(e) => {
+            eprintln!("差分再走査: ルートディレクトリを解決できませんでした: {e}");
+            return false;
+        }
+    };
+
+    // 走査(ファイルI/O)はロックの外で行う(native.md §2)
+    let mut outcomes = Vec::with_capacity(batch.len());
+    for path in batch {
+        let dir = projects_dir.clone();
+        let target = path.clone();
+        let outcome = tauri::async_runtime::spawn_blocking(move || {
+            let repo = FileSystemRepository::new(dir);
+            match repo.session_file_ref(&target) {
+                None => RescanOutcome::Removed(target),
+                Some(reference) => match repo.parse_session_file(&reference) {
+                    Ok(parsed) => RescanOutcome::Parsed(Box::new(parsed)),
+                    Err(e) => RescanOutcome::Failed(target, e.to_string()),
+                },
+            }
+        })
+        .await;
+        match outcome {
+            Ok(outcome) => outcomes.push(outcome),
+            Err(_) => eprintln!(
+                "差分再走査: バックグラウンド処理に失敗しました: {}",
+                path.display()
+            ),
+        }
+    }
+
+    let state = app_handle.state::<Mutex<AppState>>();
+    let mut guard = state.lock().await;
+    if guard.session_scan_generation != generation {
+        return false; // 全件キューが開始された: そちらが同じファイルを読み直す
+    }
+    let mut changed = false;
+    for outcome in outcomes {
+        match outcome {
+            RescanOutcome::Parsed(parsed) => {
+                app::upsert_parsed_session(&mut guard.user_sessions, *parsed);
+                changed = true;
+            }
+            RescanOutcome::Removed(path) => {
+                changed |= app::remove_parsed_session(&mut guard.user_sessions, &path);
+            }
+            RescanOutcome::Failed(path, message) => eprintln!(
+                "差分再走査: {} の走査に失敗したためスキップします: {message}",
+                path.display()
+            ),
+        }
+    }
+    changed
 }

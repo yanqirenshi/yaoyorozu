@@ -1280,14 +1280,17 @@ async fn update_github_project_item_status(
 fn start_session_watcher(app_handle: &tauri::AppHandle, root: PathBuf) {
     let repo = FileSystemRepository::new(root);
     let handle = app_handle.clone();
-    match repo.watch_projects(move |project| {
+    match repo.watch_projects(move |change| {
+        // ビューアの追従(従来どおり。プロジェクト単位)
         let _ = handle.emit(
             "session:changed",
             SessionChangedEventDto {
-                project,
+                project: change.project,
                 agent: AgentKindDto::ClaudeCode,
             },
         );
+        // ハブの自動更新: 変更のあった会話ファイルだけを差分再走査する(issue #311)
+        session_scan_queue::enqueue_changed(handle.clone(), change.conversation_files);
     }) {
         Ok(new_watcher) => {
             let slot = app_handle.state::<WatcherSlot>();

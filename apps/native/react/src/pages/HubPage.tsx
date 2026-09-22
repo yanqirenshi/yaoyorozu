@@ -13,6 +13,7 @@ import {
   onPcDataLoaded,
   onPcDataLoading,
   onPcDataProgress,
+  onPcSessionsUpdated,
   onSettingsUpdated,
   onWindowsChanged,
   openProfileWindow,
@@ -856,20 +857,26 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
   // ため `pc` も取り直す。イベントは1ファイル完了ごとに届き短時間に連発する
   // ため、取り直しは末尾デバウンス(300ms)でまとめる(最終状態は
   // `pc:data_loaded` 側の `loadPc` でも取り直されるため取りこぼさない)。
+  // セッションファイルの変更による差分再走査の完了(`pc:sessions_updated`。
+  // issue #311)でも同じデバウンスで取り直す(セッションが進行中だと続けて届く)。
   const progressReloadTimer = useRef<number | null>(null);
   useEffect(() => {
+    const scheduleReload = () => {
+      if (progressReloadTimer.current === null) {
+        progressReloadTimer.current = window.setTimeout(() => {
+          progressReloadTimer.current = null;
+          loadPc();
+        }, 300);
+      }
+    };
     const unlistenPromises = [
       onPcDataLoaded(loadPc),
       onPcDataLoading(loadPc),
       onPcDataProgress((progress) => {
         setScanProgress(progress);
-        if (progressReloadTimer.current === null) {
-          progressReloadTimer.current = window.setTimeout(() => {
-            progressReloadTimer.current = null;
-            loadPc();
-          }, 300);
-        }
+        scheduleReload();
       }),
+      onPcSessionsUpdated(scheduleReload),
     ];
     return () => {
       unlistenPromises.forEach((p) => p.then((unlisten) => unlisten()));

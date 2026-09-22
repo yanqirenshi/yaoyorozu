@@ -741,6 +741,56 @@ pub fn retain_enumerated_parsed_sessions(
     sessions.retain(|p| enumerated_paths.contains(&p.conversation_file_path));
 }
 
+/// 削除された会話ファイルの `ParsedSession` を取り除く(ファイル監視による差分
+/// 再走査。issue #311)。同一 `session_id` の別ファイル(worktree 移動。#214)は
+/// 別エントリのため残り、`Session` としては集約(#217)の結果その別ファイルの
+/// ぶんが残る。取り除いたかどうかを返す。
+pub fn remove_parsed_session(sessions: &mut Vec<ParsedSession>, file_path: &Path) -> bool {
+    let before = sessions.len();
+    sessions.retain(|p| p.conversation_file_path != file_path);
+    sessions.len() != before
+}
+
+/// ファイル監視が検知した会話ファイルの変更を、差分再走査へまとめて渡すための
+/// 待ち行列(issue #311)。純粋なデータ構造で、時間(待ち時間)は持たない。
+///
+/// 書き込み中の jsonl は頻繁に更新されるため、変更のたびに走査すると暴れる。
+/// 呼び出し側は「ワーカーは常に高々1つ。動いていなければ起動し、1回の処理が
+/// 終わるたびに最短間隔だけ待ってから、溜まった変更をまとめて取り出す」運用に
+/// する。同じファイルの変更は集合で1件に畳まれるので、書き込みが頻発しても
+/// 1ファイルの走査は「最短間隔+走査時間」に1回に収まる。
+#[derive(Debug, Default)]
+pub struct RescanQueue {
+    pending: std::collections::BTreeSet<PathBuf>,
+    worker_running: bool,
+}
+
+impl RescanQueue {
+    /// 変更を溜める。ワーカーを新たに起動する必要があるとき(動いていなかった
+    /// とき)だけ `true` を返し、その場でワーカーを「動いている」状態にする。
+    pub fn push(&mut self, paths: impl IntoIterator<Item = PathBuf>) -> bool {
+        self.pending.extend(paths);
+        if self.pending.is_empty() || self.worker_running {
+            return false;
+        }
+        self.worker_running = true;
+        true
+    }
+
+    /// 溜まった変更をすべて取り出す。何も無ければワーカーを「止まった」状態に
+    /// して `None` を返す(呼び出し側はそのままワーカーを終える)。
+    /// 取り出しと停止の判定を1回の呼び出し(=1回のロック)で行うことで、
+    /// 「空を確認した直後に変更が来たのに、ワーカーが終わっていて誰も処理しない」
+    /// 取りこぼしを防ぐ。
+    pub fn take_or_stop(&mut self) -> Option<Vec<PathBuf>> {
+        if self.pending.is_empty() {
+            self.worker_running = false;
+            return None;
+        }
+        Some(std::mem::take(&mut self.pending).into_iter().collect())
+    }
+}
+
 /// ハブグラフの調整値を読み込む。ファイルが存在しない/壊れている場合の
 /// デフォルト値へのフォールバックは `HubTuningStore` 実装(infra)側の責務
 /// (issue #249)。
@@ -1630,6 +1680,58 @@ mod tests {
         // 別のパスは追加される
         upsert_parsed_session(&mut sessions, sample_parsed_session("b"));
         assert_eq!(sessions.len(), 2);
+    }
+
+    #[test]
+    fn remove_parsed_session_drops_only_the_given_path() {
+        let mut sessions = vec![sample_parsed_session("a"), sample_parsed_session("b")];
+
+        assert!(remove_parsed_session(
+            &mut sessions,
+            Path::new("/tmp/a.jsonl")
+        ));
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, "b");
+
+        // 既に無いパスは何もせず false
+        assert!(!remove_parsed_session(
+            &mut sessions,
+            Path::new("/tmp/a.jsonl")
+        ));
+        assert_eq!(sessions.len(), 1);
+    }
+
+    #[test]
+    fn rescan_queue_starts_one_worker_and_coalesces_changes() {
+        let mut queue = RescanQueue::default();
+
+        // 最初の変更でワーカーを起動する。動いている間の変更では起動しない
+        assert!(queue.push([PathBuf::from("/a.jsonl")]));
+        assert!(!queue.push([PathBuf::from("/b.jsonl"), PathBuf::from("/a.jsonl")]));
+
+        // 同じファイルの変更は1件に畳まれてまとめて取り出される
+        let batch = queue.take_or_stop().expect("pending changes");
+        assert_eq!(
+            batch,
+            vec![PathBuf::from("/a.jsonl"), PathBuf::from("/b.jsonl")]
+        );
+
+        // 処理中に届いた変更は次の取り出しで拾われ、その間もワーカーは1つのまま
+        assert!(!queue.push([PathBuf::from("/a.jsonl")]));
+        assert_eq!(queue.take_or_stop(), Some(vec![PathBuf::from("/a.jsonl")]));
+
+        // 空になったらワーカーは止まり、次の変更でまた起動する
+        assert_eq!(queue.take_or_stop(), None);
+        assert!(queue.push([PathBuf::from("/c.jsonl")]));
+    }
+
+    #[test]
+    fn rescan_queue_does_not_start_worker_for_empty_push() {
+        let mut queue = RescanQueue::default();
+        assert!(!queue.push(Vec::<PathBuf>::new()));
+        assert_eq!(queue.take_or_stop(), None);
+        // 空の push の後でも、次の実変更でワーカーが起動する
+        assert!(queue.push([PathBuf::from("/a.jsonl")]));
     }
 
     #[test]
