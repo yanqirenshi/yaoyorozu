@@ -213,12 +213,13 @@
   /* 余白 */
   --space-1: 4px;
   --space-2: 8px;
+  --space-11: 11px;
   --space-3: 12px;
   --space-4: 16px;
+  --space-22: 22px;
   --space-6: 24px;
   --space-8: 32px;
-  --space-12: 48px;
-  --space-16: 64px;
+  --space-33: 33px;
 
   /* 角の形状 */
   --radius-0: 0px;

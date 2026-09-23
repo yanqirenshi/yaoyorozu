@@ -28,10 +28,21 @@ const SECTIONS: DocSection[] = [
     body: (
       <>
         <Para>
-          基準単位は {SPACING_BASE_PX}px。スケールは 4 / 8 / 12 / 16 / 24 / 32 / 48 / 64 の8段階とし、
-          この値以外の余白は使わない。トークン名の数値は基準単位の倍数であり、Tailwind のクラス番号と一致する
-          (<Code>sp-4</Code> = 16px = <Code>p-4</Code>)。
+          基準単位は {SPACING_BASE_PX}px。スケールは{" "}
+          {SPACING_SCALE.map((s) => s.px).join(" / ")} の{SPACING_SCALE.length}段階とし、
+          この値以外の余白は使わない。
         </Para>
+        <Para>
+          トークン名の読み方は2通りある。<Code>sp-1</Code> 〜 <Code>sp-8</Code> は数値が基準単位の倍数で、
+          Tailwind のクラス番号と一致する(<Code>sp-4</Code> = 16px = <Code>p-4</Code>)。
+          <Code>sp-11</Code> / <Code>sp-22</Code> / <Code>sp-33</Code> は数値がそのまま px であり
+          (2026-09-23 決定)、4px グリッドにも Tailwind のクラス番号にも乗らないため、
+          Tailwind から使うときは任意値(<Code>p-[22px]</Code>)で書く。
+        </Para>
+        <Note>
+          sp-11 と sp-3(12px)は 1px、sp-22 と sp-6(24px)は 2px、sp-33 と sp-8(32px)は 1px しか違わない。
+          差が見えないため、同じ画面で併用しない。sp-11 / sp-22 の用途は未定で、使いどころが決まった時点でここに書く。
+        </Note>
         <TokenTable
           columns={[
             { key: "bar", label: "", width: "180px" },
@@ -58,7 +69,7 @@ const SECTIONS: DocSection[] = [
           }))}
         />
         <Note>
-          8段階のうち、1画面で使うのはたいてい4〜5段階である。使える値を絞ることが目的であり、全部を使い切る必要はない。
+          {SPACING_SCALE.length}段階のうち、1画面で使うのはたいてい4〜5段階である。使える値を絞ることが目的であり、全部を使い切る必要はない。
         </Note>
       </>
     ),
