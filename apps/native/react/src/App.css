@@ -677,6 +677,22 @@ body,
   display: flex;
 }
 
+/* ビューア(`/profiles/:id`)の CLAUDE.md。内容が枠に貼り付かないよう、
+   markdown-viewer / markdown-editor を包むアプリ側の要素(markdown-workspace)
+   に余白を持たせる(ユーザー指示)。
+   markdown-viewer 自体を div 等で包むことはできない — markdown-workspace は
+   `[slot="preview"]` で中身を取得して直接操作するため(dist の `get viewer()`)、
+   間に要素を挟むとその要素を掴んでしまう。
+   部品が内部に持つ余白(:root の --md-padding。既定は dock 避けの下端222px。
+   issue #59)は、この余白と二重になるうえ、ビューアには dock が無い
+   (issue #257)ため 0 にする。 */
+.claude-md-pane .claude-md-editor-workspace {
+  box-sizing: border-box;
+  padding: 22px;
+  --md-padding: 0;
+  --md-editor-padding: 0;
+}
+
 .claude-md-editor {
   flex: 1;
   min-height: 0;
