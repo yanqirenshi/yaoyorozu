@@ -375,6 +375,26 @@ body,
   display: flex;
 }
 
+/* 画面下のフッター(ユーザー指示)。ビューアの操作(表示の切り替え・再読み込み・
+   保存など)をまとめて置く。以前はヘッダの右端にあった(issue #257)。
+   ヘッダ(`.session-conversation-head`)と同じ重なり順にして、吹き出しメニューが
+   コンテンツの上に出るようにする。 */
+.viewer-footer {
+  position: relative;
+  z-index: 40;
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  border-top: 1px solid var(--border-default);
+  background: var(--surface-base);
+}
+
+/* フッターでは吹き出しメニューを上向きに開く(下向きだと画面外に出る)。 */
+.viewer-footer .viewer-toolbar-menu {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
 /* ビューアの上部: プロファイル名(左)とページ内ツールバー(右。issue #257)。
    ウィンドウの左端から右端まで届き、下罫線も全幅で通る(issue #291)。 */
 .session-conversation-head {
