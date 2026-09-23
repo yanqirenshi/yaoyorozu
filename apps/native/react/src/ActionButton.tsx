@@ -12,7 +12,7 @@ export type ActionButtonSize = "small" | "medium" | "large";
 
 export type ActionButtonProps = {
   size?: ActionButtonSize;
-  /** 省略時は種類ごとの既定のラベル(追加 / 変更)。 */
+  /** 省略時は種類ごとの既定のラベル(追加 / 保存 / 変更)。 */
   label?: string;
   disabled?: boolean;
   /** フォーム送信のときだけ `submit`。既定は `button`。 */
