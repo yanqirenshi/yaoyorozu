@@ -1436,6 +1436,34 @@ body,
   border-color: var(--border-default);
 }
 
+/* 選択ボタン(線。issue #339)。形は変更ボタンと同じだが、値は独立して持つ
+   (変更ボタンとは色の系統が異なるため、#334 の保存ボタンのようなセレクタ
+   併記にはしない)。文字色は 墨-500(変更ボタンの金茶-500に対応する段階)
+   ではなく `--text-primary`(墨-900)。墨-500 は白背景に対し 3.56:1 で本文の
+   基準(4.5:1)に届かず、対象を指定するだけの操作でニュートラルな配色に
+   色味を優先する理由もないため。 */
+.action-button-select {
+  background-color: var(--surface-raised);
+  color: var(--text-primary);
+  border-color: var(--color-sumi-600);
+}
+
+.action-button-select:hover:not(:disabled) {
+  background-color: var(--color-sumi-50);
+  border-color: var(--color-sumi-700);
+}
+
+.action-button-select:active:not(:disabled) {
+  background-color: var(--color-sumi-100);
+  border-color: var(--color-sumi-800);
+}
+
+.action-button-select:disabled {
+  background-color: var(--surface-raised);
+  color: var(--text-disabled);
+  border-color: var(--border-default);
+}
+
 /* 操作できないときはカーソルを not-allowed に。フォーカスはキーボード操作
    (`:focus-visible`)のときだけ出し、ポインタで押したときには出さない。 */
 .action-button:disabled {
