@@ -12,7 +12,6 @@ import {
   isAppError,
   listGithubProjectItems,
   listSessions,
-  onAppWarning,
   onSessionChanged,
   onSettingsUpdated,
   saveProjectClaudeMd,
@@ -303,19 +302,6 @@ function SessionsPage({ nav }: SessionsPageProps) {
     };
   }, [targetFolders, projectParam, sessionParam, loadSessionGroups, refreshSessionInPlace]);
 
-  useEffect(() => {
-    const unlistenPromise = onAppWarning(({ project }) => {
-      if (project !== projectParam || !sessionParam) return;
-      setError(
-        "メッセージが表示中とは別の会話に追記された可能性があります。再読み込みします。",
-      );
-      loadSession(project, sessionParam);
-    });
-    return () => {
-      unlistenPromise.then((unlisten) => unlisten());
-    };
-  }, [projectParam, sessionParam, loadSession]);
-
   // 設定の変更(設定画面でのプロファイル切り替え等)で対象フォルダ・GitHubプロジェクトが変わった
   // ことの通知。表示中のフォルダが新しいプロファイルの対象から外れた場合は
   // 選択を解除する(issue #72)。
@@ -403,7 +389,9 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const selectedSummary = sessionGroups
     .find((g) => g.folder === projectParam)
     ?.sessions.find((s) => s.id === sessionParam);
-  const canSend = selectedSummary?.is_latest ?? false;
+  // `--resume <ID>` 化(issue #345)により、一覧に出る系列先頭のセッションは
+  // すべて送信対象にできる(旧「最新のみ送信可」の制約は撤廃)。
+  const canSend = !!selectedSummary;
 
   // ウィンドウレジストリ(issue #83)へこのウィンドウの表示状態を報告する。
   // 「1ウィンドウ=1プロファイル」への一本化(issue #91)でタブが無くなった
@@ -466,12 +454,8 @@ function SessionsPage({ nav }: SessionsPageProps) {
         refreshSessionInPlace(projectParam, sessionParam);
       })
       .catch((e) => {
-        if (isAppError(e) && e.code === "session_stale") {
-          // 表示中セッションが最新でない疑い: 安全側で全クリアして取り直す。
-          setError("表示中の会話が最新ではありません。再読み込みします。");
-          loadSession(projectParam, sessionParam);
-          return;
-        }
+        // `session_busy`(他プロセスで実行中。issue #345)を含め、Rust側の
+        // エラーメッセージはそのままユーザー向けに表示できる文言になっている。
         setError(isAppError(e) ? e.message : String(e));
       })
       .finally(() => setSending(false));
@@ -642,11 +626,6 @@ function SessionsPage({ nav }: SessionsPageProps) {
                 {sending ? "送信中…" : "送信"}
               </button>
             </form>
-            {projectParam && sessionParam && !canSend && (
-              <p className="message-form-notice">
-                送信できるのは最新のセッションのみです。
-              </p>
-            )}
             <div className="conversation-scroll">
               {error && <p className="error">{error}</p>}
               {!projectParam || !sessionParam ? (

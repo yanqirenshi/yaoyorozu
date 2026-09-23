@@ -1561,15 +1561,6 @@ body,
   border-bottom: 1px solid var(--border-default);
 }
 
-.message-form-notice {
-  flex-shrink: 0;
-  margin: 0;
-  padding: 6px 24px;
-  font-size: 0.85rem;
-  color: var(--text-secondary);
-  border-bottom: 1px solid var(--border-default);
-}
-
 .message-input {
   flex: 1;
   min-width: 0;

@@ -79,7 +79,7 @@ pub use role::Role;
 pub use rule_summary::RuleSummary;
 pub use session::Session;
 pub use session_file::SessionFile;
-pub use session_summary::{sort_sessions_by_recency, SessionSummary};
+pub use session_summary::{collapse_session_series, SessionSummary};
 pub use session_title::{excerpt, resolve_session_title};
 pub use settings::{effective_projects_dir, Settings, CURRENT_SETTINGS_VERSION};
 pub use skill_summary::SkillSummary;

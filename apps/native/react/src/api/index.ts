@@ -3,7 +3,6 @@ import { listen } from "@tauri-apps/api/event";
 import type {
   AgentModeDto,
   AppErrorDto,
-  AppWarningEvent,
   ClaudeDirPageDto,
   ClaudeMdDto,
   ClaudeSettingsDto,
@@ -39,7 +38,6 @@ export type {
   AgentKindDto,
   AgentModeDto,
   AppErrorDto,
-  AppWarningEvent,
   ClaudeDirEntryDto,
   ClaudeDirEntryKindDto,
   ClaudeDirPageDto,
@@ -124,15 +122,6 @@ export function onSessionChanged(
   callback: (event: SessionChangedEvent) => void,
 ): Promise<() => void> {
   const unlisten = listen<SessionChangedEvent>("session:changed", (event) => {
-    callback(event.payload);
-  });
-  return unlisten.then((fn) => fn);
-}
-
-export function onAppWarning(
-  callback: (event: AppWarningEvent) => void,
-): Promise<() => void> {
-  const unlisten = listen<AppWarningEvent>("app:warning", (event) => {
     callback(event.payload);
   });
   return unlisten.then((fn) => fn);

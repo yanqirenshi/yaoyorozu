@@ -1,8 +1,8 @@
 use domain::{
-    is_valid_claude_dir_path, is_valid_json, is_valid_project_dir_name, is_valid_rule_file_name,
-    is_valid_session_id, is_valid_skill_name, order_messages_newest_first, paginate_messages,
-    reconcile_branches, reconcile_worktrees, repositories_from_profiles, sort_claude_dir_entries,
-    sort_projects_by_recency, sort_sessions_by_recency, Camera, ClaudeDirEntry, ClaudeDirPage,
+    collapse_session_series, is_valid_claude_dir_path, is_valid_json, is_valid_project_dir_name,
+    is_valid_rule_file_name, is_valid_session_id, is_valid_skill_name, order_messages_newest_first,
+    paginate_messages, reconcile_branches, reconcile_worktrees, repositories_from_profiles,
+    sort_claude_dir_entries, sort_projects_by_recency, Camera, ClaudeDirEntry, ClaudeDirPage,
     ClaudeMdFile, ClaudeSettingsFile, Conversation, GitLedger, GitRepositoryLedger, HubLayout,
     HubTuning, LogLine, NodePosition, ParsedSession, Project, RuleSummary, SessionSummary,
     Settings, SkillSummary, CURRENT_GIT_LEDGER_VERSION, CURRENT_HUB_LAYOUT_VERSION,
@@ -19,9 +19,11 @@ pub enum AppError {
     Io(String),
     #[error("{0}")]
     InvalidInput(String),
-    /// 表示中のセッションが、送信直前の時点での最新セッションと一致しない。
+    /// 送信対象のセッションが、既に他のプロセスで実行中(そのプロセスが
+    /// 会話ファイルへ書き込み中)である。並行追記による会話の混線を防ぐため
+    /// 送信を拒否する(issue #345)。
     #[error("{0}")]
-    SessionStale(String),
+    SessionBusy(String),
     /// `claude` 実行ファイルが見つからない。
     #[error("{0}")]
     CliNotFound(String),
@@ -75,12 +77,11 @@ pub trait SessionSource {
     /// 指定セッション(ID + 全メッセージ)を返す。
     fn session(&self, project: &str, session_id: &str) -> Result<Conversation, AppError>;
 
-    /// 最新セッションのIDだけを返す(送信前後の一致検証用の軽量な問い合わせ)。
-    fn latest_session_id(&self, project: &str) -> Result<String, AppError>;
-
-    /// 最新セッションの作業ディレクトリ(cwd)を返す。`AgentGateway` へ渡す
-    /// `SendRequest` を組み立てるために使う。
-    fn latest_session_cwd(&self, project: &str) -> Result<PathBuf, AppError>;
+    /// 指定セッション自身の作業ディレクトリ(cwd)を返す。`AgentGateway` へ渡す
+    /// `SendRequest` を組み立てるために使う(issue #345: `--resume <ID>` は
+    /// 対象セッションをIDで直接指定するため、フォルダ内の最新ではなく対象
+    /// セッション自身のcwdを使う)。
+    fn session_cwd(&self, project: &str, session_id: &str) -> Result<PathBuf, AppError>;
 
     /// 指定プロジェクトの全セッションを一覧表示用に要約して返す(ビューア
     /// 左ペイン用。issue #33)。
@@ -328,6 +329,17 @@ pub trait AgentGateway {
     fn send(&self, req: SendRequest) -> Result<(), AppError>;
 }
 
+/// 実行中セッションの検出(port)。`--resume <ID>` は追記先をIDで直接指定する
+/// ため表示中と別の会話への誤爆は起きないが、同じ会話ファイルへ他プロセス
+/// (Claude Desktop本体・別ウィンドウ等)が並行して書き込み中だと追記が
+/// 混線しうる。送信前にこれを検出しブロックするために使う(issue #345)。
+/// 実体(`~/.claude/sessions/<PID>.json` の読み取りとプロセス生存確認)は
+/// infra に閉じ込める。
+pub trait RunningSessionSource {
+    /// `session_id` が現在、他のプロセスの `claude` によって実行中なら `true`。
+    fn is_running(&self, session_id: &str) -> Result<bool, AppError>;
+}
+
 /// 送信時に許可する権限モード。
 /// - `Chat`(既定): ツール実行を伴わない会話のみ
 /// - `Read`: 読み取り専用ツールの実行を許可する(plan モード相当)。書き込み系の
@@ -342,11 +354,14 @@ pub enum AgentMode {
     Read,
 }
 
-/// 送信対象のセッションをどう扱うか。現時点では既存セッションの継続のみを
-/// サポートする(新規セッションを明示的に開始するUIは将来の別イシューで扱う)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 送信対象の会話をどう継続するか。現時点では既存の会話への `--resume` の
+/// みをサポートする(issue #345。新規セッションを明示的に開始するUIは
+/// 将来の別イシューで扱う)。
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Continuation {
-    Continue,
+    /// この `session_id` へ `--resume` で継続する(フォーク系列の先頭=
+    /// 表示中セッション自身のID)。
+    Resume(String),
 }
 
 #[derive(Debug, Clone)]
@@ -355,20 +370,6 @@ pub struct SendRequest {
     pub text: String,
     pub mode: AgentMode,
     pub continuation: Continuation,
-}
-
-/// 送信直後に `SessionSource` から再取得した最新セッションIDが、送信前に
-/// 検証した `expected_session_id` と食い違っていた場合の情報。
-///
-/// 送信前チェックと `AgentGateway::send` の実行の間には別セッションが
-/// 割り込む競合窓が原理的に残る(`--continue` は実行時点の最新会話を継続する
-/// ため)。この窓で割り込みが起きると、検証を通過したのに表示中とは別の
-/// 会話へ追記されてしまう。送信自体は成功しているため `AppError` にはせず、
-/// 呼び出し側(tauri層)が警告としてフロントへ伝えるための戻り値として返す。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SessionMismatch {
-    pub expected_session_id: String,
-    pub actual_session_id: String,
 }
 
 pub fn list_projects(source: &dyn SessionSource) -> Result<Vec<Project>, AppError> {
@@ -495,66 +496,69 @@ pub fn resolve_session_display_hints(
     hints
 }
 
-/// 指定プロジェクトのセッション一覧を、最終更新の新しい順に並べて返す
-/// (ビューア左ペイン用。issue #33)。
+/// 指定プロジェクトのセッション一覧を、フォーク系列(issue #345)ごとに
+/// 最新ファイルだけへ畳んだ上で、最終更新の新しい順に並べて返す(ビューア
+/// 左ペイン用。issue #33)。
 pub fn list_sessions(
     source: &dyn SessionSource,
     project: &str,
 ) -> Result<Vec<SessionSummary>, AppError> {
-    let mut sessions = source.list_sessions(project)?;
-    sort_sessions_by_recency(&mut sessions);
-    Ok(sessions)
+    let sessions = source.list_sessions(project)?;
+    Ok(collapse_session_series(sessions))
 }
 
-/// `expected_session_id` が実行直前の最新セッションと一致する場合のみ送信する。
+/// `session_id`(表示中のフォーク系列の先頭。`list_sessions` が返すのは
+/// 各系列の最新ファイルのみなので、表示中のIDがそのまま系列の先頭になる)へ
+/// `--resume` でメッセージを送信する(issue #345)。
 ///
-/// 表示してから送信するまでの間に別のセッションが作られていた場合(例: Claude
-/// Desktop側で新しい会話を始めた)、ユーザーが見ていない会話に無言で追記される
-/// 事故を防ぐための不変条件。不一致なら送信せず `SessionStale` を返す。
+/// 継続方式を `--continue`(カレントディレクトリの最新の会話をそのまま
+/// 継続)から `--resume <ID>` へ変えたことで、旧実装が必要としていた
+/// 「表示中セッションが実際に最新か」の事前検証(`SessionStale`)と、
+/// 送信前後の競合窓を検出する事後検証(`SessionMismatch`/`app:warning`)は
+/// 撤廃した。どちらも「`--continue` はその時点の最新会話に無言で追記する」
+/// という性質に起因する不変条件であり、追記先をIDで直接指定する
+/// `--resume` にはそもそも当てはまらない(存在しないIDを渡せば `claude`
+/// 自体がエラーになる)。
 ///
-/// 送信後、`SessionSource` から改めて最新セッションIDを取得し
-/// `expected_session_id` と比較する。送信前チェックと送信実行の間の競合窓
-/// (このチェックでは検出できない)で割り込みが起きていた場合、[`SessionMismatch`]
-/// を返す。送信自体は成功しているため、これはエラーではなく戻り値としての
-/// 警告情報である。
+/// 代わりに必要になるのは「対象セッションが今まさに他プロセス
+/// (Claude Desktop本体・別ウィンドウ等)で実行中でないか」の確認である。
+/// 同じ会話ファイルへの並行書き込みによる混線を防ぐため、送信前に
+/// `RunningSessionSource` で確認し、実行中なら `SessionBusy` を返して
+/// 送信しない。
 pub fn send_message(
     source: &dyn SessionSource,
     agent: &dyn AgentGateway,
+    running_sessions: &dyn RunningSessionSource,
     project: &str,
-    expected_session_id: &str,
+    session_id: &str,
     text: &str,
     mode: AgentMode,
-) -> Result<Option<SessionMismatch>, AppError> {
+) -> Result<(), AppError> {
     if text.trim().is_empty() {
         return Err(AppError::InvalidInput(
             "メッセージを入力してください".to_string(),
         ));
     }
-
-    let actual_session_id = source.latest_session_id(project)?;
-    if actual_session_id != expected_session_id {
-        return Err(AppError::SessionStale(format!(
-            "表示中のセッションが最新ではありません(表示中: {expected_session_id}, 最新: {actual_session_id})"
-        )));
+    if !is_valid_session_id(session_id) {
+        return Err(AppError::InvalidInput("不正なセッションIDです".to_string()));
     }
 
-    let cwd = source.latest_session_cwd(project)?;
+    if running_sessions.is_running(session_id)? {
+        return Err(AppError::SessionBusy(
+            "このセッションは他のプロセスで実行中です。しばらく待ってから再試行してください"
+                .to_string(),
+        ));
+    }
+
+    let cwd = source.session_cwd(project, session_id)?;
     agent.send(SendRequest {
         cwd,
         text: text.to_string(),
         mode,
-        continuation: Continuation::Continue,
+        continuation: Continuation::Resume(session_id.to_string()),
     })?;
 
-    let post_send_session_id = source.latest_session_id(project)?;
-    if post_send_session_id != expected_session_id {
-        return Ok(Some(SessionMismatch {
-            expected_session_id: expected_session_id.to_string(),
-            actual_session_id: post_send_session_id,
-        }));
-    }
-
-    Ok(None)
+    Ok(())
 }
 
 /// 起動時、保存済みの設定を読み込む。ファイルが存在しない/壊れている場合の
@@ -1486,14 +1490,9 @@ mod tests {
 
     struct FakeSessionSource {
         projects: Vec<Project>,
-        session_id: String,
-        /// `Some` の場合、2回目以降の `latest_session_id` 呼び出しでこの値を返す
-        /// (送信前チェックと送信後チェックの間にセッションが変わった状況を再現する)。
-        post_send_session_id: Option<String>,
         messages: Vec<Message>,
         cwd: PathBuf,
         fail_list_projects: bool,
-        latest_session_id_calls: std::cell::Cell<usize>,
         sessions: Vec<SessionSummary>,
         parsed_sessions: HashMap<String, Result<Vec<ParsedSession>, ()>>,
         log_lines: Result<Vec<LogLine>, ()>,
@@ -1502,15 +1501,16 @@ mod tests {
     }
 
     impl FakeSessionSource {
-        fn new(session_id: &str, messages: Vec<Message>) -> Self {
+        /// `_session_id` は呼び出し側のテストが「どのセッションを表す
+        /// フェイクか」を読み取れるようにするための引数(旧`latest_session_id`
+        /// 撤廃(issue #345)後は保持しない。`session()`/`session_cwd()`は常に
+        /// 呼び出し時に渡された引数をそのまま使う)。
+        fn new(_session_id: &str, messages: Vec<Message>) -> Self {
             Self {
                 projects: Vec::new(),
-                session_id: session_id.to_string(),
-                post_send_session_id: None,
                 messages,
                 cwd: PathBuf::from("/tmp/some-project"),
                 fail_list_projects: false,
-                latest_session_id_calls: std::cell::Cell::new(0),
                 sessions: Vec::new(),
                 parsed_sessions: HashMap::new(),
                 log_lines: Ok(Vec::new()),
@@ -1535,20 +1535,7 @@ mod tests {
             })
         }
 
-        fn latest_session_id(&self, _project: &str) -> Result<String, AppError> {
-            let call = self.latest_session_id_calls.get();
-            self.latest_session_id_calls.set(call + 1);
-            if call == 0 {
-                Ok(self.session_id.clone())
-            } else {
-                Ok(self
-                    .post_send_session_id
-                    .clone()
-                    .unwrap_or_else(|| self.session_id.clone()))
-            }
-        }
-
-        fn latest_session_cwd(&self, _project: &str) -> Result<PathBuf, AppError> {
+        fn session_cwd(&self, _project: &str, _session_id: &str) -> Result<PathBuf, AppError> {
             Ok(self.cwd.clone())
         }
 
@@ -1599,6 +1586,17 @@ mod tests {
             }
             self.sent.borrow_mut().push(req);
             Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeRunningSessionSource {
+        running: bool,
+    }
+
+    impl RunningSessionSource for FakeRunningSessionSource {
+        fn is_running(&self, _session_id: &str) -> Result<bool, AppError> {
+            Ok(self.running)
         }
     }
 
@@ -1689,33 +1687,47 @@ mod tests {
         assert!(matches!(error, AppError::InvalidInput(_)));
     }
 
+    fn sample_session_summary(id: &str, modified_at_ms: u64) -> SessionSummary {
+        SessionSummary {
+            id: id.to_string(),
+            title: id.to_string(),
+            modified_at_ms,
+            cwd: None,
+            git_branch: None,
+            root_uuid: None,
+        }
+    }
+
     #[test]
-    fn list_sessions_sorts_by_recency_and_marks_latest() {
+    fn list_sessions_sorts_by_recency() {
         let mut source = FakeSessionSource::new("s1", vec![]);
         source.sessions = vec![
-            SessionSummary {
-                id: "old".to_string(),
-                title: "old".to_string(),
-                modified_at_ms: 1,
-                is_latest: false,
-                cwd: None,
-                git_branch: None,
-            },
-            SessionSummary {
-                id: "new".to_string(),
-                title: "new".to_string(),
-                modified_at_ms: 2,
-                is_latest: false,
-                cwd: None,
-                git_branch: None,
-            },
+            sample_session_summary("old", 1),
+            sample_session_summary("new", 2),
         ];
 
         let sessions = list_sessions(&source, "some-project").expect("should list sessions");
         let ids: Vec<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, vec!["new", "old"]);
-        assert!(sessions[0].is_latest);
-        assert!(!sessions[1].is_latest);
+    }
+
+    #[test]
+    fn list_sessions_collapses_fork_series_to_the_latest_file() {
+        let mut source = FakeSessionSource::new("s1", vec![]);
+        source.sessions = vec![
+            SessionSummary {
+                root_uuid: Some("root-a".to_string()),
+                ..sample_session_summary("fork-1", 1)
+            },
+            SessionSummary {
+                root_uuid: Some("root-a".to_string()),
+                ..sample_session_summary("fork-2", 2)
+            },
+        ];
+
+        let sessions = list_sessions(&source, "some-project").expect("should list sessions");
+        let ids: Vec<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["fork-2"]);
     }
 
     fn sample_parsed_session(session_id: &str) -> ParsedSession {
@@ -2057,35 +2069,38 @@ mod tests {
     }
 
     #[test]
-    fn send_message_delegates_to_agent_when_session_matches() {
+    fn send_message_resumes_the_given_session_id() {
         let source = FakeSessionSource::new("s1", vec![]);
         let agent = FakeAgentGateway::default();
-        let outcome = send_message(
+        let running_sessions = FakeRunningSessionSource::default();
+        send_message(
             &source,
             &agent,
+            &running_sessions,
             "some-project",
             "s1",
             "hello",
             AgentMode::Chat,
         )
         .expect("should send message");
-        assert_eq!(outcome, None, "no mismatch when session id is unchanged");
 
         let sent = agent.sent.borrow();
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].text, "hello");
         assert_eq!(sent[0].cwd, source.cwd);
         assert_eq!(sent[0].mode, AgentMode::Chat);
-        assert_eq!(sent[0].continuation, Continuation::Continue);
+        assert_eq!(sent[0].continuation, Continuation::Resume("s1".to_string()));
     }
 
     #[test]
     fn send_message_passes_requested_mode_through_to_agent() {
         let source = FakeSessionSource::new("s1", vec![]);
         let agent = FakeAgentGateway::default();
+        let running_sessions = FakeRunningSessionSource::default();
         send_message(
             &source,
             &agent,
+            &running_sessions,
             "some-project",
             "s1",
             "hello",
@@ -2103,39 +2118,14 @@ mod tests {
     }
 
     #[test]
-    fn send_message_returns_mismatch_when_session_changes_during_send() {
-        let mut source = FakeSessionSource::new("s1", vec![]);
-        source.post_send_session_id = Some("s2".to_string());
-        let agent = FakeAgentGateway::default();
-
-        let outcome = send_message(
-            &source,
-            &agent,
-            "some-project",
-            "s1",
-            "hello",
-            AgentMode::Chat,
-        )
-        .expect("send itself should still succeed");
-
-        assert_eq!(
-            outcome,
-            Some(SessionMismatch {
-                expected_session_id: "s1".to_string(),
-                actual_session_id: "s2".to_string(),
-            })
-        );
-        // 送信自体は行われている(警告であってエラーではない)。
-        assert_eq!(agent.sent.borrow().len(), 1);
-    }
-
-    #[test]
     fn send_message_rejects_blank_text() {
         let source = FakeSessionSource::new("s1", vec![]);
         let agent = FakeAgentGateway::default();
+        let running_sessions = FakeRunningSessionSource::default();
         let error = send_message(
             &source,
             &agent,
+            &running_sessions,
             "some-project",
             "s1",
             "   ",
@@ -2147,22 +2137,43 @@ mod tests {
     }
 
     #[test]
-    fn send_message_rejects_stale_session_without_sending() {
-        let source = FakeSessionSource::new("latest-id", vec![]);
+    fn send_message_rejects_invalid_session_id_without_sending() {
+        let source = FakeSessionSource::new("s1", vec![]);
         let agent = FakeAgentGateway::default();
+        let running_sessions = FakeRunningSessionSource::default();
         let error = send_message(
             &source,
             &agent,
+            &running_sessions,
             "some-project",
-            "displayed-id",
+            "../etc/passwd",
             "hello",
             AgentMode::Chat,
         )
-        .expect_err("should reject stale session");
-        assert!(matches!(error, AppError::SessionStale(_)));
+        .expect_err("should reject invalid session id");
+        assert!(matches!(error, AppError::InvalidInput(_)));
+        assert!(agent.sent.borrow().is_empty());
+    }
+
+    #[test]
+    fn send_message_rejects_when_session_is_running_elsewhere() {
+        let source = FakeSessionSource::new("s1", vec![]);
+        let agent = FakeAgentGateway::default();
+        let running_sessions = FakeRunningSessionSource { running: true };
+        let error = send_message(
+            &source,
+            &agent,
+            &running_sessions,
+            "some-project",
+            "s1",
+            "hello",
+            AgentMode::Chat,
+        )
+        .expect_err("should reject when session is busy");
+        assert!(matches!(error, AppError::SessionBusy(_)));
         assert!(
             agent.sent.borrow().is_empty(),
-            "must not send when session is stale"
+            "must not send when the session is running elsewhere"
         );
     }
 

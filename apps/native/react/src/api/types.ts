@@ -30,11 +30,13 @@ export type ConversationDto = {
   agent: AgentKindDto;
 };
 
+// セッション一覧(ビューア左ペイン)の1件分。`listSessions` はフォーク系列
+// (issue #345)ごとに最新ファイルだけへ畳んだ結果を返すため、ここに並ぶのは
+// 常に各系列の先頭(送信対象にできるセッション)。
 export type SessionSummaryDto = {
   id: string;
   title: string;
   modified_at: number;
-  is_latest: boolean;
   // ハブのグラフ階層(issue #104)。JSONLに記録が無ければ `null`。
   cwd: string | null;
   git_branch: string | null;
@@ -48,12 +50,6 @@ export type AppErrorDto = {
 export type SessionChangedEvent = {
   project: string;
   agent: AgentKindDto;
-};
-
-export type AppWarningEvent = {
-  project: string;
-  expected_session_id: string;
-  actual_session_id: string;
 };
 
 export type GithubProjectDto = {

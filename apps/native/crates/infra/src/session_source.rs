@@ -1,8 +1,7 @@
 use app::{AppError, SessionSource};
 use domain::{
-    convert_json_line_to_log_line, extract_cwd, extract_message, extract_session_id,
-    resolve_session_title, AgentKind, Conversation, LogLine, ParsedSession, Project, ScannedLine,
-    SessionSummary,
+    convert_json_line_to_log_line, extract_cwd, extract_message, resolve_session_title, AgentKind,
+    Conversation, LogLine, ParsedSession, Project, ScannedLine, SessionSummary,
 };
 use notify::RecursiveMode;
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
@@ -347,22 +346,22 @@ impl<'a> SessionCwdSelector<'a> {
     }
 }
 
-/// 最新セッションファイルに記録されている作業ディレクトリ(cwd)のうち、
-/// そのファイルが置かれたプロジェクトフォルダに対応するもの
+/// 指定した会話ファイルに記録されている作業ディレクトリ(cwd)のうち、その
+/// ファイルが置かれたプロジェクトフォルダに対応するもの
 /// ([`SessionCwdSelector`])を返す。
-/// `claude --continue` はカレントディレクトリに対応するプロジェクトフォルダの
-/// 最新の会話を継続するため、同じフォルダに対応する cwd で起動する必要がある。
-/// 最初の cwd をそのまま使うと、worktree に移ったセッションではメインの
-/// フォルダの別の会話へ送ってしまい、しかも送信前後のセッションID検証
-/// (worktree 側のフォルダを見る)では検出できない。
-fn resolve_session_cwd(project_dir: &Path) -> Result<PathBuf, AppError> {
-    let path = latest_session_file(project_dir)
-        .ok_or_else(|| AppError::NotFound("セッションが見つかりません".to_string()))?;
-
-    let file = fs::File::open(&path)
+///
+/// `--resume <ID>` は追記先をIDで直接指定するため、`--continue`(カレント
+/// ディレクトリに対応するプロジェクトフォルダの最新の会話を継続)のように
+/// cwdの一致がそのまま送信先を左右するわけではない。それでもcwd起点の
+/// ツール実行・フックの挙動を対象セッションの実際の作業ディレクトリに揃える
+/// ため、引き続きこの解決を行う(issue #345。旧`resolve_session_cwd`は
+/// 「フォルダ内最新ファイル」固定だったが、`session_cwd`が任意のセッション
+/// ファイルを指定できるよう汎用化した)。
+fn resolve_cwd_for_session_file(path: &Path) -> Result<PathBuf, AppError> {
+    let file = fs::File::open(path)
         .map_err(|e| AppError::Io(format!("{} を開けませんでした: {}", path.display(), e)))?;
 
-    let mut selector = SessionCwdSelector::for_session_file(&path);
+    let mut selector = SessionCwdSelector::for_session_file(path);
     for cwd in BufReader::new(file)
         .lines()
         .map_while(Result::ok)
@@ -379,24 +378,6 @@ fn resolve_session_cwd(project_dir: &Path) -> Result<PathBuf, AppError> {
     })?;
 
     Ok(PathBuf::from(cwd))
-}
-
-/// 最新セッションファイルのID(`sessionId`)を、ファイル全体を読まずに求める。
-/// `sessionId` は通常どの行にも記録されているため、最初の1行で見つかる
-/// (`find_map` が短絡評価するので、送信前後の軽量チェックに使える)。
-fn latest_session_id_in_dir(project_dir: &Path) -> Result<String, AppError> {
-    let path = latest_session_file(project_dir)
-        .ok_or_else(|| AppError::NotFound("セッションが見つかりません".to_string()))?;
-
-    let file = fs::File::open(&path)
-        .map_err(|e| AppError::Io(format!("{} を開けませんでした: {}", path.display(), e)))?;
-
-    BufReader::new(file)
-        .lines()
-        .map_while(Result::ok)
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
-        .find_map(|value| extract_session_id(&value))
-        .ok_or_else(|| AppError::Io("セッションIDを取得できませんでした".to_string()))
 }
 
 impl SessionSource for FileSystemRepository {
@@ -521,12 +502,12 @@ impl SessionSource for FileSystemRepository {
         Ok(lines)
     }
 
-    fn latest_session_id(&self, project: &str) -> Result<String, AppError> {
-        latest_session_id_in_dir(&self.projects_dir.join(project))
-    }
-
-    fn latest_session_cwd(&self, project: &str) -> Result<PathBuf, AppError> {
-        resolve_session_cwd(&self.projects_dir.join(project))
+    fn session_cwd(&self, project: &str, session_id: &str) -> Result<PathBuf, AppError> {
+        let path = self
+            .projects_dir
+            .join(project)
+            .join(format!("{session_id}.jsonl"));
+        resolve_cwd_for_session_file(&path)
     }
 
     fn list_sessions(&self, project: &str) -> Result<Vec<SessionSummary>, AppError> {
@@ -540,12 +521,9 @@ impl SessionSource for FileSystemRepository {
                     id: scanned.id,
                     title: scanned.title,
                     modified_at_ms,
-                    // `is_latest` はフォルダ内での相対比較が必要なため、
-                    // ここでは決められない(app::list_sessions が
-                    // `sort_sessions_by_recency` で確定させる)。
-                    is_latest: false,
                     cwd: scanned.cwd,
                     git_branch: scanned.git_branch,
+                    root_uuid: scanned.root_uuid,
                 })
             })
             .collect()
@@ -631,6 +609,9 @@ struct CachedSessionSummary {
     mode: Option<String>,
     slug: Option<String>,
     last_prompt: Option<String>,
+    /// 会話チェーンの根(最初の `parentUuid: null` 行の `uuid`)。フォーク系列の
+    /// グループ化キー(issue #345。`domain::SessionSummary.root_uuid`)。
+    root_uuid: Option<String>,
 }
 
 static SESSION_SUMMARY_CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedSessionSummary>>> =
@@ -692,6 +673,7 @@ fn scan_session_summary(path: &Path) -> Result<CachedSessionSummary, AppError> {
     let mut mode: Option<String> = None;
     let mut slug: Option<String> = None;
     let mut last_prompt: Option<String> = None;
+    let mut root_uuid: Option<String> = None;
 
     // 1行につき `SessionLine` を1回だけ構築し、各値をそのフィールドから直接読む
     // (issue #302。従来は `extract_*` を最大9回呼び、そのたびに `Value` の
@@ -730,6 +712,16 @@ fn scan_session_summary(path: &Path) -> Result<CachedSessionSummary, AppError> {
         if let Some(value) = scanned.last_prompt() {
             last_prompt = Some(value.to_string());
         }
+        // 会話チェーンの根(最初の `parentUuid: null` 行のuuid。issue #345)。
+        // `uuid` を持たないセッションメタ行・未知の行はどちらも `None` を
+        // 返すため、`uuid` の有無で会話チェーン行かどうかを見分ける。
+        if root_uuid.is_none() {
+            if let Some(uuid) = scanned.uuid() {
+                if scanned.parent_uuid().is_none() {
+                    root_uuid = Some(uuid.to_string());
+                }
+            }
+        }
     }
 
     let id = id.ok_or_else(|| AppError::Io("セッションIDを取得できませんでした".to_string()))?;
@@ -751,6 +743,7 @@ fn scan_session_summary(path: &Path) -> Result<CachedSessionSummary, AppError> {
         mode,
         slug,
         last_prompt,
+        root_uuid,
     })
 }
 
@@ -760,7 +753,7 @@ mod tests {
     use domain::Role;
     use domain::{
         extract_ai_title, extract_custom_title, extract_git_branch, extract_last_prompt,
-        extract_mode, extract_slug,
+        extract_mode, extract_session_id, extract_slug,
     };
     use std::fs::File;
     use std::io::Write;
@@ -780,6 +773,7 @@ mod tests {
         let mut mode: Option<String> = None;
         let mut slug: Option<String> = None;
         let mut last_prompt: Option<String> = None;
+        let mut root_uuid: Option<String> = None;
 
         for value in BufReader::new(file)
             .lines()
@@ -819,6 +813,15 @@ mod tests {
             if let Some(value) = extract_last_prompt(&value) {
                 last_prompt = Some(value);
             }
+            if root_uuid.is_none() {
+                if let Ok(line) = serde_json::from_value::<domain::SessionLine>(value.clone()) {
+                    if let Some(uuid) = line.uuid() {
+                        if line.parent_uuid().is_none() {
+                            root_uuid = Some(uuid.to_string());
+                        }
+                    }
+                }
+            }
         }
 
         let id =
@@ -841,6 +844,7 @@ mod tests {
             mode,
             slug,
             last_prompt,
+            root_uuid,
         })
     }
 
@@ -852,15 +856,6 @@ mod tests {
             r#"{{"type":"user","sessionId":"{id}","cwd":"{cwd_escaped}","message":{{"content":"hello"}}}}"#
         )
         .unwrap();
-    }
-
-    #[test]
-    fn latest_session_id_in_dir_reads_session_id_from_latest_file() {
-        let dir = tempfile::tempdir().unwrap();
-        write_session_file(dir.path(), "s1", dir.path());
-
-        let id = latest_session_id_in_dir(dir.path()).expect("should find session id");
-        assert_eq!(id, "s1");
     }
 
     #[test]
@@ -952,27 +947,14 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_repository_latest_session_id_matches_latest_session() {
+    fn filesystem_repository_session_cwd_reads_recorded_cwd() {
         let dir = tempfile::tempdir().unwrap();
         let project_dir = dir.path().join("proj");
         fs::create_dir_all(&project_dir).unwrap();
         write_session_file(&project_dir, "s1", &project_dir);
 
         let repo = FileSystemRepository::new(dir.path().to_path_buf());
-        let id = repo.latest_session_id("proj").expect("should get id");
-
-        assert_eq!(id, "s1");
-    }
-
-    #[test]
-    fn filesystem_repository_latest_session_cwd_reads_recorded_cwd() {
-        let dir = tempfile::tempdir().unwrap();
-        let project_dir = dir.path().join("proj");
-        fs::create_dir_all(&project_dir).unwrap();
-        write_session_file(&project_dir, "s1", &project_dir);
-
-        let repo = FileSystemRepository::new(dir.path().to_path_buf());
-        let cwd = repo.latest_session_cwd("proj").expect("should get cwd");
+        let cwd = repo.session_cwd("proj", "s1").expect("should get cwd");
 
         assert_eq!(cwd, project_dir);
     }
@@ -1011,13 +993,13 @@ mod tests {
     }
 
     #[test]
-    fn latest_session_cwd_prefers_the_cwd_matching_the_project_dir() {
+    fn session_cwd_prefers_the_cwd_matching_the_project_dir() {
         let dir = tempfile::tempdir().unwrap();
         write_session_moved_into_worktree(dir.path());
 
         let repo = FileSystemRepository::new(dir.path().to_path_buf());
         let cwd = repo
-            .latest_session_cwd(WORKTREE_PROJECT)
+            .session_cwd(WORKTREE_PROJECT, "s1")
             .expect("should get cwd");
 
         assert_eq!(cwd, PathBuf::from(WORKTREE_CWD));
@@ -1039,7 +1021,7 @@ mod tests {
     }
 
     #[test]
-    fn latest_session_cwd_falls_back_to_the_first_cwd_when_none_match_the_project_dir() {
+    fn session_cwd_falls_back_to_the_first_cwd_when_none_match_the_project_dir() {
         let dir = tempfile::tempdir().unwrap();
         let project_dir = dir.path().join("proj");
         fs::create_dir_all(&project_dir).unwrap();
@@ -1054,7 +1036,7 @@ mod tests {
         .unwrap();
 
         let repo = FileSystemRepository::new(dir.path().to_path_buf());
-        let cwd = repo.latest_session_cwd("proj").expect("should get cwd");
+        let cwd = repo.session_cwd("proj", "s1").expect("should get cwd");
 
         assert_eq!(cwd, PathBuf::from("/repo"));
     }
@@ -1128,6 +1110,49 @@ mod tests {
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].cwd.as_deref(), Some("/repo"));
         assert_eq!(sessions[0].git_branch.as_deref(), Some("feature/x"));
+    }
+
+    #[test]
+    fn list_sessions_extracts_root_uuid_from_the_first_chain_root_line() {
+        // issue #345: 根uuidは「parentUuidが無い最初の会話チェーン行」の
+        // uuid。sessionメタ行(mode等)はuuidを持たないため無視される。
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        fs::write(
+            project_dir.join("s1.jsonl"),
+            [
+                r#"{"type":"mode","mode":"normal","sessionId":"s1"}"#,
+                r#"{"type":"user","uuid":"root-1","sessionId":"s1","message":{"content":"hello"}}"#,
+                r#"{"type":"assistant","uuid":"a-1","parentUuid":"root-1","sessionId":"s1","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let sessions = repo.list_sessions("proj").expect("should list sessions");
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].root_uuid.as_deref(), Some("root-1"));
+    }
+
+    #[test]
+    fn list_sessions_leaves_root_uuid_none_when_no_chain_root_line_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        fs::write(
+            project_dir.join("s1.jsonl"),
+            r#"{"type":"custom-title","customTitle":"タイトル","sessionId":"s1"}"#,
+        )
+        .unwrap();
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let sessions = repo.list_sessions("proj").expect("should list sessions");
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].root_uuid, None);
     }
 
     #[test]
