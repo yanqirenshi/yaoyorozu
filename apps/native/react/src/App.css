@@ -1377,12 +1377,12 @@ body,
   letter-spacing: var(--text-ui-18m-100-tracking);
 }
 
-/* 追加ボタン(塗り)。文字が暗い(墨)ため、ホバー・押下中は背景を明るくする
-   方向に変える(一般的な「押すと濃くなる」とは逆)。文字の陰は読みやすさの
-   ためのもので、無効では付けない。 */
-/* ラベルは白・陰なし(issue #328)。白 on 金茶-500 はコントラスト 2.61:1 で
-   基準未達だが、色味を優先したユーザー判断(2026-09-23)のためそのまま
-   採用する(直さない。.action-button-edit と同じ扱い)。 */
+/* 追加ボタン(塗り)。ラベルは白・陰なし(issue #328)。白 on 金茶-500 は
+   コントラスト 2.61:1 で基準未達だが、色味を優先したユーザー判断
+   (2026-09-23)のためそのまま採用する(直さない。.action-button-edit と
+   同じ扱い)。文字が白いので、ホバー・押下中は背景を暗くする方向に変える
+   (issue #328 追記。以前の墨文字版は逆に明るくしていたが、白文字化に
+   伴って反転した)。 */
 .action-button-add {
   background-color: var(--color-kincha-500);
   color: var(--text-inverse);
@@ -1390,13 +1390,13 @@ body,
 }
 
 .action-button-add:hover:not(:disabled) {
-  background-color: var(--color-kincha-400);
-  border-color: var(--color-kincha-400);
+  background-color: var(--color-kincha-600);
+  border-color: var(--color-kincha-600);
 }
 
 .action-button-add:active:not(:disabled) {
-  background-color: var(--color-kincha-300);
-  border-color: var(--color-kincha-300);
+  background-color: var(--color-kincha-700);
+  border-color: var(--color-kincha-700);
 }
 
 .action-button-add:disabled {
