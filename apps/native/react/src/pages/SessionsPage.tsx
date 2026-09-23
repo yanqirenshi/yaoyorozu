@@ -566,12 +566,11 @@ function SessionsPage({ nav }: SessionsPageProps) {
       {/* 最上段は左端まで届く全幅のヘッダ(issue #291)。その下に
           サイドメニュー | セッション一覧 | コンテンツ を並べる。 */}
       <div className="session-conversation-head">
-        {/* ヘッダ: 左にこのウィンドウのプロファイル名(表示のみ。issue #275)、
-            右に既存のツールバー(issue #257)。 */}
+        {/* ヘッダ: このウィンドウのプロファイル名(表示のみ。issue #275)。
+            操作(ツールバー)は画面下のフッターへ移した(ユーザー指示)。 */}
         <h2 className="session-conversation-title" title={profileName ?? undefined}>
           {profileName}
         </h2>
-        <ViewerToolbar items={dockItems} />
       </div>
       <div className="viewer-body">
       {/* ビュー切り替えは上部のタブではなく、画面の最左端のサイドメニュー
@@ -872,6 +871,12 @@ function SessionsPage({ nav }: SessionsPageProps) {
           repositoryGuide
         )}
       </div>
+      </div>
+      {/* 画面下のフッター(ユーザー指示)。表示の切り替え・再読み込み・保存などの
+          操作をここにまとめる。項目の中身・挙動は従来のまま(`dockItems`)で、
+          置き場所だけをヘッダから移した。 */}
+      <div className="viewer-footer">
+        <ViewerToolbar items={dockItems} />
       </div>
     </div>
   );
