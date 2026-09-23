@@ -16,6 +16,7 @@ import { resolveColor } from "@/data/uiDesign";
 import AddButton from "@/components/parts/AddButton";
 import EditButton from "@/components/parts/EditButton";
 import SaveButton from "@/components/parts/SaveButton";
+import SelectButton from "@/components/parts/SelectButton";
 import {
   ButtonContent,
   buttonStaticSx,
@@ -37,6 +38,7 @@ const COMPONENTS: Record<ButtonKind, typeof AddButton> = {
   add: AddButton,
   save: SaveButton,
   edit: EditButton,
+  select: SelectButton,
 };
 
 const STATES: { key: ButtonState | "focus"; label: string }[] = [
@@ -57,15 +59,16 @@ const SECTIONS: DocSection[] = [
           ボタンは、押すとその場で何かが起きる操作要素である。画面を移動させるものはボタンではなくリンクとして作る。
         </Para>
         <Para>
-          いまは「追加」「保存」「変更」の3種類を定義している。
-          いずれもアイコンを付けず文字だけのラベルで構成する。追加と保存は同じ見た目(塗り)で、
-          変更だけ強調を落として線で描く。
+          いまは「追加」「保存」「変更」「選択」の4種類を定義している。
+          いずれもアイコンを付けず文字だけのラベルで構成する。追加と保存は同じ見た目(塗り)、
+          変更と選択は強調を落とした線で、色だけが違う。
         </Para>
-        <Sample caption="追加ボタン・保存ボタン(塗り)と変更ボタン(線)。実際に押せる。">
+        <Sample caption="追加ボタン・保存ボタン(塗り)と、変更ボタン・選択ボタン(線)。実際に押せる。">
           <div className="flex flex-wrap items-center gap-4">
             <AddButton />
             <SaveButton />
             <EditButton />
+            <SelectButton />
           </div>
         </Sample>
       </>
@@ -76,9 +79,10 @@ const SECTIONS: DocSection[] = [
     title: "種類",
     body: (
       <Para>
-        追加と保存は画面の主要な操作として塗りで描き、変更は既存の対象への副次的な操作として線で描く。
+        追加と保存は画面の主要な操作として塗りで描き、変更と選択は副次的な操作として線で描く。
         並べたときに「どちらを先に押すべきか」が強調の差だけで読み取れるようにしている。
         追加と保存は配色をまったく同じにしており、違いはラベルと置き場所だけである。
+        変更と選択は形が同じで、対象に手を入れるか(金茶)、指し示すだけか(墨)を色で分けている。
       </Para>
     ),
     children: BUTTON_KINDS.map((kind) => {
@@ -245,7 +249,7 @@ const SECTIONS: DocSection[] = [
     body: (
       <>
         <Para>
-          状態は5つ。ホバーと押下中は色を1段ずつ変える(追加・保存は背景を濃く、変更は境界を濃くする)。無効は墨の階調に落とす。
+          状態は5つ。ホバーと押下中は色を1段ずつ変える(追加・保存は背景を濃く、変更・選択は境界を濃くする)。無効は墨の階調に落とす。
           フォーカスは{BUTTON_FOCUS.note}
         </Para>
         <Sample surface="base" caption="状態を固定した見本。実際のボタンはポインタとキーボードの操作で切り替わる。">
@@ -285,6 +289,7 @@ const SECTIONS: DocSection[] = [
             <AddButton disabled />
             <SaveButton disabled />
             <EditButton disabled />
+            <SelectButton disabled />
           </div>
         </Sample>
         <TokenTable
@@ -342,10 +347,12 @@ const SECTIONS: DocSection[] = [
           >
             {'import AddButton from "@/components/parts/AddButton";\n' +
               'import SaveButton from "@/components/parts/SaveButton";\n' +
-              'import EditButton from "@/components/parts/EditButton";\n\n' +
+              'import EditButton from "@/components/parts/EditButton";\n' +
+              'import SelectButton from "@/components/parts/SelectButton";\n\n' +
               '<AddButton label="プロファイルを追加" onClick={add} />\n' +
               '<SaveButton onClick={save} disabled={!dirty} />\n' +
-              '<EditButton size="small" onClick={edit} />'}
+              '<EditButton size="small" onClick={edit} />\n' +
+              '<SelectButton label="フォルダを選択" onClick={pick} />'}
           </Box>
         </Sample>
         <TokenTable
@@ -356,7 +363,7 @@ const SECTIONS: DocSection[] = [
           ]}
           rows={[
             { prop: "size", type: '"small" | "medium" | "large"', note: "既定は medium。" },
-            { prop: "label", type: "string", note: "既定は「追加」「保存」「変更」。対象が周囲から分からないときは対象を含めて書く。" },
+            { prop: "label", type: "string", note: "既定は「追加」「保存」「変更」「選択」。対象が周囲から分からないときは対象を含めて書く。" },
             { prop: "disabled", type: "boolean", note: "操作できないとき。disabled 属性として出力する。" },
             { prop: "type", type: '"button" | "submit"', note: "既定は button。フォームの送信だけ submit にする。" },
             { prop: "onClick", type: "(event) => void", note: "" },
@@ -383,7 +390,7 @@ export default function ButtonPage() {
           </Para>
           <Para>
             そのため、操作の種類ごとに見た目を1つに決める。
-            追加と保存は塗り、変更は線、という対応を全画面で守る。
+            追加と保存は塗り、変更と選択は線、という対応を全画面で守る。
           </Para>
         </>
       }
