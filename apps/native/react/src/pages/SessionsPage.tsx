@@ -870,13 +870,14 @@ function SessionsPage({ nav }: SessionsPageProps) {
         ) : (
           repositoryGuide
         )}
+        {/* コンテンツ領域の下端のフッター(ユーザー指示)。表示の切り替え・
+            再読み込み・保存などの操作をここにまとめる。サイドメニューや
+            セッション一覧の下には回り込ませない(ページ全体のフッターにはしない)。
+            項目の中身・挙動は従来のまま(`dockItems`)。 */}
+        <div className="viewer-footer">
+          <ViewerToolbar items={dockItems} />
+        </div>
       </div>
-      </div>
-      {/* 画面下のフッター(ユーザー指示)。表示の切り替え・再読み込み・保存などの
-          操作をここにまとめる。項目の中身・挙動は従来のまま(`dockItems`)で、
-          置き場所だけをヘッダから移した。 */}
-      <div className="viewer-footer">
-        <ViewerToolbar items={dockItems} />
       </div>
     </div>
   );
