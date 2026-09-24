@@ -26,11 +26,14 @@
  * 【対象・ファイル対応】native.md §1 の「1型(クラス)= 1ファイル」(issue #184、
  * PR #185)により、domain クレートは各型が型名 snake_case のファイルに分かれて
  * いる(例: `Settings` → `settings.rs`)。`lib.rs` は `mod` 宣言と `pub use` のみ。
- * 本図の34クラスのうち、`ProjectItemKind` は `ProjectItem` と同じ `project_item.rs`
+ * 本図の38クラスのうち、`ProjectItemKind` は `ProjectItem` と同じ `project_item.rs`
  * に、`ClaudeDirEntryKind` は `ClaudeDirEntry` と同じ `claude_dir_entry.rs` に、
  * `GitRepositoryLedger` は `GitLedger` と同じ `git_ledger.rs` に、`ObservedWorktree`
- * は `ObservedGitState` と同じ `observed_git_state.rs` に同居する(native.md 曰く
- * 「その型専用の小さな補助enum」だが、補助structも同じ扱いにしている)。ほかの30
+ * は `ObservedGitState` と同じ `observed_git_state.rs` に、`ImageMediaType`・
+ * `ImageAttachmentError` は `ImageAttachment` と同じ `image_attachment.rs` に同居する
+ * (native.md 曰く「その型専用の小さな補助enum」だが、補助structも同じ扱いにしている。
+ * なお `ImageMediaType` は `ImageAttachment` と `MessageImage` の両方から使われるため、
+ * 「専用」には厳密には当たらない。図は実物のファイル対応どおりに描いた)。ほかの32
  * クラスはそれぞれ単独のファイル(型名 snake_case)。掲載対象は `classes-domain.ts`
  * に掲載済みの Pc・User・Profile と、`session_line/`(33型。かつては
  * `classes-session-line.ts` で描いていたが、不要になったため図ごと削除した)を
@@ -124,6 +127,9 @@ const DEFS: ClassDef[] = [
       // 組み立て元の会話チェーン行の uuid(issue #313)。元の jsonl 行を引き当てる
       // ためのキー。行に uuid が無ければ None。
       attr("uuid", "Option<String>"),
+      // この行に含まれる表示可能な画像の枚数(issue #349)。画像本体は持たない
+      // (必要なときだけ MessageImage として取り出す)。
+      attr("image_count", "usize"),
     ],
     position: { x: 2450, y: 150 },
     filePath: "apps/native/crates/domain/src/message.rs",
@@ -398,6 +404,48 @@ const DEFS: ClassDef[] = [
     filePath: "apps/native/crates/domain/src/observed_git_state.rs",
     size: { w: 300, h: 0 },
   },
+  // ============ 画像添付(issue #349) ============
+  {
+    name: { physical: "ImageAttachmentError", logical: "ImageAttachmentError", description: "画像添付の検証エラー(image_attachment.rs)。定数 MAX_IMAGES_PER_MESSAGE = 5(1メッセージの最大枚数)・MAX_IMAGE_BASE64_LEN = 5,000,000(base64 の最大長)は図に描かない。issue #349" },
+    stereotype: "enumeration",
+    attributes: [
+      "Empty",
+      "InvalidBase64",
+      "UnsupportedFormat",
+      "TooLarge { base64_len: usize, max: usize }",
+      "TooMany { count: usize, max: usize }",
+    ].map(label),
+    position: { x: 3650, y: 150 },
+    filePath: "apps/native/crates/domain/src/image_attachment.rs",
+    // データを持つバリアントの表記が長いので広げる(LogLine の size の説明を参照)。
+    size: { w: 340, h: 0 },
+  },
+  {
+    name: { physical: "ImageAttachment", logical: "ImageAttachment", description: "送信時に添付する画像1枚(検証済み)。issue #349" },
+    attributes: [
+      attr("media_type", "ImageMediaType"),
+      attr("data_base64", "String"),
+    ],
+    position: { x: 3650, y: 450 },
+    filePath: "apps/native/crates/domain/src/image_attachment.rs",
+  },
+  {
+    name: { physical: "ImageMediaType", logical: "ImageMediaType", description: "対応する画像形式(PNG / JPEG / GIF / WebP)。ImageAttachment と MessageImage の両方から使われる(image_attachment.rs に同居)。issue #349" },
+    stereotype: "enumeration",
+    attributes: ["Png", "Jpeg", "Gif", "Webp"].map(label),
+    // ImageAttachment(上)と MessageImage(下)の間に置く。
+    position: { x: 3650, y: 750 },
+    filePath: "apps/native/crates/domain/src/image_attachment.rs",
+  },
+  {
+    name: { physical: "MessageImage", logical: "MessageImage", description: "会話ログの1行(user 行)に含まれる画像1枚。ビューアが「画像 n 枚」を押したときに、その行の画像だけをオンデマンドで取り出すために使う(メッセージ一覧には画像本体を載せない)。issue #349" },
+    attributes: [
+      attr("media_type", "ImageMediaType"),
+      attr("data_base64", "String"),
+    ],
+    position: { x: 3650, y: 1050 },
+    filePath: "apps/native/crates/domain/src/message_image.rs",
+  },
   // ============ 走査(.jsonl の読み取り・組み立て) ============
   {
     name: { physical: "ScannedLine", logical: "ScannedLine", description: "走査(.jsonl 全行の読み取り)用の、1行分の型付きビュー。SessionLine を1回だけ構築し、session_id / cwd / git_branch / custom_title / ai_title / mode / slug / last_prompt / timestamp / message などをメソッドで直接返す(抽出結果は extract_* と一致)。フィールドは private で、メソッド(parse と値の取り出し)は図に描かない(冒頭の【ScannedLine】を参照)。issue #302" },
@@ -449,6 +497,9 @@ const RELATIONSHIPS = [
   rel("association", "HubLayout", "NodePosition", "positions", "right", "left"),
   rel("association", "HubLayout", "Camera", "camera", "bottom", "top"),
   rel("association", "ViewerTabs", "ViewerTab", "tabs", "right", "left"),
+  // 画像添付
+  rel("composition", "ImageAttachment", "ImageMediaType", "media_type", "bottom", "top"),
+  rel("composition", "MessageImage", "ImageMediaType", "media_type", "top", "bottom"),
   // /claude 画面(Explorer)
   rel("association", "ClaudeDirPage", "ClaudeDirEntry", "entries", "right", "left"),
   rel("composition", "ClaudeDirEntry", "ClaudeDirEntryKind", "kind", "bottom", "top"),
