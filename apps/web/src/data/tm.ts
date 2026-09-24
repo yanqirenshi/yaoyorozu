@@ -46,13 +46,42 @@
  * 【実行中セッション(~/.claude/sessions/)】
  * 実行中の Claude Code プロセスごとに <pid>.json と <pid>.<ハッシュ>.key が置かれ、
  * プロセスが終わると消える。語彙はこのフォルダの実測による(報告書は未作成)。
- * 個体指定子は pidDomain + pid + procStart の組。pid は OS が使い回すため単独では
+ * 個体指定子は pidDomain + pid + startedAt の組。pid は OS が使い回すため単独では
  * 個体を指定できない。実行中かどうかは、ファイルの有無に加えて、同じ pid の
- * プロセスの開始時刻が procStart と一致するかで判定する。
+ * プロセスの開始時刻が procStart と一致するかで判定する(procStart が無い台帳では
+ * pid の生存だけで見る。PoC #382 レポート §4.2・§4.4)。
  * .key の peerToken はセッション間メッセージの認証値で、値は秘匿する
  * (本ファイルにも画面にも書かない。語彙として名前だけを置く)。
  * 未確認: /clear や /resume で、同じプロセスのまま sessionId が切り替わるか。
  * 切り替わっても個体指定子はプロセス側なので、モデルは変わらない。
+ *
+ * 【Phase 1(app から claude CLI と対話する)】
+ * app が claude CLI を子プロセスとして持ち、標準入出力(stream-json)で対話し続ける
+ * 方式に決まった(PoC #382。reports/claude-cli-stream-json-session.md)。
+ * この段で足した語彙と、立てないと決めたものの記録(イシュー #387)。
+ *
+ * - 起動元(app が起動 / 外部)で実行中セッションを相違サブセットに切る。app が起動した
+ *   ものだけがプロセスの状態と権限の問い合わせを持ち、右側の語彙が変わるため。区分は
+ *   台帳に無く、app が自分の子プロセスの PID を知っていることで付ける。台帳の
+ *   entrypoint(sdk-cli)は、ほかの SDK 利用でも同じ値になるため区分に使えない(§4.2)。
+ * - プロセスの状態(起動中 / 待機 / 実行中 / 権限待ち / 終了。§7.1)は app 側が持つ状態で
+ *   台帳には無い。app が起動したサブセットの属性(プロセス状態・その更新日時)に置く。
+ *   履歴が必要になったら、状態の移り変わりをイベントとして別に立てる。
+ * - 台帳の status(idle / busy)・statusUpdatedAt・hostSessionId は、これまでモデルに
+ *   入れていなかった語彙(§4.2)。実行中セッションの属性に足した。
+ * - 権限の問い合わせと応答は別のイベントにする。問い合わせ日時と応答日時は別の行為の
+ *   日付であり、1つの箱に同居させないため。中断による取り消し(control_cancel_request)
+ *   は応答の決着種別のひとつとして扱う。AskUserQuestion(選択肢)と ExitPlanMode
+ *   (計画の承認)も同じ can_use_tool で届く(§2.4)ので、tool_name から求まる
+ *   問い合わせ種別(D)で区別する。
+ * - 入力キューは app 側に立てない。中断の応答に still_queued(キューに残った入力の ID)
+ *   が付く(§3.1)ことから、キューは CLI 側が持っている。未確認: sdk-cli 起動でも jsonl に
+ *   queue-operation 行が書かれるか。Phase 1 の実装で確認する。
+ * - 途中経過(stream_event、system/status など。§5)はモノとして立てない。画面へ流す
+ *   だけで app は保存せず、確定した応答は既存の「AI応答行」が受けるため。
+ * - 表示名は既存の会話タイトル(custom-title)で足りる。--name を付けると台帳の name に
+ *   も入る(§6.1)。同時に書かれる agent-name 行はサブエージェントの語彙なので第3弾で扱う。
+ * - --replay-user-messages で返る uuid は既存の行UUIDそのもの(§7.3)。新しい語彙は要らない。
  *
  * 【作業ディレクトリを立てない】
  * 作業ディレクトリ(行や実行中セッションの cwd)はモノとして立てず、ログ行・実行中
@@ -63,9 +92,9 @@
  * (フォルダ名(D))は置かない。
  *
  * 【関係の検証(モノ × モノ の網羅性)】
- * 25エンティティの全300ペアを確認した。直接の結線があるのは22ペア(23本)で、
+ * 30エンティティの全435ペアを確認した。直接の結線があるのは27ペア(28本)で、
  * 対照表・対応表とその親の10ペアは垂下(mapping)でつながる。
- * 残る268ペアのうち、以下11ペアは「語彙は存在するが今は関係を構成していない」ものであり、
+ * 残る398ペアのうち、以下12ペアは「語彙は存在するが今は関係を構成していない」ものであり、
  * 見落としではなく判断の記録として残す。
  *
  * - ログ行 × 入力キュー / 入力キュー × ユーザー行
@@ -98,10 +127,14 @@
  *   ため、個体指定子では結べない。所属リポジトリが必要になれば、登録済みリポジトリの
  *   うちパスが cwd の先頭に一致するものを求める導出項目として立てられる(実測で
  *   77,087行の 97.7% が求まった)。
+ * - 権限の問い合わせ × AI応答行
+ *   ツール使用ID(tool_use_id)は AI応答行の中の tool_use ブロックを指す(PoC #382
+ *   レポート §2.1)。ブロックは第2弾で「ツール呼び出し」としてモノにする予定で、
+ *   そのときに結ぶ。
  *
- * 他の257ペアは直接の関係を構成しないのが正しい。内訳は、サブセットが親(ログ行)から
- * 行UUIDを継承しており親で張った関係がそのまま効くもの12ペア、対応する語彙が
- * そもそも存在しないもの245ペア。
+ * 他の386ペアは直接の関係を構成しないのが正しい。内訳は、サブセットが親(ログ行・
+ * 実行中セッション)から個体指定子を継承しており親で張った関係がそのまま効くもの
+ * 16ペア、対応する語彙がそもそも存在しないもの370ペア。
  *
  * R-R・E-E は対照表・対応表で構成するが、図の上では親どうしを1本の線で結び、その
  * 中点の○から表をぶら下げる(垂下。d3.ter 0.1.24 の `relationship.mapping`)。
@@ -234,12 +267,16 @@ const IDENTIFIER_DEFS: TmName[] = [
   { physical: "filePath", logical: "ファイルパス" },
   { physical: "sessionId", logical: "セッションID" },
   // 実行中セッション(~/.claude/sessions/<pid>.json)の個体指定子。OS は pid を
-  // 使い回すため、pid だけでは個体を指定できない。procStart(OS のプロセス作成時刻。
-  // Windows では FILETIME)と pidDomain(pid が有効な範囲。`<OS>:<ホスト名>`)を
+  // 使い回すため、pid だけでは個体を指定できない。pidDomain(pid が有効な範囲。
+  // `<OS>:<ホスト名>`)と startedAt(Claude Code がセッションを始めた時刻。Unix ms)を
   // 組にする。いずれもファイルに実在する値で、発明した ID ではない。
+  // 以前は procStart(OS のプロセス作成時刻)を組にしていたが、sdk-cli 起動の台帳には
+  // 原則書かれない(PoC #382 レポート §4.2・§4.4)ため、右側の属性へ移した。
   { physical: "pidDomain", logical: "PIDドメイン" },
   { physical: "pid", logical: "プロセスID" },
-  { physical: "procStart", logical: "プロセス開始日時" },
+  { physical: "startedAt", logical: "起動日時" },
+  // 権限の問い合わせ(control_request / can_use_tool)の ID(レポート §2.1)。
+  { physical: "requestId", logical: "リクエストID" },
   { physical: "uuid", logical: "行UUID" },
   // 再帰表が継承する行UUID。0.1.22 で結線にラベルを出せるようになったため
   // (Foolsgolds/Assholes#16)、親子の別は線のラベルで示し、箱の中は TM の
@@ -305,7 +342,9 @@ const ATTRIBUTE_DEFS: TmName[] = [
   { physical: "enqueuedAt", logical: "投入日時" },
   { physical: "content", logical: "入力テキスト" },
   // 実行中セッション(~/.claude/sessions/<pid>.json と <pid>.<ハッシュ>.key)の語彙。
-  { physical: "startedAt", logical: "起動日時" },
+  // procStart は OS のプロセス作成時刻(Windows では FILETIME)。sdk-cli 起動の台帳には
+  // 原則書かれない(レポート §4.2)ため個体指定子から外したが、生存判定には使う。
+  { physical: "procStart", logical: "プロセス開始日時" },
   { physical: "kind", logical: "種別" },
   // 他のセッションからメッセージを送るときの宛先名。
   { physical: "name", logical: "名前" },
@@ -322,6 +361,32 @@ const ATTRIBUTE_DEFS: TmName[] = [
   // 画面・ログ・リポジトリに書かない(native.md §4)。ここに置くのは語彙だけ。
   { physical: "peerToken", logical: "ピアトークン(秘匿)" },
   { physical: "peerFeature", logical: "機能名" },
+  // 台帳にあるが、これまでモデルに入れていなかった語彙(レポート §4.2)。
+  { physical: "status", logical: "台帳の状態" },
+  { physical: "statusUpdatedAt", logical: "台帳の状態の更新日時" },
+  { physical: "hostSessionId", logical: "ホストセッションID" },
+  // app が起動した実行中セッションだけが持つ、app 側の状態(レポート §7.1)。
+  { physical: "processState", logical: "プロセス状態" },
+  { physical: "processStateAt", logical: "プロセス状態の更新日時" },
+  // 権限の問い合わせ(control_request / can_use_tool。レポート §2.1)。
+  { physical: "toolName", logical: "ツール名" },
+  { physical: "displayName", logical: "表示名" },
+  { physical: "toolUseId", logical: "ツール使用ID" },
+  { physical: "toolInput", logical: "入力" },
+  { physical: "blockedPath", logical: "拒否されたパス" },
+  { physical: "requestedAt", logical: "問い合わせ日時" },
+  // tool_name から求まる。can_use_tool / AskUserQuestion / ExitPlanMode(レポート §2.4)。
+  { physical: "requestKind", logical: "問い合わせ種別(D)" },
+  // 権限の応答(control_response)と、中断による取り消し(control_cancel_request)。
+  { physical: "behavior", logical: "決着種別" },
+  { physical: "updatedInput", logical: "更新後の入力" },
+  { physical: "denyMessage", logical: "拒否メッセージ" },
+  { physical: "updatedPermissions", logical: "更新後の権限" },
+  { physical: "respondedAt", logical: "応答日時" },
+  // permission_suggestions の1件(多値)。
+  { physical: "suggestionType", logical: "提案種別" },
+  { physical: "suggestionDestination", logical: "適用先" },
+  { physical: "suggestionContent", logical: "内容" },
 ];
 
 const IDENTIFIER_BASE_ID = 1;
@@ -607,12 +672,15 @@ const ENTITY_DEFS: EntityDef[] = [
     name: { physical: "RunningSession", logical: "実行中セッション" },
     type: "EVENT",
     description:
-      "いま動いている Claude Code のプロセス1つ。~/.claude/sessions/ に <pid>.json(本体)と <pid>.<ハッシュ>.key(認証値)が置かれ、プロセスが終わると消える(実測: セッションログ49件に対してファイルは4件で、4件ともプロセスが生きていた)。ファイル名は pid だが OS は pid を使い回すため、pidDomain + pid + procStart の組を個体指定子にする。.key も同じ3つの値(procStartFt = procStart)で特定されるので、別の箱にせず同じモノとして扱う。起動日時(startedAt)という過去の出来事の日付が帰属するためイベント。procStart は OS のプロセス作成時刻(実測で OS の値と100ナノ秒単位まで一致)、startedAt は Claude Code がセッションを始めた時刻で、約1秒遅い。会話(セッション)はこのプロセスの中で動くものなので、sessionId は個体指定子にせず (R) として持つ。実行中かどうかは、ファイルがあり、かつ OS に同じ pid のプロセスがあって開始時刻が procStart と一致することで判定する(pid だけで判定すると、終了後に同じ pid が別のプロセスに使われたとき誤判定する)。peerToken の値は秘匿で、画面・ログ・リポジトリに書かない。",
+      "いま動いている Claude Code のプロセス1つ。~/.claude/sessions/ に <pid>.json(本体)と <pid>.<ハッシュ>.key(認証値)が置かれ、プロセスが終わると消える(実測: セッションログ49件に対してファイルは4件で、4件ともプロセスが生きていた)。ファイル名は pid だが OS は pid を使い回すため、pidDomain + pid + startedAt の組を個体指定子にする(procStart は sdk-cli 起動の台帳には原則書かれないため右側の属性に置く。レポート §4.2・§4.4)。.key も同じプロセスの値で特定されるので、別の箱にせず同じモノとして扱う。起動日時(startedAt)という過去の出来事の日付が帰属するためイベント。procStart は OS のプロセス作成時刻(実測で OS の値と100ナノ秒単位まで一致)、startedAt は Claude Code がセッションを始めた時刻で、約1秒遅い。会話(セッション)はこのプロセスの中で動くものなので、sessionId は個体指定子にせず (R) として持つ。実行中かどうかは、ファイルがあり、かつ OS に同じ pid のプロセスがあって開始時刻が procStart と一致することで判定する(pid だけで判定すると、終了後に同じ pid が別のプロセスに使われたとき誤判定する)。procStart が無い台帳では pid の生存だけで判定する(#361 のガードの現状の作りと同じ)。kill で落とすと台帳が残るため、ファイルの有無だけでは判定できない(レポート §4.3)。peerToken の値は秘匿で、画面・ログ・リポジトリに書かない。",
     position: { x: 650, y: 1250 },
-    identifiers: ["pidDomain", "pid", "procStart", "sessionId(R)"],
+    identifiers: ["pidDomain", "pid", "startedAt", "sessionId(R)"],
     attributes: [
-      "startedAt",
+      "procStart",
       "cwd",
+      "status",
+      "statusUpdatedAt",
+      "hostSessionId",
       "version",
       "kind",
       "entrypoint",
@@ -635,8 +703,76 @@ const ENTITY_DEFS: EntityDef[] = [
     description:
       "peerFeatures(配列。例: notify_idle / artifact_yield)。セッション間メッセージで使える機能の一覧で、1プロセスに複数あるため多値(MO)として分ける。個体指定子は親の3つの値(R)。",
     position: { x: 1350, y: 1300 },
-    identifiers: ["pidDomain(R)", "pid(R)", "procStart(R)"],
+    identifiers: ["pidDomain(R)", "pid(R)", "startedAt(R)"],
     attributes: ["peerFeature"],
+  },
+
+  // ============ Phase 1(app から claude CLI と対話する)============
+  {
+    name: { physical: "RunningSessionByApp", logical: "実行中セッション(app起動)" },
+    type: "EVENT-SUBSET",
+    description:
+      "app が子プロセスとして起動した claude CLI(PoC #382)。区分コードは起動元。app は標準入出力で対話し続けるため、このサブセットだけがプロセスの状態と権限の問い合わせを持つ。台帳は外部起動と同じ形で書かれる(entrypoint は sdk-cli。レポート §4.2)ので台帳だけでは区別できず、app が自分の子プロセスの PID を知っていることで区分する。#361 のガード(実行中の検知)では、app は自分が起動した PID を除外する(レポート §4.4)。プロセス状態は 起動中 / 待機 / 実行中 / 権限待ち / 終了(レポート §7.1)で、台帳の状態(idle / busy)より細かい。",
+    position: { x: 350, y: 2100 },
+    identifiers: ["pidDomain(R)", "pid(R)", "startedAt(R)"],
+    attributes: ["processState", "processStateAt"],
+  },
+  {
+    name: {
+      physical: "RunningSessionExternal",
+      logical: "実行中セッション(外部起動)",
+    },
+    type: "EVENT-SUBSET",
+    description:
+      "app 以外(ターミナルの claude、Claude Desktop、ほかの SDK 利用)が起動した実行中セッション。app は台帳から存在を知るだけで、標準入出力を持たないため対話できない。右側の語彙は親が持つものだけ。",
+    position: { x: 1000, y: 2100 },
+    identifiers: ["pidDomain(R)", "pid(R)", "startedAt(R)"],
+    attributes: [],
+  },
+  {
+    name: { physical: "PermissionRequest", logical: "権限の問い合わせ" },
+    type: "EVENT",
+    description:
+      "CLI から届く control_request(subtype: can_use_tool)。ツールを使ってよいかを app に尋ねる(レポート §2.1)。個体指定子は request_id と、尋ねてきた実行中セッションの値(R)。AskUserQuestion(選択肢)と ExitPlanMode(計画の承認)も同じ形で届く(レポート §2.4)ため、tool_name から求まる問い合わせ種別(D)で区別し、画面の出し分けに使う。入力は渡された引数、提案は「今後も許可」の候補(多値に分ける)。拒否されたパスは Bash のときに付く。ツール使用IDは AI応答行の中の tool_use ブロックを指すが、ブロックは第2弾でモノにするため今は結ばない。",
+    position: { x: 350, y: 2450 },
+    identifiers: ["requestId", "pidDomain(R)", "pid(R)", "startedAt(R)"],
+    attributes: [
+      "toolName",
+      "displayName",
+      "description",
+      "toolUseId",
+      "toolInput",
+      "blockedPath",
+      "requestedAt",
+      "requestKind",
+    ],
+  },
+  {
+    name: { physical: "PermissionResponse", logical: "権限の応答" },
+    type: "EVENT",
+    description:
+      "app が返す control_response(レポート §2.1)。許可なら更新後の入力(そのまま、または書き換えた引数)を返し、拒否なら拒否メッセージがそのままモデルへの tool_result になる。「今後も許可」は更新後の権限に入れて返す。中断すると CLI から control_cancel_request が来て応答せずに終わるため、決着種別に取り消しを含める。問い合わせとは別の行為(日時が別)なので1つの箱に同居させず、先行後続で結ぶ。1つの問い合わせに応答は0件または1件。",
+    position: { x: 1000, y: 2450 },
+    identifiers: ["requestId(R)"],
+    attributes: [
+      "behavior",
+      "updatedInput",
+      "denyMessage",
+      "updatedPermissions",
+      "respondedAt",
+    ],
+  },
+  {
+    name: {
+      physical: "PermissionSuggestion",
+      logical: "権限の問い合わせ．提案",
+    },
+    type: "MANY-VALUED-OR",
+    description:
+      "permission_suggestions の1件(レポート §2.1)。setMode / addRules / addDirectories などの種別と、適用先(session / localSettings など)を持つ。1つの問い合わせに複数あるため多値(MO)。SDK の PermissionUpdate 型そのもので、許可応答の更新後の権限に入れ返すと「今後も許可」になる。",
+    position: { x: 1000, y: 2750 },
+    identifiers: ["requestId(R)"],
+    attributes: ["suggestionType", "suggestionDestination", "suggestionContent"],
   },
 
   // ============ 再帰 ============
@@ -722,6 +858,12 @@ type RelationshipDef = {
  * カーディナリティ・オプショナリティの記号はサブセット結線には描かれない。
  */
 const LINE_TYPE_SUBSET: TmSubset = { kind: "different", code: "行種別" };
+
+/**
+ * 実行中セッションを起動元(app が起動 / 外部)で切る区分コード。app が起動したものだけが
+ * プロセスの状態と権限の問い合わせを持つため、属性構成が異なる相違のサブセットになる。
+ */
+const LAUNCHED_BY_SUBSET: TmSubset = { kind: "different", code: "起動元" };
 
 const RELATIONSHIP_DEFS: RelationshipDef[] = [
   // ---- 実行環境(PC / ユーザー / Gitリポジトリ)----
@@ -826,6 +968,59 @@ const RELATIONSHIP_DEFS: RelationshipDef[] = [
     to: {
       entity: "RunningSessionPeerFeature",
       position: 90,
+      cardinality: 3,
+      optionality: 0,
+    },
+  },
+  // 実行中セッションのサブセット。起動元で切る(×起動元)。app が起動したものだけが
+  // プロセスの状態と権限の問い合わせを持つため、属性構成が異なる相違のサブセット。
+  {
+    from: { entity: "RunningSession", position: 20, cardinality: 1, optionality: 1 },
+    to: {
+      entity: "RunningSessionByApp",
+      position: 180,
+      cardinality: 1,
+      optionality: 0,
+    },
+    subset: LAUNCHED_BY_SUBSET,
+  },
+  {
+    from: { entity: "RunningSession", position: 340, cardinality: 1, optionality: 1 },
+    to: {
+      entity: "RunningSessionExternal",
+      position: 180,
+      cardinality: 1,
+      optionality: 0,
+    },
+    subset: LAUNCHED_BY_SUBSET,
+  },
+  // app が起動した実行中セッション 1 : 権限の問い合わせ 複数または値なし。E-E の
+  // 先行後続(問い合わせが実行中セッションの値を (R) で継承する)。
+  {
+    from: {
+      entity: "RunningSessionByApp",
+      position: 0,
+      cardinality: 1,
+      optionality: 1,
+    },
+    to: { entity: "PermissionRequest", position: 180, cardinality: 3, optionality: 0 },
+  },
+  // 権限の問い合わせ 1 : 応答 1件または値なし(中断で取り消されると応答が無い)。E-E。
+  {
+    from: { entity: "PermissionRequest", position: 270, cardinality: 1, optionality: 1 },
+    to: {
+      entity: "PermissionResponse",
+      position: 90,
+      cardinality: 1,
+      optionality: 0,
+    },
+  },
+  // 権限の問い合わせ 1 : 提案 複数または値なし(多値)。
+  {
+    from: { entity: "PermissionRequest", position: 350, cardinality: 1, optionality: 1 },
+    to: {
+      entity: "PermissionSuggestion",
+      position: 170,
       cardinality: 3,
       optionality: 0,
     },
