@@ -691,11 +691,10 @@ function SessionsPage({ nav }: SessionsPageProps) {
 
   return (
     <div className="viewer-page">
-      {/* 最上段は左端まで届く全幅のヘッダ(issue #291)。プロファイル名(#275)は
-          ウィンドウタイトルへ移した(#348・#377)ため、今は中身が無い(操作の
-          ツールバーは画面下のフッター)。その下に サイドメニュー | 選んだセッションの
-          一覧 | コンテンツ を並べる。 */}
-      <div className="session-conversation-head" />
+      {/* 全幅のヘッダは置かない(issue #379)。プロファイル名(#275)はウィンドウ
+          タイトルへ移し(#348・#377)、操作のツールバーは画面下のフッターにあり、
+          セッションのタブも無くなって中身が空になったため。サイドメニュー | 選んだ
+          セッションの一覧 | コンテンツ を並べる。 */}
       {pickerOpen && (
         <SessionPickerDialog
           candidates={pickerCandidates}

@@ -430,8 +430,7 @@ body,
    ビューアの操作(表示の切り替え・再読み込み・保存など)をまとめて置く。
    サイドメニュー・セッション一覧の下には回り込ませない(ページ全体のフッターには
    しない)。以前はヘッダの右端にあった(issue #257)。
-   ヘッダ(`.session-conversation-head`)と同じ重なり順にして、吹き出しメニューが
-   コンテンツの上に出るようにする。 */
+   重なり順を上げて、吹き出しメニューがコンテンツの上に出るようにする。 */
 .viewer-footer {
   position: relative;
   z-index: 40;
@@ -446,21 +445,6 @@ body,
 .viewer-footer .viewer-toolbar-menu {
   top: auto;
   bottom: calc(100% + 6px);
-}
-
-/* ビューアの上部(ヘッダ)。ウィンドウの左端から右端まで届き、下罫線も全幅で通る
-   (issue #291)。プロファイル名(#275)はウィンドウタイトルへ移したため(#348・#377)
-   中身は無い(操作のツールバーは画面下のフッター)。高さは 40px を保ち、下罫線は
-   内側の影で描く(#348 でタブ列を置いたときの寸法のまま。セッション一覧を左ペインへ
-   戻した #379 でも変えない)。 */
-.session-conversation-head {
-  position: relative;
-  z-index: 40;
-  flex-shrink: 0;
-  display: flex;
-  align-items: flex-end;
-  min-height: 40px;
-  box-shadow: inset 0 -1px 0 var(--border-default);
 }
 
 /* ビューアの最左端のサイドメニュー(issue #263)。アイコンのみ(名前は
