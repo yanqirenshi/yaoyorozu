@@ -91,7 +91,10 @@ impl ScannedLine {
         if !matches!(self.line, SessionLine::User(_)) {
             return None;
         }
-        message_from_line(&self.line).map(|m| m.text)
+        // 画像だけの発言(本文が空)はタイトルの元にしない(issue #349)。
+        message_from_line(&self.line)
+            .map(|m| m.text)
+            .filter(|text| !text.trim().is_empty())
     }
 
     /// `uuid`(issue #345: フォーク系列の根uuid判定用)。

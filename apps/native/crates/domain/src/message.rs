@@ -8,6 +8,9 @@ pub struct Message {
     /// メッセージの組み立て元の会話チェーン行の `uuid`(issue #313)。元の jsonl 行を
     /// 引き当てるためのキー。行に `uuid` が無ければ `None`。
     pub uuid: Option<String>,
+    /// この行に含まれる表示可能な画像(base64 ソース・対応形式)の枚数(issue #349)。
+    /// 画像本体は持たない(必要なときだけ `extract_message_images` で取り出す)。
+    pub image_count: usize,
 }
 
 /// 会話ログは記録順(古い順)で保持されるため、表示直前に反転して新しい順にする。
@@ -33,12 +36,14 @@ mod tests {
                 text: "first".to_string(),
                 timestamp: "1".to_string(),
                 uuid: None,
+                image_count: 0,
             },
             Message {
                 role: Role::Assistant,
                 text: "second".to_string(),
                 timestamp: "2".to_string(),
                 uuid: None,
+                image_count: 0,
             },
         ];
 
@@ -54,6 +59,7 @@ mod tests {
             text: text.to_string(),
             timestamp: String::new(),
             uuid: None,
+            image_count: 0,
         }
     }
 

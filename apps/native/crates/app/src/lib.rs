@@ -1,12 +1,14 @@
 use domain::{
-    collapse_session_series, is_valid_claude_dir_path, is_valid_json, is_valid_project_dir_name,
-    is_valid_rule_file_name, is_valid_session_id, is_valid_skill_name, order_messages_newest_first,
-    paginate_messages, reconcile_branches, reconcile_worktrees, repositories_from_profiles,
-    sort_claude_dir_entries, sort_projects_by_recency, Camera, ClaudeDirEntry, ClaudeDirPage,
-    ClaudeMdFile, ClaudeSettingsFile, Conversation, GitLedger, GitRepositoryLedger, HubLayout,
-    HubTuning, LogLine, NodePosition, ParsedSession, Project, RuleSummary, SessionSummary,
-    Settings, SkillSummary, ViewerTab, ViewerTabs, CURRENT_GIT_LEDGER_VERSION,
-    CURRENT_HUB_LAYOUT_VERSION, CURRENT_HUB_TUNING_VERSION, CURRENT_VIEWER_TABS_VERSION,
+    collapse_session_series, extract_message_images, is_valid_claude_dir_path, is_valid_json,
+    is_valid_project_dir_name, is_valid_rule_file_name, is_valid_session_id, is_valid_skill_name,
+    order_messages_newest_first, paginate_messages, reconcile_branches, reconcile_worktrees,
+    repositories_from_profiles, sort_claude_dir_entries, sort_projects_by_recency,
+    validate_image_attachment, validate_image_attachments, validate_image_count, Camera,
+    ClaudeDirEntry, ClaudeDirPage, ClaudeMdFile, ClaudeSettingsFile, Conversation, GitLedger,
+    GitRepositoryLedger, HubLayout, HubTuning, ImageAttachment, LogLine, MessageImage,
+    NodePosition, ParsedSession, Project, RuleSummary, SessionSummary, Settings, SkillSummary,
+    ViewerTab, ViewerTabs, CURRENT_GIT_LEDGER_VERSION, CURRENT_HUB_LAYOUT_VERSION,
+    CURRENT_HUB_TUNING_VERSION, CURRENT_VIEWER_TABS_VERSION,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -344,8 +346,52 @@ pub trait AgentGateway {
 /// 実体(`~/.claude/sessions/<PID>.json` の読み取りとプロセス生存確認)は
 /// infra に閉じ込める。
 pub trait RunningSessionSource {
-    /// `session_id` が現在、他のプロセスの `claude` によって実行中なら `true`。
-    fn is_running(&self, session_id: &str) -> Result<bool, AppError>;
+    /// `session_id` が現在、他のプロセスの `claude` によって実行中(とみなせる)なら、
+    /// その根拠を返す。実行中でないと確定できる場合だけ `None`。
+    ///
+    /// 「読めない・分からない」は実行中とみなす側に倒す(会話の混線という害が、
+    /// 誤ってブロックする害より大きいため)。台帳の列挙・読み取りができず何も
+    /// 判断できないときは `Err`(送信しない)。
+    fn find_running(&self, session_id: &str) -> Result<Option<RunningSession>, AppError>;
+}
+
+/// 送信先が実行中とみなされた根拠(issue #345)。エラーメッセージに含め、誤って
+/// 止められたときにユーザーが原因(台帳ファイル・PID)を見つけて自分で解消できる
+/// ようにする(壊れた台帳の PID が別のプロセスに使い回されると、そのフォルダへの
+/// 送信が止まり続けうるため)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunningSession {
+    /// 根拠になった実行中セッション台帳(`~/.claude/sessions/<PID>.json`)のパス。
+    pub ledger_path: PathBuf,
+    pub pid: u32,
+    pub evidence: RunningEvidence,
+}
+
+/// [`RunningSession`] の根拠の強さ。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunningEvidence {
+    /// 台帳の `sessionId` が送信先と一致し、そのプロセスが生きている。
+    SessionMatched,
+    /// 台帳から `sessionId` を取り出せず(読めない・書き込み途中・欠落)送信先と
+    /// 照合できないが、そのプロセスが生きているため、安全側で実行中とみなした。
+    LedgerUnreadable,
+}
+
+impl RunningSession {
+    /// 送信を止めるときにユーザーへ見せる理由。台帳のパスと PID を含める。
+    fn block_message(&self) -> String {
+        let path = self.ledger_path.display();
+        match self.evidence {
+            RunningEvidence::SessionMatched => format!(
+                "このセッションは他のプロセス(PID {})で実行中です。しばらく待ってから再試行してください(台帳: {path})",
+                self.pid
+            ),
+            RunningEvidence::LedgerUnreadable => format!(
+                "実行中のセッションの台帳を読み取れず、このセッションと照合できないため、送信を止めました(台帳: {path}、PID {})。そのプロセスが終了していて台帳が壊れている・古い場合は、この台帳ファイルを削除してから再試行してください",
+                self.pid
+            ),
+        }
+    }
 }
 
 /// 送信時に許可する権限モード。
@@ -376,6 +422,8 @@ pub enum Continuation {
 pub struct SendRequest {
     pub cwd: PathBuf,
     pub text: String,
+    /// 検証済みの添付画像(issue #349)。空なら従来どおり本文のみの送信。
+    pub images: Vec<ImageAttachment>,
     pub mode: AgentMode,
     pub continuation: Continuation,
 }
@@ -533,6 +581,13 @@ pub fn list_sessions(
 /// 同じ会話ファイルへの並行書き込みによる混線を防ぐため、送信前に
 /// `RunningSessionSource` で確認し、実行中なら `SessionBusy` を返して
 /// 送信しない。
+///
+/// `images`(base64。issue #349)があれば検証して添付する。本文が空でも画像が
+/// あれば送れる(画像だけの送信)。画像の有無にかかわらず、上記の実行中ガードは
+/// 同じように効く。
+// 引数が8個になるが、独立した入力(ports 3つ・対象・本文・画像・モード)で、
+// まとめる構造体を作るほどの意味的なまとまりは無いため許容する。
+#[allow(clippy::too_many_arguments)]
 pub fn send_message(
     source: &dyn SessionSource,
     agent: &dyn AgentGateway,
@@ -540,33 +595,60 @@ pub fn send_message(
     project: &str,
     session_id: &str,
     text: &str,
+    images: &[String],
     mode: AgentMode,
 ) -> Result<(), AppError> {
-    if text.trim().is_empty() {
+    if text.trim().is_empty() && images.is_empty() {
         return Err(AppError::InvalidInput(
             "メッセージを入力してください".to_string(),
         ));
     }
+    let images =
+        validate_image_attachments(images).map_err(|e| AppError::InvalidInput(e.to_string()))?;
     if !is_valid_session_id(session_id) {
         return Err(AppError::InvalidInput("不正なセッションIDです".to_string()));
     }
 
-    if running_sessions.is_running(session_id)? {
-        return Err(AppError::SessionBusy(
-            "このセッションは他のプロセスで実行中です。しばらく待ってから再試行してください"
-                .to_string(),
-        ));
+    if let Some(running) = running_sessions.find_running(session_id)? {
+        return Err(AppError::SessionBusy(running.block_message()));
     }
 
     let cwd = source.session_cwd(project, session_id)?;
     agent.send(SendRequest {
         cwd,
         text: text.to_string(),
+        images,
         mode,
         continuation: Continuation::Resume(session_id.to_string()),
     })?;
 
     Ok(())
+}
+
+/// 画像を1枚添付しようとしたときの事前検証(ビューアの添付時。issue #349)。
+/// `existing_count` は既に添付済みの枚数。形式・サイズ・枚数の判定は送信時
+/// ([`send_message`])と同じ domain の関数を通すため、規則の実体は1か所に保たれる
+/// (フロントに上限値を持たせない)。
+pub fn check_image_attachment(data_base64: &str, existing_count: usize) -> Result<(), AppError> {
+    validate_image_count(existing_count.saturating_add(1))
+        .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+    validate_image_attachment(data_base64)
+        .map(|_| ())
+        .map_err(|e| AppError::InvalidInput(e.to_string()))
+}
+
+/// 指定メッセージ(会話チェーン行の `uuid`)に含まれる画像を、記録順に返す
+/// (ビューアの「画像 n 枚」。issue #349)。`get_session_line_raw`(#313)と同じ
+/// オンデマンド取得で、メッセージ一覧には画像本体を載せない。行が見つからなければ
+/// `AppError::NotFound`、画像の無い行は空。
+pub fn get_session_line_images(
+    source: &dyn SessionSource,
+    project: &str,
+    session_id: &str,
+    uuid: &str,
+) -> Result<Vec<MessageImage>, AppError> {
+    let raw = get_session_line_raw(source, project, session_id, uuid)?;
+    Ok(extract_message_images(&raw))
 }
 
 /// 起動時、保存済みの設定を読み込む。ファイルが存在しない/壊れている場合の
@@ -1659,12 +1741,24 @@ mod tests {
 
     #[derive(Default)]
     struct FakeRunningSessionSource {
-        running: bool,
+        running: Option<RunningSession>,
+    }
+
+    impl FakeRunningSessionSource {
+        fn running() -> Self {
+            Self {
+                running: Some(RunningSession {
+                    ledger_path: PathBuf::from("/home/u/.claude/sessions/123.json"),
+                    pid: 123,
+                    evidence: RunningEvidence::SessionMatched,
+                }),
+            }
+        }
     }
 
     impl RunningSessionSource for FakeRunningSessionSource {
-        fn is_running(&self, _session_id: &str) -> Result<bool, AppError> {
-            Ok(self.running)
+        fn find_running(&self, _session_id: &str) -> Result<Option<RunningSession>, AppError> {
+            Ok(self.running.clone())
         }
     }
 
@@ -1707,12 +1801,14 @@ mod tests {
                     text: "first".to_string(),
                     timestamp: "".to_string(),
                     uuid: None,
+                    image_count: 0,
                 },
                 Message {
                     role: Role::Assistant,
                     text: "second".to_string(),
                     timestamp: "".to_string(),
                     uuid: None,
+                    image_count: 0,
                 },
             ],
         );
@@ -1735,6 +1831,7 @@ mod tests {
                     text: text.to_string(),
                     timestamp: "".to_string(),
                     uuid: None,
+                    image_count: 0,
                 })
                 .collect(),
         );
@@ -2237,6 +2334,7 @@ mod tests {
             "some-project",
             "s1",
             "hello",
+            &[],
             AgentMode::Chat,
         )
         .expect("should send message");
@@ -2261,6 +2359,7 @@ mod tests {
             "some-project",
             "s1",
             "hello",
+            &[],
             AgentMode::Read,
         )
         .expect("should send message");
@@ -2286,6 +2385,7 @@ mod tests {
             "some-project",
             "s1",
             "   ",
+            &[],
             AgentMode::Chat,
         )
         .expect_err("should reject");
@@ -2305,6 +2405,7 @@ mod tests {
             "some-project",
             "../etc/passwd",
             "hello",
+            &[],
             AgentMode::Chat,
         )
         .expect_err("should reject invalid session id");
@@ -2312,11 +2413,188 @@ mod tests {
         assert!(agent.sent.borrow().is_empty());
     }
 
+    /// PNGのマジックナンバー(8バイト)+ダミー4バイトのbase64。形式判定だけを通す最小データ。
+    const PNG_BASE64: &str = "iVBORw0KGgoAAAAA";
+
+    #[test]
+    fn send_message_passes_validated_images_to_the_agent() {
+        let source = FakeSessionSource::new("s1", vec![]);
+        let agent = FakeAgentGateway::default();
+        let running_sessions = FakeRunningSessionSource::default();
+        send_message(
+            &source,
+            &agent,
+            &running_sessions,
+            "some-project",
+            "s1",
+            "見て",
+            &[PNG_BASE64.to_string()],
+            AgentMode::Chat,
+        )
+        .expect("should send with an image");
+
+        let sent = agent.sent.borrow();
+        assert_eq!(sent[0].images.len(), 1);
+        assert_eq!(sent[0].images[0].data_base64, PNG_BASE64);
+        assert_eq!(sent[0].text, "見て");
+    }
+
+    #[test]
+    fn send_message_allows_an_image_without_text() {
+        let source = FakeSessionSource::new("s1", vec![]);
+        let agent = FakeAgentGateway::default();
+        let running_sessions = FakeRunningSessionSource::default();
+        send_message(
+            &source,
+            &agent,
+            &running_sessions,
+            "some-project",
+            "s1",
+            "  ",
+            &[PNG_BASE64.to_string()],
+            AgentMode::Chat,
+        )
+        .expect("image-only send is allowed");
+        assert_eq!(agent.sent.borrow().len(), 1);
+    }
+
+    #[test]
+    fn send_message_rejects_invalid_images_without_sending() {
+        let source = FakeSessionSource::new("s1", vec![]);
+        let agent = FakeAgentGateway::default();
+        let running_sessions = FakeRunningSessionSource::default();
+        // 形式違い(テキスト)・枚数超過のどちらも、送らずに理由つきで弾く。
+        for images in [
+            vec!["aGVsbG8gd29ybGQh".to_string()],
+            vec![PNG_BASE64.to_string(); domain::MAX_IMAGES_PER_MESSAGE + 1],
+        ] {
+            let error = send_message(
+                &source,
+                &agent,
+                &running_sessions,
+                "some-project",
+                "s1",
+                "hello",
+                &images,
+                AgentMode::Chat,
+            )
+            .expect_err("should reject");
+            assert!(matches!(error, AppError::InvalidInput(_)), "{error:?}");
+        }
+        assert!(agent.sent.borrow().is_empty());
+    }
+
+    #[test]
+    fn send_message_blocks_images_too_when_session_is_running_elsewhere() {
+        // issue #349: 実行中セッションのガード(#346)は画像付き送信にも効く。
+        let source = FakeSessionSource::new("s1", vec![]);
+        let agent = FakeAgentGateway::default();
+        let running_sessions = FakeRunningSessionSource::running();
+        let error = send_message(
+            &source,
+            &agent,
+            &running_sessions,
+            "some-project",
+            "s1",
+            "見て",
+            &[PNG_BASE64.to_string()],
+            AgentMode::Chat,
+        )
+        .expect_err("should be blocked");
+        assert!(matches!(error, AppError::SessionBusy(_)));
+        assert!(agent.sent.borrow().is_empty());
+    }
+
+    #[test]
+    fn check_image_attachment_validates_format_size_and_count() {
+        assert!(check_image_attachment(PNG_BASE64, 0).is_ok());
+        assert!(check_image_attachment(PNG_BASE64, domain::MAX_IMAGES_PER_MESSAGE - 1).is_ok());
+        // 追加すると上限を超える。
+        assert!(matches!(
+            check_image_attachment(PNG_BASE64, domain::MAX_IMAGES_PER_MESSAGE),
+            Err(AppError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            check_image_attachment("aGVsbG8gd29ybGQh", 0),
+            Err(AppError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn get_session_line_images_extracts_images_from_the_raw_line() {
+        let mut source = FakeSessionSource::new("s1", vec![]);
+        source.raw_line = Some(
+            r#"{"type":"user","uuid":"u1","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}},{"type":"text","text":"見て"}]}}"#
+                .to_string(),
+        );
+
+        let images = get_session_line_images(&source, "some-project", "s1", "u1")
+            .expect("should extract images");
+
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].data_base64, "AAAA");
+        assert_eq!(images[0].media_type.as_mime(), "image/png");
+    }
+
+    #[test]
+    fn get_session_line_images_rejects_invalid_ids_and_reports_missing_line() {
+        let source = FakeSessionSource::new("s1", vec![]);
+        assert!(matches!(
+            get_session_line_images(&source, "some-project", "../x", "u1"),
+            Err(AppError::InvalidInput(_))
+        ));
+        // 行が見つからない(FakeSessionSource の既定)は NotFound。
+        assert!(matches!(
+            get_session_line_images(&source, "some-project", "s1", "u1"),
+            Err(AppError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn send_message_block_message_names_the_ledger_file_and_pid_so_the_user_can_resolve_it() {
+        // issue #345 の後続: 台帳が壊れて PID が使い回されると止まり続けうるため、
+        // 止めた理由に原因の台帳のパスと PID を含める(どちらの根拠でも)。
+        for evidence in [
+            RunningEvidence::SessionMatched,
+            RunningEvidence::LedgerUnreadable,
+        ] {
+            let source = FakeSessionSource::new("s1", vec![]);
+            let agent = FakeAgentGateway::default();
+            let running_sessions = FakeRunningSessionSource {
+                running: Some(RunningSession {
+                    ledger_path: PathBuf::from("/home/u/.claude/sessions/19104.json"),
+                    pid: 19104,
+                    evidence,
+                }),
+            };
+
+            let error = send_message(
+                &source,
+                &agent,
+                &running_sessions,
+                "some-project",
+                "s1",
+                "hello",
+                &[],
+                AgentMode::Chat,
+            )
+            .expect_err("should reject");
+
+            let AppError::SessionBusy(message) = error else {
+                panic!("expected SessionBusy");
+            };
+            assert!(
+                message.contains("19104.json") && message.contains("19104"),
+                "{evidence:?}: {message}"
+            );
+        }
+    }
+
     #[test]
     fn send_message_rejects_when_session_is_running_elsewhere() {
         let source = FakeSessionSource::new("s1", vec![]);
         let agent = FakeAgentGateway::default();
-        let running_sessions = FakeRunningSessionSource { running: true };
+        let running_sessions = FakeRunningSessionSource::running();
         let error = send_message(
             &source,
             &agent,
@@ -2324,6 +2602,7 @@ mod tests {
             "some-project",
             "s1",
             "hello",
+            &[],
             AgentMode::Chat,
         )
         .expect_err("should reject when session is busy");

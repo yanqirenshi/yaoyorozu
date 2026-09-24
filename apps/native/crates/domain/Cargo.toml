@@ -10,3 +10,5 @@ serde_json = "1"
 # 使わないため `default-features = false` にし、純粋計算(`std`)のみ有効化する
 # (domainクレートはI/Oに依存しない。native.md §1)。
 chrono = { version = "0.4", default-features = false, features = ["std"] }
+# 添付画像(base64)の検証専用(issue #349)。純粋計算のみでI/Oは持たない。
+base64 = "0.22"

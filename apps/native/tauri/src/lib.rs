@@ -8,10 +8,10 @@ use dto::{
     AgentKindDto, AgentModeDto, AppErrorDto, CameraDto, ClaudeDirPageDto, ClaudeMdDto,
     ClaudeSettingsDto, ConversationDto, DeviceCodeDto, GithubAuthFailedEventDto,
     GithubAuthStatusDto, GithubAuthenticatedEventDto, GithubProjectDto, GithubProjectSummaryDto,
-    HubLayoutDto, HubTuningDto, NodePositionDto, PcDto, ProfileSummaryDto, ProjectDto,
-    ProjectItemsPageDto, ProjectSettingsFileDto, RuleDto, RuleSummaryDto, SessionChangedEventDto,
-    SessionSummaryDto, SettingsCorruptedEventDto, SettingsDto, SettingsInputDto, SkillDto,
-    SkillSummaryDto, ViewerTabDto, WindowStateDto, WindowTabDto,
+    HubLayoutDto, HubTuningDto, MessageImageDto, NodePositionDto, PcDto, ProfileSummaryDto,
+    ProjectDto, ProjectItemsPageDto, ProjectSettingsFileDto, RuleDto, RuleSummaryDto,
+    SessionChangedEventDto, SessionSummaryDto, SettingsCorruptedEventDto, SettingsDto,
+    SettingsInputDto, SkillDto, SkillSummaryDto, ViewerTabDto, WindowStateDto, WindowTabDto,
 };
 use infra::{
     ClaudeCliAgent, FileClaudeDirStore, FileClaudeMdStore, FileClaudeSettingsStore,
@@ -117,6 +117,44 @@ async fn get_session_line_raw(
     .map_err(AppErrorDto::from)
 }
 
+/// 指定メッセージ(会話チェーン行の `uuid`)に含まれる画像を返す(ビューアの
+/// 「画像 n 枚」。issue #349)。`get_session_line_raw` と同じオンデマンド取得。
+#[tauri::command]
+async fn get_session_line_images(
+    state: tauri::State<'_, Mutex<AppState>>,
+    project: String,
+    session_id: String,
+    uuid: String,
+) -> Result<Vec<MessageImageDto>, AppErrorDto> {
+    let root = effective_projects_dir_from_state(&state).await?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let source = FileSystemRepository::new(root);
+        app::get_session_line_images(&source, &project, &session_id, &uuid)
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map(|images| images.into_iter().map(MessageImageDto::from).collect())
+    .map_err(AppErrorDto::from)
+}
+
+/// 画像を1枚添付しようとしたときの事前検証(形式・サイズ・枚数。issue #349)。
+/// `existing_count` は添付済みの枚数。違反ならその理由がエラーメッセージで返る。
+#[tauri::command]
+async fn check_image_attachment(data: String, existing_count: usize) -> Result<(), AppErrorDto> {
+    tauri::async_runtime::spawn_blocking(move || app::check_image_attachment(&data, existing_count))
+        .await
+        .unwrap_or_else(|_| {
+            Err(app::AppError::Io(
+                "バックグラウンド処理に失敗しました".to_string(),
+            ))
+        })
+        .map_err(AppErrorDto::from)
+}
+
 #[tauri::command]
 async fn get_session(
     state: tauri::State<'_, Mutex<AppState>>,
@@ -198,6 +236,7 @@ async fn send_message(
     project: String,
     session_id: String,
     text: String,
+    images: Vec<String>,
     mode: AgentModeDto,
 ) -> Result<(), AppErrorDto> {
     let root = effective_projects_dir_from_state(&state).await?;
@@ -215,6 +254,7 @@ async fn send_message(
             &project,
             &session_id,
             &text,
+            &images,
             mode.into(),
         )
     })
@@ -1677,6 +1717,8 @@ pub fn run() {
             list_skills,
             get_skill,
             get_session_line_raw,
+            get_session_line_images,
+            check_image_attachment,
             get_project_settings_file,
             save_project_settings_file,
             get_claude_settings_file,

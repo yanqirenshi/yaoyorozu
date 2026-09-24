@@ -1,4 +1,4 @@
-use app::{AppError, RunningSessionSource};
+use app::{AppError, RunningEvidence, RunningSession, RunningSessionSource};
 use std::path::{Path, PathBuf};
 use windows::Win32::Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, FILETIME};
 use windows::Win32::System::Threading::{
@@ -111,8 +111,13 @@ impl LedgerEntry {
 /// - PID を特定できない(中身にも `<PID>.json` のファイル名にも無い)→ 生存を確かめる
 ///   相手がおらず、ブロックしても永続的に解消できない(ユーザーが台帳を消すまで
 ///   全送信が止まる)ため、この台帳は無視する(唯一の「止めない」例外)
-/// - 台帳のディレクトリが「存在しない」以外の理由で読めない → 何も分からないので
-///   エラー(送信しない)
+/// - 台帳のディレクトリが「存在しない」以外の理由で読めない、または列挙の途中で
+///   読めなかった項目がある → 実行中の台帳を見落としたかもしれないので、エラー
+///   (送信しない。黙って読み飛ばさない)
+///
+/// 止めた場合は、根拠になった台帳のパスと PID を返す([`RunningSession`])。壊れた
+/// 台帳が残って PID が使い回されると、その台帳が原因で送信が止まり続けうるため、
+/// エラーメッセージにパスを出してユーザーが自分で解消できるようにする。
 pub struct FileRunningSessionSource {
     sessions_dir: PathBuf,
 }
@@ -133,12 +138,12 @@ impl FileRunningSessionSource {
 }
 
 impl RunningSessionSource for FileRunningSessionSource {
-    fn is_running(&self, session_id: &str) -> Result<bool, AppError> {
+    fn find_running(&self, session_id: &str) -> Result<Option<RunningSession>, AppError> {
         let entries = match std::fs::read_dir(&self.sessions_dir) {
             Ok(entries) => entries,
             // ディレクトリが無い(このPCでまだ一度も `claude` が実行中セッション
             // 台帳を作っていない等)場合だけ、実行中のセッションは無いと確定できる。
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => {
                 return Err(AppError::Io(format!(
                     "実行中セッションの台帳({})を読めませんでした: {e}",
@@ -146,32 +151,53 @@ impl RunningSessionSource for FileRunningSessionSource {
                 )))
             }
         };
-
-        for entry in entries.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
-            let ledger = LedgerEntry::read(&path);
-            let Some(pid) = ledger.pid else {
-                continue;
-            };
-            match ledger.session_id.as_deref() {
-                Some(id) if id != session_id => continue,
-                Some(_) => {
-                    if process_is_alive(pid, ledger.proc_start.as_deref(), ledger.started_at_ms) {
-                        return Ok(true);
-                    }
-                }
-                None => {
-                    if !matches!(probe_process(pid), ProcessProbe::NotFound) {
-                        return Ok(true);
-                    }
-                }
-            }
-        }
-        Ok(false)
+        find_running_in(
+            session_id,
+            entries.map(|entry| entry.map(|e| e.path())),
+            &self.sessions_dir,
+        )
     }
+}
+
+/// 台帳のパスの列(ディレクトリの列挙結果)から、`session_id` が実行中とみなせる
+/// 台帳を探す。列挙の途中で読めなかった項目(`Err`)があれば、その項目が実行中の
+/// セッションの台帳だったかもしれず見落とすと止め漏れになるため、黙って捨てずに
+/// エラーにする(送信しない)。`dir` はエラーメッセージ用。
+fn find_running_in(
+    session_id: &str,
+    paths: impl Iterator<Item = std::io::Result<PathBuf>>,
+    dir: &Path,
+) -> Result<Option<RunningSession>, AppError> {
+    for path in paths {
+        let path = path.map_err(|e| {
+            AppError::Io(format!(
+                "実行中セッションの台帳の一覧({})を最後まで読めませんでした: {e}",
+                dir.display()
+            ))
+        })?;
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let ledger = LedgerEntry::read(&path);
+        let Some(pid) = ledger.pid else {
+            continue;
+        };
+        let evidence = match ledger.session_id.as_deref() {
+            Some(id) if id != session_id => continue,
+            Some(_) => process_is_alive(pid, ledger.proc_start.as_deref(), ledger.started_at_ms)
+                .then_some(RunningEvidence::SessionMatched),
+            None => (!matches!(probe_process(pid), ProcessProbe::NotFound))
+                .then_some(RunningEvidence::LedgerUnreadable),
+        };
+        if let Some(evidence) = evidence {
+            return Ok(Some(RunningSession {
+                ledger_path: path,
+                pid,
+                evidence,
+            }));
+        }
+    }
+    Ok(None)
 }
 
 /// `pid` のプロセスが現在も生存しており、かつ `proc_start`(`startedAt` が
@@ -352,6 +378,66 @@ mod tests {
 
     fn source(dir: &tempfile::TempDir) -> FileRunningSessionSource {
         FileRunningSessionSource::new(dir.path().to_path_buf())
+    }
+
+    /// 真偽だけを見るテストが読みやすいように、`find_running` を bool に畳む。
+    trait IsRunning {
+        fn is_running(&self, session_id: &str) -> Result<bool, AppError>;
+    }
+
+    impl IsRunning for FileRunningSessionSource {
+        fn is_running(&self, session_id: &str) -> Result<bool, AppError> {
+            self.find_running(session_id).map(|found| found.is_some())
+        }
+    }
+
+    #[test]
+    fn find_running_reports_the_ledger_path_pid_and_evidence() {
+        let pid = std::process::id();
+
+        // sessionId が一致する台帳
+        let dir = tempfile::tempdir().unwrap();
+        write_record(dir.path(), pid, "s1", "1");
+        let found = source(&dir).find_running("s1").unwrap().expect("running");
+        assert_eq!(found.ledger_path, dir.path().join(format!("{pid}.json")));
+        assert_eq!(found.pid, pid);
+        assert_eq!(found.evidence, RunningEvidence::SessionMatched);
+
+        // sessionId を取り出せない台帳(壊れている)
+        let dir = tempfile::tempdir().unwrap();
+        write_ledger(dir.path(), &format!("{pid}.json"), r#"{"sessionId":"#);
+        let found = source(&dir).find_running("s1").unwrap().expect("running");
+        assert_eq!(found.ledger_path, dir.path().join(format!("{pid}.json")));
+        assert_eq!(found.evidence, RunningEvidence::LedgerUnreadable);
+    }
+
+    #[test]
+    fn find_running_in_fails_when_an_entry_could_not_be_read_instead_of_skipping_it() {
+        // 列挙の途中で読めなかった項目は、実行中の台帳だったかもしれない。黙って
+        // 捨てずにエラー(送信しない)。前後の台帳が無関係でも、それだけで安全と
+        // 判断しない。
+        let dir = tempfile::tempdir().unwrap();
+        let unrelated = dir.path().join("1.json");
+        let entries: Vec<std::io::Result<PathBuf>> = vec![
+            Ok(unrelated),
+            Err(std::io::Error::other("boom")),
+            Ok(dir.path().join("2.json")),
+        ];
+
+        let result = find_running_in("s1", entries.into_iter(), dir.path());
+
+        assert!(matches!(result, Err(AppError::Io(_))), "{result:?}");
+    }
+
+    #[test]
+    fn find_running_in_returns_none_when_every_entry_is_readable_and_unrelated() {
+        let dir = tempfile::tempdir().unwrap();
+        write_record(dir.path(), std::process::id(), "other", "1");
+        let path = dir.path().join(format!("{}.json", std::process::id()));
+
+        let result = find_running_in("s1", vec![Ok(path)].into_iter(), dir.path());
+
+        assert_eq!(result.unwrap(), None);
     }
 
     #[test]

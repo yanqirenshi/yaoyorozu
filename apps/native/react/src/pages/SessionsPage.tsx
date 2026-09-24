@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { DragEvent, FormEvent } from "react";
+import type { ChangeEvent, ClipboardEvent, DragEvent, FormEvent } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { DockItem } from "command-dock";
 import type { ViewMode } from "@yanqirenshi/markdown.sitter";
 import {
+  checkImageAttachment,
   getGithubAuthStatus,
   getProjectClaudeMd,
   getProjectSettingsFile,
@@ -32,11 +33,14 @@ import type {
 } from "../api";
 import ClaudeMdEditor from "../ClaudeMdEditor";
 import type { ClaudeMdEditorHandle } from "../ClaudeMdEditor";
+import { readImageFile } from "../attachedImage";
+import type { AttachedImage } from "../attachedImage";
 import { createClaudeMdDockItems } from "../claudeMdDockItems";
 import { MODE_ICON, RELOAD_ICON } from "../icons";
 import JsonFileEditor from "../JsonFileEditor";
 import type { JsonFileEditorHandle } from "../JsonFileEditor";
 import { formatTimestamp } from "../formatTimestamp";
+import MessageImagesDialog from "../MessageImagesDialog";
 import MessageText from "../MessageText";
 import ProfileSettingsPane from "../ProfileSettingsPane";
 import SessionPickerDialog from "../SessionPickerDialog";
@@ -136,6 +140,11 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const [error, setError] = useState<string | null>(null);
   // 「データ」ボタンで開いているメッセージの uuid(閉じていれば null。issue #313)。
   const [rawLineUuid, setRawLineUuid] = useState<string | null>(null);
+  // 「画像 n 枚」で開いているメッセージの uuid(閉じていれば null。issue #349)。
+  const [imagesUuid, setImagesUuid] = useState<string | null>(null);
+  // 送信前の添付画像(issue #349。入力途中の UI 状態。送信で空に戻す)。
+  const [attachments, setAttachments] = useState<AttachedImage[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [mode, setMode] = useState<AgentModeDto>("chat");
@@ -582,15 +591,59 @@ function SessionsPage({ nav }: SessionsPageProps) {
     nav.setSkill(name);
   };
 
+  // 受け取った画像ファイル(貼り付け・ファイル選択)を1枚ずつ Rust で事前検証し、
+  // 通ったものだけをサムネイルにする(形式・サイズ・枚数の規則は Rust の domain が
+  // 唯一の判定元。違反は理由つきで表示して添付しない。issue #349)。
+  const addImageFiles = async (files: File[]) => {
+    setError(null);
+    let count = attachments.length;
+    for (const file of files) {
+      try {
+        const image = await readImageFile(file);
+        await checkImageAttachment(image.base64, count);
+        count += 1;
+        setAttachments((prev) => [...prev, image]);
+      } catch (e) {
+        setError(isAppError(e) ? e.message : String(e));
+      }
+    }
+  };
+
+  const handlePaste = (event: ClipboardEvent<HTMLInputElement>) => {
+    const files = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null);
+    if (files.length === 0) return;
+    event.preventDefault();
+    void addImageFiles(files);
+  };
+
+  const handleFilesSelected = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    // 同じファイルをもう一度選べるように、選択をリセットする。
+    event.target.value = "";
+    if (files.length > 0) void addImageFiles(files);
+  };
+
+  const canSubmit = !!draft.trim() || attachments.length > 0;
+
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
-    if (!projectParam || !sessionParam || !canSend || sending || !draft.trim()) return;
+    if (!projectParam || !sessionParam || !canSend || sending || !canSubmit) return;
 
     setSending(true);
     setError(null);
-    sendMessage(projectParam, sessionParam, draft, mode)
+    sendMessage(
+      projectParam,
+      sessionParam,
+      draft,
+      attachments.map((image) => image.base64),
+      mode,
+    )
       .then(() => {
         setDraft("");
+        setAttachments([]);
         // 送信成功: 同一セッションへの追記(issue #314)。差分再読込でチラつかせない。
         refreshSessionInPlace(projectParam, sessionParam);
       })
@@ -744,24 +797,69 @@ function SessionsPage({ nav }: SessionsPageProps) {
         {view === "chat" ? (
           <>
             <form className="message-form" onSubmit={handleSubmit}>
+              {/* 画像の添付(ファイル選択。貼り付けは入力欄の paste で受ける。issue #349) */}
+              <button
+                type="button"
+                className="message-attach"
+                title="画像を添付"
+                aria-label="画像を添付"
+                disabled={!projectParam || !sessionParam || !canSend || sending}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                画像
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                hidden
+                onChange={handleFilesSelected}
+              />
               <input
                 type="text"
                 className="message-input"
-                placeholder="AIにメッセージを送る"
+                placeholder="AIにメッセージを送る(画像は貼り付けでも添付できます)"
                 value={draft}
                 disabled={!projectParam || !sessionParam || !canSend || sending}
                 onChange={(e) => setDraft(e.target.value)}
+                onPaste={handlePaste}
               />
               <button
                 type="submit"
                 className="message-send"
                 disabled={
-                  !projectParam || !sessionParam || !canSend || sending || !draft.trim()
+                  !projectParam || !sessionParam || !canSend || sending || !canSubmit
                 }
               >
                 {sending ? "送信中…" : "送信"}
               </button>
             </form>
+            {attachments.length > 0 && (
+              <div className="message-attachments">
+                {attachments.map((image, i) => (
+                  <div key={image.id} className="message-attachment">
+                    <img
+                      className="message-attachment-thumb"
+                      src={image.dataUrl}
+                      alt={`添付画像 ${i + 1}`}
+                    />
+                    <button
+                      type="button"
+                      className="message-attachment-remove"
+                      title="この画像を外す"
+                      aria-label={`添付画像 ${i + 1} を外す`}
+                      disabled={sending}
+                      onClick={() =>
+                        setAttachments((prev) => prev.filter((a) => a.id !== image.id))
+                      }
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="conversation-scroll">
               {error && <p className="error">{error}</p>}
               {!projectParam || !sessionParam ? (
@@ -780,6 +878,14 @@ function SessionsPage({ nav }: SessionsPageProps) {
                       sessionId={sessionParam}
                       uuid={rawLineUuid}
                       onClose={() => setRawLineUuid(null)}
+                    />
+                  )}
+                  {imagesUuid && (
+                    <MessageImagesDialog
+                      project={projectParam}
+                      sessionId={sessionParam}
+                      uuid={imagesUuid}
+                      onClose={() => setImagesUuid(null)}
                     />
                   )}
                   <div className="messages">
@@ -807,7 +913,21 @@ function SessionsPage({ nav }: SessionsPageProps) {
                             )}
                           </div>
                           <div className={`message message-${m.role}`}>
-                            <MessageText text={m.text} />
+                            {m.text && <MessageText text={m.text} />}
+                            {/* 画像は本体を載せず件数だけ。押すとその行の画像を取りに行く(issue #349)。
+                                uuid の無い行は取得できないので件数だけ出す。 */}
+                            {m.image_count > 0 &&
+                              (m.uuid ? (
+                                <button
+                                  type="button"
+                                  className="message-images-button"
+                                  onClick={() => setImagesUuid(m.uuid)}
+                                >
+                                  画像 {m.image_count} 枚
+                                </button>
+                              ) : (
+                                <span className="message-images-count">画像 {m.image_count} 枚</span>
+                              ))}
                           </div>
                         </div>
                       );

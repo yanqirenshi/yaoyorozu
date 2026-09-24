@@ -43,23 +43,26 @@ pub fn extract_message(value: &serde_json::Value) -> Option<Message> {
 /// `extract_message`(`&Value` 版)と `ScannedLine::message`(issue #302)が
 /// 共有する、抽出ルールの唯一の実装。
 pub(super) fn message_from_line(line: &SessionLine) -> Option<Message> {
-    let (role, text, timestamp, uuid) = match line {
+    let (role, text, timestamp, uuid, image_count) = match line {
         SessionLine::User(l) => (
             Role::User,
             user_content_text(&l.message.content),
             l.base.timestamp.clone().unwrap_or_default(),
             l.base.uuid.clone(),
+            l.base64_images().len(),
         ),
         SessionLine::Assistant(l) => (
             Role::Assistant,
             assistant_content_text(&l.message.content),
             l.base.timestamp.clone().unwrap_or_default(),
             l.base.uuid.clone(),
+            0,
         ),
         _ => return None,
     };
 
-    if text.trim().is_empty() {
+    // 本文が空でも、画像が付いていれば表示対象にする(画像だけの貼り付け。issue #349)。
+    if text.trim().is_empty() && image_count == 0 {
         return None;
     }
 
@@ -68,6 +71,7 @@ pub(super) fn message_from_line(line: &SessionLine) -> Option<Message> {
         text,
         timestamp,
         uuid,
+        image_count,
     })
 }
 
@@ -180,6 +184,44 @@ mod tests {
             Some("a-1")
         );
         assert_eq!(extract_message(&no_uuid).unwrap().uuid, None);
+    }
+
+    #[test]
+    fn extract_message_counts_displayable_images_and_keeps_image_only_messages() {
+        // issue #349: 画像だけの発言も表示対象。URL参照・対応外形式は数えない。
+        let image_only = json!({
+            "type": "user", "uuid": "u-1",
+            "message": { "role": "user", "content": [
+                { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "AAAA" } },
+                { "type": "image", "source": { "type": "base64", "media_type": "image/jpeg", "data": "BBBB" } },
+                { "type": "image", "source": { "type": "url", "url": "https://example.com/a.png" } }
+            ] }
+        });
+        let message = extract_message(&image_only).expect("image-only message is kept");
+        assert_eq!(message.text, "");
+        assert_eq!(message.image_count, 2);
+
+        let with_text = json!({
+            "type": "user",
+            "message": { "role": "user", "content": [
+                { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "AAAA" } },
+                { "type": "text", "text": "見てください" }
+            ] }
+        });
+        let message = extract_message(&with_text).unwrap();
+        assert_eq!(
+            (message.text.as_str(), message.image_count),
+            ("見てください", 1)
+        );
+
+        // 画像も本文も無ければ従来どおり非表示。
+        let unsupported_only = json!({
+            "type": "user",
+            "message": { "role": "user", "content": [
+                { "type": "image", "source": { "type": "base64", "media_type": "image/svg+xml", "data": "AAAA" } }
+            ] }
+        });
+        assert!(extract_message(&unsupported_only).is_none());
     }
 
     #[test]
