@@ -1595,6 +1595,103 @@ body,
   cursor: default;
 }
 
+/* 画像の添付ボタン(issue #349)。送信ボタンより控えめな枠線のみのボタン。 */
+.message-attach {
+  flex-shrink: 0;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--surface-base);
+  cursor: pointer;
+}
+
+.message-attach:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 送信前の添付画像のサムネイル(issue #349) */
+.message-attachments {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 24px;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.message-attachment {
+  position: relative;
+}
+
+.message-attachment-thumb {
+  display: block;
+  height: 64px;
+  max-width: 160px;
+  object-fit: cover;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+}
+
+.message-attachment-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--border-default);
+  border-radius: 50%;
+  font-size: 0.9rem;
+  line-height: 1;
+  color: var(--text-primary);
+  background: var(--surface-base);
+  cursor: pointer;
+}
+
+.message-attachment-remove:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 会話表示の「画像 n 枚」(issue #349)。「データ」ボタンと同じ控えめな下線ボタン。 */
+.message-images-button {
+  display: block;
+  margin-top: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--color-primary);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.message-images-count {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-secondary);
+}
+
+.message-images-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  margin-bottom: 12px;
+}
+
+.message-images-item {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+}
+
 .conversation-scroll {
   flex: 1;
   min-height: 0;

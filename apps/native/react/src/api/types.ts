@@ -20,6 +20,15 @@ export type MessageDto = {
   timestamp: string;
   // 元の jsonl 行の uuid(「データ」表示用。issue #313)。行に無ければ null。
   uuid: string | null;
+  // この行に含まれる画像の枚数(issue #349)。画像本体は載せず、押されたときに
+  // getSessionLineImages で取る。
+  image_count: number;
+};
+
+// getSessionLineImages の1枚分(issue #349)。data は base64(data: プレフィックス無し)。
+export type MessageImageDto = {
+  media_type: string;
+  data: string;
 };
 
 // 表示中の会話(issue #197でRust側`Session`→`Conversation`に改名したのに

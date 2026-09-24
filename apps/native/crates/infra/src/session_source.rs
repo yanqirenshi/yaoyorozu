@@ -1430,6 +1430,105 @@ mod tests {
         }
     }
 
+    // native.md §5からの意図的な逸脱(`diagnose_real_log_line_conversion` と同じ理由):
+    // 実ユーザーディレクトリを**読み取りのみ**で走査する一回限りの手動診断で、通常の
+    // `cargo test` では実行されない(`#[ignore]`)。issue #349: 既存の会話の画像
+    // (Desktopで貼ったもの)の件数・「画像だけのメッセージ」の有無と、画像の最も多い
+    // ファイルでの `session_line_raw`+画像抽出のオンデマンド取得の所要時間を出す。
+    // 実行例: `cargo test -p infra --release -- --ignored --nocapture diagnose_real_message_images`
+    #[test]
+    #[ignore]
+    fn diagnose_real_message_images() {
+        let projects_dir =
+            FileSystemRepository::default_projects_dir().expect("should resolve home directory");
+        if !projects_dir.is_dir() {
+            println!("{} が無いためスキップします", projects_dir.display());
+            return;
+        }
+
+        let (mut files_with_images, mut image_messages, mut image_only_messages) =
+            (0u64, 0u64, 0u64);
+        let mut total_images = 0u64;
+        // (ファイルサイズ, プロジェクト, セッションID, 最後の画像行のuuid)
+        let mut biggest: Option<(u64, String, String, String)> = None;
+
+        for project_entry in fs::read_dir(&projects_dir).unwrap().flatten() {
+            let project_path = project_entry.path();
+            let Some(project) = project_path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let Ok(entries) = fs::read_dir(&project_path) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                    continue;
+                }
+                let Ok(file) = fs::File::open(&path) else {
+                    continue;
+                };
+                let mut file_has_images = false;
+                let mut last_image_uuid: Option<String> = None;
+                for line in BufReader::new(file).lines().map_while(Result::ok) {
+                    // 画像を含む行だけをパースする(大半の行を読み飛ばす)。
+                    if !line.contains("\"type\":\"image\"") {
+                        continue;
+                    }
+                    let Some(message) = ScannedLine::parse(&line).and_then(|l| l.message()) else {
+                        continue;
+                    };
+                    if message.image_count == 0 {
+                        continue;
+                    }
+                    file_has_images = true;
+                    image_messages += 1;
+                    total_images += message.image_count as u64;
+                    if message.text.trim().is_empty() {
+                        image_only_messages += 1;
+                    }
+                    last_image_uuid = message.uuid.clone();
+                }
+                if file_has_images {
+                    files_with_images += 1;
+                    let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                    if let (Some(uuid), Some(id)) =
+                        (last_image_uuid, path.file_stem().and_then(|s| s.to_str()))
+                    {
+                        if biggest.as_ref().is_none_or(|(s, ..)| size > *s) {
+                            biggest = Some((size, project.to_string(), id.to_string(), uuid));
+                        }
+                    }
+                }
+            }
+        }
+
+        println!("=== 既存会話の画像 実データ診断 (issue #349) ===");
+        println!("画像を含むファイル数: {files_with_images}");
+        println!("画像を含むメッセージ数: {image_messages}(うち本文が空の画像だけ: {image_only_messages})");
+        println!("画像の合計枚数: {total_images}");
+
+        if let Some((size, project, session_id, uuid)) = biggest {
+            let repo = FileSystemRepository::new(projects_dir);
+            let started = std::time::Instant::now();
+            let raw = repo.session_line_raw(&project, &session_id, &uuid);
+            let lookup = started.elapsed();
+            let images = raw
+                .as_deref()
+                .map(domain::extract_message_images)
+                .unwrap_or_default();
+            println!(
+                "画像の最も多いファイル: {project}/{session_id}.jsonl ({:.1}MB)",
+                size as f64 / 1_048_576.0
+            );
+            println!(
+                "最後の画像行(uuid={uuid})の取得: 行探索 {lookup:?} + 抽出込みで {:?}、画像 {} 枚",
+                started.elapsed(),
+                images.len()
+            );
+        }
+    }
+
     /// 新しい走査(1行1回のパース)が、従来の走査(`extract_*` を行ごとに最大9回)と
     /// 同じ結果になること(issue #302 の同一性の保証)。ID・タイトル・cwd・ブランチ・
     /// メタ行(custom-title / ai-title / mode / last-prompt)・slug が複数回現れる、

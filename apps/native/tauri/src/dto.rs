@@ -58,6 +58,9 @@ pub struct MessageDto {
     pub timestamp: String,
     /// 元の jsonl 行の `uuid`(ビューアの「データ」表示用。issue #313)。行に無ければ null。
     pub uuid: Option<String>,
+    /// この行に含まれる画像の枚数(issue #349)。画像本体は載せず、押されたときに
+    /// `get_session_line_images` でオンデマンドに取る。
+    pub image_count: usize,
 }
 
 impl From<domain::Message> for MessageDto {
@@ -67,6 +70,23 @@ impl From<domain::Message> for MessageDto {
             text: message.text,
             timestamp: message.timestamp,
             uuid: message.uuid,
+            image_count: message.image_count,
+        }
+    }
+}
+
+/// `get_session_line_images` の1枚分(issue #349)。フロントが `data:` URL を組み立てて表示する。
+#[derive(Serialize, Clone)]
+pub struct MessageImageDto {
+    pub media_type: String,
+    pub data: String,
+}
+
+impl From<domain::MessageImage> for MessageImageDto {
+    fn from(image: domain::MessageImage) -> Self {
+        Self {
+            media_type: image.media_type.as_mime().to_string(),
+            data: image.data_base64,
         }
     }
 }
