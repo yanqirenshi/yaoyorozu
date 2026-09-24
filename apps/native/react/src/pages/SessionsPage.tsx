@@ -10,6 +10,7 @@ import {
   getProjectSettingsFile,
   getSession,
   getSettings,
+  getViewerTabs,
   isAppError,
   listGithubProjectItems,
   listSessions,
@@ -17,6 +18,7 @@ import {
   onSettingsUpdated,
   saveProjectClaudeMd,
   saveProjectSettingsFile,
+  saveViewerTabs,
   sendMessage,
   updateGithubProjectItemStatus,
 } from "../api";
@@ -26,6 +28,7 @@ import type {
   ProjectItemDto,
   ProjectStatusOptionDto,
   SessionSummaryDto,
+  ViewerTabDto,
   WindowTabDto,
 } from "../api";
 import ClaudeMdEditor from "../ClaudeMdEditor";
@@ -40,6 +43,8 @@ import { formatTimestamp } from "../formatTimestamp";
 import MessageImagesDialog from "../MessageImagesDialog";
 import MessageText from "../MessageText";
 import ProfileSettingsPane from "../ProfileSettingsPane";
+import SessionPickerDialog from "../SessionPickerDialog";
+import type { SessionPickerCandidate } from "../SessionPickerDialog";
 import RawLineDialog from "../RawLineDialog";
 import { SendErrorBody } from "../SendErrorBody";
 import ViewerSideMenu from "../ViewerSideMenu";
@@ -77,11 +82,14 @@ const SCOPE_INSUFFICIENT_MESSAGE =
 
 const DISCARD_CONFIRM_MESSAGE = "編集内容を破棄しますか?保存していない変更は失われます。";
 
-// セッション一覧の1行の鍵(対象フォルダが複数のとき、同じセッション ID が別フォルダにも
-// 現れうるため「フォルダ|セッション ID」)。フォルダ名・セッション ID は英数字と `-` のみで、
-// `|` は含まれない。
-function sessionRowKey(folder: string, sessionId: string): string {
-  return `${folder}|${sessionId}`;
+// 左ペインの「選んだセッション」の鍵(issue #348・#353・#369・#379)。「フォルダ|セッション ID」。
+// 1行 = 1セッション(セッション ID = 会話ファイル)。フォークや圧縮で別の
+// ID のファイルに分かれた会話は、別のセッション(別の行)として扱う。
+// フォルダ名・セッション ID は英数字と `-` のみで、`|` は含まれない。
+const SESSION_TAB_SEPARATOR = "|";
+
+function sessionTabKey(folder: string, sessionId: string): string {
+  return `${folder}${SESSION_TAB_SEPARATOR}${sessionId}`;
 }
 
 type SessionsPageProps = {
@@ -99,6 +107,13 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const [resolvedProfileId, setResolvedProfileId] = useState<string | null>(null);
   const [targetFolders, setTargetFolders] = useState<string[]>([]);
   const [sessionGroups, setSessionGroups] = useState<SessionGroup[]>([]);
+  // 左ペインに並べる「自分で選んだセッション」の並び(issue #353・#379。保存済みの全体)。`null` は読み込み前。
+  // 一覧に見つからないもの(削除・対象フォルダから外れた等)は表示しないだけで、
+  // ここには残す(戻ってきたら復活する。エラーにはしない)。
+  const [viewerTabs, setViewerTabs] = useState<ViewerTabDto[] | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  // 並びの保存は順序どおりに実行する(連続操作で古い並びが後勝ちしないように)。
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [messages, setMessages] = useState<MessageDto[]>([]);
   // `refreshSessionInPlace` が最新の読み込み件数を参照するための ref(issue #314)。
   // state をそのまま依存配列に入れると、追記のたびに購読(`onSessionChanged` 等)の
@@ -307,6 +322,17 @@ function SessionsPage({ nav }: SessionsPageProps) {
     };
   }, [targetFolders, projectParam, sessionParam, loadSessionGroups, refreshSessionInPlace]);
 
+  // 保存済みのセッションタブを読み込む(issue #353)。プロファイルが確定してから。
+  useEffect(() => {
+    if (!resolvedProfileId) return;
+    getViewerTabs(resolvedProfileId)
+      .then(setViewerTabs)
+      .catch((e) => {
+        setViewerTabs([]);
+        setError(isAppError(e) ? e.message : String(e));
+      });
+  }, [resolvedProfileId]);
+
   // 設定の変更(設定画面でのプロファイル切り替え等)で対象フォルダ・GitHubプロジェクトが変わった
   // ことの通知。表示中のフォルダが新しいプロファイルの対象から外れた場合は
   // 選択を解除する(issue #72)。
@@ -389,14 +415,76 @@ function SessionsPage({ nav }: SessionsPageProps) {
       .finally(() => setMovingItemId(null));
   };
 
-  // 左ペインのセッション一覧(issue #379。ヘッダのタブ #348 から元の縦一覧へ戻した)。
-  // 対象フォルダ内の全セッションを新しい順に並べる(フォルダをまたぐ。#369 でセッション
-  // ID 単位・全件になっており、フォークや圧縮で分かれたファイルも別の行として並ぶ)。
-  // 1行は、タイトル(custom-title 等の解決済み)と更新日時。対象フォルダが複数のときは
-  // 見分けられるようフォルダ名も添える(以前のフォルダごとの見出しは出さない)。
+  // 一覧の全セッション(新しい順。フォルダをまたぐ)。
   const allSessions = sessionGroups
     .flatMap((group) => group.sessions.map((session) => ({ folder: group.folder, session })))
     .sort((a, b) => b.session.modified_at - a.session.modified_at);
+  const sessionByTabKey = new Map(
+    allSessions.map(({ folder, session }) => [sessionTabKey(folder, session.id), { folder, session }]),
+  );
+
+  // 左ペインの縦一覧(issue #379。#348 のヘッダのタブから戻した)。自分で選んだ
+  // セッションだけを、追加した順に並べる(#353 と同じ。初期は0件)。一覧に見つからない
+  // もの(削除・対象フォルダから外れた等)は表示しないだけで、保存済みの並びには残す。
+  // 1行は、タイトルと更新日時。対象フォルダが複数のときは見分けられるようフォルダ名も
+  // 添える(フォルダごとの見出しは出さない)。
+  const openTabs = (viewerTabs ?? []).flatMap((tab) => {
+    const hit = sessionByTabKey.get(sessionTabKey(tab.project, tab.session_id));
+    return hit ? [{ key: sessionTabKey(tab.project, tab.session_id), ...hit }] : [];
+  });
+  const selectedSessionSummary = sessionGroups
+    .find((g) => g.folder === projectParam)
+    ?.sessions.find((s) => s.id === sessionParam);
+  const selectedTabValue =
+    projectParam && selectedSessionSummary
+      ? sessionTabKey(projectParam, selectedSessionSummary.id)
+      : "";
+
+  // タブの並びを更新して保存する(追加・閉じるのたびに自動保存)。
+  const persistViewerTabs = (tabs: ViewerTabDto[]) => {
+    setViewerTabs(tabs);
+    if (!resolvedProfileId) return;
+    saveQueueRef.current = saveQueueRef.current
+      .then(() => saveViewerTabs(resolvedProfileId, tabs))
+      .catch((e) => setError(isAppError(e) ? e.message : String(e)));
+  };
+
+  // 「+」のモーダルで選んだセッションを、選んだ順に末尾へ足す。足したうちの最初の
+  // 行を選択する。
+  const handleAddSessionTabs = (keys: string[]) => {
+    setPickerOpen(false);
+    const added = keys.flatMap((key) => {
+      const hit = sessionByTabKey.get(key);
+      return hit ? [{ tab: { project: hit.folder, session_id: hit.session.id }, hit }] : [];
+    });
+    if (added.length === 0) return;
+    persistViewerTabs([...(viewerTabs ?? []), ...added.map((a) => a.tab)]);
+    handleSelectSession(added[0].hit.folder, added[0].hit.session.id);
+  };
+
+  // 行の「×」(または Delete キー)で一覧から外す。一覧から外すだけで会話ファイルは
+  // 消さない。選択中の行を外したら隣の行(下、無ければ上)を選択し、最後の1つ
+  // だったら選択を外して 0 件の案内へ戻る(#353 と同じ遷移)。
+  const handleCloseSessionTab = (key: string) => {
+    persistViewerTabs(
+      (viewerTabs ?? []).filter((tab) => sessionTabKey(tab.project, tab.session_id) !== key),
+    );
+    if (key !== selectedTabValue) return;
+    const index = openTabs.findIndex((tab) => tab.key === key);
+    const neighbor = openTabs[index + 1] ?? openTabs[index - 1];
+    if (neighbor) {
+      handleSelectSession(neighbor.folder, neighbor.session.id);
+    } else {
+      nav.clearProjectAndSession();
+    }
+  };
+
+  const pickerCandidates: SessionPickerCandidate[] = allSessions.map(({ folder, session }) => ({
+    key: sessionTabKey(folder, session.id),
+    folder,
+    title: session.title,
+    modifiedAt: session.modified_at,
+  }));
 
   const selectedSummary = sessionGroups
     .find((g) => g.folder === projectParam)
@@ -605,9 +693,18 @@ function SessionsPage({ nav }: SessionsPageProps) {
     <div className="viewer-page">
       {/* 最上段は左端まで届く全幅のヘッダ(issue #291)。プロファイル名(#275)は
           ウィンドウタイトルへ移した(#348・#377)ため、今は中身が無い(操作の
-          ツールバーは画面下のフッター)。その下に サイドメニュー | セッション一覧 |
-          コンテンツ を並べる。 */}
+          ツールバーは画面下のフッター)。その下に サイドメニュー | 選んだセッションの
+          一覧 | コンテンツ を並べる。 */}
       <div className="session-conversation-head" />
+      {pickerOpen && (
+        <SessionPickerDialog
+          candidates={pickerCandidates}
+          openKeys={new Set(openTabs.map((tab) => tab.key))}
+          showFolder={targetFolders.length > 1}
+          onAdd={handleAddSessionTabs}
+          onClose={() => setPickerOpen(false)}
+        />
+      )}
       <div className="viewer-body">
       {/* ビュー切り替えは上部のタブではなく、画面の最左端のサイドメニュー
           (issue #263)。切り替えの挙動(`handleSwitchView`)は従来のまま。 */}
@@ -620,18 +717,31 @@ function SessionsPage({ nav }: SessionsPageProps) {
           一覧を出し入れしても破棄されない(会話に戻ればそのまま)。 */}
       {view === "chat" && (
         <div className="project-list">
-          {targetFolders.length === 0 ? (
-            <p>設定のClaudeタブで対象フォルダを選択してください。</p>
-          ) : allSessions.length === 0 ? (
-            <p className="session-group-empty">セッションがありません。</p>
-          ) : (
-            allSessions.map(({ folder, session }) => (
+          {/* 「+」(issue #353・#379)。押すとモーダルで追加するセッションを選ぶ。
+              0件のときはこれだけが見える。 */}
+          <button
+            type="button"
+            className="session-list-add"
+            title="セッションを追加"
+            aria-label="セッションを追加"
+            onClick={() => setPickerOpen(true)}
+          >
+            + セッションを追加
+          </button>
+          {openTabs.map(({ key, folder, session }) => (
+            <div key={key} className="session-list-row">
               <button
-                key={sessionRowKey(folder, session.id)}
-                className={`project-item ${
-                  folder === projectParam && session.id === sessionParam ? "selected" : ""
+                type="button"
+                className={`project-item session-list-item ${
+                  key === selectedTabValue ? "selected" : ""
                 }`}
                 onClick={() => handleSelectSession(folder, session.id)}
+                onKeyDown={(event) => {
+                  // キーボードからは Delete で外す(× は Tab キーの順序に入れない。#353 と同じ)。
+                  if (event.key !== "Delete") return;
+                  event.preventDefault();
+                  handleCloseSessionTab(key);
+                }}
               >
                 <span className="session-item-title">{session.title}</span>
                 <span className="session-item-updated">
@@ -643,8 +753,29 @@ function SessionsPage({ nav }: SessionsPageProps) {
                   </span>
                 )}
               </button>
-            ))
-          )}
+              <button
+                type="button"
+                className="session-list-close"
+                tabIndex={-1}
+                title={`${session.title} を外す`}
+                aria-label={`${session.title} を一覧から外す`}
+                onClick={() => handleCloseSessionTab(key)}
+              >
+                {/* 基本デザイン「アイコン」の close(uiIcon.ts)。色は currentColor。 */}
+                <svg
+                  viewBox="0 0 20 20"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.7"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M5 5l10 10M15 5L5 15" />
+                </svg>
+              </button>
+            </div>
+          ))}
         </div>
       )}
       <div className="session-conversation">
@@ -717,7 +848,13 @@ function SessionsPage({ nav }: SessionsPageProps) {
             <div className="conversation-scroll">
               {error && <p className="error">{error}</p>}
               {!projectParam || !sessionParam ? (
-                <p>左の一覧からセッションを選択してください。</p>
+                <p>
+                  {targetFolders.length === 0
+                    ? "設定のClaudeタブで対象フォルダを選択してください。"
+                    : openTabs.length === 0
+                      ? "左の「+」からセッションを追加してください。"
+                      : "左の一覧からセッションを選択してください。"}
+                </p>
               ) : (
                 <>
                   {rawLineUuid && (
