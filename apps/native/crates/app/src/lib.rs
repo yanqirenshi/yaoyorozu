@@ -1,14 +1,14 @@
 use domain::{
     collapse_session_series, extract_message_images, is_valid_claude_dir_path, is_valid_json,
     is_valid_project_dir_name, is_valid_rule_file_name, is_valid_session_id, is_valid_skill_name,
-    order_messages_newest_first, paginate_messages, reconcile_branches, reconcile_worktrees,
-    repositories_from_profiles, sort_claude_dir_entries, sort_projects_by_recency,
-    validate_image_attachment, validate_image_attachments, validate_image_count, Camera,
-    ClaudeDirEntry, ClaudeDirPage, ClaudeMdFile, ClaudeSettingsFile, Conversation, GitLedger,
-    GitRepositoryLedger, HubLayout, HubTuning, ImageAttachment, LogLine, Message, MessageImage,
-    NodePosition, ParsedSession, Project, RuleSummary, SessionSummary, Settings, SkillSummary,
-    ViewerTab, ViewerTabs, CURRENT_GIT_LEDGER_VERSION, CURRENT_HUB_LAYOUT_VERSION,
-    CURRENT_HUB_TUNING_VERSION, CURRENT_VIEWER_TABS_VERSION,
+    mark_failed_questions, order_messages_newest_first, paginate_messages, reconcile_branches,
+    reconcile_worktrees, repositories_from_profiles, sort_claude_dir_entries,
+    sort_projects_by_recency, validate_image_attachment, validate_image_attachments,
+    validate_image_count, Camera, ClaudeDirEntry, ClaudeDirPage, ClaudeMdFile, ClaudeSettingsFile,
+    Conversation, GitLedger, GitRepositoryLedger, HubLayout, HubTuning, ImageAttachment, LogLine,
+    Message, MessageImage, NodePosition, ParsedSession, Project, RuleSummary, SessionSummary,
+    Settings, SkillSummary, ViewerTab, ViewerTabs, CURRENT_GIT_LEDGER_VERSION,
+    CURRENT_HUB_LAYOUT_VERSION, CURRENT_HUB_TUNING_VERSION, CURRENT_VIEWER_TABS_VERSION,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -558,6 +558,9 @@ pub fn reload_session(
         mut messages,
         lines,
     } = source.read_session(project, session_id)?;
+    // 送信に失敗した質問とエラー行に印を付ける(表示のためだけ。会話ファイルには触らない。
+    // issue #364)。記録順のうちに付け、そのあと新しい順に並べる。
+    mark_failed_questions(&mut messages);
     order_messages_newest_first(&mut messages);
     Ok(ReloadedSession {
         messages: CachedMessages {
@@ -1733,7 +1736,7 @@ pub fn list_claude_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use domain::{AgentKind, Message, Role};
+    use domain::{AgentKind, Message, MessageStatus, Role};
 
     struct FakeSessionSource {
         projects: Vec<Project>,
@@ -1914,6 +1917,7 @@ mod tests {
                     timestamp: "".to_string(),
                     uuid: None,
                     image_count: 0,
+                    status: MessageStatus::Normal,
                 },
                 Message {
                     role: Role::Assistant,
@@ -1921,6 +1925,7 @@ mod tests {
                     timestamp: "".to_string(),
                     uuid: None,
                     image_count: 0,
+                    status: MessageStatus::Normal,
                 },
             ],
         );
@@ -1945,6 +1950,7 @@ mod tests {
                     timestamp: "".to_string(),
                     uuid: None,
                     image_count: 0,
+                    status: MessageStatus::Normal,
                 })
                 .collect(),
         );
@@ -1972,6 +1978,7 @@ mod tests {
             timestamp: "".to_string(),
             uuid: None,
             image_count: 0,
+            status: MessageStatus::Normal,
         }
     }
 
@@ -1998,6 +2005,39 @@ mod tests {
             .collect();
         assert_eq!(cached, vec!["b", "a"]);
         assert_eq!(reloaded.messages.fingerprint, source.fingerprint.get());
+    }
+
+    #[test]
+    fn reload_session_marks_failed_questions_before_ordering_newest_first() {
+        // 記録順: 質問1 → 答え1 → 質問2(失敗)→ エラー行
+        let mut error = user_message("err");
+        error.role = Role::Assistant;
+        error.status = MessageStatus::Error;
+        let mut answer = user_message("a1");
+        answer.role = Role::Assistant;
+        let source = FakeSessionSource::new(
+            "s1",
+            vec![user_message("q1"), answer, user_message("q2"), error],
+        );
+
+        let reloaded = reload_session(&source, "p", "s1").expect("should reload");
+
+        // 新しい順: エラー行、失敗した質問、答え、質問1
+        let got: Vec<(&str, MessageStatus)> = reloaded
+            .messages
+            .messages
+            .iter()
+            .map(|m| (m.text.as_str(), m.status))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("err", MessageStatus::ErrorForQuestion),
+                ("q2", MessageStatus::FailedQuestion),
+                ("a1", MessageStatus::Normal),
+                ("q1", MessageStatus::Normal),
+            ]
+        );
     }
 
     #[test]

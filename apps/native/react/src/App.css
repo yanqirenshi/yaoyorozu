@@ -1983,6 +1983,52 @@ body,
   border: 1px solid var(--color-kusairo-100);
 }
 
+/* 送信に失敗したことの見分け(issue #364)。エラー行は普通の返事と見分けがつくよう
+   セマンティックカラー(error)の控えめな面と細い枠にし、答えのない質問は破線の枠と
+   メタ情報の「送信に失敗」だけを添える(本文は普通の質問のまま)。 */
+.message-send-error {
+  background-color: var(--semantic-error-bg);
+  border: 1px solid var(--semantic-error-border);
+  box-shadow: none;
+}
+
+.message-failed-question {
+  border: 1px dashed var(--semantic-error-border);
+}
+
+.message-meta-failed {
+  color: var(--semantic-error-fg);
+}
+
+.send-error-title {
+  margin: 0;
+  color: var(--semantic-error-fg);
+  font-weight: 600;
+}
+
+.send-error-hint {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.send-error-details {
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.send-error-details summary {
+  cursor: pointer;
+}
+
+.send-error-text {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
+
 /* 吹き出し(.message)とメタ情報(種類・日時。issue #258)を横に並べる行。
    user は吹き出しの右、assistant は吹き出しの左にメタ情報を置く(吹き出しの
    配置は従来どおり: user は左寄せ、assistant は右寄せの幅77%)。 */

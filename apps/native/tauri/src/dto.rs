@@ -61,6 +61,29 @@ pub struct MessageDto {
     /// この行に含まれる画像の枚数(issue #349)。画像本体は載せず、押されたときに
     /// `get_session_line_images` でオンデマンドに取る。
     pub image_count: usize,
+    /// 送信の失敗に関する見分け(issue #364)。フロントは表示の切り替えにだけ使う。
+    pub status: MessageStatusDto,
+}
+
+/// `domain::MessageStatus` の DTO(issue #364)。
+#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageStatusDto {
+    Normal,
+    FailedQuestion,
+    ErrorForQuestion,
+    Error,
+}
+
+impl From<domain::MessageStatus> for MessageStatusDto {
+    fn from(status: domain::MessageStatus) -> Self {
+        match status {
+            domain::MessageStatus::Normal => Self::Normal,
+            domain::MessageStatus::FailedQuestion => Self::FailedQuestion,
+            domain::MessageStatus::ErrorForQuestion => Self::ErrorForQuestion,
+            domain::MessageStatus::Error => Self::Error,
+        }
+    }
 }
 
 impl From<domain::Message> for MessageDto {
@@ -71,6 +94,7 @@ impl From<domain::Message> for MessageDto {
             timestamp: message.timestamp,
             uuid: message.uuid,
             image_count: message.image_count,
+            status: message.status.into(),
         }
     }
 }
