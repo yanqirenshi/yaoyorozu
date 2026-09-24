@@ -796,6 +796,18 @@ pub fn retain_enumerated_parsed_sessions(
     sessions.retain(|p| enumerated_paths.contains(&p.conversation_file_path));
 }
 
+/// ビューアのウィンドウの初期タイトル(issue #348)。「<プロファイル名> - <フォルダ名>」で、
+/// 対象フォルダが複数のときは「 / 」でつなぎ、無いときはプロファイル名だけ。
+/// ウィンドウ生成時(`open_profile_window`)の値で、その後の設定変更への追従は
+/// フロント(`Layout.tsx` の `viewerWindowTitle`。同じ規則)が `setTitle` で行う。
+pub fn viewer_window_title(profile_name: &str, selected_project_folders: &[String]) -> String {
+    if selected_project_folders.is_empty() {
+        profile_name.to_string()
+    } else {
+        format!("{profile_name} - {}", selected_project_folders.join(" / "))
+    }
+}
+
 /// 削除された会話ファイルの `ParsedSession` を取り除く(ファイル監視による差分
 /// 再走査。issue #311)。同一 `session_id` の別ファイル(worktree 移動。#214)は
 /// 別エントリのため残り、`Session` としては集約(#217)の結果その別ファイルの
@@ -1823,6 +1835,19 @@ mod tests {
                 "should reject ({project:?}, {session_id:?}, {uuid:?})"
             );
         }
+    }
+
+    #[test]
+    fn viewer_window_title_joins_profile_name_and_folders() {
+        assert_eq!(viewer_window_title("yaoyorozu", &[]), "yaoyorozu");
+        assert_eq!(
+            viewer_window_title("yaoyorozu", &["C--Users-yanqi-prj-yaoyorozu".to_string()]),
+            "yaoyorozu - C--Users-yanqi-prj-yaoyorozu"
+        );
+        assert_eq!(
+            viewer_window_title("p", &["a".to_string(), "b".to_string()]),
+            "p - a / b"
+        );
     }
 
     #[test]

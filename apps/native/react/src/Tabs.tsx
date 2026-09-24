@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import type { KeyboardEvent } from "react";
 
 // 共通部品「タブ」(issue #287)。仕様の正は apps/web の `uiTab.ts`
@@ -10,6 +10,9 @@ import type { KeyboardEvent } from "react";
 type TabItem = {
   id: string;
   label: string;
+  // ツールチップ(title 属性)。省略時はラベル全体(仕様どおり)。補足情報を足したい
+  // ときだけ指定する(issue #348: セッションタブに日時・フォルダ名を足す)。
+  title?: string;
   disabled?: boolean;
 };
 
@@ -51,6 +54,13 @@ function Tabs({
   size = "medium",
 }: TabsProps) {
   const refs = useRef<Record<string, HTMLButtonElement | null>>({});
+
+  // 選択中のタブが横スクロールで見えない位置にあるとき(URL からの復元・
+  // 外部からの切替など)、見える位置まで寄せる。見えているときは動かさない
+  // (issue #348。タブが多いセッションタブで必要になった)。
+  useEffect(() => {
+    refs.current[value]?.scrollIntoView({ inline: "nearest", block: "nearest" });
+  }, [value]);
 
   const focusTab = (index: number) => {
     const item = items[index];
@@ -120,7 +130,7 @@ function Tabs({
             aria-controls={selected ? tabPanelId(id) : undefined}
             tabIndex={index === entryIndex ? 0 : -1}
             disabled={item.disabled}
-            title={item.label}
+            title={item.title ?? item.label}
             onClick={() => onChange(item.id)}
           >
             {item.label}

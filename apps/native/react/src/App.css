@@ -60,7 +60,7 @@ body,
   height: 100vh;
   border: 1px solid var(--border-default);
   box-sizing: border-box;
-  /* 各画面が自前のスクロール領域(`.project-list` 等)を持つ前提のため、
+  /* 各画面が自前のスクロール領域(`.settings-profile-pane` 等)を持つ前提のため、
      外枠自体はどちらの方向にもスクロールさせない(issue #109で判明: 縦方向の
      指定が漏れていたため、内容が縦に長くなるページ(ハブのグラフ等)で
      ウィンドウ全体に不要な縦スクロールバーが出ていた)。 */
@@ -259,9 +259,8 @@ body,
   background: var(--state-hover);
 }
 
-/* 画面左の一覧ペイン(固定幅+縦スクロール)。ビューアのセッション一覧と
-   設定のプロファイル一覧(issue #74)で骨格を共有する。 */
-.project-list,
+/* 画面左の一覧ペイン(固定幅+縦スクロール)。設定のプロファイル一覧(issue #74)。
+   ビューアのセッション一覧はヘッダのタブに移した(issue #348)。 */
 .settings-profile-pane {
   width: 320px;
   flex-shrink: 0;
@@ -279,37 +278,10 @@ body,
   padding-bottom: 96px;
 }
 
-.project-list h2,
 .settings-profile-pane h2 {
   font-size: 1rem;
   font-weight: 400;
   margin: 0 0 8px;
-}
-
-.session-group {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.session-group-heading {
-  font-size: 0.85rem;
-  font-weight: 400;
-  color: var(--text-secondary);
-  margin: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-group-heading-prefix {
-  color: var(--border-default);
-}
-
-.session-group-empty {
-  font-size: 0.85rem;
-  color: var(--text-secondary);
-  margin: 0;
 }
 
 .project-item {
@@ -329,16 +301,10 @@ body,
   cursor: pointer;
 }
 
-.session-item-title,
 .settings-profile-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.session-item-updated {
-  font-size: 0.75rem;
-  color: var(--text-secondary);
 }
 
 .project-item:hover {
@@ -397,30 +363,33 @@ body,
   bottom: calc(100% + 6px);
 }
 
-/* ビューアの上部: プロファイル名(左)とページ内ツールバー(右。issue #257)。
-   ウィンドウの左端から右端まで届き、下罫線も全幅で通る(issue #291)。 */
+/* ビューアの上部(ヘッダ): 会話ビューのときだけセッションのタブを並べる
+   (issue #348。プロファイル名(#275)は消してウィンドウタイトルへ移した)。
+   ウィンドウの左端から右端まで届き、下罫線も全幅で通る(issue #291)。
+   下罫線は border ではなく内側の影で描き、選択中タブの下線(3px)をその上に
+   重ねる(Tabs 部品の仕様と同じ描き方。#289)。タブ列が収まらないときは
+   Tabs 自身が折り返さず横スクロールする。 */
 .session-conversation-head {
   position: relative;
   z-index: 40;
   flex-shrink: 0;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  border-bottom: 1px solid var(--border-default);
+  align-items: flex-end;
+  /* Tabs(small)の高さ(40px)に合わせる。会話以外のビュー(タブなし)へ切り替えても
+     サイドメニュー・コンテンツの位置がずれないように。 */
+  min-height: 40px;
+  box-shadow: inset 0 -1px 0 var(--border-default);
 }
 
-/* ヘッダ左のプロファイル名(issue #275)。表示のみ。長い名前は省略する。 */
-.session-conversation-title {
+/* ヘッダの中のタブ列は、ヘッダ自身が下罫線を持つので自分の罫線は描かない。
+   横幅いっぱいに広げ、左右の余白はヘッダの端に合わせて詰める。 */
+.session-conversation-head .tabs {
+  flex: 1;
   min-width: 0;
-  margin: 0;
-  padding: 0 0 0 16px;
-  font-size: 0.95rem;
-  font-weight: 600;
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  padding: 0 var(--space-2);
+  box-shadow: none;
+  /* 横スクロールバーは細くして、ヘッダの高さを食わないようにする。 */
+  scrollbar-width: thin;
 }
 
 /* ビューアの最左端のサイドメニュー(issue #263)。アイコンのみ(名前は

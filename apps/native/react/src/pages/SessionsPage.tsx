@@ -42,6 +42,8 @@ import ViewerToolbar from "../ViewerToolbar";
 import { createProjectSettingsDockItems } from "../projectSettingsDockItems";
 import RulesPane from "../RulesPane";
 import SkillsPane from "../SkillsPane";
+import Tabs, { tabPanelProps } from "../Tabs";
+import type { TabItem } from "../Tabs";
 import { useReportWindowState } from "../useReportWindowState";
 import { PANE_VIEWS } from "../viewerNav";
 import type { PaneView, ViewerNav } from "../viewerNav";
@@ -72,12 +74,13 @@ const SCOPE_INSUFFICIENT_MESSAGE =
 
 const DISCARD_CONFIRM_MESSAGE = "編集内容を破棄しますか?保存していない変更は失われます。";
 
-// フォルダ名(例: "C--Users-yanqi-prj-yaoyorozu")は末尾の要素が実際の
-// リポジトリ名に対応することが多いため、末尾要素を目立たせて表示する。
-function splitFolderNameForDisplay(name: string): { prefix: string; tail: string } {
-  const idx = name.lastIndexOf("-");
-  if (idx === -1) return { prefix: "", tail: name };
-  return { prefix: name.slice(0, idx + 1), tail: name.slice(idx + 1) };
+// セッションタブの値(issue #348)。対象フォルダが複数のとき同じセッション ID が
+// 別フォルダにも現れうるため「フォルダ|セッションID」にする(フォルダ名は英数字と
+// `-` のみ、セッション ID は英数字と `-` のみで、`|` は含まれない)。
+const SESSION_TAB_SEPARATOR = "|";
+
+function sessionTabValue(folder: string, sessionId: string): string {
+  return `${folder}${SESSION_TAB_SEPARATOR}${sessionId}`;
 }
 
 type SessionsPageProps = {
@@ -93,9 +96,6 @@ function SessionsPage({ nav }: SessionsPageProps) {
   // ID。`windowProfileId` が `null`(`/profiles` に id 省略)の場合はアクティブ
   // プロファイルへフォールバックする(Rust側 `resolve_profile` と同じ規則)。
   const [resolvedProfileId, setResolvedProfileId] = useState<string | null>(null);
-  // このウィンドウのプロファイル名(ヘッダに表示。issue #275)。プロファイルの
-  // 名前変更に追従するため、設定の読み込み・`settings:updated` のたびに引き直す。
-  const [profileName, setProfileName] = useState<string | null>(null);
   const [targetFolders, setTargetFolders] = useState<string[]>([]);
   const [sessionGroups, setSessionGroups] = useState<SessionGroup[]>([]);
   const [messages, setMessages] = useState<MessageDto[]>([]);
@@ -169,7 +169,6 @@ function SessionsPage({ nav }: SessionsPageProps) {
       .then((settings) => {
         const profileId = windowProfileId ?? settings.active_profile_id;
         setResolvedProfileId(profileId);
-        setProfileName(settings.profiles.find((p) => p.id === profileId)?.name ?? null);
         setRepositoryPath(settings.repository_path);
         setTargetFolders(settings.selected_project_folders);
         setGithubProject(settings.github_project);
@@ -309,8 +308,6 @@ function SessionsPage({ nav }: SessionsPageProps) {
     const unlistenPromise = onSettingsUpdated(() => {
       getSettings(windowProfileId)
         .then((settings) => {
-          const profileId = windowProfileId ?? settings.active_profile_id;
-          setProfileName(settings.profiles.find((p) => p.id === profileId)?.name ?? null);
           setRepositoryPath(settings.repository_path);
           setTargetFolders(settings.selected_project_folders);
           setGithubProject(settings.github_project);
@@ -384,6 +381,30 @@ function SessionsPage({ nav }: SessionsPageProps) {
         setProjectItemsError(isAppError(e) ? e.message : String(e));
       })
       .finally(() => setMovingItemId(null));
+  };
+
+  // ヘッダのセッションタブ(issue #348)。ラベル・並び(新しい順)は以前の一覧と
+  // 同じ。対象フォルダが複数のときは全フォルダのセッションをまとめて新しい順に並べ、
+  // 同名のセッションを見分けられるようツールチップにフォルダ名を含める。日時は
+  // タブには出さずツールチップへ(実装時判断)。
+  const sessionTabs: TabItem[] = sessionGroups
+    .flatMap((group) => group.sessions.map((s) => ({ folder: group.folder, s })))
+    .sort((a, b) => b.s.modified_at - a.s.modified_at)
+    .map(({ folder, s }) => ({
+      id: sessionTabValue(folder, s.id),
+      label: s.title,
+      title: [
+        s.title,
+        ...(targetFolders.length > 1 ? [folder] : []),
+        new Date(s.modified_at).toLocaleString(),
+      ].join("\n"),
+    }));
+  const selectedTabValue =
+    projectParam && sessionParam ? sessionTabValue(projectParam, sessionParam) : "";
+  const handleSelectSessionTab = (value: string) => {
+    const at = value.indexOf(SESSION_TAB_SEPARATOR);
+    if (at < 0) return;
+    handleSelectSession(value.slice(0, at), value.slice(at + 1));
   };
 
   const selectedSummary = sessionGroups
@@ -547,64 +568,34 @@ function SessionsPage({ nav }: SessionsPageProps) {
 
   return (
     <div className="viewer-page">
-      {/* 最上段は左端まで届く全幅のヘッダ(issue #291)。その下に
-          サイドメニュー | セッション一覧 | コンテンツ を並べる。 */}
+      {/* 最上段は左端まで届く全幅のヘッダ(issue #291)。会話ビューのときだけ、
+          対象フォルダのセッションをタブで並べて切り替える(issue #348。以前は
+          左のセッション一覧ペインだった。#279 の「会話ビューのときだけ」を引き継ぐ)。
+          プロファイル名とフォルダ名はウィンドウタイトルへ移した(Layout.tsx)。
+          切替の挙動(`handleSelectSession`。URL の project/session の更新→
+          切替時の全クリア、追記時の差分反映 #314)は一覧のときと同じ。 */}
       <div className="session-conversation-head">
-        {/* ヘッダ: このウィンドウのプロファイル名(表示のみ。issue #275)。
-            操作(ツールバー)は画面下のフッターへ移した(ユーザー指示)。 */}
-        <h2 className="session-conversation-title" title={profileName ?? undefined}>
-          {profileName}
-        </h2>
+        {view === "chat" && sessionTabs.length > 0 && (
+          <Tabs
+            id="session-tabs"
+            aria-label="セッションの切り替え"
+            size="small"
+            items={sessionTabs}
+            value={selectedTabValue}
+            onChange={handleSelectSessionTab}
+          />
+        )}
       </div>
       <div className="viewer-body">
       {/* ビュー切り替えは上部のタブではなく、画面の最左端のサイドメニュー
           (issue #263)。切り替えの挙動(`handleSwitchView`)は従来のまま。 */}
       <ViewerSideMenu active={view} onChange={handleSwitchView} />
-      {/* セッション一覧ペインは「会話」ビューのときだけ表示する(issue #279)。
-          CLAUDE.md / Rules / Skills / settings 系は #269 でセッション不要になり、
-          GitHub Project も元々プロファイル基準のため、それ以外のビューでは
-          一覧を出さずコンテンツ領域を広げる。選択中のセッション・会話の表示は
-          このコンポーネントの状態と URL(`project`/`session`)に持っており、
-          一覧を出し入れしても破棄されない(会話に戻ればそのまま)。 */}
-      {view === "chat" && (
-        <div className="project-list">
-          {targetFolders.length === 0 ? (
-            <p>設定のClaudeタブで対象フォルダを選択してください。</p>
-          ) : (
-            sessionGroups.map((group) => {
-              const { prefix, tail } = splitFolderNameForDisplay(group.folder);
-              return (
-                <div key={group.folder} className="session-group">
-                  <h3 className="session-group-heading" title={group.folder}>
-                    <span className="session-group-heading-prefix">{prefix}</span>
-                    <strong>{tail}</strong>
-                  </h3>
-                  {group.sessions.length === 0 && (
-                    <p className="session-group-empty">セッションがありません。</p>
-                  )}
-                  {group.sessions.map((s) => (
-                    <button
-                      key={s.id}
-                      className={`project-item ${
-                        group.folder === projectParam && s.id === sessionParam
-                          ? "selected"
-                          : ""
-                      }`}
-                      onClick={() => handleSelectSession(group.folder, s.id)}
-                    >
-                      <span className="session-item-title">{s.title}</span>
-                      <span className="session-item-updated">
-                        {new Date(s.modified_at).toLocaleString()}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              );
-            })
-          )}
-        </div>
-      )}
-      <div className="session-conversation">
+      <div
+        className="session-conversation"
+        {...(view === "chat" && selectedSummary
+          ? tabPanelProps("session-tabs", selectedTabValue)
+          : {})}
+      >
         {view === "chat" ? (
           <>
             <form className="message-form" onSubmit={handleSubmit}>
@@ -629,7 +620,13 @@ function SessionsPage({ nav }: SessionsPageProps) {
             <div className="conversation-scroll">
               {error && <p className="error">{error}</p>}
               {!projectParam || !sessionParam ? (
-                <p>左の一覧からセッションを選択してください。</p>
+                <p>
+                  {targetFolders.length === 0
+                    ? "設定のClaudeタブで対象フォルダを選択してください。"
+                    : sessionTabs.length === 0
+                      ? "セッションがありません。"
+                      : "上のタブからセッションを選択してください。"}
+                </p>
               ) : (
                 <>
                   {rawLineUuid && (
