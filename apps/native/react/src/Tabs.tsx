@@ -30,7 +30,7 @@ type TabsProps = {
   // 任意の機能で、指定しなければ従来どおり × なし。/claude・/settings のタブは
   // 使わない)。タブ選択中に Delete キーでも閉じられる(WAI-ARIA の推奨)。
   // タブを外すだけで、選択の付け替えは呼び出し側が行う。
-  // ※ × の見た目は uiTab.ts の仕様にまだ無いため、既存トークンによる仮の見た目。
+  // × の見た目の仕様の正は uiTab.ts の `TAB_CLOSE`(issue #358 で仮の見た目から合わせた)。
   onClose?: (id: string) => void;
 };
 
@@ -169,10 +169,22 @@ function Tabs({
               className="tab-close"
               tabIndex={-1}
               aria-label={`${item.label} を閉じる`}
-              title="閉じる"
+              title={`${item.label} を閉じる`}
               onClick={() => onClose(item.id)}
             >
-              ×
+              {/* 基本デザイン「アイコン」の close(uiIcon.ts)。大きさは CSS(--icon-16)、
+                  色は currentColor(タブの文字色を継ぐ)。名前は button の aria-label。 */}
+              <svg
+                viewBox="0 0 20 20"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M5 5l10 10M15 5L5 15" />
+              </svg>
             </button>
           </div>
         );
