@@ -93,6 +93,16 @@ impl ScannedLine {
         }
         message_from_line(&self.line).map(|m| m.text)
     }
+
+    /// `uuid`(issue #345: フォーク系列の根uuid判定用)。
+    pub fn uuid(&self) -> Option<&str> {
+        self.line.uuid()
+    }
+
+    /// `parentUuid`(issue #345: フォーク系列の根uuid判定用)。
+    pub fn parent_uuid(&self) -> Option<&str> {
+        self.line.parent_uuid()
+    }
 }
 
 #[cfg(test)]

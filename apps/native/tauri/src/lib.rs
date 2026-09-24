@@ -5,8 +5,8 @@ mod state;
 
 use app::{SettingsStore, TokenStore};
 use dto::{
-    AgentKindDto, AgentModeDto, AppErrorDto, AppWarningDto, CameraDto, ClaudeDirPageDto,
-    ClaudeMdDto, ClaudeSettingsDto, ConversationDto, DeviceCodeDto, GithubAuthFailedEventDto,
+    AgentKindDto, AgentModeDto, AppErrorDto, CameraDto, ClaudeDirPageDto, ClaudeMdDto,
+    ClaudeSettingsDto, ConversationDto, DeviceCodeDto, GithubAuthFailedEventDto,
     GithubAuthStatusDto, GithubAuthenticatedEventDto, GithubProjectDto, GithubProjectSummaryDto,
     HubLayoutDto, HubTuningDto, NodePositionDto, PcDto, ProfileSummaryDto, ProjectDto,
     ProjectItemsPageDto, ProjectSettingsFileDto, RuleDto, RuleSummaryDto, SessionChangedEventDto,
@@ -16,8 +16,8 @@ use dto::{
 use infra::{
     ClaudeCliAgent, FileClaudeDirStore, FileClaudeMdStore, FileClaudeSettingsStore,
     FileHubLayoutStore, FileHubTuningStore, FileProjectSettingsStore, FileRulesStore,
-    FileSettingsStore, FileSkillsStore, FileSystemRepository, GithubApiClient, GithubAuthLog,
-    KeyringTokenStore,
+    FileRunningSessionSource, FileSettingsStore, FileSkillsStore, FileSystemRepository,
+    GithubApiClient, GithubAuthLog, KeyringTokenStore,
 };
 use state::{resolve_effective_projects_dir, AppState};
 use std::path::PathBuf;
@@ -194,7 +194,6 @@ async fn list_sessions(
 
 #[tauri::command]
 async fn send_message(
-    app: tauri::AppHandle,
     state: tauri::State<'_, Mutex<AppState>>,
     project: String,
     session_id: String,
@@ -204,36 +203,28 @@ async fn send_message(
     let root = effective_projects_dir_from_state(&state).await?;
     // claude CLI の起動は数秒〜数十秒かかるため、async ランタイムを塞がないよう
     // ブロッキングスレッドで実行する。
-    let project_for_warning = project.clone();
-    let result = tauri::async_runtime::spawn_blocking(
-        move || -> Result<Option<app::SessionMismatch>, app::AppError> {
-            let source = FileSystemRepository::new(root);
-            let agent = ClaudeCliAgent::new();
-            app::send_message(&source, &agent, &project, &session_id, &text, mode.into())
-        },
-    )
-    .await;
-
-    match result {
-        Ok(Ok(Some(mismatch))) => {
-            // 送信は成功しているためエラーにはせず、警告イベントで通知する。
-            let _ = app.emit(
-                "app:warning",
-                AppWarningDto {
-                    project: project_for_warning,
-                    expected_session_id: mismatch.expected_session_id,
-                    actual_session_id: mismatch.actual_session_id,
-                },
-            );
-            Ok(())
-        }
-        Ok(Ok(None)) => Ok(()),
-        Ok(Err(e)) => Err(e.into()),
-        Err(_) => Err(AppErrorDto {
-            code: "internal".to_string(),
-            message: "バックグラウンド処理に失敗しました".to_string(),
-        }),
-    }
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), app::AppError> {
+        let source = FileSystemRepository::new(root);
+        let agent = ClaudeCliAgent::new();
+        let sessions_dir = FileRunningSessionSource::default_sessions_dir()?;
+        let running_sessions = FileRunningSessionSource::new(sessions_dir);
+        app::send_message(
+            &source,
+            &agent,
+            &running_sessions,
+            &project,
+            &session_id,
+            &text,
+            mode.into(),
+        )
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
 }
 
 #[tauri::command]

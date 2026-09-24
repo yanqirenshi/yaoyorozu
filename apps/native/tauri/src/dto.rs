@@ -95,16 +95,14 @@ impl From<domain::Conversation> for ConversationDto {
     }
 }
 
-/// セッション一覧(ビューア左ペイン)の1件分。
+/// セッション一覧(ビューア左ペイン)の1件分。`list_sessions` はフォーク系列
+/// (issue #345)ごとに最新ファイルだけへ畳んだ結果を返すため、ここに並ぶのは
+/// 常に各系列の先頭(送信対象にできるセッション)である。
 #[derive(Serialize, Clone)]
 pub struct SessionSummaryDto {
     pub id: String,
     pub title: String,
     pub modified_at: u64,
-    /// そのフォルダで最も新しいセッションかどうか。`true` のときだけ
-    /// 送信フォームを有効にする(`--continue` の性質上、最新以外へは
-    /// 送信できないため。issue #33)。
-    pub is_latest: bool,
     /// セッションの作業ディレクトリ。JSONLに記録が無ければ `null`
     /// (ハブのグラフ階層用。issue #104)。
     pub cwd: Option<String>,
@@ -119,7 +117,6 @@ impl From<domain::SessionSummary> for SessionSummaryDto {
             id: summary.id,
             title: summary.title,
             modified_at: summary.modified_at_ms,
-            is_latest: summary.is_latest,
             cwd: summary.cwd,
             git_branch: summary.git_branch,
         }
@@ -170,17 +167,6 @@ impl From<ProjectSettingsFileDto> for app::ProjectSettingsFile {
             ProjectSettingsFileDto::SettingsLocal => app::ProjectSettingsFile::SettingsLocal,
         }
     }
-}
-
-/// `app:warning` イベントのペイロード。送信自体は成功しているが、送信前チェックと
-/// 実際の送信実行の間に別セッションが割り込んだ可能性がある場合に通知する
-/// (native.md §3.2)。エラーではなく警告のため、`send_message` の戻り値ではなく
-/// イベントとして届ける。
-#[derive(Serialize, Clone)]
-pub struct AppWarningDto {
-    pub project: String,
-    pub expected_session_id: String,
-    pub actual_session_id: String,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -520,7 +506,7 @@ impl From<app::AppError> for AppErrorDto {
             app::AppError::NotFound(message) => ("not_found", message),
             app::AppError::Io(message) => ("io", message),
             app::AppError::InvalidInput(message) => ("invalid_input", message),
-            app::AppError::SessionStale(message) => ("session_stale", message),
+            app::AppError::SessionBusy(message) => ("session_busy", message),
             app::AppError::CliNotFound(message) => ("cli_not_found", message),
             app::AppError::CliFailed(message) => ("cli_failed", message),
             app::AppError::Timeout(message) => ("timeout", message),

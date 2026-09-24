@@ -1,4 +1,4 @@
-use app::{AgentGateway, AgentMode, AppError, SendRequest};
+use app::{AgentGateway, AgentMode, AppError, Continuation, SendRequest};
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, ExitStatus, Stdio};
@@ -42,6 +42,17 @@ impl ClaudeCliAgent {
     }
 }
 
+/// 起動する `claude` 実行ファイル。現状はPATH解決に任せているが、参照箇所を
+/// この1関数に閉じておく(Lab (PM)からの申し送り。issue #345)。アプリが
+/// 起動する `claude` はWinGet版(2.1.150)で固定されており、Desktop起源
+/// セッションへの`--resume`がこの版で応答まで通るかはLab (PoC:検証)が
+/// 確認中(B-0)。結果次第では絶対パスなど別の解決方法に差し替える可能性が
+/// あるため、呼び出し元は必ずこの関数経由にすること(直接 `"claude"` を
+/// 書かない)。
+fn claude_executable() -> &'static str {
+    "claude"
+}
+
 impl AgentGateway for ClaudeCliAgent {
     fn send(&self, req: SendRequest) -> Result<(), AppError> {
         if !req.cwd.is_dir() {
@@ -51,23 +62,22 @@ impl AgentGateway for ClaudeCliAgent {
             )));
         }
 
-        // continuation(Continuation::Continue)は現状単一のバリアントしか
-        // 存在しないため分岐は設けていない。送信対象が最新セッションと一致
-        // するかどうかは app::send_message が事前に検証済み。ここでは
-        // --continue でそのまま継続するのみで、失敗時に新規セッションへ
-        // 暗黙にフォールバックすることはしない(無言で別の会話が生まれる
-        // 事故を防ぐため)。
-        let command = build_send_message_command(&req.cwd, &req.text, req.mode);
+        let command = build_send_message_command(&req.cwd, &req.text, req.mode, &req.continuation);
         run_with_timeout(command, timeout_for(req.mode))?;
         Ok(())
     }
 }
 
 /// 送信用の `claude` コマンドを組み立てる。
-/// `--continue`(カレントディレクトリの最新の会話をそのまま継続)は常に付ける。
 ///
-/// `--continue` は `--resume <id>` と異なり entrypoint に関係なく機能する
-/// (Claude Desktop起源のセッションにも追記できる)ため、こちらを使う。
+/// `continuation`(`Continuation::Resume(session_id)`)で指定したIDへ
+/// `--resume <ID>` で追記する(issue #345)。旧実装の `--continue`
+/// (カレントディレクトリの最新の会話をそのまま継続)は、フォルダ内で
+/// 表示中以外のセッションが作られると誤って別の会話に追記してしまう
+/// ため撤廃した。`--resume <ID>` はIDで追記先を直接指定するため、この
+/// 種の誤爆が起きない(現行版では entrypoint に関係なく機能することを
+/// 確認済み。reports/claude-desktop-session-resume-limitation.md 追記
+/// 2026-09-23)。
 ///
 /// モードによる分岐:
 /// - `Chat`: `--tools ""` でツール実行(Bash/Edit等)を一切許可しない。
@@ -77,8 +87,13 @@ impl AgentGateway for ClaudeCliAgent {
 ///   plan モードは変更を伴う操作を提案するのみで実行しない(`--print` の
 ///   非対話実行では承認手段がないため、変更系操作は事実上常に未実行のまま
 ///   終わることを実機で確認済み)。
-fn build_send_message_command(cwd: &Path, text: &str, mode: AgentMode) -> Command {
-    let mut command = Command::new("claude");
+fn build_send_message_command(
+    cwd: &Path,
+    text: &str,
+    mode: AgentMode,
+    continuation: &Continuation,
+) -> Command {
+    let mut command = Command::new(claude_executable());
     command.current_dir(cwd);
     for var in DESKTOP_LINEAGE_ENV_VARS {
         command.env_remove(var);
@@ -91,7 +106,8 @@ fn build_send_message_command(cwd: &Path, text: &str, mode: AgentMode) -> Comman
             command.arg("--permission-mode").arg("plan");
         }
     }
-    command.arg("--continue");
+    let Continuation::Resume(session_id) = continuation;
+    command.arg("--resume").arg(session_id);
     command.arg("--print").arg(text);
     command
 }
@@ -180,7 +196,6 @@ fn run_with_timeout(mut command: Command, timeout: Duration) -> Result<String, A
 mod tests {
     use super::*;
     use app::AgentMode;
-    use app::Continuation;
 
     fn args_of(command: &Command) -> Vec<String> {
         command
@@ -192,23 +207,56 @@ mod tests {
     #[test]
     fn build_send_message_command_chat_mode_disables_all_tools() {
         let cwd = std::env::current_dir().unwrap();
-        let command = build_send_message_command(&cwd, "hello", AgentMode::Chat);
+        let command = build_send_message_command(
+            &cwd,
+            "hello",
+            AgentMode::Chat,
+            &Continuation::Resume("s1".to_string()),
+        );
         assert_eq!(
             args_of(&command),
-            vec!["--tools", "", "--continue", "--print", "hello"]
+            vec!["--tools", "", "--resume", "s1", "--print", "hello"]
         );
     }
 
     #[test]
     fn build_send_message_command_read_mode_uses_plan_permission_mode() {
         let cwd = std::env::current_dir().unwrap();
-        let command = build_send_message_command(&cwd, "hello", AgentMode::Read);
+        let command = build_send_message_command(
+            &cwd,
+            "hello",
+            AgentMode::Read,
+            &Continuation::Resume("s1".to_string()),
+        );
         assert_eq!(
             args_of(&command),
             vec![
                 "--permission-mode",
                 "plan",
-                "--continue",
+                "--resume",
+                "s1",
+                "--print",
+                "hello"
+            ]
+        );
+    }
+
+    #[test]
+    fn build_send_message_command_resumes_the_given_session_id() {
+        let cwd = std::env::current_dir().unwrap();
+        let command = build_send_message_command(
+            &cwd,
+            "hello",
+            AgentMode::Chat,
+            &Continuation::Resume("target-session".to_string()),
+        );
+        assert_eq!(
+            args_of(&command),
+            vec![
+                "--tools",
+                "",
+                "--resume",
+                "target-session",
                 "--print",
                 "hello"
             ]
@@ -218,7 +266,12 @@ mod tests {
     #[test]
     fn build_send_message_command_removes_desktop_lineage_env_vars() {
         let cwd = std::env::current_dir().unwrap();
-        let command = build_send_message_command(&cwd, "hello", AgentMode::Chat);
+        let command = build_send_message_command(
+            &cwd,
+            "hello",
+            AgentMode::Chat,
+            &Continuation::Resume("s1".to_string()),
+        );
         let removed: Vec<String> = command
             .get_envs()
             .filter(|(_, v)| v.is_none())
@@ -248,7 +301,7 @@ mod tests {
                 cwd: missing_cwd,
                 text: "hello".to_string(),
                 mode: AgentMode::Chat,
-                continuation: Continuation::Continue,
+                continuation: Continuation::Resume("s1".to_string()),
             })
             .expect_err("should fail when cwd is missing");
 
