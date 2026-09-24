@@ -89,7 +89,6 @@ const DEFS: ClassDef[] = [
       attr("id", "String"),
       attr("title", "String"),
       attr("modified_at", "u64"),
-      attr("is_latest", "bool"),
       attr("cwd", "Option<String>"),
       attr("git_branch", "Option<String>"),
     ],

@@ -155,12 +155,11 @@ const DEFS: ClassDef[] = [
     filePath: "apps/native/crates/domain/src/role.rs",
   },
   {
-    name: { physical: "SessionSummary", logical: "SessionSummary", description: "セッション一覧(ビューア左ペイン)表示用の1件分。issue #33 / #104" },
+    name: { physical: "SessionSummary", logical: "SessionSummary", description: "セッション一覧(ビューア左ペイン)表示用の1件分。1件 = 1セッション(セッションID = 会話ファイル)で、フォークや圧縮で別のIDのファイルに分かれた会話は別のセッションとして並ぶ。issue #33 / #104 / #369" },
     attributes: [
       attr("id", "String"),
       attr("title", "String"),
       attr("modified_at_ms", "u64"),
-      attr("is_latest", "bool"),
       attr("cwd", "Option<String>"),
       attr("git_branch", "Option<String>"),
     ],
@@ -328,7 +327,7 @@ const DEFS: ClassDef[] = [
     filePath: "apps/native/crates/domain/src/hub_tuning.rs",
   },
   {
-    name: { physical: "ViewerTabs", logical: "ViewerTabs", description: "ビューアで開いているセッションタブの並び(プロファイルごとに別ファイル viewer-tabs/<プロファイルID>.json)。settings.json には入れない(見た目の状態のため)。選択中のタブは保存しない(URL で持つ)。issue #353" },
+    name: { physical: "ViewerTabs", logical: "ViewerTabs", description: "ビューアで開いているセッションタブの並び(プロファイルごとに別ファイル viewer-tabs/<プロファイルID>.json)。settings.json には入れない(見た目の状態のため)。選択中のタブは保存しない(URL で持つ)。スキーマ version は 2(#369 でタブのキーを series_key から session_id に改めた。v1 からのマイグレーションは infra にある)。issue #353 / #369" },
     attributes: [
       attr("version", "u32"),
       attr("tabs", "Vec<ViewerTab>"),
@@ -338,10 +337,10 @@ const DEFS: ClassDef[] = [
     filePath: "apps/native/crates/domain/src/viewer_tabs.rs",
   },
   {
-    name: { physical: "ViewerTab", logical: "ViewerTab", description: "ビューアのセッションタブ1件。どのセッションのタブかを特定するキー(project, series_key)だけを持つ。series_key はフォーク系列の鍵(root_uuid、無ければ session_id)で、フォークしても変わらないので、保存したタブが同じ会話を指し続ける。issue #353" },
+    name: { physical: "ViewerTab", logical: "ViewerTab", description: "ビューアのセッションタブ1件。どのセッションのタブかを特定するキー(project, session_id)だけを持つ。1つのタブ = 1セッション(セッションID = 会話ファイル)で、フォークや圧縮で別のIDのファイルに分かれた会話は別のセッションなので別のタブになる(#353 で入れたフォーク系列の鍵 series_key は #369 で廃止)。issue #353 / #369" },
     attributes: [
       attr("project", "String"), // プロジェクトフォルダ名(~/.claude/projects/ 直下)
-      attr("series_key", "String"), // フォーク系列の鍵(root_uuid、無ければ session_id)
+      attr("session_id", "String"), // セッションID(会話ファイル名の拡張子を除いたもの)
     ],
     position: { x: 2450, y: 2250 },
     filePath: "apps/native/crates/domain/src/viewer_tab.rs",
