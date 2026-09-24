@@ -259,8 +259,10 @@ body,
   background: var(--state-hover);
 }
 
-/* 画面左の一覧ペイン(固定幅+縦スクロール)。設定のプロファイル一覧(issue #74)。
-   ビューアのセッション一覧はヘッダのタブに移した(issue #348)。 */
+/* 画面左の一覧ペイン(固定幅+縦スクロール)。ビューアのセッション一覧と
+   設定のプロファイル一覧(issue #74)で骨格を共有する。ビューアのセッション一覧は
+   #348 でヘッダのタブに移したが、#379 で左ペインの縦一覧へ戻した。 */
+.project-list,
 .settings-profile-pane {
   width: 320px;
   flex-shrink: 0;
@@ -301,7 +303,90 @@ body,
   cursor: pointer;
 }
 
+.session-item-title,
 .settings-profile-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-item-updated {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+/* 左ペインの「選んだセッション」の一覧(issue #379)。「+」は一覧の先頭。行は
+   選択用のボタン(`.project-item`)と、右上に重ねた「×」(外す)。ボタンは入れ子に
+   できないので、行(`.session-list-row`)の中で並べて × を重ねる。 */
+.session-list-add {
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  border: 1px dashed var(--border-default);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 10px 14px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.session-list-add:hover {
+  background-color: var(--state-hover);
+  color: var(--text-primary);
+}
+
+.session-list-add:focus-visible,
+.session-list-close:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.session-list-row {
+  position: relative;
+}
+
+/* × の分だけ右に余白を取り、タイトル・日時・フォルダ名と重ならないようにする。 */
+.session-list-item {
+  padding-right: calc(var(--space-6) + var(--space-3));
+}
+
+.session-list-close {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-6);
+  height: var(--space-6);
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-4);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.session-list-close svg {
+  width: var(--icon-16);
+  height: var(--icon-16);
+}
+
+.session-list-close:hover {
+  background: var(--color-sumi-100);
+  color: var(--text-primary);
+}
+
+.session-list-close:active {
+  background: var(--color-sumi-200);
+}
+
+/* 対象フォルダが複数のときだけ添える、そのセッションのフォルダ名(見分け用)。 */
+.session-item-folder {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -345,8 +430,7 @@ body,
    ビューアの操作(表示の切り替え・再読み込み・保存など)をまとめて置く。
    サイドメニュー・セッション一覧の下には回り込ませない(ページ全体のフッターには
    しない)。以前はヘッダの右端にあった(issue #257)。
-   ヘッダ(`.session-conversation-head`)と同じ重なり順にして、吹き出しメニューが
-   コンテンツの上に出るようにする。 */
+   重なり順を上げて、吹き出しメニューがコンテンツの上に出るようにする。 */
 .viewer-footer {
   position: relative;
   z-index: 40;
@@ -361,65 +445,6 @@ body,
 .viewer-footer .viewer-toolbar-menu {
   top: auto;
   bottom: calc(100% + 6px);
-}
-
-/* ビューアの上部(ヘッダ): 会話ビューのときだけセッションのタブを並べる
-   (issue #348。プロファイル名(#275)は消してウィンドウタイトルへ移した)。
-   ウィンドウの左端から右端まで届き、下罫線も全幅で通る(issue #291)。
-   下罫線は border ではなく内側の影で描き、選択中タブの下線(3px)をその上に
-   重ねる(Tabs 部品の仕様と同じ描き方。#289)。タブ列が収まらないときは
-   Tabs 自身が折り返さず横スクロールする。 */
-.session-conversation-head {
-  position: relative;
-  z-index: 40;
-  flex-shrink: 0;
-  display: flex;
-  align-items: flex-end;
-  /* Tabs(small)の高さ(40px)に合わせる。会話以外のビュー(タブなし)へ切り替えても
-     サイドメニュー・コンテンツの位置がずれないように。 */
-  min-height: 40px;
-  box-shadow: inset 0 -1px 0 var(--border-default);
-}
-
-/* ヘッダの中のタブ列は、ヘッダ自身が下罫線を持つので自分の罫線は描かない。
-   横幅いっぱいに広げ、左右の余白はヘッダの端に合わせて詰める。 */
-.session-conversation-head .tabs {
-  flex: 1;
-  min-width: 0;
-  padding: 0 var(--space-2);
-  box-shadow: none;
-  /* 横スクロールバーは細くして、ヘッダの高さを食わないようにする。 */
-  scrollbar-width: thin;
-}
-
-/* タブ列の左端の「+」(issue #353)。押すとセッションを選ぶモーダルを開く。
-   タブ(small)と同じ高さの正方形で、タブと同じ配色の変化(ホバーで草色-50)。 */
-.session-tab-add {
-  flex-shrink: 0;
-  width: 40px;
-  height: 40px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  font-family: inherit;
-  font-size: 1.25rem;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.session-tab-add:hover {
-  background: var(--color-kusairo-50);
-  color: var(--text-primary);
-}
-
-.session-tab-add:active {
-  background: var(--color-kusairo-100);
-}
-
-.session-tab-add:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: -2px;
 }
 
 /* ビューアの最左端のサイドメニュー(issue #263)。アイコンのみ(名前は
