@@ -986,16 +986,14 @@ pub fn retain_enumerated_parsed_sessions(
     sessions.retain(|p| enumerated_paths.contains(&p.conversation_file_path));
 }
 
-/// ビューアのウィンドウの初期タイトル(issue #348)。「<プロファイル名> - <フォルダ名>」で、
-/// 対象フォルダが複数のときは「 / 」でつなぎ、無いときはプロファイル名だけ。
-/// ウィンドウ生成時(`open_profile_window`)の値で、その後の設定変更への追従は
-/// フロント(`Layout.tsx` の `viewerWindowTitle`。同じ規則)が `setTitle` で行う。
-pub fn viewer_window_title(profile_name: &str, selected_project_folders: &[String]) -> String {
-    if selected_project_folders.is_empty() {
-        profile_name.to_string()
-    } else {
-        format!("{profile_name} - {}", selected_project_folders.join(" / "))
-    }
+/// ビューアのウィンドウの初期タイトル。プロファイル名だけ(issue #377。issue #348 で
+/// 「<プロファイル名> - <フォルダ名を「 / 」でつないだもの>」にしていたが、対象フォルダが
+/// 増えると長大になり意味も読み取れないため、フォルダ名の列挙をやめた。対象フォルダは
+/// 設定画面で見られる)。ウィンドウ生成時(`open_profile_window`)の値で、その後の
+/// プロファイル名の変更への追従はフロント(`Layout.tsx` の `viewerWindowTitle`。同じ規則)が
+/// `setTitle` で行う。
+pub fn viewer_window_title(profile_name: &str) -> String {
+    profile_name.to_string()
 }
 
 /// 削除された会話ファイルの `ParsedSession` を取り除く(ファイル監視による差分
@@ -2333,15 +2331,12 @@ mod tests {
     }
 
     #[test]
-    fn viewer_window_title_joins_profile_name_and_folders() {
-        assert_eq!(viewer_window_title("yaoyorozu", &[]), "yaoyorozu");
+    fn viewer_window_title_is_the_profile_name_only() {
+        // issue #377: 対象フォルダの数によらずプロファイル名だけ(フォルダ名は列挙しない)。
+        assert_eq!(viewer_window_title("yaoyorozu"), "yaoyorozu");
         assert_eq!(
-            viewer_window_title("yaoyorozu", &["C--Users-yanqi-prj-yaoyorozu".to_string()]),
-            "yaoyorozu - C--Users-yanqi-prj-yaoyorozu"
-        );
-        assert_eq!(
-            viewer_window_title("p", &["a".to_string(), "b".to_string()]),
-            "p - a / b"
+            viewer_window_title("メイン プロファイル"),
+            "メイン プロファイル"
         );
     }
 
