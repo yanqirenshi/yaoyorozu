@@ -12,10 +12,11 @@ import type { MarkdownViewer } from "@yanqirenshi/markdown.sitter";
 // `foldable={false}` は効かない(要素が DOM に接続される際、コンポーネント
 // 自身の connectedCallback が「属性が無ければ既定で足す」処理を先に行うため、
 // 接続前に設定した false が接続直後に上書きされる。実機で確認)。接続後に
-// 効く useEffect で明示的に設定し直す。0.1.3(issue #372)時点でも
+// 効く useEffect で明示的に設定し直す。0.1.4(issue #375)時点でも
 // markdown-viewer.js の該当ロジック(connectedCallback)は変更されておらず、
 // この回避策は引き続き必要(0.1.1→0.1.2はテーブルセルの padding、0.1.2→0.1.3は
-// `marked.parse` の `breaks: true`=単独の改行を <br> にする、のみ)。
+// `marked.parse` の `breaks: true`=単独の改行を <br> にする、0.1.3→0.1.4は
+// スタイルのテーブル幅 `width: auto; max-width: 100%`=内容に合わせた幅、のみ)。
 type MessageTextProps = {
   text: string;
 };
