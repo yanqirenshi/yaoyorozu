@@ -84,20 +84,14 @@ const SCOPE_INSUFFICIENT_MESSAGE =
 
 const DISCARD_CONFIRM_MESSAGE = "編集内容を破棄しますか?保存していない変更は失われます。";
 
-// セッションタブの鍵(issue #348・#353)。「フォルダ|系列の鍵」。
-// 系列の鍵はフォーク系列の `root_uuid`(取れなければセッション ID 自身)。
-// 一覧は系列ごとの最新ファイルだけを返し(#345)、フォークすると最新ファイルの
-// セッション ID が変わるため、セッション ID ではなく系列の鍵をタブの同一性
-// (と保存するキー)にする: フォークしてもタブは同じ会話を指し続ける。
-// フォルダ名・セッション ID・root_uuid は英数字と `-` のみで、`|` は含まれない。
+// セッションタブの鍵(issue #348・#353・#369)。「フォルダ|セッション ID」。
+// 1つのタブ = 1セッション(セッション ID = 会話ファイル)。フォークや圧縮で別の
+// ID のファイルに分かれた会話は、別のセッション(別のタブ)として扱う。
+// フォルダ名・セッション ID は英数字と `-` のみで、`|` は含まれない。
 const SESSION_TAB_SEPARATOR = "|";
 
-function seriesKeyOf(s: SessionSummaryDto): string {
-  return s.root_uuid ?? s.id;
-}
-
-function sessionTabKey(folder: string, seriesKey: string): string {
-  return `${folder}${SESSION_TAB_SEPARATOR}${seriesKey}`;
+function sessionTabKey(folder: string, sessionId: string): string {
+  return `${folder}${SESSION_TAB_SEPARATOR}${sessionId}`;
 }
 
 type SessionsPageProps = {
@@ -122,12 +116,6 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const [pickerOpen, setPickerOpen] = useState(false);
   // タブの保存は順序どおりに実行する(連続操作で古い並びが後勝ちしないように)。
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
-  // 選択中セッションの系列の鍵(フォーク後の追従用。下記の effect)。
-  const lastSelectedSeriesRef = useRef<{
-    project: string;
-    sessionId: string;
-    seriesKey: string;
-  } | null>(null);
   const [messages, setMessages] = useState<MessageDto[]>([]);
   // `refreshSessionInPlace` が最新の読み込み件数を参照するための ref(issue #314)。
   // state をそのまま依存配列に入れると、追記のたびに購読(`onSessionChanged` 等)の
@@ -347,30 +335,6 @@ function SessionsPage({ nav }: SessionsPageProps) {
       });
   }, [resolvedProfileId]);
 
-  // フォークへの追従(issue #353)。表示中のセッションがフォークされて一覧の最新
-  // ファイルが別の ID に変わったとき(=表示中の ID が一覧から消え、同じ系列の
-  // 鍵の別 ID が現れたとき)、URL の session を新しい ID へ付け替える。タブは
-  // 系列の鍵で同一性を持つのでタブ自体は変わらず、開いている会話だけを最新
-  // ファイルへ移す。
-  useEffect(() => {
-    if (!projectParam || !sessionParam) return;
-    const group = sessionGroups.find((g) => g.folder === projectParam);
-    if (!group) return;
-    const current = group.sessions.find((s) => s.id === sessionParam);
-    if (current) {
-      lastSelectedSeriesRef.current = {
-        project: projectParam,
-        sessionId: sessionParam,
-        seriesKey: seriesKeyOf(current),
-      };
-      return;
-    }
-    const last = lastSelectedSeriesRef.current;
-    if (!last || last.project !== projectParam || last.sessionId !== sessionParam) return;
-    const successor = group.sessions.find((s) => seriesKeyOf(s) === last.seriesKey);
-    if (successor) nav.setProjectAndSession(projectParam, successor.id);
-  }, [sessionGroups, projectParam, sessionParam, nav.setProjectAndSession]);
-
   // 設定の変更(設定画面でのプロファイル切り替え等)で対象フォルダ・GitHubプロジェクトが変わった
   // ことの通知。表示中のフォルダが新しいプロファイルの対象から外れた場合は
   // 選択を解除する(issue #72)。
@@ -453,12 +417,12 @@ function SessionsPage({ nav }: SessionsPageProps) {
       .finally(() => setMovingItemId(null));
   };
 
-  // 一覧の全セッション(新しい順。フォルダをまたぐ)。系列の鍵つき(issue #353)。
+  // 一覧の全セッション(新しい順。フォルダをまたぐ)。
   const allSessions = sessionGroups
     .flatMap((group) => group.sessions.map((session) => ({ folder: group.folder, session })))
     .sort((a, b) => b.session.modified_at - a.session.modified_at);
   const sessionByTabKey = new Map(
-    allSessions.map(({ folder, session }) => [sessionTabKey(folder, seriesKeyOf(session)), { folder, session }]),
+    allSessions.map(({ folder, session }) => [sessionTabKey(folder, session.id), { folder, session }]),
   );
 
   // ヘッダのセッションタブ(issue #348)。自分で選んで開いたものだけを、開いた
@@ -466,8 +430,8 @@ function SessionsPage({ nav }: SessionsPageProps) {
   // ラベルは以前の一覧と同じタイトル。同名のセッションを見分けられるよう、複数
   // フォルダのときはツールチップにフォルダ名を含める。日時はツールチップへ。
   const openTabs = (viewerTabs ?? []).flatMap((tab) => {
-    const hit = sessionByTabKey.get(sessionTabKey(tab.project, tab.series_key));
-    return hit ? [{ key: sessionTabKey(tab.project, tab.series_key), ...hit }] : [];
+    const hit = sessionByTabKey.get(sessionTabKey(tab.project, tab.session_id));
+    return hit ? [{ key: sessionTabKey(tab.project, tab.session_id), ...hit }] : [];
   });
   const sessionTabs: TabItem[] = openTabs.map(({ key, folder, session }) => ({
     id: key,
@@ -483,7 +447,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
     ?.sessions.find((s) => s.id === sessionParam);
   const selectedTabValue =
     projectParam && selectedSessionSummary
-      ? sessionTabKey(projectParam, seriesKeyOf(selectedSessionSummary))
+      ? sessionTabKey(projectParam, selectedSessionSummary.id)
       : "";
 
   // タブの並びを更新して保存する(追加・閉じるのたびに自動保存)。
@@ -506,7 +470,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
     setPickerOpen(false);
     const added = keys.flatMap((key) => {
       const hit = sessionByTabKey.get(key);
-      return hit ? [{ tab: { project: hit.folder, series_key: seriesKeyOf(hit.session) }, hit }] : [];
+      return hit ? [{ tab: { project: hit.folder, session_id: hit.session.id }, hit }] : [];
     });
     if (added.length === 0) return;
     persistViewerTabs([...(viewerTabs ?? []), ...added.map((a) => a.tab)]);
@@ -518,7 +482,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
   // だったら選択を外して 0 件の案内へ戻る。
   const handleCloseSessionTab = (key: string) => {
     persistViewerTabs(
-      (viewerTabs ?? []).filter((tab) => sessionTabKey(tab.project, tab.series_key) !== key),
+      (viewerTabs ?? []).filter((tab) => sessionTabKey(tab.project, tab.session_id) !== key),
     );
     if (key !== selectedTabValue) return;
     const index = openTabs.findIndex((tab) => tab.key === key);
@@ -531,7 +495,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
   };
 
   const pickerCandidates: SessionPickerCandidate[] = allSessions.map(({ folder, session }) => ({
-    key: sessionTabKey(folder, seriesKeyOf(session)),
+    key: sessionTabKey(folder, session.id),
     folder,
     title: session.title,
     modifiedAt: session.modified_at,
@@ -540,8 +504,8 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const selectedSummary = sessionGroups
     .find((g) => g.folder === projectParam)
     ?.sessions.find((s) => s.id === sessionParam);
-  // `--resume <ID>` 化(issue #345)により、一覧に出る系列先頭のセッションは
-  // すべて送信対象にできる(旧「最新のみ送信可」の制約は撤廃)。
+  // `--resume <ID>` 化(issue #345)により、一覧に出るセッションはすべて送信対象に
+  // できる(表示中のセッション ID へ送る。旧「最新のみ送信可」の制約は撤廃)。
   const canSend = !!selectedSummary;
 
   // ウィンドウレジストリ(issue #83)へこのウィンドウの表示状態を報告する。
