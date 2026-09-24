@@ -60,7 +60,7 @@ body,
   height: 100vh;
   border: 1px solid var(--border-default);
   box-sizing: border-box;
-  /* 各画面が自前のスクロール領域(`.project-list` 等)を持つ前提のため、
+  /* 各画面が自前のスクロール領域(`.settings-profile-pane` 等)を持つ前提のため、
      外枠自体はどちらの方向にもスクロールさせない(issue #109で判明: 縦方向の
      指定が漏れていたため、内容が縦に長くなるページ(ハブのグラフ等)で
      ウィンドウ全体に不要な縦スクロールバーが出ていた)。 */
@@ -259,9 +259,8 @@ body,
   background: var(--state-hover);
 }
 
-/* 画面左の一覧ペイン(固定幅+縦スクロール)。ビューアのセッション一覧と
-   設定のプロファイル一覧(issue #74)で骨格を共有する。 */
-.project-list,
+/* 画面左の一覧ペイン(固定幅+縦スクロール)。設定のプロファイル一覧(issue #74)。
+   ビューアのセッション一覧はヘッダのタブに移した(issue #348)。 */
 .settings-profile-pane {
   width: 320px;
   flex-shrink: 0;
@@ -279,37 +278,10 @@ body,
   padding-bottom: 96px;
 }
 
-.project-list h2,
 .settings-profile-pane h2 {
   font-size: 1rem;
   font-weight: 400;
   margin: 0 0 8px;
-}
-
-.session-group {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.session-group-heading {
-  font-size: 0.85rem;
-  font-weight: 400;
-  color: var(--text-secondary);
-  margin: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-group-heading-prefix {
-  color: var(--border-default);
-}
-
-.session-group-empty {
-  font-size: 0.85rem;
-  color: var(--text-secondary);
-  margin: 0;
 }
 
 .project-item {
@@ -329,16 +301,10 @@ body,
   cursor: pointer;
 }
 
-.session-item-title,
 .settings-profile-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.session-item-updated {
-  font-size: 0.75rem;
-  color: var(--text-secondary);
 }
 
 .project-item:hover {
@@ -397,30 +363,63 @@ body,
   bottom: calc(100% + 6px);
 }
 
-/* ビューアの上部: プロファイル名(左)とページ内ツールバー(右。issue #257)。
-   ウィンドウの左端から右端まで届き、下罫線も全幅で通る(issue #291)。 */
+/* ビューアの上部(ヘッダ): 会話ビューのときだけセッションのタブを並べる
+   (issue #348。プロファイル名(#275)は消してウィンドウタイトルへ移した)。
+   ウィンドウの左端から右端まで届き、下罫線も全幅で通る(issue #291)。
+   下罫線は border ではなく内側の影で描き、選択中タブの下線(3px)をその上に
+   重ねる(Tabs 部品の仕様と同じ描き方。#289)。タブ列が収まらないときは
+   Tabs 自身が折り返さず横スクロールする。 */
 .session-conversation-head {
   position: relative;
   z-index: 40;
   flex-shrink: 0;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  border-bottom: 1px solid var(--border-default);
+  align-items: flex-end;
+  /* Tabs(small)の高さ(40px)に合わせる。会話以外のビュー(タブなし)へ切り替えても
+     サイドメニュー・コンテンツの位置がずれないように。 */
+  min-height: 40px;
+  box-shadow: inset 0 -1px 0 var(--border-default);
 }
 
-/* ヘッダ左のプロファイル名(issue #275)。表示のみ。長い名前は省略する。 */
-.session-conversation-title {
+/* ヘッダの中のタブ列は、ヘッダ自身が下罫線を持つので自分の罫線は描かない。
+   横幅いっぱいに広げ、左右の余白はヘッダの端に合わせて詰める。 */
+.session-conversation-head .tabs {
+  flex: 1;
   min-width: 0;
-  margin: 0;
-  padding: 0 0 0 16px;
-  font-size: 0.95rem;
-  font-weight: 600;
+  padding: 0 var(--space-2);
+  box-shadow: none;
+  /* 横スクロールバーは細くして、ヘッダの高さを食わないようにする。 */
+  scrollbar-width: thin;
+}
+
+/* タブ列の左端の「+」(issue #353)。押すとセッションを選ぶモーダルを開く。
+   タブ(small)と同じ高さの正方形で、タブと同じ配色の変化(ホバーで草色-50)。 */
+.session-tab-add {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.session-tab-add:hover {
+  background: var(--color-kusairo-50);
   color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.session-tab-add:active {
+  background: var(--color-kusairo-100);
+}
+
+.session-tab-add:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 /* ビューアの最左端のサイドメニュー(issue #263)。アイコンのみ(名前は
@@ -690,6 +689,97 @@ body,
   background: transparent;
   color: var(--text-disabled);
   cursor: not-allowed;
+}
+
+/* 「×」つきのタブ(issue #353。Tabs の onClose を指定したときだけ)。見た目の仕様の
+   正は uiTab.ts の `TAB_CLOSE`(issue #358)。タブと × はボタンの入れ子にできない
+   ため、セルの中で並べて × をタブの右端に重ねる。 */
+.tab-cell {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  /* × の線の色はタブの文字色を継ぐ(`.tab-close` は color: inherit)。× はタブの
+     兄弟なので、タブの状態に応じたタブの文字色をセルに持たせて揃える。 */
+  color: var(--text-secondary);
+}
+
+/* ホバー(タブ本体でも × の上でも)。無効のタブは除く。 */
+.tab-cell:hover:not(:has(> .tab:disabled)) {
+  color: var(--text-primary);
+}
+
+/* × の上にポインタがあるときも、タブ本体のホバーと同じ背景・文字色にする
+   (仕様では × はタブの中にあり、× の上でもタブのホバーが続くため)。 */
+.tab-cell:hover > .tab:not(:disabled) {
+  background: var(--color-kusairo-50);
+  color: var(--text-primary);
+}
+
+/* 選択中(ホバー中も)は草色-800。上のホバーより後に置いて勝たせる。 */
+.tab-cell:has(> .tab[aria-selected="true"]:not(:disabled)) {
+  color: var(--color-kusairo-800);
+}
+
+.tab-cell:hover > .tab[aria-selected="true"]:not(:disabled) {
+  color: var(--color-kusairo-800);
+}
+
+.tab-cell:has(> .tab:disabled) {
+  color: var(--text-disabled);
+}
+
+/* × の分だけ右の余白を広げる(ラベルと重ならないように)。右の余白 = タブの左右
+   パディング + × のクリック領域 + ラベルとの間隔(`--space-1`)。 */
+.tabs-small .tab.tab-closable {
+  padding-right: calc(var(--space-3) + var(--space-6) + var(--space-1));
+}
+
+.tabs-medium .tab.tab-closable {
+  padding-right: calc(var(--space-4) + var(--space-6) + var(--space-1));
+}
+
+.tab-close {
+  position: absolute;
+  top: 0;
+  /* 選択中の下線(3px)の上の領域で上下中央に置く。 */
+  bottom: 3px;
+  margin: auto 0;
+  /* × の右側の余白は、タブの左右パディングと同じ。 */
+  right: var(--space-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-6);
+  height: var(--space-6);
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-4);
+  background: transparent;
+  /* 線の色はタブの文字色を継ぐ。状態で変わるのは背景だけ。 */
+  color: inherit;
+  cursor: pointer;
+}
+
+.tabs-medium .tab-close {
+  right: var(--space-4);
+}
+
+.tab-close svg {
+  width: var(--icon-16);
+  height: var(--icon-16);
+}
+
+.tab-close:hover {
+  background: var(--color-sumi-100);
+}
+
+.tab-close:active {
+  background: var(--color-sumi-200);
+}
+
+.tab-close:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .claude-md-pane {
@@ -1296,6 +1386,111 @@ body,
   color: var(--surface-base);
   background-color: var(--semantic-error-fg);
   cursor: pointer;
+}
+
+/* タブに出すセッションを選ぶモーダル(issue #353)。プロファイル削除の確認と同じ
+   `settings-dialog` を土台に、幅を広げ、一覧は枠の中でスクロールさせる。 */
+.session-picker {
+  width: min(640px, calc(100vw - 32px));
+  max-width: none;
+}
+
+.session-picker-body {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 96px);
+  box-sizing: border-box;
+}
+
+.session-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.session-picker-head h3 {
+  margin: 0;
+}
+
+.session-picker-close {
+  border: none;
+  background: none;
+  font-size: 1.4rem;
+  line-height: 1;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.session-picker-close:hover {
+  color: var(--text-primary);
+}
+
+.session-picker-search {
+  box-sizing: border-box;
+  width: 100%;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.9rem;
+}
+
+.session-picker-list {
+  flex: 1;
+  min-height: 0;
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+}
+
+.session-picker-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.session-picker-item:hover:not(.disabled) {
+  background: var(--color-kusairo-50);
+}
+
+.session-picker-item.selected {
+  background: var(--color-kusairo-100);
+}
+
+/* 追加済み(すでにタブにあるもの)は選べない表示。 */
+.session-picker-item.disabled {
+  color: var(--text-disabled);
+  cursor: not-allowed;
+}
+
+.session-picker-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.session-picker-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-picker-meta {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.session-picker-item.disabled .session-picker-meta {
+  color: var(--text-disabled);
 }
 
 /* 元データ(jsonl の1行)のモーダル(issue #313)。プロファイル削除の確認と同じ

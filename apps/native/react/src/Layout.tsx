@@ -29,14 +29,26 @@ const DEFAULT_WINDOW_TITLE = "YAOYOROZU";
 
 // プロファイルを指定した別ウィンドウ(`/profiles/:id`)のタイトルは
 // 「<プロファイル名> - <ページ名>」にして、どのプロファイルのウィンドウかを
-// 区別できるようにする(issue #76)。新しいウィンドウは常にビューア
-// (`/profiles/<id>`。open_profile_window)を開く。`/profiles*` はパス
-// パラメータを含むため完全一致ではなくプレフィックス判定にする(issue #88)。
+// 区別できるようにする(issue #76)。ただしビューアは、ページ名(「ビューア」)の
+// 代わりに対象フォルダ名を出す(issue #348。下記 `viewerWindowTitle`)。
 function pageLabelForPath(pathname: string): string {
   if (pathname === "/settings") return "設定";
   if (pathname === "/claude") return "Claude";
-  if (pathname === "/profiles" || pathname.startsWith("/profiles/")) return "ビューア";
   return DEFAULT_WINDOW_TITLE;
+}
+
+// ビューア(`/profiles/:id`。パスパラメータを含むため完全一致ではなく
+// プレフィックス判定。issue #88)のウィンドウタイトル(issue #348)。
+// 「<プロファイル名> - <フォルダ名>」。対象フォルダが複数のときは「 / 」でつなぎ、
+// 無いときはプロファイル名だけ。Rust 側の初期タイトル(`app::viewer_window_title`。
+// ウィンドウ生成時)と同じ規則で、設定変更(対象フォルダ・プロファイル名)には
+// ここで追従する。
+function isViewerPath(pathname: string): boolean {
+  return pathname === "/profiles" || pathname.startsWith("/profiles/");
+}
+
+function viewerWindowTitle(profileName: string, folders: string[]): string {
+  return folders.length > 0 ? `${profileName} - ${folders.join(" / ")}` : profileName;
 }
 
 // AppDock(グローバルメニュー)は全画面共通のためレイアウト側に置く
@@ -49,6 +61,8 @@ function Layout() {
   const [pageItems, setPageItems] = useState<PageDockItem[]>([]);
   const [corruptionWarning, setCorruptionWarning] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<ProfileSummaryDto[]>([]);
+  // このウィンドウのプロファイルの対象フォルダ(ビューアのタイトルに出す。issue #348)。
+  const [targetFolders, setTargetFolders] = useState<string[]>([]);
 
   useEffect(() => {
     // 設定ファイルの破損は起動直後(まだ /settings にいるとは限らない)に
@@ -68,18 +82,21 @@ function Layout() {
       ? profiles.find((p) => p.id === windowProfileId)?.name
       : null;
     const title = profileName
-      ? `${profileName} - ${pageLabelForPath(location.pathname)}`
+      ? isViewerPath(location.pathname)
+        ? viewerWindowTitle(profileName, targetFolders)
+        : `${profileName} - ${pageLabelForPath(location.pathname)}`
       : (WINDOW_TITLE_BY_PATH[location.pathname] ?? DEFAULT_WINDOW_TITLE);
     void getCurrentWindow().setTitle(title);
-  }, [location.pathname, windowProfileId, profiles]);
+  }, [location.pathname, windowProfileId, profiles, targetFolders]);
 
   // プロファイル一覧は別ウィンドウのタイトル(「<プロファイル名> - <ページ名>」)
   // に使う。全画面共通のため Layout 自身が取得する(issue #72・#76)。
   useEffect(() => {
     const loadProfiles = () => {
-      getSettings()
+      getSettings(windowProfileId)
         .then((settings) => {
           setProfiles(settings.profiles);
+          setTargetFolders(settings.selected_project_folders);
         })
         .catch((e) => console.error(e));
     };
@@ -88,7 +105,7 @@ function Layout() {
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
     };
-  }, []);
+  }, [windowProfileId]);
 
   // ナビトリガーは即アクション型の丸アイコン。表示中のページ自身の分も含めて
   // 常に同じ並び・位置で出す(issue #253。ページごとに項目がずれない=位置を

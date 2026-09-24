@@ -11,13 +11,13 @@ use dto::{
     HubLayoutDto, HubTuningDto, MessageImageDto, NodePositionDto, PcDto, ProfileSummaryDto,
     ProjectDto, ProjectItemsPageDto, ProjectSettingsFileDto, RuleDto, RuleSummaryDto,
     SessionChangedEventDto, SessionSummaryDto, SettingsCorruptedEventDto, SettingsDto,
-    SettingsInputDto, SkillDto, SkillSummaryDto, WindowStateDto, WindowTabDto,
+    SettingsInputDto, SkillDto, SkillSummaryDto, ViewerTabDto, WindowStateDto, WindowTabDto,
 };
 use infra::{
     ClaudeCliAgent, FileClaudeDirStore, FileClaudeMdStore, FileClaudeSettingsStore,
     FileHubLayoutStore, FileHubTuningStore, FileProjectSettingsStore, FileRulesStore,
     FileRunningSessionSource, FileSettingsStore, FileSkillsStore, FileSystemRepository,
-    GithubApiClient, GithubAuthLog, KeyringTokenStore,
+    FileViewerTabsStore, GithubApiClient, GithubAuthLog, KeyringTokenStore,
 };
 use state::{resolve_effective_projects_dir, AppState};
 use std::path::PathBuf;
@@ -441,17 +441,17 @@ async fn open_profile_window(
     state: tauri::State<'_, Mutex<AppState>>,
     profile_id: String,
 ) -> Result<(), AppErrorDto> {
-    let profile_name = {
+    // ウィンドウの初期タイトル(issue #348)。設定変更への追従はフロントが行う。
+    let title = {
         let guard = state.lock().await;
-        app::resolve_profile(&guard.settings, Some(profile_id.as_str()))?
-            .name
-            .clone()
+        let profile = app::resolve_profile(&guard.settings, Some(profile_id.as_str()))?;
+        app::viewer_window_title(&profile.name, &profile.selected_project_folders)
     };
 
     let label = format!("profile-{}", uuid::Uuid::new_v4());
     let url = tauri::WebviewUrl::App(format!("index.html#/profiles/{profile_id}").into());
     tauri::WebviewWindowBuilder::new(&app, label, url)
-        .title(format!("{profile_name} - ビューア"))
+        .title(title)
         .inner_size(800.0, 600.0)
         .drag_and_drop(false)
         .build()
@@ -640,6 +640,63 @@ fn hub_tuning_path(app: &tauri::AppHandle) -> Result<PathBuf, AppErrorDto> {
         .app_data_dir()
         .map(|dir| dir.join("hub-tuning.json"))
         .map_err(|e| AppErrorDto::from(app::AppError::Io(e.to_string())))
+}
+
+/// ビューアのセッションタブの保存先ディレクトリ(`app_data_dir/viewer-tabs/`。
+/// プロファイルごとに `<プロファイルID>.json`。issue #353)。`AppState` には
+/// 持たせない(見た目の状態で `settings:updated` を発火させないため)。
+fn viewer_tabs_dir(app: &tauri::AppHandle) -> Result<PathBuf, AppErrorDto> {
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join("viewer-tabs"))
+        .map_err(|e| AppErrorDto::from(app::AppError::Io(e.to_string())))
+}
+
+/// プロファイルのセッションタブの並びを返す(issue #353)。ファイルが無い/壊れて
+/// いる場合は空。
+#[tauri::command]
+async fn get_viewer_tabs(
+    app: tauri::AppHandle,
+    profile_id: String,
+) -> Result<Vec<ViewerTabDto>, AppErrorDto> {
+    let dir = viewer_tabs_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || -> Result<Vec<ViewerTabDto>, app::AppError> {
+        let store = FileViewerTabsStore::new(dir);
+        let tabs = app::load_viewer_tabs(&store, &profile_id)?;
+        Ok(tabs.tabs.into_iter().map(Into::into).collect())
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
+}
+
+/// プロファイルのセッションタブの並びを丸ごと保存する(issue #353)。
+#[tauri::command]
+async fn save_viewer_tabs(
+    app: tauri::AppHandle,
+    profile_id: String,
+    tabs: Vec<ViewerTabDto>,
+) -> Result<(), AppErrorDto> {
+    let dir = viewer_tabs_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), app::AppError> {
+        let store = FileViewerTabsStore::new(dir);
+        app::save_viewer_tabs(
+            &store,
+            &profile_id,
+            tabs.into_iter().map(Into::into).collect(),
+        )
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })
+    .map_err(Into::into)
 }
 
 /// ハブグラフの調整値を返す(issue #249)。ファイルが無い/壊れている場合は
@@ -1650,6 +1707,8 @@ pub fn run() {
             get_hub_layout,
             save_hub_layout,
             get_hub_tuning,
+            get_viewer_tabs,
+            save_viewer_tabs,
             save_hub_tuning,
             get_project_claude_md,
             save_project_claude_md,

@@ -49,6 +49,15 @@ export type SessionSummaryDto = {
   // ハブのグラフ階層(issue #104)。JSONLに記録が無ければ `null`。
   cwd: string | null;
   git_branch: string | null;
+  // フォーク系列の鍵(issue #345)。ビューアのセッションタブが「フォークしても同じ
+  // 会話を指す」キーに使う(issue #353)。null のときは id 自身が系列の鍵。
+  root_uuid: string | null;
+};
+
+// ビューアのセッションタブ1件(issue #353)。キーは「フォルダ + 系列の鍵」。
+export type ViewerTabDto = {
+  project: string;
+  series_key: string;
 };
 
 export type AppErrorDto = {

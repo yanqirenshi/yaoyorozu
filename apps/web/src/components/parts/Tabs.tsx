@@ -1,10 +1,12 @@
 "use client";
 
+import type { KeyboardEvent, MouseEvent } from "react";
 import Box from "@mui/material/Box";
 import MuiTab from "@mui/material/Tab";
 import MuiTabs from "@mui/material/Tabs";
 import {
   TAB_BAR,
+  TAB_CLOSE,
   TAB_COLORS,
   TAB_FOCUS,
   TAB_INDICATOR,
@@ -13,8 +15,9 @@ import {
   type TabSize,
   type TabState,
 } from "@/data/uiTab";
+import { ICON_DRAWING_SPEC, ICON_SAMPLES } from "@/data/uiIcon";
 import { resolveColor } from "@/data/uiDesign";
-import { spacePx, textStyle } from "@/components/tokens";
+import { iconPx, radiusCss, spacePx, textStyle } from "@/components/tokens";
 
 /**
  * 部品「タブ」。同じ領域の中で表示する内容を切り替える。
@@ -35,6 +38,12 @@ export type TabsProps = {
   /** 選択中のタブの key。 */
   value: string;
   onChange: (key: string) => void;
+  /**
+   * 渡すと各タブに「×」が付き、押すと閉じられる。
+   * 閉じたあとにどのタブを選ぶかは親が決める(部品は状態を持たない)。
+   * 列の一部だけを閉じられるようにはしない(仕様の規則)。
+   */
+  onClose?: (key: string) => void;
   size?: TabSize;
   /** 何を切り替えるタブか(例: 「表示の切り替え」)。支援技術に読み上げられる。 */
   "aria-label": string;
@@ -70,6 +79,9 @@ function tabSizeSx(size: TabSize) {
   const s = sizeSpec(size);
   return {
     ...textStyle(s.textStyle),
+    // ラベルと × を横に並べる(MUI の既定に任せず明示する)。
+    flexDirection: "row",
+    alignItems: "center",
     height: s.heightPx + "px",
     minHeight: s.heightPx + "px",
     px: spacePx(s.paddingX) + "px",
@@ -90,7 +102,6 @@ export function tabStaticSx(size: TabSize, state: TabState | "focus") {
   const selected = state === "selected" || state === "selectedHover";
   return {
     display: "inline-flex",
-    alignItems: "center",
     ...tabSizeSx(size),
     ...colorSx(state === "focus" ? "default" : state),
     boxShadow: selected
@@ -121,16 +132,94 @@ export function TabLabel({ label }: { label: string }) {
   );
 }
 
+function iconBody(key: string) {
+  const icon = ICON_SAMPLES.find((i) => i.key === key);
+  if (!icon) throw new Error("未定義のアイコンです: " + key);
+  return icon.body;
+}
+
+/** 「×」のクリック領域の sx。/ui の見本と部品で共用する。 */
+export function tabCloseSx(state: "default" | "hover" | "active") {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+    width: TAB_CLOSE.targetPx + "px",
+    height: TAB_CLOSE.targetPx + "px",
+    ml: spacePx(TAB_CLOSE.gap) + "px",
+    borderRadius: radiusCss(TAB_CLOSE.radius),
+    border: "none",
+    padding: 0,
+    cursor: "pointer",
+    // 線の色はタブの文字色をそのまま継ぐ。状態で変わるのは背景だけ。
+    color: TAB_CLOSE.color,
+    backgroundColor: resolveColor(TAB_CLOSE.bg[state]).value,
+  };
+}
+
+/** 閉じる(×)。閉じられるタブにだけ出る。 */
+export function TabClose({
+  label,
+  onClose,
+}: {
+  label: string;
+  onClose?: () => void;
+}) {
+  const px = iconPx(TAB_CLOSE.iconToken);
+  return (
+    <Box
+      component="span"
+      role="button"
+      // Tab キーの順序には入れない(仕様 TAB_CLOSE.note)。キーボードからは Delete で閉じる。
+      tabIndex={-1}
+      aria-label={label + " を閉じる"}
+      title={label + " を閉じる"}
+      onClick={(event: MouseEvent) => {
+        // タブの選択(親の onChange)を起こさずに閉じる。
+        event.stopPropagation();
+        onClose?.();
+      }}
+      sx={{
+        ...tabCloseSx("default"),
+        "&:hover": { backgroundColor: resolveColor(TAB_CLOSE.bg.hover).value },
+        "&:active": { backgroundColor: resolveColor(TAB_CLOSE.bg.active).value },
+      }}
+    >
+      <svg
+        viewBox={ICON_DRAWING_SPEC.viewBox}
+        width={px}
+        height={px}
+        fill={ICON_DRAWING_SPEC.fill}
+        stroke={ICON_DRAWING_SPEC.stroke}
+        strokeWidth={ICON_DRAWING_SPEC.strokeWidth}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+        dangerouslySetInnerHTML={{ __html: iconBody(TAB_CLOSE.icon) }}
+      />
+    </Box>
+  );
+}
+
 export default function Tabs({
   items,
   value,
   onChange,
+  onClose,
   size = "medium",
   "aria-label": ariaLabel,
   idPrefix,
 }: TabsProps) {
   const s = sizeSpec(size);
   const border = resolveColor(TAB_BAR.border).value;
+
+  // キーボードからは Delete でそのタブを閉じる(× は Tab キーの順序に入れないため)。
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>, key: string) => {
+    if (!onClose || event.key !== "Delete") return;
+    event.preventDefault();
+    onClose(key);
+  };
 
   return (
     <MuiTabs
@@ -161,13 +250,24 @@ export default function Tabs({
         <MuiTab
           key={item.key}
           value={item.key}
-          label={<TabLabel label={item.label} />}
+          label={
+            <>
+              <TabLabel label={item.label} />
+              {onClose && (
+                <TabClose
+                  label={item.label}
+                  onClose={() => onClose(item.key)}
+                />
+              )}
+            </>
+          }
           // 省略表示されても全体が分かるように、ラベル全体をツールチップに出す。
           title={item.label}
           disabled={item.disabled}
           disableRipple
           id={idPrefix ? idPrefix + "-tab-" + item.key : undefined}
           aria-controls={idPrefix ? idPrefix + "-panel-" + item.key : undefined}
+          onKeyDown={(event) => handleKeyDown(event, item.key)}
           sx={{
             ...tabSizeSx(size),
             ...colorSx("default"),

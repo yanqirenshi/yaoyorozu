@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import type { KeyboardEvent } from "react";
 
 // 共通部品「タブ」(issue #287)。仕様の正は apps/web の `uiTab.ts`
@@ -10,6 +10,9 @@ import type { KeyboardEvent } from "react";
 type TabItem = {
   id: string;
   label: string;
+  // ツールチップ(title 属性)。省略時はラベル全体(仕様どおり)。補足情報を足したい
+  // ときだけ指定する(issue #348: セッションタブに日時・フォルダ名を足す)。
+  title?: string;
   disabled?: boolean;
 };
 
@@ -23,6 +26,12 @@ type TabsProps = {
   // 何を切り替えるか(tablist のラベル)
   "aria-label": string;
   size?: "small" | "medium";
+  // 指定したときだけ、各タブに「×」を出して閉じられるようにする(issue #353。
+  // 任意の機能で、指定しなければ従来どおり × なし。/claude・/settings のタブは
+  // 使わない)。タブ選択中に Delete キーでも閉じられる(WAI-ARIA の推奨)。
+  // タブを外すだけで、選択の付け替えは呼び出し側が行う。
+  // × の見た目の仕様の正は uiTab.ts の `TAB_CLOSE`(issue #358 で仮の見た目から合わせた)。
+  onClose?: (id: string) => void;
 };
 
 function tabId(baseId: string, value: string): string {
@@ -49,8 +58,19 @@ function Tabs({
   onChange,
   "aria-label": ariaLabel,
   size = "medium",
+  onClose,
 }: TabsProps) {
   const refs = useRef<Record<string, HTMLButtonElement | null>>({});
+  // Delete で閉じた直後、閉じた位置のタブへフォーカスを戻すために最新の並びを持つ。
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+
+  // 選択中のタブが横スクロールで見えない位置にあるとき(URL からの復元・
+  // 外部からの切替など)、見える位置まで寄せる。見えているときは動かさない
+  // (issue #348。タブが多いセッションタブで必要になった)。
+  useEffect(() => {
+    refs.current[value]?.scrollIntoView({ inline: "nearest", block: "nearest" });
+  }, [value]);
 
   const focusTab = (index: number) => {
     const item = items[index];
@@ -86,6 +106,18 @@ function Tabs({
           ? findEnabled(items.length - 1, -1)
           : items.length - 1;
         break;
+      case "Delete":
+        // 閉じられるタブ列のときだけ。フォーカス中のタブを閉じ、同じ位置(末尾なら
+        // 1つ前)のタブへフォーカスを移す(マウスなしで続けて操作できるように)。
+        if (!onClose) return;
+        e.preventDefault();
+        onClose(items[current].id);
+        setTimeout(() => {
+          const rest = itemsRef.current;
+          const target = rest[Math.min(current, rest.length - 1)];
+          if (target) refs.current[target.id]?.focus();
+        }, 0);
+        return;
       default:
         return;
     }
@@ -106,7 +138,7 @@ function Tabs({
     >
       {items.map((item, index) => {
         const selected = item.id === value;
-        return (
+        const tab = (
           <button
             key={item.id}
             ref={(el) => {
@@ -115,16 +147,46 @@ function Tabs({
             id={tabId(id, item.id)}
             type="button"
             role="tab"
-            className="tab"
+            className={onClose ? "tab tab-closable" : "tab"}
             aria-selected={selected}
             aria-controls={selected ? tabPanelId(id) : undefined}
             tabIndex={index === entryIndex ? 0 : -1}
             disabled={item.disabled}
-            title={item.label}
+            title={item.title ?? item.label}
             onClick={() => onChange(item.id)}
           >
             {item.label}
           </button>
+        );
+        if (!onClose) return tab;
+        // ボタンの中にボタンは置けないため、タブと × を並べて重ねる。× はマウス用
+        // (キーボードは Delete)なので Tab キーの巡回には入れない。
+        return (
+          <div key={item.id} className="tab-cell" role="presentation">
+            {tab}
+            <button
+              type="button"
+              className="tab-close"
+              tabIndex={-1}
+              aria-label={`${item.label} を閉じる`}
+              title={`${item.label} を閉じる`}
+              onClick={() => onClose(item.id)}
+            >
+              {/* 基本デザイン「アイコン」の close(uiIcon.ts)。大きさは CSS(--icon-16)、
+                  色は currentColor(タブの文字色を継ぐ)。名前は button の aria-label。 */}
+              <svg
+                viewBox="0 0 20 20"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M5 5l10 10M15 5L5 15" />
+              </svg>
+            </button>
+          </div>
         );
       })}
     </div>

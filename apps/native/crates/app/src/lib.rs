@@ -7,7 +7,8 @@ use domain::{
     ClaudeDirEntry, ClaudeDirPage, ClaudeMdFile, ClaudeSettingsFile, Conversation, GitLedger,
     GitRepositoryLedger, HubLayout, HubTuning, ImageAttachment, LogLine, MessageImage,
     NodePosition, ParsedSession, Project, RuleSummary, SessionSummary, Settings, SkillSummary,
-    CURRENT_GIT_LEDGER_VERSION, CURRENT_HUB_LAYOUT_VERSION, CURRENT_HUB_TUNING_VERSION,
+    ViewerTab, ViewerTabs, CURRENT_GIT_LEDGER_VERSION, CURRENT_HUB_LAYOUT_VERSION,
+    CURRENT_HUB_TUNING_VERSION, CURRENT_VIEWER_TABS_VERSION,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -223,6 +224,14 @@ pub trait HubLayoutStore {
 pub trait HubTuningStore {
     fn load(&self) -> Result<HubTuning, AppError>;
     fn save(&self, tuning: &HubTuning) -> Result<(), AppError>;
+}
+
+/// ビューアのセッションタブの並び(`ViewerTabs`。issue #353)の永続化(port)。
+/// プロファイルごとに別ファイルへ保存する(実体は infra)。
+pub trait ViewerTabsStore {
+    /// ファイルが無い・壊れている場合は空(`ViewerTabs::default()`)。
+    fn load(&self, profile_id: &str) -> Result<ViewerTabs, AppError>;
+    fn save(&self, profile_id: &str, tabs: &ViewerTabs) -> Result<(), AppError>;
 }
 
 /// 実行環境(このPC・ログインユーザー)の取得(port)。実体(レジストリ・
@@ -836,6 +845,18 @@ pub fn retain_enumerated_parsed_sessions(
     sessions.retain(|p| enumerated_paths.contains(&p.conversation_file_path));
 }
 
+/// ビューアのウィンドウの初期タイトル(issue #348)。「<プロファイル名> - <フォルダ名>」で、
+/// 対象フォルダが複数のときは「 / 」でつなぎ、無いときはプロファイル名だけ。
+/// ウィンドウ生成時(`open_profile_window`)の値で、その後の設定変更への追従は
+/// フロント(`Layout.tsx` の `viewerWindowTitle`。同じ規則)が `setTitle` で行う。
+pub fn viewer_window_title(profile_name: &str, selected_project_folders: &[String]) -> String {
+    if selected_project_folders.is_empty() {
+        profile_name.to_string()
+    } else {
+        format!("{profile_name} - {}", selected_project_folders.join(" / "))
+    }
+}
+
 /// 削除された会話ファイルの `ParsedSession` を取り除く(ファイル監視による差分
 /// 再走査。issue #311)。同一 `session_id` の別ファイル(worktree 移動。#214)は
 /// 別エントリのため残り、`Session` としては集約(#217)の結果その別ファイルの
@@ -883,6 +904,54 @@ impl RescanQueue {
             return None;
         }
         Some(std::mem::take(&mut self.pending).into_iter().collect())
+    }
+}
+
+/// ビューアのセッションタブの並びを読み込む(issue #353)。プロファイル ID は
+/// ファイル名の構築に使うため検証する(native.md §4)。
+pub fn load_viewer_tabs(
+    store: &dyn ViewerTabsStore,
+    profile_id: &str,
+) -> Result<ViewerTabs, AppError> {
+    validate_profile_id(profile_id)?;
+    store.load(profile_id)
+}
+
+/// ビューアのセッションタブの並びを保存する(issue #353)。並びは呼び出し側が
+/// 持つ全体で丸ごと置き換える。プロジェクト名・系列の鍵を検証し、同じキーの
+/// 重複は先頭だけを残す。`version` は現在のバージョンで書く。
+pub fn save_viewer_tabs(
+    store: &dyn ViewerTabsStore,
+    profile_id: &str,
+    tabs: Vec<ViewerTab>,
+) -> Result<(), AppError> {
+    validate_profile_id(profile_id)?;
+    let mut unique: Vec<ViewerTab> = Vec::with_capacity(tabs.len());
+    for tab in tabs {
+        if !is_valid_project_dir_name(&tab.project) || tab.series_key.trim().is_empty() {
+            return Err(AppError::InvalidInput("不正なタブの指定です".to_string()));
+        }
+        if !unique.contains(&tab) {
+            unique.push(tab);
+        }
+    }
+    store.save(
+        profile_id,
+        &ViewerTabs {
+            version: CURRENT_VIEWER_TABS_VERSION,
+            tabs: unique,
+        },
+    )
+}
+
+fn validate_profile_id(profile_id: &str) -> Result<(), AppError> {
+    // プロファイル ID は英数字とハイフンのみ(アプリが生成する uuid 等)。
+    if is_valid_session_id(profile_id) {
+        Ok(())
+    } else {
+        Err(AppError::InvalidInput(
+            "不正なプロファイルIDです".to_string(),
+        ))
     }
 }
 
@@ -1866,6 +1935,95 @@ mod tests {
                 "should reject ({project:?}, {session_id:?}, {uuid:?})"
             );
         }
+    }
+
+    struct FakeViewerTabsStore {
+        saved: std::cell::RefCell<Vec<(String, ViewerTabs)>>,
+    }
+
+    impl ViewerTabsStore for FakeViewerTabsStore {
+        fn load(&self, _profile_id: &str) -> Result<ViewerTabs, AppError> {
+            Ok(ViewerTabs::default())
+        }
+        fn save(&self, profile_id: &str, tabs: &ViewerTabs) -> Result<(), AppError> {
+            self.saved
+                .borrow_mut()
+                .push((profile_id.to_string(), tabs.clone()));
+            Ok(())
+        }
+    }
+
+    fn viewer_tab(project: &str, key: &str) -> ViewerTab {
+        ViewerTab {
+            project: project.to_string(),
+            series_key: key.to_string(),
+        }
+    }
+
+    #[test]
+    fn save_viewer_tabs_dedupes_keeping_order_and_writes_current_version() {
+        let store = FakeViewerTabsStore {
+            saved: Default::default(),
+        };
+        save_viewer_tabs(
+            &store,
+            "p1",
+            vec![
+                viewer_tab("a", "k1"),
+                viewer_tab("b", "k2"),
+                viewer_tab("a", "k1"),
+            ],
+        )
+        .unwrap();
+        let saved = store.saved.borrow();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].0, "p1");
+        assert_eq!(saved[0].1.version, CURRENT_VIEWER_TABS_VERSION);
+        assert_eq!(
+            saved[0].1.tabs,
+            vec![viewer_tab("a", "k1"), viewer_tab("b", "k2")]
+        );
+    }
+
+    #[test]
+    fn viewer_tabs_commands_reject_unsafe_inputs() {
+        let store = FakeViewerTabsStore {
+            saved: Default::default(),
+        };
+        assert!(matches!(
+            load_viewer_tabs(&store, "../x"),
+            Err(AppError::InvalidInput(_))
+        ));
+        for bad in ["", "../x", "a/b"] {
+            assert!(matches!(
+                save_viewer_tabs(&store, bad, vec![]),
+                Err(AppError::InvalidInput(_))
+            ));
+        }
+        for tab in [
+            viewer_tab("..", "k"),
+            viewer_tab("a/b", "k"),
+            viewer_tab("a", " "),
+        ] {
+            assert!(matches!(
+                save_viewer_tabs(&store, "p1", vec![tab]),
+                Err(AppError::InvalidInput(_))
+            ));
+        }
+        assert!(store.saved.borrow().is_empty());
+    }
+
+    #[test]
+    fn viewer_window_title_joins_profile_name_and_folders() {
+        assert_eq!(viewer_window_title("yaoyorozu", &[]), "yaoyorozu");
+        assert_eq!(
+            viewer_window_title("yaoyorozu", &["C--Users-yanqi-prj-yaoyorozu".to_string()]),
+            "yaoyorozu - C--Users-yanqi-prj-yaoyorozu"
+        );
+        assert_eq!(
+            viewer_window_title("p", &["a".to_string(), "b".to_string()]),
+            "p - a / b"
+        );
     }
 
     #[test]

@@ -6,6 +6,7 @@ import {
   TAB_ANATOMY,
   TAB_ANTIPATTERNS,
   TAB_BAR,
+  TAB_CLOSE,
   TAB_COLORS,
   TAB_CONTRAST,
   TAB_FOCUS,
@@ -23,7 +24,8 @@ import Tabs, {
   tabStaticSx,
   type TabItem,
 } from "@/components/parts/Tabs";
-import { spacePx } from "@/components/tokens";
+import AddButton from "@/components/parts/AddButton";
+import { iconPx as iconSizePx, spacePx } from "@/components/tokens";
 import FoundationPage, {
   Code,
   Note,
@@ -82,6 +84,68 @@ function TabsDemo({
         sx={{ ...textStyle("Body-14N-170"), color: TEXT_SECONDARY, p: "16px" }}
       >
         「{current?.label}」の内容が表示される領域
+      </Box>
+    </div>
+  );
+}
+
+const CLOSABLE_ITEMS: TabItem[] = [
+  { key: "s1", label: "認証まわりの実装" },
+  { key: "s2", label: "タブの仕様を決める" },
+  { key: "s3", label: "リリース作業" },
+];
+
+/** 閉じられるタブの作例。閉じたあと何を選ぶかは、部品ではなくこちら(親)が決める。 */
+function ClosableTabsDemo() {
+  const [items, setItems] = useState(CLOSABLE_ITEMS);
+  const [value, setValue] = useState(CLOSABLE_ITEMS[0].key);
+
+  const handleClose = (key: string) => {
+    const index = items.findIndex((i) => i.key === key);
+    const rest = items.filter((i) => i.key !== key);
+    setItems(rest);
+    // 選択中のタブを閉じたときは、隣(右を優先)のタブを選ぶ。
+    if (key === value && rest.length > 0) {
+      setValue(rest[Math.min(index, rest.length - 1)].key);
+    }
+  };
+
+  if (items.length === 0) {
+    return (
+      <div className="flex flex-col items-start gap-3">
+        <Box sx={{ ...textStyle("Body-14N-170"), color: TEXT_SECONDARY }}>
+          タブがありません。
+        </Box>
+        <AddButton
+          size="small"
+          label="作例を戻す"
+          onClick={() => {
+            setItems(CLOSABLE_ITEMS);
+            setValue(CLOSABLE_ITEMS[0].key);
+          }}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <Tabs
+        items={items}
+        value={value}
+        onChange={setValue}
+        onClose={handleClose}
+        size="small"
+        aria-label="閉じられるタブの作例"
+        idPrefix="demo-closable"
+      />
+      <Box
+        role="tabpanel"
+        id={"demo-closable-panel-" + value}
+        aria-labelledby={"demo-closable-tab-" + value}
+        sx={{ ...textStyle("Body-14N-170"), color: TEXT_SECONDARY, p: "16px" }}
+      >
+        「{items.find((i) => i.key === value)?.label}」の内容が表示される領域
       </Box>
     </div>
   );
@@ -269,6 +333,86 @@ const SECTIONS: DocSection[] = [
             <TabsDemo items={LONG_ITEMS} size="small" label="長いラベルの作例" />
           </Box>
         </Sample>
+      </>
+    ),
+  },
+  {
+    id: "tab-close",
+    title: "閉じられるタブ",
+    body: (
+      <>
+        <Para>
+          タブ列の中身を利用者が自分で決める画面(自分で開いて、要らなくなったら閉じる)では、
+          各タブの右に「×」を付ける。既定では出さない。
+          内容が固定の切り替え(設定の項目、図 / WBS など)には付けない。
+        </Para>
+        <Sample caption="× で閉じられるタブ。選択中のタブを閉じると隣が選ばれ、すべて閉じると案内に戻る。タブにフォーカスして Delete でも閉じられる。">
+          <ClosableTabsDemo />
+        </Sample>
+        <TokenTable
+          columns={[
+            { key: "item", label: "項目", width: "180px" },
+            { key: "value", label: "値" },
+            { key: "note", label: "備考" },
+          ]}
+          rows={[
+            {
+              item: "図形",
+              value: TAB_CLOSE.icon,
+              note: "基本デザイン「アイコン」の close をそのまま使う。",
+            },
+            {
+              item: "図形の大きさ",
+              value:
+                TAB_CLOSE.iconToken + " (" + iconSizePx(TAB_CLOSE.iconToken) + "px)",
+              note: "タブのサイズによらず同じ。",
+            },
+            {
+              item: "クリック領域",
+              value: TAB_CLOSE.targetPx + "px 四方",
+              note: "WCAG 2.2 の操作対象サイズ(24px 以上)を満たす。",
+            },
+            {
+              item: "角の形状",
+              value: TAB_CLOSE.radius,
+              note: "ホバー時の背景の角。",
+            },
+            {
+              item: "ラベルとの間隔",
+              value: TAB_CLOSE.gap + " (" + spacePx(TAB_CLOSE.gap) + "px)",
+              note: "",
+            },
+            {
+              item: "線の色",
+              value: TAB_CLOSE.color,
+              note: "タブの文字色を継ぐ。未選択では墨-700、選択中では草色-800 と、ラベルと同じ色になる。",
+            },
+            {
+              item: "背景(通常)",
+              value: <ColorRef refName={TAB_CLOSE.bg.default} />,
+              note: "",
+            },
+            {
+              item: "背景(ホバー)",
+              value: <ColorRef refName={TAB_CLOSE.bg.hover} />,
+              note: "× 自身のホバー。タブのホバー(草色)と混ざらないよう墨の階調にする。",
+            },
+            {
+              item: "背景(押下中)",
+              value: <ColorRef refName={TAB_CLOSE.bg.active} />,
+              note: "",
+            },
+          ]}
+        />
+        <Note>{TAB_CLOSE.contrast}</Note>
+        <Para>
+          支援技術に読み上げる名前は {TAB_CLOSE.ariaLabel}
+          {TAB_CLOSE.note}
+        </Para>
+        <Para>
+          閉じたあとにどのタブを選ぶかは部品では決めず、使う側が決める
+          (<Code>onClose</Code> を渡したときだけ × が出る)。
+        </Para>
       </>
     ),
   },
