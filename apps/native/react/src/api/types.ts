@@ -23,7 +23,14 @@ export type MessageDto = {
   // この行に含まれる画像の枚数(issue #349)。画像本体は載せず、押されたときに
   // getSessionLineImages で取る。
   image_count: number;
+  // 送信の失敗に関する見分け(issue #364)。会話ファイルは書き換えず、表示だけで分かるようにする。
+  //  - failed_question: 答えのない質問(直後が送信失敗のエラー行)
+  //  - error_for_question: 送信失敗のエラー行(直前が答えのない質問)
+  //  - error: 送信失敗のエラー行(直前に AI の返答がある=返答の途中で失敗)
+  status: MessageStatusDto;
 };
+
+export type MessageStatusDto = "normal" | "failed_question" | "error_for_question" | "error";
 
 // getSessionLineImages の1枚分(issue #349)。data は base64(data: プレフィックス無し)。
 export type MessageImageDto = {

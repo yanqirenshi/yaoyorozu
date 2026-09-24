@@ -141,6 +141,8 @@ mod tests {
         r#"{"type":"user","sessionId":"s1","message":{"role":"user","content":"   "}}"#,
         r#"{"type":"user","sessionId":"s1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"x"}]}}"#,
         r#"{"type":"assistant","uuid":"u2","sessionId":"s1","cwd":"/work/b","gitBranch":"HEAD","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"t","signature":"s"},{"type":"text","text":"first"},{"type":"tool_use","id":"toolu_1","name":"x","input":{}},{"type":"text","text":"second"}]}}"#,
+        r#"{"type":"assistant","uuid":"e1","sessionId":"s1","timestamp":"2026-01-01T00:00:02.000Z","isApiErrorMessage":true,"error":"server_error","message":{"role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"API Error: 500 Internal server error."}]}}"#,
+        r#"{"type":"assistant","uuid":"e2","sessionId":"s1","timestamp":"2026-01-01T00:00:03.000Z","isApiErrorMessage":false,"message":{"role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"No response requested."}]}}"#,
         r#"{"type":"custom-title","customTitle":"タイトル","sessionId":"s1"}"#,
         r#"{"type":"ai-title","aiTitle":"AI タイトル","sessionId":"s1"}"#,
         r#"{"type":"mode","mode":"plan","sessionId":"s1"}"#,
@@ -226,7 +228,7 @@ mod tests {
                 None => (None, Ok(None)),
             };
 
-            let parts = |m: Message| (m.role, m.text, m.timestamp, m.uuid, m.image_count);
+            let parts = |m: Message| (m.role, m.text, m.timestamp, m.uuid, m.image_count, m.status);
             assert_eq!(old_message.map(parts), new_message.map(parts), "{text}");
             assert_eq!(old_log_line, new_log_line, "{text}");
         }

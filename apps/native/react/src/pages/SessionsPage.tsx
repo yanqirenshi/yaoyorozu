@@ -46,6 +46,7 @@ import ProfileSettingsPane from "../ProfileSettingsPane";
 import SessionPickerDialog from "../SessionPickerDialog";
 import type { SessionPickerCandidate } from "../SessionPickerDialog";
 import RawLineDialog from "../RawLineDialog";
+import { SendErrorBody } from "../SendErrorBody";
 import ViewerSideMenu from "../ViewerSideMenu";
 import ViewerToolbar from "../ViewerToolbar";
 import { createProjectSettingsDockItems } from "../projectSettingsDockItems";
@@ -896,11 +897,21 @@ function SessionsPage({ nav }: SessionsPageProps) {
                       // 吹き出しの横に、種類(role)と日時を小さく淡く出す
                       // (issue #258)。timestamp が空・不正なら日時は出さない。
                       const time = formatTimestamp(m.timestamp);
+                      // 送信に失敗したことの見分け(issue #364)。エラー行は普通の返事と、
+                      // 答えのない質問は普通の質問と見分けがつくようにする。
+                      const isSendError = m.status === "error" || m.status === "error_for_question";
+                      const isFailedQuestion = m.status === "failed_question";
                       return (
-                        <div key={key} className={`message-row message-row-${m.role}`}>
+                        <div
+                          key={key}
+                          className={`message-row message-row-${m.role}${isSendError ? " message-row-send-error" : ""}`}
+                        >
                           <div className={`message-meta message-meta-${m.role}`}>
-                            <span className="message-meta-role">{m.role}</span>
+                            <span className="message-meta-role">{isSendError ? "error" : m.role}</span>
                             {time && <span className="message-meta-time">{time}</span>}
+                            {isFailedQuestion && (
+                              <span className="message-meta-failed">送信に失敗</span>
+                            )}
                             {/* 元の jsonl 行をモーダルで見る(issue #313)。uuid の無い行は出さない。 */}
                             {m.uuid && (
                               <button
@@ -912,8 +923,14 @@ function SessionsPage({ nav }: SessionsPageProps) {
                               </button>
                             )}
                           </div>
-                          <div className={`message message-${m.role}`}>
-                            {m.text && <MessageText text={m.text} />}
+                          <div
+                            className={`message message-${m.role}${isSendError ? " message-send-error" : ""}${isFailedQuestion ? " message-failed-question" : ""}`}
+                          >
+                            {isSendError ? (
+                              <SendErrorBody text={m.text} status={m.status} />
+                            ) : (
+                              m.text && <MessageText text={m.text} />
+                            )}
                             {/* 画像は本体を載せず件数だけ。押すとその行の画像を取りに行く(issue #349)。
                                 uuid の無い行は取得できないので件数だけ出す。 */}
                             {m.image_count > 0 &&

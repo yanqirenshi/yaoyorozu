@@ -73,7 +73,9 @@ pub use log_line::{
     convert_json_line_to_log_line, convert_session_line, AssistantLogLine, AttachmentLogLine,
     LogLine, LogLineBase, LogLineConversionError, SystemLogLine, UserLogLine,
 };
-pub use message::{order_messages_newest_first, paginate_messages, Message};
+pub use message::{
+    mark_failed_questions, order_messages_newest_first, paginate_messages, Message, MessageStatus,
+};
 pub use message_image::{extract_message_images, MessageImage};
 pub use node_position::NodePosition;
 pub use observed_git_state::{ObservedGitState, ObservedWorktree};

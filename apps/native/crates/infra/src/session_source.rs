@@ -922,13 +922,23 @@ mod tests {
     }
 
     /// `Message` は `PartialEq` を持たないため、比較用に全項目のタプルにする。
-    fn message_parts(m: &domain::Message) -> (Role, String, String, Option<String>, usize) {
+    fn message_parts(
+        m: &domain::Message,
+    ) -> (
+        Role,
+        String,
+        String,
+        Option<String>,
+        usize,
+        domain::MessageStatus,
+    ) {
         (
             m.role,
             m.text.clone(),
             m.timestamp.clone(),
             m.uuid.clone(),
             m.image_count,
+            m.status,
         )
     }
 
@@ -943,6 +953,7 @@ mod tests {
             r#"{"type":"user","uuid":"u4","parentUuid":"u3","sessionId":"s1","timestamp":"2026-01-01T00:00:04.000Z","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"BBBB"}}]}}"#,
             r#"{"type":"user","uuid":"u5","parentUuid":"u4","sessionId":"s1","timestamp":"2026-01-01T00:00:05.000Z","message":{"role":"user","content":"   "}}"#,
             r#"{"type":"system","subtype":"informational","content":"x","level":"info","uuid":"sy1","parentUuid":"u5","sessionId":"s1","timestamp":"2026-01-01T00:00:06.000Z"}"#,
+            r#"{"type":"assistant","uuid":"e1","parentUuid":"sy1","sessionId":"s1","timestamp":"2026-01-01T00:00:06.500Z","isApiErrorMessage":true,"error":"server_error","message":{"role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"API Error: 500 Internal server error."}]}}"#,
             r#"{"type":"custom-title","customTitle":"タイトル","sessionId":"s1"}"#,
             r#"{"type":"queue-operation","operation":"enqueue","sessionId":"s1"}"#,
             r#"{"type":"some-future-type","sessionId":"s1"}"#,
@@ -979,8 +990,17 @@ mod tests {
             "LogLine が従来と一致する"
         );
         // 標本の中身を取り違えていない(空の一致で通らない)ことの確認。
-        assert_eq!(content.messages.len(), 6);
-        assert_eq!(content.lines.len(), 8);
+        assert_eq!(content.messages.len(), 7);
+        assert_eq!(content.lines.len(), 9);
+        assert_eq!(
+            content
+                .messages
+                .iter()
+                .filter(|m| m.status == domain::MessageStatus::Error)
+                .count(),
+            1,
+            "エラー行は1件だけ(会話ファイルは読むだけで、印は表示側で付ける)"
+        );
     }
 
     #[test]
