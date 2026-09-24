@@ -26,11 +26,11 @@
  * 【対象・ファイル対応】native.md §1 の「1型(クラス)= 1ファイル」(issue #184、
  * PR #185)により、domain クレートは各型が型名 snake_case のファイルに分かれて
  * いる(例: `Settings` → `settings.rs`)。`lib.rs` は `mod` 宣言と `pub use` のみ。
- * 本図の32クラスのうち、`ProjectItemKind` は `ProjectItem` と同じ `project_item.rs`
+ * 本図の34クラスのうち、`ProjectItemKind` は `ProjectItem` と同じ `project_item.rs`
  * に、`ClaudeDirEntryKind` は `ClaudeDirEntry` と同じ `claude_dir_entry.rs` に、
  * `GitRepositoryLedger` は `GitLedger` と同じ `git_ledger.rs` に、`ObservedWorktree`
  * は `ObservedGitState` と同じ `observed_git_state.rs` に同居する(native.md 曰く
- * 「その型専用の小さな補助enum」だが、補助structも同じ扱いにしている)。ほかの28
+ * 「その型専用の小さな補助enum」だが、補助structも同じ扱いにしている)。ほかの30
  * クラスはそれぞれ単独のファイル(型名 snake_case)。掲載対象は `classes-domain.ts`
  * に掲載済みの Pc・User・Profile と、`session_line/`(33型。かつては
  * `classes-session-line.ts` で描いていたが、不要になったため図ごと削除した)を
@@ -308,6 +308,25 @@ const DEFS: ClassDef[] = [
     position: { x: 2100, y: 1950 },
     filePath: "apps/native/crates/domain/src/hub_tuning.rs",
   },
+  {
+    name: { physical: "ViewerTabs", logical: "ViewerTabs", description: "ビューアで開いているセッションタブの並び(プロファイルごとに別ファイル viewer-tabs/<プロファイルID>.json)。settings.json には入れない(見た目の状態のため)。選択中のタブは保存しない(URL で持つ)。issue #353" },
+    attributes: [
+      attr("version", "u32"),
+      attr("tabs", "Vec<ViewerTab>"),
+    ],
+    // HubTuning の真下に置く(ViewerTab は右隣)。
+    position: { x: 2100, y: 2250 },
+    filePath: "apps/native/crates/domain/src/viewer_tabs.rs",
+  },
+  {
+    name: { physical: "ViewerTab", logical: "ViewerTab", description: "ビューアのセッションタブ1件。どのセッションのタブかを特定するキー(project, series_key)だけを持つ。series_key はフォーク系列の鍵(root_uuid、無ければ session_id)で、フォークしても変わらないので、保存したタブが同じ会話を指し続ける。issue #353" },
+    attributes: [
+      attr("project", "String"), // プロジェクトフォルダ名(~/.claude/projects/ 直下)
+      attr("series_key", "String"), // フォーク系列の鍵(root_uuid、無ければ session_id)
+    ],
+    position: { x: 2450, y: 2250 },
+    filePath: "apps/native/crates/domain/src/viewer_tab.rs",
+  },
   // ============ /claude 画面(Explorer) ============
   {
     name: { physical: "ClaudeDirPage", logical: "ClaudeDirPage", description: "~/.claude 配下のディレクトリ一覧の1ページ分(Explorerタブ)" },
@@ -429,6 +448,7 @@ const RELATIONSHIPS = [
   rel("association", "WindowState", "WindowTab", "tabs", "right", "left"),
   rel("association", "HubLayout", "NodePosition", "positions", "right", "left"),
   rel("association", "HubLayout", "Camera", "camera", "bottom", "top"),
+  rel("association", "ViewerTabs", "ViewerTab", "tabs", "right", "left"),
   // /claude 画面(Explorer)
   rel("association", "ClaudeDirPage", "ClaudeDirEntry", "entries", "right", "left"),
   rel("composition", "ClaudeDirEntry", "ClaudeDirEntryKind", "kind", "bottom", "top"),
