@@ -691,18 +691,51 @@ body,
   cursor: not-allowed;
 }
 
-/* 「×」つきのタブ(issue #353。Tabs の onClose を指定したときだけ)。タブと × は
-   ボタンの入れ子にできないため、セルの中で並べて × をタブの右端に重ねる。
-   ※ × の見た目は uiTab.ts の仕様にまだ無いので、既存トークンによる仮の見た目。 */
+/* 「×」つきのタブ(issue #353。Tabs の onClose を指定したときだけ)。見た目の仕様の
+   正は uiTab.ts の `TAB_CLOSE`(issue #358)。タブと × はボタンの入れ子にできない
+   ため、セルの中で並べて × をタブの右端に重ねる。 */
 .tab-cell {
   position: relative;
   flex-shrink: 0;
   display: flex;
+  /* × の線の色はタブの文字色を継ぐ(`.tab-close` は color: inherit)。× はタブの
+     兄弟なので、タブの状態に応じたタブの文字色をセルに持たせて揃える。 */
+  color: var(--text-secondary);
 }
 
-/* × の分だけ右の余白を広げる(ラベルと重ならないように)。 */
-.tabs .tab.tab-closable {
-  padding-right: calc(var(--space-2) + var(--space-6));
+/* ホバー(タブ本体でも × の上でも)。無効のタブは除く。 */
+.tab-cell:hover:not(:has(> .tab:disabled)) {
+  color: var(--text-primary);
+}
+
+/* × の上にポインタがあるときも、タブ本体のホバーと同じ背景・文字色にする
+   (仕様では × はタブの中にあり、× の上でもタブのホバーが続くため)。 */
+.tab-cell:hover > .tab:not(:disabled) {
+  background: var(--color-kusairo-50);
+  color: var(--text-primary);
+}
+
+/* 選択中(ホバー中も)は草色-800。上のホバーより後に置いて勝たせる。 */
+.tab-cell:has(> .tab[aria-selected="true"]:not(:disabled)) {
+  color: var(--color-kusairo-800);
+}
+
+.tab-cell:hover > .tab[aria-selected="true"]:not(:disabled) {
+  color: var(--color-kusairo-800);
+}
+
+.tab-cell:has(> .tab:disabled) {
+  color: var(--text-disabled);
+}
+
+/* × の分だけ右の余白を広げる(ラベルと重ならないように)。右の余白 = タブの左右
+   パディング + × のクリック領域 + ラベルとの間隔(`--space-1`)。 */
+.tabs-small .tab.tab-closable {
+  padding-right: calc(var(--space-3) + var(--space-6) + var(--space-1));
+}
+
+.tabs-medium .tab.tab-closable {
+  padding-right: calc(var(--space-4) + var(--space-6) + var(--space-1));
 }
 
 .tab-close {
@@ -710,24 +743,38 @@ body,
   top: 0;
   /* 選択中の下線(3px)の上の領域で上下中央に置く。 */
   bottom: 3px;
-  right: var(--space-1);
+  margin: auto 0;
+  /* × の右側の余白は、タブの左右パディングと同じ。 */
+  right: var(--space-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: var(--space-6);
   height: var(--space-6);
-  margin: auto 0;
   padding: 0;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-4);
   background: transparent;
-  color: var(--text-secondary);
-  font-family: inherit;
-  font-size: 1rem;
-  line-height: 1;
+  /* 線の色はタブの文字色を継ぐ。状態で変わるのは背景だけ。 */
+  color: inherit;
   cursor: pointer;
+}
+
+.tabs-medium .tab-close {
+  right: var(--space-4);
+}
+
+.tab-close svg {
+  width: var(--icon-16);
+  height: var(--icon-16);
 }
 
 .tab-close:hover {
   background: var(--color-sumi-100);
-  color: var(--text-primary);
+}
+
+.tab-close:active {
+  background: var(--color-sumi-200);
 }
 
 .tab-close:focus-visible {
