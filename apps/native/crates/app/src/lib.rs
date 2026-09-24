@@ -5,13 +5,14 @@ use domain::{
     repositories_from_profiles, sort_claude_dir_entries, sort_projects_by_recency,
     validate_image_attachment, validate_image_attachments, validate_image_count, Camera,
     ClaudeDirEntry, ClaudeDirPage, ClaudeMdFile, ClaudeSettingsFile, Conversation, GitLedger,
-    GitRepositoryLedger, HubLayout, HubTuning, ImageAttachment, LogLine, MessageImage,
+    GitRepositoryLedger, HubLayout, HubTuning, ImageAttachment, LogLine, Message, MessageImage,
     NodePosition, ParsedSession, Project, RuleSummary, SessionSummary, Settings, SkillSummary,
     ViewerTab, ViewerTabs, CURRENT_GIT_LEDGER_VERSION, CURRENT_HUB_LAYOUT_VERSION,
     CURRENT_HUB_TUNING_VERSION, CURRENT_VIEWER_TABS_VERSION,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
@@ -69,6 +70,49 @@ pub enum AppError {
     FileConflict(String),
 }
 
+/// 会話ファイルの状態の目印(更新時刻 + サイズ)。解析済みの結果を使い回してよいかの
+/// 判定に使う(issue #350)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileFingerprint {
+    pub modified_nanos: u128,
+    pub len: u64,
+}
+
+/// 会話ファイルを1回読んで得た内容(`SessionSource::read_session` の戻り値。issue #350)。
+#[derive(Debug, Clone)]
+pub struct SessionContent {
+    pub fingerprint: FileFingerprint,
+    /// 表示用のメッセージ。**記録順**(古い順)。
+    pub messages: Vec<Message>,
+    pub lines: Vec<LogLine>,
+}
+
+/// 解析済みメッセージのキャッシュ(ファイルごと。tauri 層の `AppState` が持つ。issue #350)。
+/// ページ送りのたびに巨大な会話ファイルを読み直さないための保存先。
+#[derive(Debug, Clone)]
+pub struct CachedMessages {
+    pub fingerprint: FileFingerprint,
+    /// **新しい順**に並べ済み(表示のたびに並べ替え・複製をしない)。
+    pub messages: Arc<Vec<Message>>,
+}
+
+/// 会話ファイルを読み直して得た、キャッシュへ入れるべき内容(issue #350)。
+#[derive(Debug, Clone)]
+pub struct ReloadedSession {
+    pub messages: CachedMessages,
+    pub lines: Vec<LogLine>,
+}
+
+/// `open_session` の結果。
+#[derive(Debug, Clone)]
+pub struct OpenedSession {
+    /// 表示する範囲(新しい順)のメッセージ。
+    pub conversation: Conversation,
+    /// ファイルを読み直した場合だけ `Some`(呼び出し側がキャッシュを差し替える)。
+    /// `None` はキャッシュが今のファイルと合っていて、読み直していないことを表す。
+    pub reloaded: Option<ReloadedSession>,
+}
+
 /// プロジェクト・セッションの読み取り(ports)。Claude Code のログ形式
 /// (`~/.claude/projects/` の走査、JSONL解析)に固有の詳細はこの抽象の
 /// 向こう側(infra)に閉じ込め、`app` はプロジェクト名・セッションIDなどの
@@ -76,8 +120,23 @@ pub enum AppError {
 pub trait SessionSource {
     fn list_projects(&self) -> Result<Vec<Project>, AppError>;
 
-    /// 指定セッション(ID + 全メッセージ)を返す。
-    fn session(&self, project: &str, session_id: &str) -> Result<Conversation, AppError>;
+    /// 指定セッションの会話ファイルを**1回だけ**読み、表示用のメッセージ(記録順)と
+    /// `LogLine` 一覧を返す(issue #350)。従来は `session`(メッセージ)と
+    /// `session_lines`(LogLine)が別々に全行を読んでいた(同じ巨大ファイルを2回)。
+    /// 各行のパースも1行1回にすること。行の変換に失敗した行(uuid/timestamp欠損等)は
+    /// 実装側でスキップし、警告ログを出すこと(issue #208 本文の指示)。
+    /// 返す `fingerprint` は**読み始める前**のファイルの状態(読んでいる途中で
+    /// ファイルが伸びても、次回の照合で「古い」と判定されて読み直される側に倒す)。
+    fn read_session(&self, project: &str, session_id: &str) -> Result<SessionContent, AppError>;
+
+    /// 指定セッションの会話ファイルの現在の状態(更新時刻 + サイズ)だけを返す
+    /// (中身は読まない)。解析済みのキャッシュが今のファイルと合っているかの照合に使う
+    /// (issue #350)。
+    fn session_fingerprint(
+        &self,
+        project: &str,
+        session_id: &str,
+    ) -> Result<FileFingerprint, AppError>;
 
     /// 指定セッション自身の作業ディレクトリ(cwd)を返す。`AgentGateway` へ渡す
     /// `SendRequest` を組み立てるために使う(issue #345: `--resume <ID>` は
@@ -100,15 +159,6 @@ pub trait SessionSource {
     /// issue #197で追加した`list_session_models`(ファイルパスを持たない
     /// 版)は、この`ParsedSession`に統合したため廃止した。
     fn list_parsed_sessions(&self, project: &str) -> Result<Vec<ParsedSession>, AppError>;
-
-    /// 指定セッションの会話ファイルを行単位で`LogLine`に変換して返す
-    /// (オブジェクトモデル実装 第6弾。issue #208)。`session`(メッセージ抽出。
-    /// `Conversation`用)とは別に1回ファイルを読む(呼び出し元
-    /// `get_session` commandが同じ操作のついでに呼ぶことで「セッションを
-    /// 開いたとき」に組み立てる意図は満たすが、実装としては別読み込みで
-    /// ある点に注意。行の変換に失敗した行(uuid/timestamp欠損等)は
-    /// 実装側でスキップし、警告ログを出すこと(issue本文の指示)。
-    fn session_lines(&self, project: &str, session_id: &str) -> Result<Vec<LogLine>, AppError>;
 
     /// 指定セッションの会話ファイルから、`uuid` が一致する行の**生のテキスト**を返す
     /// (ビューアの「データ」表示。issue #313)。読み取りのみ。見つからなければ
@@ -439,20 +489,83 @@ pub fn list_projects(source: &dyn SessionSource) -> Result<Vec<Project>, AppErro
 /// フロント入力をそのままファイルパスの構築に使うことになるため、UUID形式
 /// (英数字とハイフンのみ)であることを検証してから使う(native.md §4。
 /// issue #33)。
-pub fn get_session(
+///
+/// `cached`(このファイルの解析済みキャッシュ)が今のファイルの状態
+/// (更新時刻 + サイズ)と合っていれば、ファイルは読まずにそこから範囲を切り出す
+/// (ページ送りで巨大な会話ファイルを読み直さない。issue #350)。合っていなければ
+/// `read_session` で1回だけ読み直し、キャッシュへ入れるべき内容を `reloaded` で返す。
+pub fn open_session(
     source: &dyn SessionSource,
+    cached: Option<&CachedMessages>,
     project: &str,
     session_id: &str,
     offset: usize,
     limit: usize,
-) -> Result<Conversation, AppError> {
+) -> Result<OpenedSession, AppError> {
     if !is_valid_session_id(session_id) {
         return Err(AppError::InvalidInput("不正なセッションIDです".to_string()));
     }
-    let mut session = source.session(project, session_id)?;
-    order_messages_newest_first(&mut session.messages);
-    session.messages = paginate_messages(&session.messages, offset, limit);
-    Ok(session)
+    let current = source.session_fingerprint(project, session_id)?;
+    if let Some(cached) = cached.filter(|c| c.fingerprint == current) {
+        return Ok(OpenedSession {
+            conversation: page_of_conversation(session_id, &cached.messages, offset, limit),
+            reloaded: None,
+        });
+    }
+    let reloaded = reload_session(source, project, session_id)?;
+    Ok(OpenedSession {
+        conversation: page_of_conversation(session_id, &reloaded.messages.messages, offset, limit),
+        reloaded: Some(reloaded),
+    })
+}
+
+/// 読み直した内容 `incoming` で、既にあるキャッシュ `existing` を置き換えてよいか
+/// (issue #350)。`get_session` と差分再走査は別々のタイミングで同じファイルを読み直し、
+/// 終わった順にキャッシュへ書き込むため、遅れて終わった**古い状態の読み**が
+/// 新しい状態のキャッシュを上書きしないよう、更新時刻が戻る置き換えは避ける。
+pub fn should_replace_cache(existing: Option<&CachedMessages>, incoming: &CachedMessages) -> bool {
+    existing.is_none_or(|e| e.fingerprint.modified_nanos <= incoming.fingerprint.modified_nanos)
+}
+
+/// 新しい順に並べ済みの `messages` から、表示する範囲の `Conversation` を作る。
+fn page_of_conversation(
+    session_id: &str,
+    messages_newest_first: &[Message],
+    offset: usize,
+    limit: usize,
+) -> Conversation {
+    Conversation {
+        id: session_id.to_string(),
+        messages: paginate_messages(messages_newest_first, offset, limit),
+        agent: domain::AgentKind::ClaudeCode,
+    }
+}
+
+/// 指定セッションの会話ファイルを1回読み、キャッシュへ入れる形(メッセージは新しい順、
+/// `LogLine` 一覧つき)で返す(issue #350。旧 `get_session` + `load_session_lines` の
+/// 2回読みを置き換えた)。ファイルの変更を検知した差分再走査(tauri 層)が、
+/// 読み込み済みのセッションのキャッシュを更新するときにも使う。
+pub fn reload_session(
+    source: &dyn SessionSource,
+    project: &str,
+    session_id: &str,
+) -> Result<ReloadedSession, AppError> {
+    if !is_valid_session_id(session_id) {
+        return Err(AppError::InvalidInput("不正なセッションIDです".to_string()));
+    }
+    let SessionContent {
+        fingerprint,
+        mut messages,
+        lines,
+    } = source.read_session(project, session_id)?;
+    order_messages_newest_first(&mut messages);
+    Ok(ReloadedSession {
+        messages: CachedMessages {
+            fingerprint,
+            messages: Arc::new(messages),
+        },
+        lines,
+    })
 }
 
 /// 指定メッセージ(会話チェーン行の `uuid`)の元の jsonl 行を、生のテキストで
@@ -478,22 +591,6 @@ pub fn get_session_line_raw(
         return Err(AppError::InvalidInput("不正なメッセージIDです".to_string()));
     }
     source.session_line_raw(project, session_id, uuid)
-}
-
-/// 指定セッションの会話ファイルを`LogLine`一覧として読み込む(オブジェクト
-/// モデル実装 第6弾。issue #208)。ビューアがセッションを開いたとき
-/// (`get_session`と同じ操作の一部)に呼び、結果は呼び出し元
-/// (tauri層のAppState)がファイルパスをキーにキャッシュして、以後は
-/// 再読み込みしない。
-pub fn load_session_lines(
-    source: &dyn SessionSource,
-    project: &str,
-    session_id: &str,
-) -> Result<Vec<LogLine>, AppError> {
-    if !is_valid_session_id(session_id) {
-        return Err(AppError::InvalidInput("不正なセッションIDです".to_string()));
-    }
-    source.session_lines(project, session_id)
 }
 
 /// `pc`の各ユーザーが持つ`Session.conversation_files`/`subagent_files`へ、
@@ -1648,6 +1745,10 @@ mod tests {
         log_lines: Result<Vec<LogLine>, ()>,
         /// `session_line_raw` が返す生の行。`None` は見つからない(`NotFound`)。
         raw_line: Option<String>,
+        /// `session_fingerprint` / `read_session` が返すファイルの状態(テストが書き換える)。
+        fingerprint: std::cell::Cell<FileFingerprint>,
+        /// `read_session` が呼ばれた回数(キャッシュで読み直しを省けたかの確認用)。
+        reads: std::cell::Cell<usize>,
     }
 
     impl FakeSessionSource {
@@ -1665,6 +1766,11 @@ mod tests {
                 parsed_sessions: HashMap::new(),
                 log_lines: Ok(Vec::new()),
                 raw_line: None,
+                fingerprint: std::cell::Cell::new(FileFingerprint {
+                    modified_nanos: 1,
+                    len: 1,
+                }),
+                reads: std::cell::Cell::new(0),
             }
         }
     }
@@ -1677,12 +1783,28 @@ mod tests {
             Ok(self.projects.clone())
         }
 
-        fn session(&self, _project: &str, session_id: &str) -> Result<Conversation, AppError> {
-            Ok(Conversation {
-                id: session_id.to_string(),
+        fn read_session(
+            &self,
+            _project: &str,
+            _session_id: &str,
+        ) -> Result<SessionContent, AppError> {
+            self.reads.set(self.reads.get() + 1);
+            Ok(SessionContent {
+                fingerprint: self.fingerprint.get(),
                 messages: self.messages.clone(),
-                agent: AgentKind::ClaudeCode,
+                lines: self
+                    .log_lines
+                    .clone()
+                    .map_err(|()| AppError::Io("boom".to_string()))?,
             })
+        }
+
+        fn session_fingerprint(
+            &self,
+            _project: &str,
+            _session_id: &str,
+        ) -> Result<FileFingerprint, AppError> {
+            Ok(self.fingerprint.get())
         }
 
         fn session_cwd(&self, _project: &str, _session_id: &str) -> Result<PathBuf, AppError> {
@@ -1699,16 +1821,6 @@ mod tests {
                 Some(Err(())) => Err(AppError::Io("boom".to_string())),
                 None => Ok(Vec::new()),
             }
-        }
-
-        fn session_lines(
-            &self,
-            _project: &str,
-            _session_id: &str,
-        ) -> Result<Vec<LogLine>, AppError> {
-            self.log_lines
-                .clone()
-                .map_err(|()| AppError::Io("boom".to_string()))
         }
 
         fn session_line_raw(
@@ -1813,8 +1925,9 @@ mod tests {
             ],
         );
 
-        let session =
-            get_session(&source, "some-project", "s1", 0, 10).expect("should get session");
+        let session = open_session(&source, None, "some-project", "s1", 0, 10)
+            .expect("should get session")
+            .conversation;
         assert_eq!(session.id, "s1");
         let texts: Vec<&str> = session.messages.iter().map(|m| m.text.as_str()).collect();
         assert_eq!(texts, vec!["second", "first"]);
@@ -1837,19 +1950,138 @@ mod tests {
         );
 
         // 記録順は a,b,c,d -> 新しい順は d,c,b,a -> offset 1, limit 2 で c,b
-        let session = get_session(&source, "some-project", "s1", 1, 2).expect("should get session");
+        let session = open_session(&source, None, "some-project", "s1", 1, 2)
+            .expect("should get session")
+            .conversation;
         let texts: Vec<&str> = session.messages.iter().map(|m| m.text.as_str()).collect();
         assert_eq!(texts, vec!["c", "b"]);
+    }
+
+    fn texts_of(conversation: &Conversation) -> Vec<&str> {
+        conversation
+            .messages
+            .iter()
+            .map(|m| m.text.as_str())
+            .collect()
+    }
+
+    fn user_message(text: &str) -> Message {
+        Message {
+            role: Role::User,
+            text: text.to_string(),
+            timestamp: "".to_string(),
+            uuid: None,
+            image_count: 0,
+        }
+    }
+
+    #[test]
+    fn open_session_reads_the_file_once_and_returns_content_to_cache() {
+        let mut source = FakeSessionSource::new("s1", vec![user_message("a"), user_message("b")]);
+        source.log_lines = Ok(vec![sample_log_line("l1")]);
+
+        let opened = open_session(&source, None, "p", "s1", 0, 10).expect("should open");
+
+        assert_eq!(
+            source.reads.get(),
+            1,
+            "メッセージとLogLineを1回の読みで得る"
+        );
+        let reloaded = opened.reloaded.expect("初回は読み直した内容が返る");
+        assert_eq!(reloaded.lines, vec![sample_log_line("l1")]);
+        // キャッシュへ入れるメッセージは新しい順に並べ済み。
+        let cached: Vec<&str> = reloaded
+            .messages
+            .messages
+            .iter()
+            .map(|m| m.text.as_str())
+            .collect();
+        assert_eq!(cached, vec!["b", "a"]);
+        assert_eq!(reloaded.messages.fingerprint, source.fingerprint.get());
+    }
+
+    #[test]
+    fn open_session_uses_cache_without_reading_when_the_file_is_unchanged() {
+        let source = FakeSessionSource::new("s1", ["a", "b", "c", "d"].map(user_message).to_vec());
+        let first = open_session(&source, None, "p", "s1", 0, 2).expect("should open");
+        let cache = first.reloaded.expect("初回は読む").messages;
+        assert_eq!(source.reads.get(), 1);
+
+        // ページ送り(offset を進める)。ファイルは変わっていないので読み直さない。
+        let second = open_session(&source, Some(&cache), "p", "s1", 2, 2).expect("should open");
+
+        assert_eq!(
+            source.reads.get(),
+            1,
+            "キャッシュが合っていれば読み直さない"
+        );
+        assert!(second.reloaded.is_none());
+        assert_eq!(texts_of(&second.conversation), vec!["b", "a"]);
+    }
+
+    #[test]
+    fn should_replace_cache_refuses_to_overwrite_a_newer_state_with_an_older_read() {
+        let cached = |modified_nanos| CachedMessages {
+            fingerprint: FileFingerprint {
+                modified_nanos,
+                len: 1,
+            },
+            messages: Arc::new(Vec::new()),
+        };
+
+        assert!(should_replace_cache(None, &cached(5)), "空なら入れる");
+        assert!(
+            should_replace_cache(Some(&cached(5)), &cached(6)),
+            "新しければ置き換える"
+        );
+        assert!(
+            should_replace_cache(Some(&cached(5)), &cached(5)),
+            "同じ時刻なら置き換える"
+        );
+        assert!(
+            !should_replace_cache(Some(&cached(6)), &cached(5)),
+            "古い読みは捨てる"
+        );
+    }
+
+    #[test]
+    fn open_session_rereads_when_modified_time_or_size_changed() {
+        let source = FakeSessionSource::new("s1", vec![user_message("a")]);
+        let cache = open_session(&source, None, "p", "s1", 0, 10)
+            .unwrap()
+            .reloaded
+            .unwrap()
+            .messages;
+
+        // サイズだけ変わった(同じ更新時刻)。
+        source.fingerprint.set(FileFingerprint {
+            modified_nanos: 1,
+            len: 2,
+        });
+        let opened = open_session(&source, Some(&cache), "p", "s1", 0, 10).unwrap();
+        assert_eq!(source.reads.get(), 2);
+        assert!(opened.reloaded.is_some());
+
+        // 更新時刻だけ変わった(同じサイズ)。
+        let cache = opened.reloaded.unwrap().messages;
+        source.fingerprint.set(FileFingerprint {
+            modified_nanos: 2,
+            len: 2,
+        });
+        let opened = open_session(&source, Some(&cache), "p", "s1", 0, 10).unwrap();
+        assert_eq!(source.reads.get(), 3);
+        assert!(opened.reloaded.is_some());
     }
 
     #[test]
     fn get_session_rejects_invalid_session_id_without_calling_source() {
         let source = FakeSessionSource::new("s1", vec![]);
 
-        let error = get_session(&source, "some-project", "../../etc/passwd", 0, 10)
+        let error = open_session(&source, None, "some-project", "../../etc/passwd", 0, 10)
             .expect_err("should reject invalid session id");
 
         assert!(matches!(error, AppError::InvalidInput(_)));
+        assert_eq!(source.reads.get(), 0);
     }
 
     fn sample_session_summary(id: &str, modified_at_ms: u64) -> SessionSummary {
@@ -2239,20 +2471,20 @@ mod tests {
     }
 
     #[test]
-    fn load_session_lines_delegates_to_source_for_a_valid_session_id() {
+    fn reload_session_delegates_to_source_for_a_valid_session_id() {
         let mut source = FakeSessionSource::new("s1", vec![]);
         source.log_lines = Ok(vec![sample_log_line("l1")]);
 
-        let lines = load_session_lines(&source, "proj", "s1").expect("should load lines");
+        let reloaded = reload_session(&source, "proj", "s1").expect("should reload");
 
-        assert_eq!(lines, vec![sample_log_line("l1")]);
+        assert_eq!(reloaded.lines, vec![sample_log_line("l1")]);
     }
 
     #[test]
-    fn load_session_lines_rejects_invalid_session_id_without_calling_source() {
+    fn reload_session_rejects_invalid_session_id_without_calling_source() {
         let source = FakeSessionSource::new("s1", vec![]);
 
-        let error = load_session_lines(&source, "proj", "../etc/passwd")
+        let error = reload_session(&source, "proj", "../etc/passwd")
             .expect_err("should reject invalid session id");
 
         assert!(matches!(error, AppError::InvalidInput(_)));

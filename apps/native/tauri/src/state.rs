@@ -77,6 +77,12 @@ pub struct AppState {
     /// エントリを取り除く。容量上限は引き続き設けない(無制限膨張の心配は
     /// 小さいという判断のまま)。
     pub loaded_log_lines: HashMap<PathBuf, Vec<LogLine>>,
+    /// 解析済みメッセージ(新しい順)のキャッシュ(issue #350)。キーは
+    /// `loaded_log_lines` と同じ会話ファイルのパスで、ライフサイクルも揃える
+    /// (`get_session` で読み込まれ、差分再走査で更新され、ファイルが消えたら取り除く)。
+    /// ファイルの状態(更新時刻 + サイズ)とセットで持ち、`get_session`(ページ送り)は
+    /// 状態が変わっていなければファイルを読み直さずここから切り出す。
+    pub loaded_messages: HashMap<PathBuf, app::CachedMessages>,
     /// `git_ledger`/`user_sessions` の読み込みが完了したかどうか
     /// (issue #218)。起動時は`false`で、起動後のバックグラウンドタスク・
     /// ハブの「再読み込み」操作のいずれかが一度でも完了すれば(成否に
@@ -151,6 +157,17 @@ pub struct LoadResult {
 }
 
 impl AppState {
+    /// 読み直した会話(メッセージ・LogLine)を、会話ファイルのパスをキーにキャッシュへ入れる
+    /// (issue #350)。遅れて終わった古い状態の読みが新しい状態のキャッシュを上書き
+    /// しないよう、置き換えてよいかは `app::should_replace_cache` で判断する。
+    pub fn store_loaded_session(&mut self, path: PathBuf, reloaded: app::ReloadedSession) {
+        if !app::should_replace_cache(self.loaded_messages.get(&path), &reloaded.messages) {
+            return;
+        }
+        self.loaded_log_lines.insert(path.clone(), reloaded.lines);
+        self.loaded_messages.insert(path, reloaded.messages);
+    }
+
     /// 起動時に設定ファイルを読み込む。存在しない/壊れている場合のデフォルト値
     /// へのフォールバックは `FileSettingsStore` 側の責務。
     ///
@@ -182,6 +199,7 @@ impl AppState {
                 git_ledger_path,
                 user_sessions: Vec::new(),
                 loaded_log_lines: HashMap::new(),
+                loaded_messages: HashMap::new(),
                 pc_data_loaded: false,
                 session_scan_generation: 0,
                 session_rescan: app::RescanQueue::default(),
