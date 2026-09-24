@@ -26,10 +26,11 @@
  * 【対象・ファイル対応】native.md §1 の「1型(クラス)= 1ファイル」(issue #184、
  * PR #185)により、domain クレートは各型が型名 snake_case のファイルに分かれて
  * いる(例: `Settings` → `settings.rs`)。`lib.rs` は `mod` 宣言と `pub use` のみ。
- * 本図の38クラスのうち、`ProjectItemKind` は `ProjectItem` と同じ `project_item.rs`
+ * 本図の39クラスのうち、`ProjectItemKind` は `ProjectItem` と同じ `project_item.rs`
  * に、`ClaudeDirEntryKind` は `ClaudeDirEntry` と同じ `claude_dir_entry.rs` に、
  * `GitRepositoryLedger` は `GitLedger` と同じ `git_ledger.rs` に、`ObservedWorktree`
- * は `ObservedGitState` と同じ `observed_git_state.rs` に、`ImageMediaType`・
+ * は `ObservedGitState` と同じ `observed_git_state.rs` に、`MessageStatus` は
+ * `Message` と同じ `message.rs` に、`ImageMediaType`・
  * `ImageAttachmentError` は `ImageAttachment` と同じ `image_attachment.rs` に同居する
  * (native.md 曰く「その型専用の小さな補助enum」だが、補助structも同じ扱いにしている。
  * なお `ImageMediaType` は `ImageAttachment` と `MessageImage` の両方から使われるため、
@@ -130,8 +131,20 @@ const DEFS: ClassDef[] = [
       // この行に含まれる表示可能な画像の枚数(issue #349)。画像本体は持たない
       // (必要なときだけ MessageImage として取り出す)。
       attr("image_count", "usize"),
+      // 送信の失敗に関する見分け(issue #364)。行から取り出した直後はエラー行だけが
+      // Error(それ以外は Normal)。質問との対応は mark_failed_questions が付ける。
+      attr("status", "MessageStatus"),
     ],
     position: { x: 2450, y: 150 },
+    filePath: "apps/native/crates/domain/src/message.rs",
+  },
+  {
+    name: { physical: "MessageStatus", logical: "MessageStatus", description: "送信の失敗に関する、メッセージの見分け(message.rs に同居。Message 専用の補助 enum)。会話ファイルは書き換えず、表示のための印だけを付ける。Normal: 通常のメッセージ / FailedQuestion: 答えのない質問(直後が送信失敗のエラー行の user メッセージ) / ErrorForQuestion: 答えのない質問の直後のエラー行(次に送信するとまとめて答える) / Error: 返答の途中で失敗したエラー行。issue #364" },
+    stereotype: "enumeration",
+    attributes: ["Normal", "FailedQuestion", "ErrorForQuestion", "Error"].map(label),
+    // Message の右下に置く(Message の右辺 → MessageStatus の左辺)。線のラベル(status)が
+    // 箱に隠れないよう間を空け、GithubProjectSummary(右上)とも離す。
+    position: { x: 2850, y: 340 },
     filePath: "apps/native/crates/domain/src/message.rs",
   },
   {
@@ -486,6 +499,7 @@ const RELATIONSHIPS = [
   rel("composition", "Conversation", "AgentKind", "agent", "top", "bottom"),
   rel("association", "Conversation", "Message", "messages", "right", "left"),
   rel("composition", "Message", "Role", "role", "bottom", "top"),
+  rel("composition", "Message", "MessageStatus", "status", "right", "left"),
   // 設定・プロファイル(Profile は classes-domain.ts に昇格済み。Settings.profiles の
   // コメントを参照)
   // GitHub連携(Projects v2)
