@@ -29,8 +29,8 @@ const DEFAULT_WINDOW_TITLE = "YAOYOROZU";
 
 // プロファイルを指定した別ウィンドウ(`/profiles/:id`)のタイトルは
 // 「<プロファイル名> - <ページ名>」にして、どのプロファイルのウィンドウかを
-// 区別できるようにする(issue #76)。ただしビューアは、ページ名(「ビューア」)の
-// 代わりに対象フォルダ名を出す(issue #348。下記 `viewerWindowTitle`)。
+// 区別できるようにする(issue #76)。ただしビューアは、ページ名(「ビューア」)を付けず
+// プロファイル名だけにする(issue #348・#377。下記 `viewerWindowTitle`)。
 function pageLabelForPath(pathname: string): string {
   if (pathname === "/settings") return "設定";
   if (pathname === "/claude") return "Claude";
@@ -38,17 +38,17 @@ function pageLabelForPath(pathname: string): string {
 }
 
 // ビューア(`/profiles/:id`。パスパラメータを含むため完全一致ではなく
-// プレフィックス判定。issue #88)のウィンドウタイトル(issue #348)。
-// 「<プロファイル名> - <フォルダ名>」。対象フォルダが複数のときは「 / 」でつなぎ、
-// 無いときはプロファイル名だけ。Rust 側の初期タイトル(`app::viewer_window_title`。
-// ウィンドウ生成時)と同じ規則で、設定変更(対象フォルダ・プロファイル名)には
-// ここで追従する。
+// プレフィックス判定。issue #88)のウィンドウタイトル。プロファイル名だけ(issue #377。
+// 以前は「<プロファイル名> - <対象フォルダ名を「 / 」でつないだもの>」だったが、対象
+// フォルダが増えると長大になり意味も読み取れないため、フォルダ名の列挙をやめた)。
+// Rust 側の初期タイトル(`app::viewer_window_title`。ウィンドウ生成時)と同じ規則で、
+// プロファイル名の変更にはここで追従する。
 function isViewerPath(pathname: string): boolean {
   return pathname === "/profiles" || pathname.startsWith("/profiles/");
 }
 
-function viewerWindowTitle(profileName: string, folders: string[]): string {
-  return folders.length > 0 ? `${profileName} - ${folders.join(" / ")}` : profileName;
+function viewerWindowTitle(profileName: string): string {
+  return profileName;
 }
 
 // AppDock(グローバルメニュー)は全画面共通のためレイアウト側に置く
@@ -61,8 +61,6 @@ function Layout() {
   const [pageItems, setPageItems] = useState<PageDockItem[]>([]);
   const [corruptionWarning, setCorruptionWarning] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<ProfileSummaryDto[]>([]);
-  // このウィンドウのプロファイルの対象フォルダ(ビューアのタイトルに出す。issue #348)。
-  const [targetFolders, setTargetFolders] = useState<string[]>([]);
 
   useEffect(() => {
     // 設定ファイルの破損は起動直後(まだ /settings にいるとは限らない)に
@@ -83,11 +81,11 @@ function Layout() {
       : null;
     const title = profileName
       ? isViewerPath(location.pathname)
-        ? viewerWindowTitle(profileName, targetFolders)
+        ? viewerWindowTitle(profileName)
         : `${profileName} - ${pageLabelForPath(location.pathname)}`
       : (WINDOW_TITLE_BY_PATH[location.pathname] ?? DEFAULT_WINDOW_TITLE);
     void getCurrentWindow().setTitle(title);
-  }, [location.pathname, windowProfileId, profiles, targetFolders]);
+  }, [location.pathname, windowProfileId, profiles]);
 
   // プロファイル一覧は別ウィンドウのタイトル(「<プロファイル名> - <ページ名>」)
   // に使う。全画面共通のため Layout 自身が取得する(issue #72・#76)。
@@ -96,7 +94,6 @@ function Layout() {
       getSettings(windowProfileId)
         .then((settings) => {
           setProfiles(settings.profiles);
-          setTargetFolders(settings.selected_project_folders);
         })
         .catch((e) => console.error(e));
     };

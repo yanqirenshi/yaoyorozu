@@ -440,7 +440,7 @@ async fn open_profile_window(
     let title = {
         let guard = state.lock().await;
         let profile = app::resolve_profile(&guard.settings, Some(profile_id.as_str()))?;
-        app::viewer_window_title(&profile.name, &profile.selected_project_folders)
+        app::viewer_window_title(&profile.name)
     };
 
     let label = format!("profile-{}", uuid::Uuid::new_v4());
