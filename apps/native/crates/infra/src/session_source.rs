@@ -545,7 +545,6 @@ impl SessionSource for FileSystemRepository {
                     modified_at_ms,
                     cwd: scanned.cwd,
                     git_branch: scanned.git_branch,
-                    root_uuid: scanned.root_uuid,
                 })
             })
             .collect()
@@ -631,9 +630,6 @@ struct CachedSessionSummary {
     mode: Option<String>,
     slug: Option<String>,
     last_prompt: Option<String>,
-    /// 会話チェーンの根(最初の `parentUuid: null` 行の `uuid`)。フォーク系列の
-    /// グループ化キー(issue #345。`domain::SessionSummary.root_uuid`)。
-    root_uuid: Option<String>,
 }
 
 static SESSION_SUMMARY_CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedSessionSummary>>> =
@@ -695,7 +691,6 @@ fn scan_session_summary(path: &Path) -> Result<CachedSessionSummary, AppError> {
     let mut mode: Option<String> = None;
     let mut slug: Option<String> = None;
     let mut last_prompt: Option<String> = None;
-    let mut root_uuid: Option<String> = None;
 
     // 1行につき `SessionLine` を1回だけ構築し、各値をそのフィールドから直接読む
     // (issue #302。従来は `extract_*` を最大9回呼び、そのたびに `Value` の
@@ -734,16 +729,6 @@ fn scan_session_summary(path: &Path) -> Result<CachedSessionSummary, AppError> {
         if let Some(value) = scanned.last_prompt() {
             last_prompt = Some(value.to_string());
         }
-        // 会話チェーンの根(最初の `parentUuid: null` 行のuuid。issue #345)。
-        // `uuid` を持たないセッションメタ行・未知の行はどちらも `None` を
-        // 返すため、`uuid` の有無で会話チェーン行かどうかを見分ける。
-        if root_uuid.is_none() {
-            if let Some(uuid) = scanned.uuid() {
-                if scanned.parent_uuid().is_none() {
-                    root_uuid = Some(uuid.to_string());
-                }
-            }
-        }
     }
 
     let id = id.ok_or_else(|| AppError::Io("セッションIDを取得できませんでした".to_string()))?;
@@ -765,7 +750,6 @@ fn scan_session_summary(path: &Path) -> Result<CachedSessionSummary, AppError> {
         mode,
         slug,
         last_prompt,
-        root_uuid,
     })
 }
 
@@ -795,7 +779,6 @@ mod tests {
         let mut mode: Option<String> = None;
         let mut slug: Option<String> = None;
         let mut last_prompt: Option<String> = None;
-        let mut root_uuid: Option<String> = None;
 
         for value in BufReader::new(file)
             .lines()
@@ -835,15 +818,6 @@ mod tests {
             if let Some(value) = extract_last_prompt(&value) {
                 last_prompt = Some(value);
             }
-            if root_uuid.is_none() {
-                if let Ok(line) = serde_json::from_value::<domain::SessionLine>(value.clone()) {
-                    if let Some(uuid) = line.uuid() {
-                        if line.parent_uuid().is_none() {
-                            root_uuid = Some(uuid.to_string());
-                        }
-                    }
-                }
-            }
         }
 
         let id =
@@ -866,7 +840,6 @@ mod tests {
             mode,
             slug,
             last_prompt,
-            root_uuid,
         })
     }
 
@@ -1290,49 +1263,6 @@ mod tests {
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].cwd.as_deref(), Some("/repo"));
         assert_eq!(sessions[0].git_branch.as_deref(), Some("feature/x"));
-    }
-
-    #[test]
-    fn list_sessions_extracts_root_uuid_from_the_first_chain_root_line() {
-        // issue #345: 根uuidは「parentUuidが無い最初の会話チェーン行」の
-        // uuid。sessionメタ行(mode等)はuuidを持たないため無視される。
-        let dir = tempfile::tempdir().unwrap();
-        let project_dir = dir.path().join("proj");
-        fs::create_dir_all(&project_dir).unwrap();
-        fs::write(
-            project_dir.join("s1.jsonl"),
-            [
-                r#"{"type":"mode","mode":"normal","sessionId":"s1"}"#,
-                r#"{"type":"user","uuid":"root-1","sessionId":"s1","message":{"content":"hello"}}"#,
-                r#"{"type":"assistant","uuid":"a-1","parentUuid":"root-1","sessionId":"s1","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}"#,
-            ]
-            .join("\n"),
-        )
-        .unwrap();
-
-        let repo = FileSystemRepository::new(dir.path().to_path_buf());
-        let sessions = repo.list_sessions("proj").expect("should list sessions");
-
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].root_uuid.as_deref(), Some("root-1"));
-    }
-
-    #[test]
-    fn list_sessions_leaves_root_uuid_none_when_no_chain_root_line_present() {
-        let dir = tempfile::tempdir().unwrap();
-        let project_dir = dir.path().join("proj");
-        fs::create_dir_all(&project_dir).unwrap();
-        fs::write(
-            project_dir.join("s1.jsonl"),
-            r#"{"type":"custom-title","customTitle":"タイトル","sessionId":"s1"}"#,
-        )
-        .unwrap();
-
-        let repo = FileSystemRepository::new(dir.path().to_path_buf());
-        let sessions = repo.list_sessions("proj").expect("should list sessions");
-
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].root_uuid, None);
     }
 
     #[test]

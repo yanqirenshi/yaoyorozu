@@ -1,9 +1,9 @@
 use domain::{
-    collapse_session_series, extract_message_images, is_valid_claude_dir_path, is_valid_json,
-    is_valid_project_dir_name, is_valid_rule_file_name, is_valid_session_id, is_valid_skill_name,
-    mark_failed_questions, order_messages_newest_first, paginate_messages, reconcile_branches,
-    reconcile_worktrees, repositories_from_profiles, sort_claude_dir_entries,
-    sort_projects_by_recency, validate_image_attachment, validate_image_attachments,
+    extract_message_images, is_valid_claude_dir_path, is_valid_json, is_valid_project_dir_name,
+    is_valid_rule_file_name, is_valid_session_id, is_valid_skill_name, mark_failed_questions,
+    order_messages_newest_first, paginate_messages, reconcile_branches, reconcile_worktrees,
+    repositories_from_profiles, sort_claude_dir_entries, sort_projects_by_recency,
+    sort_sessions_newest_first, validate_image_attachment, validate_image_attachments,
     validate_image_count, Camera, ClaudeDirEntry, ClaudeDirPage, ClaudeMdFile, ClaudeSettingsFile,
     Conversation, GitLedger, GitRepositoryLedger, HubLayout, HubTuning, ImageAttachment, LogLine,
     Message, MessageImage, NodePosition, ParsedSession, Project, RuleSummary, SessionSummary,
@@ -463,8 +463,7 @@ pub enum AgentMode {
 /// 将来の別イシューで扱う)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Continuation {
-    /// この `session_id` へ `--resume` で継続する(フォーク系列の先頭=
-    /// 表示中セッション自身のID)。
+    /// この `session_id`(表示中セッション自身のID)へ `--resume` で継続する。
     Resume(String),
 }
 
@@ -652,20 +651,21 @@ pub fn resolve_session_display_hints(
     hints
 }
 
-/// 指定プロジェクトのセッション一覧を、フォーク系列(issue #345)ごとに
-/// 最新ファイルだけへ畳んだ上で、最終更新の新しい順に並べて返す(ビューア
-/// 左ペイン用。issue #33)。
+/// 指定プロジェクトのセッション一覧を、最終更新の新しい順に並べて返す(ビューア
+/// 左ペイン用。issue #33)。1件 = 1セッション(セッションID = 会話ファイル)で、
+/// フォークや圧縮で分かれたファイルもそれぞれ別のセッションとして全件返す
+/// (issue #369。#345 の「系列ごとに最新ファイルへ畳む」扱いは廃止した)。
 pub fn list_sessions(
     source: &dyn SessionSource,
     project: &str,
 ) -> Result<Vec<SessionSummary>, AppError> {
-    let sessions = source.list_sessions(project)?;
-    Ok(collapse_session_series(sessions))
+    let mut sessions = source.list_sessions(project)?;
+    sort_sessions_newest_first(&mut sessions);
+    Ok(sessions)
 }
 
-/// `session_id`(表示中のフォーク系列の先頭。`list_sessions` が返すのは
-/// 各系列の最新ファイルのみなので、表示中のIDがそのまま系列の先頭になる)へ
-/// `--resume` でメッセージを送信する(issue #345)。
+/// `session_id`(表示中のセッション)へ `--resume` でメッセージを送信する
+/// (issue #345)。
 ///
 /// 継続方式を `--continue`(カレントディレクトリの最新の会話をそのまま
 /// 継続)から `--resume <ID>` へ変えたことで、旧実装が必要としていた
@@ -1059,7 +1059,7 @@ pub fn load_viewer_tabs(
 }
 
 /// ビューアのセッションタブの並びを保存する(issue #353)。並びは呼び出し側が
-/// 持つ全体で丸ごと置き換える。プロジェクト名・系列の鍵を検証し、同じキーの
+/// 持つ全体で丸ごと置き換える。プロジェクト名・セッションIDを検証し、同じキーの
 /// 重複は先頭だけを残す。`version` は現在のバージョンで書く。
 pub fn save_viewer_tabs(
     store: &dyn ViewerTabsStore,
@@ -1069,7 +1069,7 @@ pub fn save_viewer_tabs(
     validate_profile_id(profile_id)?;
     let mut unique: Vec<ViewerTab> = Vec::with_capacity(tabs.len());
     for tab in tabs {
-        if !is_valid_project_dir_name(&tab.project) || tab.series_key.trim().is_empty() {
+        if !is_valid_project_dir_name(&tab.project) || !is_valid_session_id(&tab.session_id) {
             return Err(AppError::InvalidInput("不正なタブの指定です".to_string()));
         }
         if !unique.contains(&tab) {
@@ -2131,7 +2131,6 @@ mod tests {
             modified_at_ms,
             cwd: None,
             git_branch: None,
-            root_uuid: None,
         }
     }
 
@@ -2149,22 +2148,17 @@ mod tests {
     }
 
     #[test]
-    fn list_sessions_collapses_fork_series_to_the_latest_file() {
+    fn list_sessions_returns_every_session_even_when_forked_files_look_alike() {
+        // issue #369: フォークや圧縮で分かれたファイルも、セッションごとに全件返す。
         let mut source = FakeSessionSource::new("s1", vec![]);
         source.sessions = vec![
-            SessionSummary {
-                root_uuid: Some("root-a".to_string()),
-                ..sample_session_summary("fork-1", 1)
-            },
-            SessionSummary {
-                root_uuid: Some("root-a".to_string()),
-                ..sample_session_summary("fork-2", 2)
-            },
+            sample_session_summary("fork-1", 1),
+            sample_session_summary("fork-2", 2),
         ];
 
         let sessions = list_sessions(&source, "some-project").expect("should list sessions");
         let ids: Vec<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
-        assert_eq!(ids, vec!["fork-2"]);
+        assert_eq!(ids, vec!["fork-2", "fork-1"]);
     }
 
     fn sample_parsed_session(session_id: &str) -> ParsedSession {
@@ -2281,7 +2275,7 @@ mod tests {
     fn viewer_tab(project: &str, key: &str) -> ViewerTab {
         ViewerTab {
             project: project.to_string(),
-            series_key: key.to_string(),
+            session_id: key.to_string(),
         }
     }
 

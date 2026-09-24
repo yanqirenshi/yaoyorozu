@@ -1,9 +1,9 @@
 use crate::ViewerTab;
 
-/// `ViewerTabs` の現在のスキーマバージョン。まだ v1 のみでマイグレーションは
-/// 無いが、他の永続化型(`HubLayout` 等)と同じ流儀で最初から持たせておく
-/// (issue #353)。
-pub const CURRENT_VIEWER_TABS_VERSION: u32 = 1;
+/// `ViewerTabs` の現在のスキーマバージョン(他の永続化型 `HubLayout` 等と同じ流儀。
+/// issue #353)。v2(issue #369)でタブのキーをフォーク系列の鍵(`series_key`)から
+/// セッションID(`session_id`)に改めた。v1 からのマイグレーションは infra にある。
+pub const CURRENT_VIEWER_TABS_VERSION: u32 = 2;
 
 /// ビューアで開いているセッションタブの並び(issue #353)。プロファイルごとに
 /// 別ファイル(`app_data_dir/viewer-tabs/<プロファイルID>.json`)へ保存する。
@@ -42,7 +42,7 @@ mod tests {
             version: CURRENT_VIEWER_TABS_VERSION,
             tabs: vec![ViewerTab {
                 project: "proj-a".to_string(),
-                series_key: "root-1".to_string(),
+                session_id: "sess-1".to_string(),
             }],
         };
         let json = serde_json::to_string(&tabs).unwrap();

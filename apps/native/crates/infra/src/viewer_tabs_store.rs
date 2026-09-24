@@ -1,5 +1,5 @@
 use app::{AppError, ViewerTabsStore};
-use domain::{ViewerTabs, CURRENT_VIEWER_TABS_VERSION};
+use domain::{ViewerTab, ViewerTabs, CURRENT_VIEWER_TABS_VERSION};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
@@ -13,6 +13,37 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// プロファイル ID は app 層で検証済みの前提(ファイル名の構築に使うため)。
 pub struct FileViewerTabsStore {
     dir: PathBuf,
+}
+
+/// v1(issue #353。タブのキーがフォーク系列の鍵 `series_key`)のファイル形式。
+/// マイグレーションのためだけに読む(v2 = issue #369 でキーが `session_id` になった)。
+#[derive(serde::Deserialize)]
+struct ViewerTabsV1 {
+    tabs: Vec<ViewerTabV1>,
+}
+
+#[derive(serde::Deserialize)]
+struct ViewerTabV1 {
+    project: String,
+    series_key: String,
+}
+
+/// v1 → v2。旧 `series_key` の値をそのまま `session_id` として引き継ぐ。
+/// 系列の鍵が `root_uuid` だった(=そのセッション自身のIDではなかった)タブは、
+/// 一致するセッションが一覧に無くなるので、ビューアの「一覧に無いタブは表示しない」
+/// 規則で自然に外れる(ここでは判別も削除もしない)。
+fn migrate_v1(v1: ViewerTabsV1) -> ViewerTabs {
+    ViewerTabs {
+        version: CURRENT_VIEWER_TABS_VERSION,
+        tabs: v1
+            .tabs
+            .into_iter()
+            .map(|tab| ViewerTab {
+                project: tab.project,
+                session_id: tab.series_key,
+            })
+            .collect(),
+    }
 }
 
 impl FileViewerTabsStore {
@@ -51,7 +82,24 @@ impl ViewerTabsStore for FileViewerTabsStore {
             return Ok(ViewerTabs::default());
         };
 
-        let Ok(tabs) = serde_json::from_str::<ViewerTabs>(&content) else {
+        let Ok(raw) = serde_json::from_str::<serde_json::Value>(&content) else {
+            self.evacuate_corrupt_file(&path);
+            return Ok(ViewerTabs::default());
+        };
+
+        // v1(タブのキーが `series_key`)は v2 へ移行して書き戻す(issue #369)。
+        // 書き戻しに失敗しても(パーミッション等)移行後の値で起動は継続する。
+        if raw.get("version").and_then(|v| v.as_u64()) == Some(1) {
+            let Ok(v1) = serde_json::from_value::<ViewerTabsV1>(raw) else {
+                self.evacuate_corrupt_file(&path);
+                return Ok(ViewerTabs::default());
+            };
+            let migrated = migrate_v1(v1);
+            let _ = self.save(profile_id, &migrated);
+            return Ok(migrated);
+        }
+
+        let Ok(tabs) = serde_json::from_value::<ViewerTabs>(raw) else {
             self.evacuate_corrupt_file(&path);
             return Ok(ViewerTabs::default());
         };
@@ -109,11 +157,11 @@ mod tests {
             tabs: vec![
                 ViewerTab {
                     project: "proj-a".to_string(),
-                    series_key: "root-1".to_string(),
+                    session_id: "sess-1".to_string(),
                 },
                 ViewerTab {
                     project: "proj-b".to_string(),
-                    series_key: "sess-2".to_string(),
+                    session_id: "sess-2".to_string(),
                 },
             ],
         }
@@ -167,6 +215,66 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().contains("p1.json.corrupt."))
             .count();
         assert_eq!(evacuated, 1);
+    }
+
+    #[test]
+    fn load_migrates_v1_series_keys_to_session_ids_and_persists_v2() {
+        // v1: キーはフォーク系列の鍵(`series_key`)。値はそのまま `session_id` へ引き継ぐ
+        // (`root_uuid` だった鍵は一致するセッションが無くなり、表示側の規則で外れる)。
+        let dir = tempfile::tempdir().unwrap();
+        let tabs_dir = dir.path().join("viewer-tabs");
+        fs::create_dir_all(&tabs_dir).unwrap();
+        fs::write(
+            tabs_dir.join("p1.json"),
+            r#"{"version":1,"tabs":[{"project":"proj-a","series_key":"root-1"},{"project":"proj-b","series_key":"sess-2"}]}"#,
+        )
+        .unwrap();
+        let store = FileViewerTabsStore::new(tabs_dir.clone());
+
+        let loaded = store.load("p1").unwrap();
+
+        let expected = ViewerTabs {
+            version: CURRENT_VIEWER_TABS_VERSION,
+            tabs: vec![
+                ViewerTab {
+                    project: "proj-a".to_string(),
+                    session_id: "root-1".to_string(),
+                },
+                ViewerTab {
+                    project: "proj-b".to_string(),
+                    session_id: "sess-2".to_string(),
+                },
+            ],
+        };
+        assert_eq!(loaded, expected);
+        // v2 で書き戻されている(次の起動は移行なしで読める。退避もされていない)。
+        let persisted = fs::read_to_string(tabs_dir.join("p1.json")).unwrap();
+        assert!(persisted.contains("\"version\": 2"));
+        assert!(persisted.contains("session_id"));
+        assert!(!persisted.contains("series_key"));
+        assert_eq!(store.load("p1").unwrap(), expected);
+        let evacuated = fs::read_dir(&tabs_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".corrupt."))
+            .count();
+        assert_eq!(evacuated, 0);
+    }
+
+    #[test]
+    fn load_evacuates_a_malformed_v1_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let tabs_dir = dir.path().join("viewer-tabs");
+        fs::create_dir_all(&tabs_dir).unwrap();
+        fs::write(
+            tabs_dir.join("p1.json"),
+            r#"{"version":1,"tabs":[{"project":"proj-a"}]}"#,
+        )
+        .unwrap();
+        let store = FileViewerTabsStore::new(tabs_dir.clone());
+
+        assert_eq!(store.load("p1").unwrap(), ViewerTabs::default());
+        assert!(!tabs_dir.join("p1.json").exists());
     }
 
     #[test]
