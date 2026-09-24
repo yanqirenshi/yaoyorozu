@@ -417,7 +417,7 @@ Bash の tool_result が返るまで、150 で 12〜16 秒、280 で 7 秒かか
 
 ## 付録 A. 探査ツール `cli-probe`
 
-Rust の使い捨て CLI(約 330 行)。
+Rust の使い捨て CLI(約 430 行)。
 `cli-probe <claude.exe> <cwd> <scenario> [--resume ID] [--permission-mode M] [--print] [--no-init] [--name N] [--model M] [--log FILE]`。
 
 - 子プロセスを `Stdio::piped()` で spawn し、stdout / stderr を読むスレッド 2 本と、シナリオを進めるメインスレッドで構成
@@ -425,7 +425,7 @@ Rust の使い捨て CLI(約 330 行)。
 - `can_use_tool` は `allow`(入力をそのまま `updatedInput` に)か `deny` で即答
 - 台帳 `~/.claude/sessions/<PID>.json` を要所で読んで表示
 
-ソースはスクラッチパッド(`…\scratchpad\poc382\cli-probe`)にあり、リポジトリには入れていない(入れるかはデザイン (全体) の判断)。
+ソースは `reports/tools/cli-probe/` に置く(Cargo workspace には入れない単独の crate。使い方は同フォルダの README。Issue #384 / PR #385 で配置)。
 
 ## 付録 B. 実行一覧
 
