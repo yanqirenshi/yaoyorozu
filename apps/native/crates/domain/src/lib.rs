@@ -41,6 +41,8 @@ mod skill_summary;
 mod timestamp;
 mod user;
 mod validation;
+mod viewer_tab;
+mod viewer_tabs;
 mod window_state;
 mod window_tab;
 
@@ -89,6 +91,8 @@ pub use validation::{
     is_valid_claude_dir_path, is_valid_json, is_valid_project_dir_name, is_valid_rule_file_name,
     is_valid_session_id, is_valid_skill_name,
 };
+pub use viewer_tab::ViewerTab;
+pub use viewer_tabs::{ViewerTabs, CURRENT_VIEWER_TABS_VERSION};
 pub use window_state::WindowState;
 pub use window_tab::WindowTab;
 

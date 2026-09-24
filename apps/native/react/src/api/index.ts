@@ -25,6 +25,7 @@ import type {
   RuleSummaryDto,
   SessionChangedEvent,
   SessionSummaryDto,
+  ViewerTabDto,
   SettingsCorruptedEvent,
   SettingsDto,
   SettingsInputDto,
@@ -73,6 +74,7 @@ export type {
   SessionDto,
   SessionFileDto,
   SessionSummaryDto,
+  ViewerTabDto,
   SettingsCorruptedEvent,
   SettingsDto,
   SettingsInputDto,
@@ -103,6 +105,15 @@ export function getSessionLineRaw(
   uuid: string,
 ): Promise<string> {
   return invoke<string>("get_session_line_raw", { project, sessionId, uuid });
+}
+
+// ビューアのセッションタブの並び(プロファイルごと。issue #353)。
+export function getViewerTabs(profileId: string): Promise<ViewerTabDto[]> {
+  return invoke<ViewerTabDto[]>("get_viewer_tabs", { profileId });
+}
+
+export function saveViewerTabs(profileId: string, tabs: ViewerTabDto[]): Promise<void> {
+  return invoke<void>("save_viewer_tabs", { profileId, tabs });
 }
 
 export function listSessions(project: string): Promise<SessionSummaryDto[]> {
