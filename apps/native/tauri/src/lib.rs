@@ -401,17 +401,17 @@ async fn open_profile_window(
     state: tauri::State<'_, Mutex<AppState>>,
     profile_id: String,
 ) -> Result<(), AppErrorDto> {
-    let profile_name = {
+    // ウィンドウの初期タイトル(issue #348)。設定変更への追従はフロントが行う。
+    let title = {
         let guard = state.lock().await;
-        app::resolve_profile(&guard.settings, Some(profile_id.as_str()))?
-            .name
-            .clone()
+        let profile = app::resolve_profile(&guard.settings, Some(profile_id.as_str()))?;
+        app::viewer_window_title(&profile.name, &profile.selected_project_folders)
     };
 
     let label = format!("profile-{}", uuid::Uuid::new_v4());
     let url = tauri::WebviewUrl::App(format!("index.html#/profiles/{profile_id}").into());
     tauri::WebviewWindowBuilder::new(&app, label, url)
-        .title(format!("{profile_name} - ビューア"))
+        .title(title)
         .inner_size(800.0, 600.0)
         .drag_and_drop(false)
         .build()
