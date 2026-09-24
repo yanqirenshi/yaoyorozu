@@ -380,7 +380,12 @@ const SECTIONS: DocSection[] = [
             {
               item: "ラベルとの間隔",
               value: TAB_CLOSE.gap + " (" + spacePx(TAB_CLOSE.gap) + "px)",
-              note: "",
+              note: "× の右側は、タブの左右のパディングと同じだけ空ける。",
+            },
+            {
+              item: "上下の位置",
+              value: "下線を除いた領域で上下中央",
+              note: TAB_CLOSE.verticalAlign,
             },
             {
               item: "線の色",
