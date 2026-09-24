@@ -32,7 +32,7 @@
 //!   (`AppState.session_scan_generation`)で防ぐ(旧世代の結果は適用しない)
 
 use crate::state::{self, AppState};
-use domain::{LogLine, ParsedSession};
+use domain::ParsedSession;
 use infra::{FileSystemRepository, SessionFileRef};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -196,6 +196,7 @@ async fn finish(
             guard
                 .loaded_log_lines
                 .retain(|path, _| paths.contains(path));
+            guard.loaded_messages.retain(|path, _| paths.contains(path));
         }
         // 常駐化: 後始末の結果を保持ツリーへ反映する
         let state_mut = &mut *guard;
@@ -267,11 +268,12 @@ async fn run_rescan_worker(app_handle: tauri::AppHandle) {
     }
 }
 
-/// 差分再走査の結果1件。`Parsed` の第2要素は再読込した行(`LogLine`)。
-/// 行を読み直すのは「読み込み済み(ビューアで開いたことがある)ファイル」の
+/// 差分再走査の結果1件。`Parsed` の第2要素は再読込した会話の内容
+/// (メッセージ・行(`LogLine`)。1回の読みで両方得る。issue #350)。
+/// 読み直すのは「読み込み済み(ビューアで開いたことがある)ファイル」の
 /// 変更時のみで、それ以外は `None`(遅延読み込みの原則は変えない。常駐化 PoC)。
 enum RescanOutcome {
-    Parsed(Box<ParsedSession>, Option<Vec<LogLine>>),
+    Parsed(Box<ParsedSession>, Option<app::ReloadedSession>),
     Removed(PathBuf),
     Failed(PathBuf, String),
 }
@@ -318,7 +320,7 @@ async fn rescan_batch(
                 Some(reference) => match repo.parse_session_file(&reference) {
                     Ok(parsed) => {
                         let lines = if reload_lines {
-                            app::load_session_lines(
+                            app::reload_session(
                                 &repo,
                                 &reference.project,
                                 &reference.session_id,
@@ -357,11 +359,9 @@ async fn rescan_batch(
     let mut changed = false;
     for outcome in outcomes {
         match outcome {
-            RescanOutcome::Parsed(parsed, lines) => {
-                if let Some(lines) = lines {
-                    guard
-                        .loaded_log_lines
-                        .insert(parsed.conversation_file_path.clone(), lines);
+            RescanOutcome::Parsed(parsed, reloaded) => {
+                if let Some(reloaded) = reloaded {
+                    guard.store_loaded_session(parsed.conversation_file_path.clone(), reloaded);
                 }
                 app::upsert_parsed_session(&mut guard.user_sessions, *parsed);
                 changed = true;
@@ -369,7 +369,9 @@ async fn rescan_batch(
             RescanOutcome::Removed(path) => {
                 changed |= app::remove_parsed_session(&mut guard.user_sessions, &path);
                 // 常駐化: 削除されたファイルの行キャッシュも後始末する
-                if guard.loaded_log_lines.remove(&path).is_some() {
+                let removed_lines = guard.loaded_log_lines.remove(&path).is_some();
+                let removed_messages = guard.loaded_messages.remove(&path).is_some();
+                if removed_lines || removed_messages {
                     changed = true;
                 }
             }

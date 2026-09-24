@@ -12,7 +12,7 @@
 
 use super::extract::message_from_line;
 use super::SessionLine;
-use crate::Message;
+use crate::{convert_session_line, LogLine, LogLineConversionError, Message};
 
 pub struct ScannedLine {
     line: SessionLine,
@@ -84,6 +84,22 @@ impl ScannedLine {
         message_from_line(&self.line)
     }
 
+    /// この1行から、ビューア用のメッセージと `LogLine` を**同時に**取り出す
+    /// (issue #350)。会話を開くときは `message()` と `convert_session_line` の
+    /// 両方が要るため、同じ行を2回パースしないようここで1回のパース結果を
+    /// 分け合う。値は `message()` / `convert_json_line_to_log_line` と同じ
+    /// (`SessionLine` を所有権ごと `convert_session_line` へ渡すだけで、
+    /// 変換ルールの実装は共有している)。
+    pub fn into_message_and_log_line(
+        self,
+    ) -> (
+        Option<Message>,
+        Result<Option<LogLine>, LogLineConversionError>,
+    ) {
+        let message = message_from_line(&self.line);
+        (message, convert_session_line(self.line))
+    }
+
     /// ユーザーの発言の本文(`extract_message` が `Role::User` で返すものの
     /// `text`)。アシスタント行では本文を組み立てない(走査で最初のユーザー
     /// 発言を探すときの無駄なコピーを避ける)。
@@ -111,6 +127,7 @@ impl ScannedLine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::convert_json_line_to_log_line;
     use crate::session_line::{
         extract_ai_title, extract_custom_title, extract_cwd, extract_git_branch,
         extract_last_prompt, extract_message, extract_mode, extract_session_id, extract_slug,
@@ -189,5 +206,44 @@ mod tests {
             let new_user_text = scanned.as_ref().and_then(ScannedLine::user_message_text);
             assert_eq!(old_user_text, new_user_text, "{text}");
         }
+    }
+
+    /// 会話を開くための1回パース(`into_message_and_log_line`)が、従来の2本の読み方
+    /// (`extract_message` と `convert_json_line_to_log_line`。どちらも `&Value` 版)と
+    /// 全標本で同じ結果になる(issue #350 の同一性の保証)。
+    #[test]
+    fn into_message_and_log_line_matches_old_readers_for_all_samples() {
+        for text in SAMPLE_LINES {
+            let value = serde_json::from_str::<serde_json::Value>(text).ok();
+            let old_message = value.as_ref().and_then(extract_message);
+            let old_log_line = match value.as_ref() {
+                Some(v) => convert_json_line_to_log_line(v),
+                None => Ok(None),
+            };
+
+            let (new_message, new_log_line) = match ScannedLine::parse(text) {
+                Some(scanned) => scanned.into_message_and_log_line(),
+                None => (None, Ok(None)),
+            };
+
+            let parts = |m: Message| (m.role, m.text, m.timestamp, m.uuid, m.image_count);
+            assert_eq!(old_message.map(parts), new_message.map(parts), "{text}");
+            assert_eq!(old_log_line, new_log_line, "{text}");
+        }
+    }
+
+    /// チェーン行なのに `uuid`/`timestamp` を変換できない行は、従来と同じ理由の `Err` になる。
+    #[test]
+    fn into_message_and_log_line_reports_the_same_conversion_error() {
+        let text =
+            r#"{"type":"user","sessionId":"s1","message":{"role":"user","content":"hello"}}"#;
+        let value = serde_json::from_str::<serde_json::Value>(text).unwrap();
+        let (message, log_line) = ScannedLine::parse(text)
+            .unwrap()
+            .into_message_and_log_line();
+        assert_eq!(log_line, convert_json_line_to_log_line(&value));
+        assert!(log_line.is_err(), "uuid が無い行は変換できない");
+        // 表示用のメッセージは、LogLine に変換できなくても取り出せる(従来どおり)。
+        assert_eq!(message.map(|m| m.text), Some("hello".to_string()));
     }
 }
