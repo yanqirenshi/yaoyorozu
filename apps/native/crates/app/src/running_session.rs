@@ -666,6 +666,53 @@ mod tests {
     }
 
     #[test]
+    fn the_block_message_names_the_ledger_file_and_pid_so_the_user_can_resolve_it() {
+        // issue #345 の後続: 台帳が壊れて PID が使い回されると止まり続けうるため、
+        // 止めた理由に原因の台帳のパスと PID を含める(どちらの根拠でも)。
+        struct FixedLedger(DetectedRunning);
+        impl RunningSessionSource for FixedLedger {
+            fn find_running(
+                &self,
+                _session_id: &str,
+                _exclude_pids: &[u32],
+            ) -> Result<Option<DetectedRunning>, AppError> {
+                Ok(Some(self.0.clone()))
+            }
+        }
+        for evidence in [
+            crate::RunningEvidence::SessionMatched,
+            crate::RunningEvidence::LedgerUnreadable,
+        ] {
+            let ledger = FixedLedger(DetectedRunning {
+                ledger_path: PathBuf::from("/home/u/.claude/sessions/19104.json"),
+                pid: 19104,
+                evidence,
+            });
+            let launcher = FakeLauncher::new();
+
+            let Err(AppError::SessionBusy(message)) = start_running_session(
+                &FakeSource,
+                &launcher,
+                &ledger,
+                None,
+                "proj",
+                "s1",
+                RunningPermissionMode::Default,
+                sink(),
+                1,
+            ) else {
+                panic!("expected SessionBusy");
+            };
+
+            assert!(
+                message.contains("19104.json") && message.contains("19104"),
+                "{evidence:?}: {message}"
+            );
+            assert!(launcher.started.lock().unwrap().is_empty());
+        }
+    }
+
+    #[test]
     fn start_is_blocked_when_another_process_is_running_the_same_session() {
         let launcher = FakeLauncher::new();
 

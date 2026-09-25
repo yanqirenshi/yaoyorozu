@@ -19,11 +19,10 @@ import {
   saveProjectClaudeMd,
   saveProjectSettingsFile,
   saveViewerTabs,
-  sendMessage,
   updateGithubProjectItemStatus,
 } from "../api";
 import type {
-  AgentModeDto,
+  RunningPermissionModeDto,
   MessageDto,
   ProjectItemDto,
   ProjectStatusOptionDto,
@@ -47,6 +46,11 @@ import SessionPickerDialog from "../SessionPickerDialog";
 import type { SessionPickerCandidate } from "../SessionPickerDialog";
 import RawLineDialog from "../RawLineDialog";
 import { SendErrorBody } from "../SendErrorBody";
+import LiveTurnView from "../LiveTurnView";
+import PermissionRequestCard from "../PermissionRequestCard";
+import RunningSessionBar from "../RunningSessionBar";
+import { PERMISSION_MODE_LABELS } from "../runningSessionLabels";
+import { useRunningSession } from "../useRunningSession";
 import ViewerSideMenu from "../ViewerSideMenu";
 import ViewerToolbar from "../ViewerToolbar";
 import { createProjectSettingsDockItems } from "../projectSettingsDockItems";
@@ -133,8 +137,9 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const [attachments, setAttachments] = useState<AttachedImage[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState("");
-  const [sending, setSending] = useState(false);
-  const [mode, setMode] = useState<AgentModeDto>("chat");
+  // 次に起動する実行中セッションの権限モード(issue #392。Phase 1 は plan と default)。
+  // 起動済みのプロセスには途中で反映しない(状態表示に、起動時のモードが出る)。
+  const [mode, setMode] = useState<RunningPermissionModeDto>("default");
   const viewParam = nav.view;
   const view: PaneView = PANE_VIEWS.includes(viewParam as PaneView)
     ? (viewParam as PaneView)
@@ -254,6 +259,27 @@ function SessionsPage({ nav }: SessionsPageProps) {
     },
     [],
   );
+
+  // app が起動したまま持つ claude CLI との対話(issue #392。Phase 1)。状態はイベント →
+  // Query で取り直す(楽観更新しない)。途中経過(返答中の表示)は確定した行(#314)が
+  // 一覧に現れたら消える。`busy` は起動〜送信の書き込みが終わるまで(入力欄を止める)。
+  const {
+    running,
+    live,
+    busy: sending,
+    send: sendToSession,
+    respond: respondToPermission,
+    interrupt: interruptRunning,
+    stop: stopRunning,
+  } = useRunningSession({
+    onTurnFinished: (target) => {
+      if (target && target.project === projectParam && target.session_id === sessionParam) {
+        return refreshSessionInPlace(target.project, target.session_id);
+      }
+    },
+    onError: (message) => setError(message),
+    getMessageUuids: () => messagesRef.current.flatMap((m) => (m.uuid ? [m.uuid] : [])),
+  });
 
   const loadMore = useCallback(() => {
     if (!projectParam || !sessionParam || loadingMore) return;
@@ -492,6 +518,17 @@ function SessionsPage({ nav }: SessionsPageProps) {
   // `--resume <ID>` 化(issue #345)により、一覧に出るセッションはすべて送信対象に
   // できる(表示中のセッション ID へ送る。旧「最新のみ送信可」の制約は撤廃)。
   const canSend = !!selectedSummary;
+  // app が起動している実行中セッションが、表示中の会話か(別の会話のときは、送信すると
+  // 先に停止して切り替える。Phase 1 は同時に1つ)。
+  const runningAlive = running !== null && running.process_state !== "exited";
+  const runningIsThisSession =
+    runningAlive && running.project === projectParam && running.session_id === sessionParam;
+  const runningOtherTitle =
+    runningAlive && !runningIsThisSession
+      ? (sessionGroups
+          .flatMap((g) => g.sessions)
+          .find((s) => s.id === running.session_id)?.title ?? null)
+      : null;
 
   // ウィンドウレジストリ(issue #83)へこのウィンドウの表示状態を報告する。
   // 「1ウィンドウ=1プロファイル」への一本化(issue #91)でタブが無くなった
@@ -578,31 +615,37 @@ function SessionsPage({ nav }: SessionsPageProps) {
 
   const canSubmit = !!draft.trim() || attachments.length > 0;
 
-  const handleSubmit = (event: FormEvent) => {
+  // 送信(issue #392)。app が起動したままの claude 経由で送る: 未起動なら起動して、待機に
+  // なってから送る(backend が、起動中の送信を断るため。#391)。別の会話が実行中なら、確認して
+  // 先に停止する(Phase 1 は同時に1つ)。外部(ターミナル・Desktop)で同じ会話が実行中なら、
+  // 従来どおり backend が止める(#361。エラー表示)。
+  const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     if (!projectParam || !sessionParam || !canSend || sending || !canSubmit) return;
 
-    setSending(true);
     setError(null);
-    sendMessage(
-      projectParam,
-      sessionParam,
-      draft,
-      attachments.map((image) => image.base64),
+    if (runningAlive && !runningIsThisSession) {
+      if (
+        !window.confirm(
+          "別のセッションが実行中です。停止して、このセッションで開始しますか?",
+        )
+      ) {
+        return;
+      }
+      await stopRunning();
+    }
+    const sent = await sendToSession({
+      profileId: resolvedProfileId,
+      project: projectParam,
+      sessionId: sessionParam,
       mode,
-    )
-      .then(() => {
-        setDraft("");
-        setAttachments([]);
-        // 送信成功: 同一セッションへの追記(issue #314)。差分再読込でチラつかせない。
-        refreshSessionInPlace(projectParam, sessionParam);
-      })
-      .catch((e) => {
-        // `session_busy`(他プロセスで実行中。issue #345)を含め、Rust側の
-        // エラーメッセージはそのままユーザー向けに表示できる文言になっている。
-        setError(isAppError(e) ? e.message : String(e));
-      })
-      .finally(() => setSending(false));
+      text: draft,
+      images: attachments.map((image) => image.base64),
+    });
+    if (sent) {
+      setDraft("");
+      setAttachments([]);
+    }
   };
 
   // ビューアでは dock を表示しない(issue #257)ため、これらの操作は dock ではなく
@@ -618,19 +661,12 @@ function SessionsPage({ nav }: SessionsPageProps) {
       {
         id: "mode",
         label: MODE_ICON,
-        title: "送信モード",
-        popup: [
-          {
-            label: "会話のみ(chat)",
-            active: mode === "chat",
-            onSelect: () => setMode("chat"),
-          },
-          {
-            label: "読み取り専用(read)",
-            active: mode === "read",
-            onSelect: () => setMode("read"),
-          },
-        ],
+        title: "権限モード(次の起動から)",
+        popup: (["default", "plan"] as RunningPermissionModeDto[]).map((value) => ({
+          label: PERMISSION_MODE_LABELS[value],
+          active: mode === value,
+          onSelect: () => setMode(value),
+        })),
       },
     ];
     if (view === "claude-md") {
@@ -780,6 +816,16 @@ function SessionsPage({ nav }: SessionsPageProps) {
       <div className="session-conversation">
         {view === "chat" ? (
           <>
+            {projectParam && sessionParam && (
+              <RunningSessionBar
+                running={running}
+                isThisSession={runningIsThisSession || !runningAlive}
+                otherTitle={runningOtherTitle}
+                selectedMode={mode}
+                onInterrupt={() => void interruptRunning()}
+                onStop={() => void stopRunning()}
+              />
+            )}
             <form className="message-form" onSubmit={handleSubmit}>
               {/* 画像の添付(ファイル選択。貼り付けは入力欄の paste で受ける。issue #349) */}
               <button
@@ -873,6 +919,20 @@ function SessionsPage({ nav }: SessionsPageProps) {
                     />
                   )}
                   <div className="messages">
+                    {/* 権限の問い合わせと返答中の表示(issue #392)。新しい順なので先頭に置く。 */}
+                    {runningIsThisSession &&
+                      running.permission_requests.map((request) => (
+                        <PermissionRequestCard
+                          key={request.request_id}
+                          request={request}
+                          respond={(requestId, behavior, options) =>
+                            void respondToPermission(requestId, behavior, options)
+                          }
+                        />
+                      ))}
+                    {(runningIsThisSession || sending) && (
+                      <LiveTurnView live={live} messages={messages} />
+                    )}
                     {messages.map((m, i) => {
                       // uuid をキーにして、追記のたびの DOM の作り直しを避ける
                       // (issue #314)。行に uuid が無ければ従来どおり位置キー。

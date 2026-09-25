@@ -5,7 +5,7 @@
 //! [`RunningSessionEventSink`] へ流す(順序どおり)。標準入力を閉じると約1秒で終了する。
 //! 応答が無ければ kill する(kill だと `~/.claude/sessions/<PID>.json` が残るので最後の手段)。
 
-use crate::claude_cli_agent::{claude_executable, map_spawn_error, DESKTOP_LINEAGE_ENV_VARS};
+use crate::claude_cli::{claude_executable, map_spawn_error, DESKTOP_LINEAGE_ENV_VARS};
 use crate::claude_stream_json::{
     build_args, build_initialize_line, build_interrupt_line, build_permission_response_line,
     build_user_message_line, map_wire_line,

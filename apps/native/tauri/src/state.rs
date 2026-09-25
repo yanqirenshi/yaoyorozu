@@ -28,6 +28,8 @@ pub struct RunningSessionSlot {
     /// 何番目に起動したか。読み取りの出来事は起動した世代のものだけを反映する(次の起動の
     /// 状態を、前のプロセスの遅れて届いた出来事で動かさない)。
     pub generation: u64,
+    /// 起動時に選んだ権限モード(画面の状態表示用。Phase 1 は途中で切り替えない)。
+    pub mode: app::RunningPermissionMode,
     pub session: domain::RunningSessionByApp,
     /// 子プロセスの操作口(標準入力への書き込み・中断・停止)。
     pub process: Arc<dyn app::RunningProcess>,
