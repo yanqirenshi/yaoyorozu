@@ -31,6 +31,7 @@ import type {
   CameraDto,
   GitBranchDto,
   GitRepositoryDto,
+  GitWorktreeDto,
   GithubProjectDto,
   HubLayoutDto,
   NodePositionDto,
@@ -39,6 +40,7 @@ import type {
   RunningSessionRefDto,
   RunningSessionSummaryDto,
   SessionDto,
+  WorktreeSpecDto,
 } from "../api";
 import { usePageDockItems } from "../DockItemsContext";
 import { DOMAIN_RELOAD_ICON, TUNING_ICON } from "../icons";
@@ -124,6 +126,9 @@ const USER_COLUMN_X = 320;
 const PROFILE_COLUMN_X = 560;
 const REPOSITORY_COLUMN_X = 800;
 const BRANCH_COLUMN_X = 1040;
+// GitWorktree 列(issue #438)。リポジトリ・ブランチの右に置き、セッションの
+// 格子はさらに右から始める。
+const WORKTREE_COLUMN_X = 1280;
 // プロファイルノードの枠の太さ。ウィンドウで開いているものを太くする
 // (issue #229。`buildGraphData` 参照)。
 const PROFILE_OPEN_STROKE_WIDTH = 6;
@@ -139,7 +144,7 @@ const GIT_NODE_ROW_HEIGHT = 90;
 // 合わせて「行数 × 1.5 ≒ 列数」になるよう決める(141件なら15列 × 10行)。
 // 原点のxは Pc/User/プロファイル/GitRepository/GitBranch列(issue #224・
 // #229・#283)と重ならない位置まで右へ寄せる。
-const SESSION_GRID_ORIGIN = { x: 1280, y: 70 };
+const SESSION_GRID_ORIGIN = { x: 1520, y: 70 };
 const SESSION_GRID_ASPECT = 1.5;
 // 格子の間隔。横はラベル(12px × 最大16文字 ≒ 192px)が隣と重ならない幅、
 // 縦は円(半径20)+ ラベル1行が収まる高さ。
@@ -211,7 +216,14 @@ function restartSimulation(rectum: Rectum): void {
 // (issue #109)の表示と、プロファイルノードの左クリック(ウィンドウの
 // 前面化/新規オープン)に使う。
 type HubNodeCore = {
-  kind: "pc" | "user" | "session" | "git-repository" | "git-branch" | "profile";
+  kind:
+    | "pc"
+    | "user"
+    | "session"
+    | "git-repository"
+    | "git-branch"
+    | "git-worktree"
+    | "profile";
   // ドラッグ位置の永続化(issue #121)に使う安定キー。位置を保存する
   // ノードにのみ設定する(セッションノードは force シミュレーションに委ねる
   // ため保存しない。issue #226)。GitRepository/GitBranch ノード(issue #224)は
@@ -279,6 +291,19 @@ type HubNodeCore = {
   ownerProfileName?: string;
   // 会話ファイル(jsonl)がまだ無い、実行中セッションだけの仮ノード(issue #424)。
   provisional?: boolean;
+  // 実行中セッションが動いている worktree の名前(issue #438)。リポジトリ本体で
+  // 動いている・分からないときは未設定。
+  runningWorktreeName?: string;
+  // 起動のダイアログで選べる既存の worktree(issue #438)。セッション・リポジトリ・
+  // プロファイルのノードに、そのリポジトリの worktree を載せる。
+  worktreeChoices?: WorktreeChoice[];
+  // GitWorktree(`domain::GitWorktree`。issue #193。ノードとして描くのは #438 から)。
+  worktreeId?: string;
+  worktreeName?: string;
+  worktreeFolderPath?: string;
+  worktreeDescription?: string;
+  worktreeCheckedOutBranch?: string | null;
+  worktreeCreatedAtTime?: number;
   // リポジトリノードから新規セッションを作るときに使うプロファイル
   // (このリポジトリを対象にしているもの。issue #408)。
   repositoryProfileId?: string;
@@ -372,6 +397,38 @@ function gitBranchNodeId(branchId: string): string {
   return `git-branch:${branchId}`;
 }
 
+function gitWorktreeNodeId(worktreeId: string): string {
+  return `git-worktree:${worktreeId}`;
+}
+
+// 起動のダイアログで選ぶ worktree の選択肢(issue #438)。パスは渡さない
+// (backend が台帳の worktree_id から解決する。native.md §4)ので、画面が持つのは
+// ID と、選ぶときの手がかり(名前・チェックアウト中のブランチ)だけ。
+type WorktreeChoice = { id: string; name: string; branch: string | null };
+
+function worktreeChoicesOf(repository: GitRepositoryDto | undefined): WorktreeChoice[] {
+  return (repository?.worktrees ?? []).map((worktree) => ({
+    id: worktree.worktree_id,
+    name: worktree.worktree_name,
+    branch: worktree.checked_out_branch,
+  }));
+}
+
+// 実行中セッションが動いている worktree(issue #438)。起動時の指定は backend が
+// 解決してしまうため、画面は実際の cwd から逆に辿る(リポジトリ本体で動いて
+// いれば見つからない)。
+function findRunningWorktree(
+  running: RunningSessionSummaryDto,
+  repositories: GitRepositoryDto[],
+): GitWorktreeDto | undefined {
+  const cwd = running.cwd;
+  if (!cwd) return undefined;
+  const repository = findOwningRepository(cwd, repositories);
+  return repository?.worktrees.find((worktree) =>
+    isPathUnder(cwd, worktree.worktree_folder_path),
+  );
+}
+
 // 会話ファイルのパスから、それが置かれているフォルダ名(`project`)を取り出す
 // (issue #408)。`~/.claude/projects/<project>/<session_id>.jsonl` の <project>
 // で、再開(`start_running_session` の resume)とビューアのタブ(`ViewerTabDto`)
@@ -443,6 +500,9 @@ function buildGraphData(
   // 線を引くため、リポジトリごとのノードIDと位置(正規化したパスがキー)を
   // 控えておく。
   const repositoryNodeByPath = new Map<string, { nodeId: string; y: number }>();
+  // 実行中セッション → worktree の線(issue #438)を引くための、worktree の
+  // フォルダのパス(正規化済み)からノードIDへの対応。
+  const worktreeNodeByPath = new Map<string, string>();
   let row = 0;
   repositories.forEach((repo) => {
     const repoRowStart = row;
@@ -514,6 +574,54 @@ function buildGraphData(
       // 新規セッション(issue #408)の起点にするプロファイル。
       repositoryProfileId: profileForRepository?.id,
       repositoryProfileName: profileForRepository?.name,
+      // 起動する worktree の選択肢(issue #438)。
+      worktreeChoices: worktreeChoicesOf(repo),
+    });
+
+    // GitWorktree ノード(issue #193 の台帳。ノードとして描くのは #438 から)。
+    // リポジトリ本体の右の列に、そのリポジトリの worktree を縦に並べる。実行中
+    // セッションがどの worktree で動いているかを線で見せるために足した。
+    repo.worktrees.forEach((worktree, i) => {
+      const worktreeNodeId = gitWorktreeNodeId(worktree.worktree_id);
+      positionKeys.add(worktreeNodeId);
+      const worktreePosition = resolvePosition(
+        worktreeNodeId,
+        WORKTREE_COLUMN_X,
+        GIT_NODE_ORIGIN_Y + (repoRowStart + i) * GIT_NODE_ROW_HEIGHT,
+      );
+      worktreeNodeByPath.set(
+        normalizePathForComparison(worktree.worktree_folder_path),
+        worktreeNodeId,
+      );
+      nodes.push({
+        id: worktreeNodeId,
+        x: worktreePosition.x,
+        y: worktreePosition.y,
+        move: "support",
+        label: {
+          text: truncate(worktree.worktree_name, SESSION_LABEL_MAX_CHARS),
+          fill: COLOR_SUMI,
+          font: { size: 12 },
+          y: labelYBelowCircle(20),
+        },
+        circle: { r: 20, ...INVISIBLE_NODE_CIRCLE },
+        icon: { url: HUB_NODE_ICON_URIS.gitWorktree },
+        kind: "git-worktree",
+        positionKey: worktreeNodeId,
+        worktreeId: worktree.worktree_id,
+        worktreeName: worktree.worktree_name,
+        worktreeFolderPath: worktree.worktree_folder_path,
+        worktreeDescription: worktree.description,
+        worktreeCheckedOutBranch: worktree.checked_out_branch,
+        worktreeCreatedAtTime: worktree.created_at_time,
+      });
+      // GitRepository → GitWorktree(所有。台帳どおり)。
+      edges.push({
+        id: `e${edgeSeq++}`,
+        source: repositoryNodeId,
+        target: worktreeNodeId,
+        line: { width: 2, color: COLOR_BORDER },
+      });
     });
 
     // GitRepository → GitBranch(所有。台帳どおり。issue #224)。
@@ -655,6 +763,15 @@ function buildGraphData(
       profileGithubProject: profile.githubProject,
       profileFolders: profile.folders,
       windowLabel: profile.windowLabel,
+      // 起動する worktree の選択肢(issue #438)。プロファイルの対象リポジトリのもの。
+      worktreeChoices: worktreeChoicesOf(
+        repositories.find(
+          (repo) =>
+            profile.repositoryPath !== null &&
+            normalizePathForComparison(repo.repository_path) ===
+              normalizePathForComparison(profile.repositoryPath),
+        ),
+      ),
     });
     if (repository) {
       edges.push({
@@ -688,6 +805,8 @@ function buildGraphData(
     const owningProfile = owningRepository
       ? findProfileForRepository(owningRepository.repository_path, profiles)
       : undefined;
+    // いま動いている worktree(issue #438)。線とインスペクタに使う。
+    const runningWorktree = running ? findRunningWorktree(running, repositories) : undefined;
     // 既に描画中のノードは、シミュレーションで動いた現在位置から続ける
     // (issue #226)。d3.network は `.data()` のたびに同じIDのノードも新しい
     // データの x/y で置き換えるため、引き継がないと再読み込みやブランチの
@@ -730,6 +849,9 @@ function buildGraphData(
       project: projectFolderOf(session),
       ownerProfileId: owningProfile?.id,
       ownerProfileName: owningProfile?.name,
+      // 起動する worktree の選択肢と、いま動いている worktree(issue #438)。
+      worktreeChoices: worktreeChoicesOf(owningRepository),
+      runningWorktreeName: runningWorktree?.worktree_name,
     });
 
     // セッション → GitBranch(issue #224。クラス図に無い導出関係。ログ行の
@@ -744,6 +866,25 @@ function buildGraphData(
         target: gitBranchNodeId(matchedBranch.branch_id),
         line: { width: 1, color: COLOR_BORDER },
       });
+    }
+
+    // 実行中セッション → GitWorktree(issue #438)。app が起動した claude が
+    // いまどのフォルダで動いているかを表す線で、台帳の関連ではない。他の線
+    // (薄い灰色)と違って金茶にしてあるのは、実行中セッションの枠(issue #408)と
+    // 同じ「いま動いている」を表すため。太さは所有の線(2)と導出の線(1)の
+    // 間を取らず、実行中の枠と同じ意味づけを優先して 2 にしている。
+    if (running && runningWorktree) {
+      const worktreeNodeId = worktreeNodeByPath.get(
+        normalizePathForComparison(runningWorktree.worktree_folder_path),
+      );
+      if (worktreeNodeId) {
+        edges.push({
+          id: `e${edgeSeq++}`,
+          source: sessionNodeId,
+          target: worktreeNodeId,
+          line: { width: 2, color: COLOR_KINCHA_500 },
+        });
+      }
     }
   });
 
@@ -762,6 +903,7 @@ function buildGraphData(
       normalizePathForComparison(running.repository_path),
     );
     const owningProfile = findProfileForRepository(running.repository_path, profiles);
+    const runningWorktree = findRunningWorktree(running, repositories);
     // 起動元のリポジトリの高さから描き始める(線で結ぶので、あとはシミュレー
     // ションがリポジトリの近くへ寄せる)。
     const position = currentPositions.get(sessionNodeId) ?? {
@@ -793,6 +935,7 @@ function buildGraphData(
       project: null,
       ownerProfileId: owningProfile?.id,
       ownerProfileName: owningProfile?.name,
+      runningWorktreeName: runningWorktree?.worktree_name,
     });
     if (repository) {
       edges.push({
@@ -801,6 +944,20 @@ function buildGraphData(
         target: repository.nodeId,
         line: { width: 1, color: COLOR_BORDER },
       });
+    }
+    // 実行中セッション → GitWorktree(issue #438。通常のノードと同じ線)。
+    if (runningWorktree) {
+      const worktreeNodeId = worktreeNodeByPath.get(
+        normalizePathForComparison(runningWorktree.worktree_folder_path),
+      );
+      if (worktreeNodeId) {
+        edges.push({
+          id: `e${edgeSeq++}`,
+          source: sessionNodeId,
+          target: worktreeNodeId,
+          line: { width: 2, color: COLOR_KINCHA_500 },
+        });
+      }
     }
   });
 
@@ -821,6 +978,13 @@ function nodeIdOfCore(core: HubNodeCore): string | null {
 // `startMode`/`startName` は起動(再開・新規)の入力で、ノードを選び直すと
 // 初期値へ戻す(`HubGraphPage` 側)。`busy` は backend への操作の最中で、
 // 二重に押させないためにボタンを無効にする。
+// 起動するフォルダの選び方(issue #438)。
+//  - keep: 指定しない(再開のみ。会話ファイルに記録された cwd で開く)
+//  - main: リポジトリ本体
+//  - existing: 既存の worktree(台帳の worktree_id)
+//  - branch: ブランチ名を指定(worktree が無ければ backend が用意する)
+type StartWorktreeKind = "keep" | "main" | "existing" | "branch";
+
 type InspectorHandlers = {
   onOpenProfile: (core: HubNodeCore) => void;
   onOpenInViewer: (core: HubNodeCore) => void;
@@ -831,6 +995,18 @@ type InspectorHandlers = {
   onStartModeChange: (mode: RunningPermissionModeDto) => void;
   startName: string;
   onStartNameChange: (name: string) => void;
+  // 起動するフォルダ(issue #438)。
+  startWorktreeKind: StartWorktreeKind;
+  onStartWorktreeKindChange: (kind: StartWorktreeKind) => void;
+  startWorktreeId: string;
+  onStartWorktreeIdChange: (worktreeId: string) => void;
+  startBranchName: string;
+  onStartBranchNameChange: (branchName: string) => void;
+  // 入力が足りていない(worktree・ブランチ名が未選択)ときは起動させない。
+  startInputIncomplete: boolean;
+  // 起動に失敗した理由(worktree の用意の失敗を含む。issue #438)。起動できて
+  // いないことが分かるよう、ボタンのすぐ上に出す。
+  startError: string | null;
   busy: boolean;
 };
 
@@ -844,13 +1020,66 @@ type InspectorHandlers = {
 // タイトルは変わらない。
 function HubStartSessionForm({
   handlers,
+  choices,
+  allowKeep,
   nameNote,
 }: {
   handlers: InspectorHandlers;
+  // 選んでいるノードのリポジトリの worktree(issue #438)。
+  choices: WorktreeChoice[];
+  // 「指定しない(会話ファイルのフォルダのまま)」を選べるか(再開だけ)。
+  allowKeep: boolean;
   nameNote?: string;
 }) {
   return (
     <>
+      <label className="hub-inspector-form-row">
+        <span>ブランチ / worktree</span>
+        <select
+          value={handlers.startWorktreeKind}
+          disabled={handlers.busy}
+          onChange={(e) =>
+            handlers.onStartWorktreeKindChange(e.target.value as StartWorktreeKind)
+          }
+        >
+          {allowKeep && <option value="keep">会話ファイルのフォルダのまま</option>}
+          <option value="main">リポジトリ本体</option>
+          {choices.length > 0 && <option value="existing">既存の worktree から選ぶ</option>}
+          <option value="branch">ブランチ名を指定</option>
+        </select>
+      </label>
+      {handlers.startWorktreeKind === "existing" && (
+        <label className="hub-inspector-form-row">
+          <span>worktree</span>
+          <select
+            value={handlers.startWorktreeId}
+            disabled={handlers.busy}
+            onChange={(e) => handlers.onStartWorktreeIdChange(e.target.value)}
+          >
+            <option value="">(選んでください)</option>
+            {choices.map((choice) => (
+              <option key={choice.id} value={choice.id}>
+                {choice.branch ? `${choice.name}(${choice.branch})` : choice.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {handlers.startWorktreeKind === "branch" && (
+        <label className="hub-inspector-form-row">
+          <span>ブランチ名</span>
+          <input
+            type="text"
+            value={handlers.startBranchName}
+            disabled={handlers.busy}
+            placeholder="session/impl-app-hub など"
+            onChange={(e) => handlers.onStartBranchNameChange(e.target.value)}
+          />
+          <small className="hub-inspector-form-note">
+            そのブランチの worktree が無ければ作成し、origin/main で最新化してから起動します
+          </small>
+        </label>
+      )}
       <label className="hub-inspector-form-row">
         <span>権限モード</span>
         <select
@@ -878,9 +1107,18 @@ function HubStartSessionForm({
         />
         {nameNote && <small className="hub-inspector-form-note">{nameNote}</small>}
       </label>
+      {handlers.startError && (
+        <p className="hub-inspector-form-error" role="alert">
+          {handlers.startError}
+        </p>
+      )}
     </>
   );
 }
+
+// セッション間メッセージ(issue #437)に必要な claude の版。対応しているかの判定は
+// backend(`RunningSessionSummaryDto.peer_messaging`)が持ち、ここは文言だけ。
+const MIN_PEER_MESSAGING_VERSION = "2.1.268";
 
 // 既存の会話を再開するときの注意書き(issue #424)。
 const RESUME_NAME_NOTE = "表示名を付けると、この会話のタイトルが変わります";
@@ -901,6 +1139,7 @@ function buildInspectorContent(
   if (core.kind === "profile") return buildProfileInspectorContent(core, handlers);
   if (core.kind === "git-repository") return buildRepositoryInspectorContent(core, handlers);
   if (core.kind === "git-branch") return buildBranchInspectorContent(core);
+  if (core.kind === "git-worktree") return buildWorktreeInspectorContent(core);
   return buildSessionInspectorContent(core, handlers, running);
 }
 
@@ -959,12 +1198,19 @@ function buildProfileInspectorContent(
       label: core.windowLabel ? "前面化" : "ウィンドウで開く",
       onClick: () => handlers.onOpenProfile(core),
     },
-    body: core.profileRepositoryPath ? <HubStartSessionForm handlers={handlers} /> : undefined,
+    body: core.profileRepositoryPath ? (
+      <HubStartSessionForm
+        handlers={handlers}
+        choices={core.worktreeChoices ?? []}
+        allowKeep={false}
+      />
+    ) : undefined,
     actions: [
       {
         label: "新規セッション",
         onClick: () => handlers.onStartNew(core),
-        disabled: handlers.busy || !core.profileRepositoryPath,
+        disabled:
+          handlers.busy || !core.profileRepositoryPath || handlers.startInputIncomplete,
       },
     ],
   };
@@ -994,6 +1240,19 @@ function buildSessionInspectorContent(
         },
         { label: "答え待ち", value: `${running.pending_permission_count}件` },
         { label: "リポジトリ", value: running.repository_path },
+        // いま動いているフォルダ(issue #438)。cwd から逆に辿って worktree を
+        // 特定しているので、見つからなければリポジトリ本体で動いている。
+        { label: "worktree", value: core.runningWorktreeName ?? "(リポジトリ本体)" },
+        { label: "claude の版", value: running.cli_version ?? "(不明)" },
+        // 版が古いときの警告(issue #437・#438)。起動は止まっていない。
+        ...(running.peer_messaging === false
+          ? [
+              {
+                label: "注意",
+                value: `この claude(版 ${running.cli_version ?? "?"})は、セッション間メッセージに対応していません(${MIN_PEER_MESSAGING_VERSION} 以上が必要)。会話の対話は使えます`,
+              },
+            ]
+          : []),
         { label: "表示名", value: running.name ?? "(未設定)" },
       ]
     : [];
@@ -1014,7 +1273,7 @@ function buildSessionInspectorContent(
     actions.push({
       label: "起動(再開)",
       onClick: () => handlers.onStartResume(core),
-      disabled: handlers.busy || !canAddress,
+      disabled: handlers.busy || !canAddress || handlers.startInputIncomplete,
     });
   }
   // 会話ファイルがまだ無い仮ノード(issue #424)は、モデル属性(会話ファイルから
@@ -1047,7 +1306,12 @@ function buildSessionInspectorContent(
     ],
     // 起動していないときだけ、起動の入力欄を出す。
     body: running ? undefined : (
-      <HubStartSessionForm handlers={handlers} nameNote={RESUME_NAME_NOTE} />
+      <HubStartSessionForm
+        handlers={handlers}
+        choices={core.worktreeChoices ?? []}
+        allowKeep
+        nameNote={RESUME_NAME_NOTE}
+      />
     ),
     action: null,
     actions,
@@ -1116,15 +1380,40 @@ function buildRepositoryInspectorContent(
           "(このリポジトリを対象にしたプロファイルがありません)",
       },
     ],
-    body: core.repositoryProfileId ? <HubStartSessionForm handlers={handlers} /> : undefined,
+    body: core.repositoryProfileId ? (
+      <HubStartSessionForm
+        handlers={handlers}
+        choices={core.worktreeChoices ?? []}
+        allowKeep={false}
+      />
+    ) : undefined,
     action: null,
     actions: [
       {
         label: "新規セッション",
         onClick: () => handlers.onStartNew(core),
-        disabled: handlers.busy || !core.repositoryProfileId,
+        disabled: handlers.busy || !core.repositoryProfileId || handlers.startInputIncomplete,
       },
     ],
+  };
+}
+
+// GitWorktree(issue #193 の台帳。ノードとして描くのは #438 から)。
+// `domain::GitWorktree` のモデル属性を表示する。
+function buildWorktreeInspectorContent(core: HubNodeCore): InspectorContent {
+  return {
+    title: truncate(core.worktreeName ?? "worktree", SESSION_TITLE_MAX_CHARS),
+    fields: [
+      { label: "worktree_id", value: core.worktreeId ?? "" },
+      { label: "worktree_folder_path", value: core.worktreeFolderPath ?? "" },
+      { label: "description", value: core.worktreeDescription || "(未設定)" },
+      {
+        label: "checked_out_branch",
+        value: core.worktreeCheckedOutBranch ?? "(不明)",
+      },
+      { label: "created_at_time", value: String(core.worktreeCreatedAtTime ?? "") },
+    ],
+    action: null,
   };
 }
 
@@ -1381,6 +1670,35 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
   const [busy, setBusy] = useState(false);
   const [startMode, setStartMode] = useState<RunningPermissionModeDto>("default");
   const [startName, setStartName] = useState("");
+  // 起動するフォルダの指定(issue #438)。既定は「これまでと同じ場所」
+  // (再開は会話ファイルの cwd、新規作成はリポジトリ本体)。
+  const [startWorktreeKind, setStartWorktreeKind] = useState<StartWorktreeKind>("keep");
+  const [startWorktreeId, setStartWorktreeId] = useState("");
+  const [startBranchName, setStartBranchName] = useState("");
+  // 起動に失敗した理由(worktree の用意の失敗を含む)。押したボタンのすぐ上に出す。
+  const [startError, setStartError] = useState<string | null>(null);
+
+  // 選んだ指定を backend の要求の形にする(パスは渡さない。native.md §4)。
+  // `null` は「指定しない」で、再開では会話ファイルの cwd がそのまま使われる。
+  const startWorktreeSpec = useMemo((): WorktreeSpecDto | null => {
+    switch (startWorktreeKind) {
+      case "main":
+        return { kind: "main" };
+      case "existing":
+        return startWorktreeId ? { kind: "existing", worktree_id: startWorktreeId } : null;
+      case "branch": {
+        const branchName = startBranchName.trim();
+        return branchName ? { kind: "branch", branch_name: branchName } : null;
+      }
+      default:
+        return null;
+    }
+  }, [startWorktreeKind, startWorktreeId, startBranchName]);
+
+  // worktree・ブランチ名を選ぶ指定なのに、まだ入力されていない状態。
+  const startInputIncomplete =
+    (startWorktreeKind === "existing" && startWorktreeId === "") ||
+    (startWorktreeKind === "branch" && startBranchName.trim() === "");
 
   const runInspectorAction = useCallback(
     (action: () => Promise<unknown>) => {
@@ -1398,21 +1716,42 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
 
   // 既存の会話を再開する(`--resume`)。cwd は渡さず、プロファイルとフォルダ名
   // ・session_id だけで指定する(native.md §4)。
+  // 起動(再開・新規)の操作(issue #438)。失敗の理由は画面上部の共通のエラー
+  // 表示ではなく、押したボタンのすぐ上に出す。worktree の用意に失敗したとき
+  // (`worktree_sync_failed` など)に、起動できていないことがその場で分かる
+  // ようにするため。状態の反映は他の操作と同じく Query の取り直しで行う。
+  const runStartAction = useCallback(
+    (action: () => Promise<unknown>) => {
+      setBusy(true);
+      setStartError(null);
+      action()
+        .then(() => setStartError(null))
+        .catch((e) => setStartError(isAppError(e) ? e.message : String(e)))
+        .finally(() => {
+          setBusy(false);
+          loadRunningSessions();
+        });
+    },
+    [loadRunningSessions],
+  );
+
   const handleStartResume = useCallback(
     (core: HubNodeCore) => {
       const { project, sessionId, ownerProfileId } = core;
       if (!project || !sessionId || !ownerProfileId) return;
-      runInspectorAction(() =>
+      runStartAction(() =>
         startRunningSession(ownerProfileId, {
           kind: "resume",
           project,
           session_id: sessionId,
           mode: startMode,
           name: startName.trim() || null,
+          // 指定しない(`null`)ときは、会話ファイルに記録された cwd で開く。
+          worktree: startWorktreeSpec,
         }),
       );
     },
-    [runInspectorAction, startMode, startName],
+    [runStartAction, startMode, startName, startWorktreeSpec],
   );
 
   // 新しい会話を作る。プロファイルノードは自身を、リポジトリノードはその
@@ -1422,15 +1761,17 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
     (core: HubNodeCore) => {
       const profileId = core.profileId ?? core.repositoryProfileId;
       if (!profileId) return;
-      runInspectorAction(() =>
+      runStartAction(() =>
         startRunningSession(profileId, {
           kind: "new",
           mode: startMode,
           name: startName.trim() || null,
+          // 新規作成は場所を必ず決める(既定はリポジトリ本体)。
+          worktree: startWorktreeSpec ?? { kind: "main" },
         }),
       );
     },
-    [runInspectorAction, startMode, startName],
+    [runStartAction, startMode, startName, startWorktreeSpec],
   );
 
   const handleStopRunningSession = useCallback(
@@ -1484,6 +1825,14 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
       onStartModeChange: setStartMode,
       startName,
       onStartNameChange: setStartName,
+      startWorktreeKind,
+      onStartWorktreeKindChange: setStartWorktreeKind,
+      startWorktreeId,
+      onStartWorktreeIdChange: setStartWorktreeId,
+      startBranchName,
+      onStartBranchNameChange: setStartBranchName,
+      startInputIncomplete,
+      startError,
       busy,
     }),
     [
@@ -1494,6 +1843,11 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
       handleStartNew,
       startMode,
       startName,
+      startWorktreeKind,
+      startWorktreeId,
+      startBranchName,
+      startInputIncomplete,
+      startError,
       busy,
     ],
   );
@@ -1700,10 +2054,17 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
   // 見てしまうと、同じノードを見ている最中の再描画(実行中セッションの状態
   // 変化など)で入力中の表示名が消えてしまう。
   const inspectorNodeId = inspectorCore ? nodeIdOfCore(inspectorCore) : null;
+  const inspectorNodeKind = inspectorCore?.kind ?? null;
   useEffect(() => {
     setStartMode("default");
     setStartName("");
-  }, [inspectorNodeId]);
+    // 再開は「会話ファイルのフォルダのまま」、新規作成は「リポジトリ本体」を
+    // 既定にする(issue #438。どちらも、これまでと同じ場所で起動する選択)。
+    setStartWorktreeKind(inspectorNodeKind === "session" ? "keep" : "main");
+    setStartWorktreeId("");
+    setStartBranchName("");
+    setStartError(null);
+  }, [inspectorNodeId, inspectorNodeKind]);
 
   // グラフの調整メニュー(issue #246・#249)。値は `hub-tuning.json` に保存し
   // (スライダー変更後に `HUB_TUNING_SAVE_DEBOUNCE_MS` でまとめて保存)、

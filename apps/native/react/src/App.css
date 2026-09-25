@@ -300,6 +300,18 @@ body,
   color: var(--text-secondary);
 }
 
+/* 起動に失敗した理由(worktree の用意の失敗など。issue #438)。押したボタンの
+   すぐ上に出して、起動できていないことが分かるようにする。 */
+.hub-inspector-form-error {
+  margin: 0;
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  color: var(--color-suou-700);
+  background: var(--color-suou-50);
+  overflow-wrap: anywhere;
+}
+
 .hub-inspector-form-row select,
 .hub-inspector-form-row input {
   border: 1px solid var(--border-default);
