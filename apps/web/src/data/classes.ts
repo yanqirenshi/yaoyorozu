@@ -14,14 +14,31 @@
  * 位置に置く。
  */
 import type { DiagramInput } from "@yanqirenshi/d3.classes";
-import { mergeDiagrams, type ClassFilePaths } from "./classDiagram";
-import { DOMAIN_CLASS_DATA, DOMAIN_CLASS_FILE_PATHS } from "./classes-domain";
+import {
+  mergeDiagrams,
+  type ClassFilePaths,
+  type ClassLayers,
+} from "./classDiagram";
+import {
+  DOMAIN_CLASS_DATA,
+  DOMAIN_CLASS_FILE_PATHS,
+  DOMAIN_CLASS_LAYERS,
+} from "./classes-domain";
 import {
   NATIVE_PROTOTYPE_CLASS_DATA,
   NATIVE_PROTOTYPE_CLASS_FILE_PATHS,
+  NATIVE_PROTOTYPE_CLASS_LAYERS,
 } from "./classes-native-prototype";
-import { INFRA_CLASS_DATA, INFRA_CLASS_FILE_PATHS } from "./classes-infra";
-import { TAURI_CLASS_DATA, TAURI_CLASS_FILE_PATHS } from "./classes-tauri";
+import {
+  INFRA_CLASS_DATA,
+  INFRA_CLASS_FILE_PATHS,
+  INFRA_CLASS_LAYERS,
+} from "./classes-infra";
+import {
+  TAURI_CLASS_DATA,
+  TAURI_CLASS_FILE_PATHS,
+  TAURI_CLASS_LAYERS,
+} from "./classes-tauri";
 
 export const CLASS_DIAGRAM_DATA: DiagramInput = mergeDiagrams(
   DOMAIN_CLASS_DATA,
@@ -39,4 +56,15 @@ export const CLASS_FILE_PATHS: ClassFilePaths = {
   ...NATIVE_PROTOTYPE_CLASS_FILE_PATHS,
   ...INFRA_CLASS_FILE_PATHS,
   ...TAURI_CLASS_FILE_PATHS,
+};
+
+/**
+ * 物理名 → クリーンアーキテクチャの層。色分けとインスペクタの表示用(`ClassesTab.tsx`)。
+ * 全クラスが持つ(層の定義は `classArchitecture.ts`)。
+ */
+export const CLASS_LAYERS: ClassLayers = {
+  ...DOMAIN_CLASS_LAYERS,
+  ...NATIVE_PROTOTYPE_CLASS_LAYERS,
+  ...INFRA_CLASS_LAYERS,
+  ...TAURI_CLASS_LAYERS,
 };
