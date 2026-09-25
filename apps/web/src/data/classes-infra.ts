@@ -33,20 +33,32 @@
  * `claude_dir_store.rs`、`SessionWatcher`/`FileSystemRepository` は
  * `session_source.rs` に同居、`ClaudeCliProcess`・`ExitSignal` は `ClaudeCliProcessLauncher` と
  * 同じ `claude_cli_process.rs` に同居)。全24型(実装23 + SessionWatcher)と、
- * app の port 23個を載せた。
+ * app の port 22個を載せた(1回きり送信の `AgentGateway`・`ClaudeCliAgent` は #392 で撤去)。
  *
  * 【実行中セッション(Phase 1。issue #391)】`RunningSessionSource`(#361 のガード。
  * `exclude_pids` が加わった)・`RunningSessionLauncher`・`RunningProcess`・
  * `RunningSessionEventSink` の4 port と、その実装を載せた。`ExitSignal`(private)は
  * `ClaudeCliProcess` が共有する終了の合図で、port を実装しない補助の型。port の入出力の
  * app の型(`StartRunningSession`・`RunningPermissionMode`・`StartedRunningSession`・
- * `RunningSessionEvent`・`PermissionDecision`・`DetectedRunning`・`RunningEvidence`)は、
+ * `RunningSessionEvent`・`PermissionDecision`・`DetectedRunning`・`RunningEvidence`。Phase 2 の
+ * 分は下の【Phase 2】)は、
  * app の非 port の型は基本的に載せない方針だが、port のシグネチャに出てくるので例外として
  * 載せた(層はアプリケーションのビジネスルール)。`RunningSessionEventSink` の実装
  * (`ChannelSink`)は tauri 層(`classes-tauri.ts`)で、実現の線は引かない。
  * `claude_stream_json.rs`(起動引数・標準入出力の JSON 行・wire → domain の写し)は、型
  * (struct / enum)を持たず関数だけ(wire は `serde_json::Value` から取れるものだけを取り出す。
  * 未知の type / subtype と必須項目の欠けた行は捨てる)なので、クラスとしては描かない。
+ *
+ * 【実行中セッション(Phase 2。issue #407。PR #413)】複数の実行中セッション・新規作成・
+ * モデル / 権限モードの切り替え・画面ごとの購読を足した。`StartRunningSession` は struct から
+ * enum(Resume / New)になり、画面から来る値だけの `ResumeRunningSession` /
+ * `CreateRunningSession` が加わった(起動のユースケースは `resume_running_session` /
+ * `create_running_session` に分かれた。関数なので図には描かない)。切り替え(`RunningSessionSwitch`)は
+ * port(`RunningProcess`)の `set_model` / `set_permission_mode` で、infra の `PendingSwitches`
+ * が要求と応答を対応づける。出来事に `Configured` / `SwitchApplied`、途中経過に宛先を付ける包み
+ * (`RunningSessionRef` / `AddressedProgress` / `AddressedRunningSessionEvent`)、ハブ用の
+ * 一覧項目 `RunningSessionSummary`(`summarize` で作る)も app の型。定数(`MAX_RUNNING_SESSIONS`
+ * = 8 / `MAX_KEPT_EXITED_SESSIONS` = 10)は型ではないので描かない。
  *
  * 【GitLedgerStore・GitStateSource への参照】メソッドの戻り値・引数に出てくる
  * `domain::GitLedger`・`domain::ObservedGitState` は、`classes-native-prototype.ts`
@@ -295,21 +307,6 @@ const DEFS: ClassDef[] = [
     position: { x: 3550, y: 3900 },
     filePath: "apps/native/crates/infra/src/keyring_token_store.rs",
   },
-  {
-    name: { physical: "AgentGateway", logical: "AgentGateway", description: "エージェントへのメッセージ送信(port)。app::lib.rs" },
-    stereotype: "interface",
-    methods: [method("send", ["req: SendRequest"], "Result<(), AppError>")],
-    position: { x: 4150, y: 3550 },
-    filePath: "apps/native/crates/app/src/lib.rs",
-    size: { w: 280, h: 0 },
-  },
-  {
-    name: { physical: "ClaudeCliAgent", logical: "ClaudeCliAgent", description: "claude CLI を headless(--print)で起動する AgentGateway 実装(claude_cli_agent.rs)" },
-    attributes: [],
-    position: { x: 4150, y: 3900 },
-    filePath: "apps/native/crates/infra/src/claude_cli_agent.rs",
-    size: { w: 260, h: 0 },
-  },
   // ============ レイアウト保存・ローカルAPI・Git・Explorer ============
   {
     name: { physical: "LayoutStore", logical: "LayoutStore", description: "図のレイアウトJSONへの汎用アトミック書き込み(port)。app::lib.rs" },
@@ -444,12 +441,16 @@ const DEFS: ClassDef[] = [
       method("send_user_message", ["text: &str", "images: &[ImageAttachment]"], "Result<(), AppError>"),
       method("respond_permission", ["response: &PermissionResponse"], "Result<(), AppError>"),
       method("interrupt", [], "Result<(), AppError>"),
+      // 起動中の切り替え(#407)。CLI へ渡す要求の ID は infra が付ける。受け入れられたかは、応答が
+      // 出来事 SwitchApplied として届く(ここでは現在値を変えない)。
+      method("set_model", ["model: &str"], "Result<(), AppError>"),
+      method("set_permission_mode", ["mode: RunningPermissionMode"], "Result<(), AppError>"),
       // 標準入力を閉じて終了を待つ(約1秒)。応答が無ければ強制終了する。終了済みなら何もしない。
       method("stop", [], "()"),
     ],
     position: { x: 6300, y: 3750 },
     filePath: "apps/native/crates/app/src/running_session.rs",
-    size: { w: 700, h: 0 },
+    size: { w: 760, h: 0 },
   },
   {
     name: { physical: "ClaudeCliProcess", logical: "ClaudeCliProcess", description: "起動済みの claude 子プロセス(RunningProcess の実装。claude_cli_process.rs。private)。書き込みは行の途中で混ざらないよう stdin のロックの中で1行ずつ。stop は stdin を閉じて最大3秒待ち、応答が無ければプロセスツリーごと強制終了する(Windows: taskkill /T /F → Child::kill)。Drop でも止める" },
@@ -458,7 +459,9 @@ const DEFS: ClassDef[] = [
       attr("stdin", "Mutex<Option<ChildStdin>>"), // stop で閉じる(None)
       attr("child", "Arc<Mutex<Child>>"),
       attr("exit", "Arc<ExitSignal>"), // 共有される(線 exit は関連)
-      attr("next_request", "AtomicU64"), // 中断の要求の request_id の連番
+      attr("next_request", "AtomicU64"), // 中断・切り替えの要求の request_id の連番
+      // 送った切り替えの要求(応答が成功なら SwitchApplied にする。読み取りスレッドと共有。#407)
+      attr("pending", "Arc<PendingSwitches>"),
     ],
     position: { x: 6300, y: 4200 },
     filePath: "apps/native/crates/infra/src/claude_cli_process.rs",
@@ -485,43 +488,57 @@ const DEFS: ClassDef[] = [
   // app クレートの型(port の入出力)。app の非 port の型は基本的にこの図に載せていないが、
   // 上の port のシグネチャに出てくるものはここに載せた(層はアプリケーションのビジネスルール)。
   {
-    name: { physical: "StartRunningSession", logical: "StartRunningSession", description: "起動の要求(app/src/running_session.rs)。値は app が解決済みで、フロントから受け取ったパスは含まない(cwd は会話ファイルから求める。native.md §4)" },
+    name: { physical: "StartRunningSession", logical: "StartRunningSession", description: "起動の要求(app/src/running_session.rs)。値は app が解決済みで、フロントから受け取ったパスは含まない(cwd は会話ファイル・プロファイルから求める。native.md §4)。再開と新規で持つ値が違う(新規は ID を app が決め、既存の会話ファイルから cwd を求められない)ので、平らな型に Option を並べずバリアントで表す(Phase 1 は struct。#407 で enum に)。Resume: 既存の会話を --resume で開く / New: 新しい会話を --session-id で始める(ID は app が UUID v4 で決める。cwd はリポジトリ)。repository_path はプロファイルのリポジトリ(RunningSessionByApp.repository_path の元)、name は表示名(--name。任意)" },
+    stereotype: "enumeration",
     attributes: [
-      attr("session_id", "String"),
-      attr("cwd", "PathBuf"),
-      attr("mode", "RunningPermissionMode"),
+      "Resume { session_id: String, cwd: PathBuf, mode: RunningPermissionMode, repository_path: PathBuf, name: Option<String> }",
+      "New { session_id: String, cwd: PathBuf, mode: RunningPermissionMode, repository_path: PathBuf, name: Option<String> }",
+    ].map(label),
+    methods: [
+      // どちらのバリアントにも同じ名前で取り出せる(値はバリアントごとに持つ)。
+      method("session_id", [], "&str"),
+      method("cwd", [], "&Path"),
+      method("mode", [], "RunningPermissionMode"),
+      method("repository_path", [], "&Path"),
+      method("name", [], "Option<&str>"),
+      method("is_new", [], "bool"),
+    ],
+    position: { x: 7700, y: 1450 },
+    filePath: "apps/native/crates/app/src/running_session.rs",
+    layer: "application",
+    size: { w: 1050, h: 0 },
+  },
+  {
+    name: { physical: "RunningPermissionMode", logical: "RunningPermissionMode", description: "画面で選べる権限モード(app/src/running_session.rs)。Plan(計画だけ)/ Default(すべてのツール使用が権限の問い合わせとして届く)/ AcceptEdits(編集は問い合わせない)/ Auto(#407 で AcceptEdits と Auto が加わった)。CLI の版で名前が変わる(2.1.280 では default が manual に改名)ので、as_cli_value(CLI へ渡す値)と、その逆写像 from_cli_value(manual も Default に対応づける。画面が扱わない値 = bypassPermissions / dontAsk などは None で、画面は文字列のまま出す)を持つ。domain の RunningSessionByApp.current_permission_mode は文字列で、対応づけは app の責務" },
+    stereotype: "enumeration",
+    attributes: ["Plan", "Default", "AcceptEdits", "Auto"].map(label),
+    methods: [
+      method("as_cli_value", [], "&'static str"),
+      method("from_cli_value", ["value: &str"], "Option<Self>"),
     ],
     position: { x: 7700, y: 2050 },
-    filePath: "apps/native/crates/app/src/running_session.rs",
-    layer: "application",
-    size: { w: 320, h: 0 },
-  },
-  {
-    name: { physical: "RunningPermissionMode", logical: "RunningPermissionMode", description: "Phase 1 で選べる権限モード。plan(計画だけ)と default(すべてのツール使用が権限の問い合わせとして届く)。auto など他のモードは Phase 2。CLI 2.1.280 では default が manual に改名されているが、判定には使わず CLI へそのまま渡す(as_cli_value)" },
-    stereotype: "enumeration",
-    attributes: ["Plan", "Default"].map(label),
-    methods: [method("as_cli_value", [], "&'static str")],
-    position: { x: 7700, y: 2400 },
-    filePath: "apps/native/crates/app/src/running_session.rs",
-    layer: "application",
-    size: { w: 300, h: 0 },
-  },
-  {
-    name: { physical: "StartedRunningSession", logical: "StartedRunningSession", description: "start_running_session の結果(app/src/running_session.rs)。session は domain::RunningSessionByApp(classes-domain.ts)、process は RunningProcess(この図の port)で、いずれも離れた位置にあるため線は引かない" },
-    attributes: [
-      attr("session", "domain::RunningSessionByApp"),
-      attr("process", "Arc<dyn RunningProcess>"),
-    ],
-    position: { x: 8250, y: 2050 },
     filePath: "apps/native/crates/app/src/running_session.rs",
     layer: "application",
     size: { w: 400, h: 0 },
   },
   {
-    name: { physical: "RunningSessionEvent", logical: "RunningSessionEvent", description: "実行中セッション(子プロセス)からの出来事(app/src/running_session.rs)。infra の読み取りスレッドが、CLI の wire 形式を domain の型に写したうえで RunningSessionEventSink へ流す。apply_running_session_event(純粋な規則)が状態へ反映する: Initialized → Initialized / Progress(TurnFinished) → TurnFinished / Progress(それ以外) → 状態は動かさない / PermissionRequested → 答え待ちに足して PermissionAsked / PermissionCancelled → 答え待ちから外す / Exited → 答え待ちを捨てて Exited" },
+    name: { physical: "StartedRunningSession", logical: "StartedRunningSession", description: "resume_running_session / create_running_session の結果(app/src/running_session.rs。Phase 1 の start_running_session は #407 で2つに分かれた)。session は domain::RunningSessionByApp(classes-domain.ts)、process は RunningProcess(この図の port)で、いずれも離れた位置にあるため線は引かない" },
+    attributes: [
+      attr("session", "domain::RunningSessionByApp"),
+      attr("process", "Arc<dyn RunningProcess>"),
+    ],
+    position: { x: 9000, y: 2050 },
+    filePath: "apps/native/crates/app/src/running_session.rs",
+    layer: "application",
+    size: { w: 400, h: 0 },
+  },
+  {
+    name: { physical: "RunningSessionEvent", logical: "RunningSessionEvent", description: "実行中セッション(子プロセス)からの出来事(app/src/running_session.rs)。infra の読み取りスレッドが、CLI の wire 形式を domain の型に写したうえで RunningSessionEventSink へ流す。子プロセスごとの受け口は宛先(pid)を起動後にしか知らないので宛先を持たず、tauri の処理タスクが宛先を付ける(AddressedRunningSessionEvent)。apply_running_session_event(純粋な規則)が状態へ反映する: Initialized → Initialized / Configured → 現在のモデル・権限モードを反映(値のあるものだけ)/ SwitchApplied → 受け入れられた切り替えを現在値へ反映 / Progress(TurnFinished) → TurnFinished / Progress(それ以外) → 状態は動かさない / PermissionRequested → 答え待ちに足して PermissionAsked / PermissionCancelled → 答え待ちから外す / Exited → 答え待ちを捨てて Exited(Configured と SwitchApplied は #407 で加わった)" },
     stereotype: "enumeration",
     attributes: [
       "Initialized",
+      "Configured { model: Option<String>, permission_mode: Option<String> }",
+      "SwitchApplied(RunningSessionSwitch)",
       "Progress(domain::ProgressEvent)",
       "PermissionRequested(domain::PermissionRequest)",
       "PermissionCancelled { request_id: String }",
@@ -530,7 +547,7 @@ const DEFS: ClassDef[] = [
     position: { x: 7700, y: 3350 },
     filePath: "apps/native/crates/app/src/running_session.rs",
     layer: "application",
-    size: { w: 560, h: 0 },
+    size: { w: 620, h: 0 },
   },
   {
     name: { physical: "PermissionDecision", logical: "PermissionDecision", description: "画面から受け取る、権限の問い合わせへの答え(app/src/running_session.rs)。取り消し(Cancelled)は CLI 側が決めるもので画面からは選べない。拒否メッセージを省略したときは「ユーザーが拒否しました」がそのままモデルへの tool_result になる" },
@@ -551,7 +568,7 @@ const DEFS: ClassDef[] = [
       attr("pid", "u32"),
       attr("evidence", "RunningEvidence"),
     ],
-    position: { x: 8250, y: 2400 },
+    position: { x: 9000, y: 2400 },
     filePath: "apps/native/crates/app/src/lib.rs",
     layer: "application",
     size: { w: 400, h: 0 },
@@ -560,10 +577,110 @@ const DEFS: ClassDef[] = [
     name: { physical: "RunningEvidence", logical: "RunningEvidence", description: "DetectedRunning の根拠の強さ(app::lib.rs)。SessionMatched: 台帳の sessionId が送信先と一致し、そのプロセスが生きている / LedgerUnreadable: 台帳から sessionId を取り出せず照合できないが、そのプロセスが生きているため、安全側で実行中とみなした" },
     stereotype: "enumeration",
     attributes: ["SessionMatched", "LedgerUnreadable"].map(label),
-    position: { x: 8250, y: 2750 },
+    position: { x: 9000, y: 2750 },
     filePath: "apps/native/crates/app/src/lib.rs",
     layer: "application",
     size: { w: 300, h: 0 },
+  },
+  // ---- Phase 2(複数セッション・モード切替・新規作成。issue #407) ----
+  {
+    name: { physical: "RunningSessionSwitch", logical: "RunningSessionSwitch", description: "起動中に切り替える設定(app/src/running_session.rs。issue #407)。CLI の set_model / set_permission_mode(PoC #382 レポート §6.2)に対応する。CLI へ渡す要求の ID は infra が付けるので、ここには無い。Model の名前は CLI が検証しない(存在しない名前も成功で返る)ので、app は文字種・長さだけを検証する" },
+    stereotype: "enumeration",
+    attributes: ["Model(String)", "PermissionMode(RunningPermissionMode)"].map(label),
+    position: { x: 7700, y: 2500 },
+    filePath: "apps/native/crates/app/src/running_session.rs",
+    layer: "application",
+    size: { w: 520, h: 0 },
+  },
+  {
+    name: { physical: "ResumeRunningSession", logical: "ResumeRunningSession", description: "再開する会話の指定(app/src/running_session.rs。フロントから来る値だけ。cwd は app が会話ファイルから求める。issue #407)。resume_running_session の入力" },
+    attributes: [
+      attr("project", "String"), // 会話ファイルのあるプロジェクトフォルダ名
+      attr("session_id", "String"),
+      attr("mode", "RunningPermissionMode"),
+      attr("repository_path", "Option<PathBuf>"), // 未設定なら会話の cwd をリポジトリとみなす
+      attr("name", "Option<String>"), // 表示名(--name)。任意
+    ],
+    position: { x: 8300, y: 2050 },
+    filePath: "apps/native/crates/app/src/running_session.rs",
+    layer: "application",
+    size: { w: 420, h: 0 },
+  },
+  {
+    name: { physical: "CreateRunningSession", logical: "CreateRunningSession", description: "新規作成する会話の指定(app/src/running_session.rs。issue #407)。create_running_session の入力。新しい会話の ID は app が決める(new_session_id = UUID v4 を --session-id に渡す)。repository_path が新規の cwd になる(パスはフロントから受け取らない。native.md §4)" },
+    attributes: [
+      attr("repository_path", "PathBuf"),
+      attr("mode", "RunningPermissionMode"),
+      attr("name", "Option<String>"), // 表示名(--name)。任意
+    ],
+    position: { x: 8300, y: 2450 },
+    filePath: "apps/native/crates/app/src/running_session.rs",
+    layer: "application",
+    size: { w: 420, h: 0 },
+  },
+  {
+    name: { physical: "RunningSessionRef", logical: "RunningSessionRef", description: "実行中セッション(app が起動した子プロセス)1つの宛先(app/src/running_session_summary.rs。issue #407)。個体指定子は pid_domain + pid + started_at(pid は OS が使い回すので単独では個体を指定できない。domain の RunningSession と同じ)。画面はこれを持ち回って、送信・応答・購読の対象を指定する" },
+    attributes: [
+      attr("pid_domain", "String"),
+      attr("pid", "u32"),
+      attr("started_at", "u64"),
+    ],
+    methods: [
+      method("of", ["session: &domain::RunningSessionByApp"], "Self"),
+      method("matches", ["session: &domain::RunningSessionByApp"], "bool"),
+    ],
+    position: { x: 9700, y: 2050 },
+    filePath: "apps/native/crates/app/src/running_session_summary.rs",
+    layer: "application",
+    size: { w: 500, h: 0 },
+  },
+  {
+    name: { physical: "AddressedProgress", logical: "AddressedProgress", description: "宛先を付けた途中経過(app/src/running_session_summary.rs。issue #407)。domain の ProgressEvent は CLI にも複数セッションにも依存しない中立の型のまま変えず、宛先(RunningSessionRef)を付けた包みをここに置く(#404 の申し送り (d))。Channel(画面ごとの購読)で流す。event は domain::ProgressEvent(classes-domain.ts。別の図の離れた位置にあるため線は引かない)" },
+    attributes: [
+      attr("target", "RunningSessionRef"),
+      attr("event", "domain::ProgressEvent"),
+    ],
+    position: { x: 10400, y: 2050 },
+    filePath: "apps/native/crates/app/src/running_session_summary.rs",
+    layer: "application",
+    size: { w: 400, h: 0 },
+  },
+  {
+    name: { physical: "AddressedRunningSessionEvent", logical: "AddressedRunningSessionEvent", description: "宛先を付けた、実行中セッションからの出来事(app/src/running_session_summary.rs。issue #407)。子プロセスごとの受け口は宛先を知らない(pid は起動してから分かる)ので、tauri 層の処理タスクが宛先を付けて状態へ反映する。as_progress は、画面へ流す途中経過(Progress)なら宛先付きで取り出す。event は RunningSessionEvent(この図の、離れた位置)" },
+    attributes: [
+      attr("target", "RunningSessionRef"),
+      attr("event", "RunningSessionEvent"),
+    ],
+    methods: [method("as_progress", [], "Option<AddressedProgress>")],
+    position: { x: 10400, y: 2450 },
+    filePath: "apps/native/crates/app/src/running_session_summary.rs",
+    layer: "application",
+    size: { w: 480, h: 0 },
+  },
+  {
+    name: { physical: "RunningSessionSummary", logical: "RunningSessionSummary", description: "ハブなどが並べる、実行中セッション1つの一覧項目(app/src/running_session_summary.rs。読み取り専用。issue #407)。domain::RunningSessionByApp からの純粋な変換 summarize で作る。答え待ちの問い合わせの中身は持たない(数だけ。中身は get_running_session で取る)。name は #404 の申し送りへの追加: 新規作成の直後は会話ファイルが無く会話タイトルがまだ無いので、一覧は起動時に付けた表示名(--name)を名前に使える。process_state は domain::ProcessState(classes-domain.ts。線は引かない)" },
+    attributes: [
+      attr("target", "RunningSessionRef"),
+      attr("session_id", "String"),
+      attr("repository_path", "PathBuf"),
+      attr("process_state", "domain::ProcessState"),
+      attr("pending_permission_count", "usize"),
+      attr("current_model", "Option<String>"),
+      attr("current_permission_mode", "Option<String>"),
+      attr("cwd", "Option<PathBuf>"),
+      attr("name", "Option<String>"),
+    ],
+    position: { x: 9700, y: 2850 },
+    filePath: "apps/native/crates/app/src/running_session_summary.rs",
+    layer: "application",
+    size: { w: 480, h: 0 },
+  },
+  {
+    name: { physical: "PendingSwitches", logical: "PendingSwitches", description: "送った切り替え(set_model / set_permission_mode)の要求と応答の対応づけ(claude_stream_json.rs。pub(crate)。タプル構造体。issue #407)。CLI の control_response は何を切り替えたかを持たないので、受け入れられたときに何を切り替えたかを引く。要求 ID は infra が付ける(app の型には無い)。書き込みスレッドと読み取りスレッドで共有する。キーは request_id" },
+    attributes: [attr("0", "Mutex<HashMap<String, RunningSessionSwitch>>")],
+    position: { x: 6950, y: 4550 },
+    filePath: "apps/native/crates/infra/src/claude_stream_json.rs",
+    size: { w: 560, h: 0 },
   },
 ];
 
@@ -586,7 +703,6 @@ const RELATIONSHIPS = [
   rel("realization", "WindowsExecutionEnvironmentSource", "ExecutionEnvironmentSource", undefined, "top", "bottom"),
   rel("realization", "GithubApiClient", "GithubGateway", undefined, "top", "bottom"),
   rel("realization", "KeyringTokenStore", "TokenStore", undefined, "top", "bottom"),
-  rel("realization", "ClaudeCliAgent", "AgentGateway", undefined, "top", "bottom"),
   rel("realization", "FileLayoutStore", "LayoutStore", undefined, "top", "bottom"),
   rel("realization", "FileLocalApiTokenStore", "LocalApiTokenStore", undefined, "top", "bottom"),
   rel("realization", "SystemGitWorktreeLister", "GitWorktreeLister", undefined, "top", "bottom"),
@@ -601,7 +717,12 @@ const RELATIONSHIPS = [
   // exit は Arc で共有される(所有ではないので関連)。
   rel("association", "ClaudeCliProcess", "ExitSignal", "exit", "right", "left"),
   // 値として持つ enum なので、コンポジション(この図の書き方どおり、持つ側 → enum)。
-  rel("composition", "StartRunningSession", "RunningPermissionMode", "mode", "bottom", "top"),
+  rel("composition", "ResumeRunningSession", "RunningPermissionMode", "mode", "left", "right"),
+  rel("composition", "CreateRunningSession", "RunningPermissionMode", "mode", "left", 290),
+  rel("association", "AddressedProgress", "RunningSessionRef", "target", "left", "right"),
+  rel("association", "AddressedRunningSessionEvent", "RunningSessionRef", "target", "left", 290),
+  rel("association", "RunningSessionSummary", "RunningSessionRef", "target", "top", "bottom"),
+  rel("association", "ClaudeCliProcess", "PendingSwitches", "pending", 300, "left"),
   rel("composition", "DetectedRunning", "RunningEvidence", "evidence", "bottom", "top"),
 ];
 
