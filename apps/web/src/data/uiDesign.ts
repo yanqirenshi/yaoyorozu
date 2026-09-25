@@ -497,6 +497,7 @@ export const COMPONENT_NAV: NavItem[] = [
         children: [
           { key: "part-button", label: "ボタン" },
           { key: "part-tab", label: "タブ" },
+          { key: "part-loading", label: "ローディング" },
         ],
       },
     ],
