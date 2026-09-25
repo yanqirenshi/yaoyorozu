@@ -337,3 +337,75 @@ export type ClaudeDirPageDto = {
   entries: ClaudeDirEntryDto[];
   total: number;
 };
+
+// ============ 実行中セッション(issue #391。Phase 1「1セッションを app から対話する」) ============
+
+// 起動時に選ぶ権限モード。Phase 1 は plan と default の2つ。
+export type RunningPermissionModeDto = "plan" | "default";
+
+// 途中経過(Channel で流れてくる)。kind で区別する。
+export type ProgressEventDto =
+  | { kind: "text_delta"; text: string }
+  | { kind: "tool_started"; tool_use_id: string; tool_name: string }
+  | { kind: "tool_result_arrived"; tool_use_id: string; is_error: boolean }
+  | { kind: "turn_finished"; succeeded: boolean }
+  | { kind: "sent_line_confirmed"; uuid: string };
+
+export type ProcessStateDto =
+  | "starting"
+  | "idle"
+  | "running"
+  | "awaiting_permission"
+  | "exited";
+
+// 権限の問い合わせの種別(tool_name から導出)。
+//  - tool_use: 通常のツール使用の許可
+//  - ask_user_question: 選択肢の質問(許可・拒否ではなく、選択を updated_input に入れて返す)
+//  - exit_plan_mode: 計画の承認
+export type PermissionRequestKindDto = "tool_use" | "ask_user_question" | "exit_plan_mode";
+
+// 権限の提案(「今後も許可」に使える更新)。許可の応答で、選んだものをそのまま
+// updated_permissions に入れて返す。
+export type PermissionSuggestionDto = {
+  suggestion_type: string;
+  suggestion_destination: string;
+  suggestion_content: unknown;
+};
+
+// 答え待ちの権限の問い合わせ。tool_input はツールごとに形が違うので JSON のまま。
+export type PermissionRequestDto = {
+  request_id: string;
+  tool_name: string;
+  display_name: string | null;
+  description: string | null;
+  tool_use_id: string;
+  tool_input: unknown;
+  blocked_path: string | null;
+  requested_at: number;
+  request_kind: PermissionRequestKindDto;
+  suggestions: PermissionSuggestionDto[];
+};
+
+// app が起動した実行中セッションの現在の状態。
+export type RunningSessionDto = {
+  project: string;
+  session_id: string;
+  pid: number;
+  started_at: number;
+  cwd: string | null;
+  process_state: ProcessStateDto;
+  process_state_at: number;
+  permission_requests: PermissionRequestDto[];
+};
+
+// running-session:changed のペイロード(軽量。データ本体は getRunningSession で取り直す)。
+export type RunningSessionChangedEvent = {
+  session_id: string;
+  process_state: ProcessStateDto;
+  pending_permission_count: number;
+  // 終了したときだけ、終了コード(不明なら null)。終了以外は null。
+  exit_code: number | null;
+};
+
+// 権限の問い合わせへの答えの種別。取り消し(CLI 側が決める)は選べない。
+export type PermissionBehaviorDto = "allow" | "deny";

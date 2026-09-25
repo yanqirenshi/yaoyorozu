@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
   AgentModeDto,
@@ -18,12 +18,18 @@ import type {
   MessageImageDto,
   NodePositionDto,
   PcDto,
+  PermissionBehaviorDto,
+  PermissionSuggestionDto,
   ProfileSummaryDto,
+  ProgressEventDto,
   ProjectDto,
   ProjectItemsPageDto,
   ProjectSettingsFileDto,
   RuleDto,
   RuleSummaryDto,
+  RunningPermissionModeDto,
+  RunningSessionChangedEvent,
+  RunningSessionDto,
   SessionChangedEvent,
   SessionSummaryDto,
   ViewerTabDto,
@@ -147,6 +153,79 @@ export function getSessionLineImages(
   uuid: string,
 ): Promise<MessageImageDto[]> {
   return invoke<MessageImageDto[]>("get_session_line_images", { project, sessionId, uuid });
+}
+
+// ---- 実行中セッション(issue #391)。app が claude CLI を起動したまま持ち、対話する。 ----
+// cwd やパスは渡さない(backend が会話ファイルから解決する。native.md §4)。
+
+// 会話 sessionId を子プロセスの claude として起動する(--resume)。Phase 1 は同時に1つ。
+// 途中経過は onProgress へ、順序どおりに届く(Channel)。
+export function startRunningSession(
+  profileId: string | null,
+  project: string,
+  sessionId: string,
+  mode: RunningPermissionModeDto,
+  onProgress: (event: ProgressEventDto) => void,
+): Promise<RunningSessionDto> {
+  const channel = new Channel<ProgressEventDto>();
+  channel.onmessage = onProgress;
+  return invoke<RunningSessionDto>("start_running_session", {
+    profileId,
+    project,
+    sessionId,
+    mode,
+    onProgress: channel,
+  });
+}
+
+// 起動済みの実行中セッションの現在の状態(答え待ちの問い合わせを含む)。無ければ null。
+export function getRunningSession(): Promise<RunningSessionDto | null> {
+  return invoke<RunningSessionDto | null>("get_running_session");
+}
+
+// 実行中セッションへ user メッセージ(本文と画像 base64)を送る。
+export function sendToRunningSession(text: string, images: string[]): Promise<void> {
+  return invoke<void>("send_to_running_session", { text, images });
+}
+
+// 権限の問い合わせに答える。allow は updatedInput(書き換えた入力。省略で問い合わせの
+// 入力のまま)と updatedPermissions(「今後も許可」にする提案)を、deny は message を添えられる。
+export function respondPermission(
+  requestId: string,
+  behavior: PermissionBehaviorDto,
+  options: {
+    updatedInput?: unknown;
+    updatedPermissions?: PermissionSuggestionDto[];
+    message?: string;
+  } = {},
+): Promise<void> {
+  return invoke<void>("respond_permission", {
+    requestId,
+    behavior,
+    updatedInput: options.updatedInput ?? null,
+    updatedPermissions: options.updatedPermissions ?? null,
+    message: options.message ?? null,
+  });
+}
+
+// 生成中(権限待ちを含む)の中断。プロセスは生きたまま、次の入力を送れる。
+export function interruptRunningSession(): Promise<void> {
+  return invoke<void>("interrupt_running_session");
+}
+
+// 実行中セッションを止める(標準入力を閉じて終了を待つ。約1秒)。
+export function stopRunningSession(): Promise<void> {
+  return invoke<void>("stop_running_session");
+}
+
+// 状態変化・権限の問い合わせの到着/決着の通知(軽量)。詳細は getRunningSession で取り直す。
+export function onRunningSessionChanged(
+  callback: (event: RunningSessionChangedEvent) => void,
+): Promise<() => void> {
+  const unlisten = listen<RunningSessionChangedEvent>("running-session:changed", (event) => {
+    callback(event.payload);
+  });
+  return unlisten.then((fn) => fn);
 }
 
 export function onSessionChanged(

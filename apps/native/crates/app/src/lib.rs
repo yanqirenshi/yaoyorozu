@@ -14,6 +14,15 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+mod running_session;
+pub use running_session::{
+    apply_running_session_event, begin_respond_permission, begin_send_to_running_session,
+    interrupt_running_session, own_running_pids, respond_permission, send_to_running_session,
+    start_running_session, stop_running_session, write_permission_response, write_user_message,
+    NowMs, PermissionDecision, RunningPermissionMode, RunningProcess, RunningSessionEvent,
+    RunningSessionEventSink, RunningSessionLauncher, StartRunningSession, StartedRunningSession,
+};
+
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
     #[error("{0}")]
@@ -402,22 +411,31 @@ pub trait RunningSessionSource {
     /// 「読めない・分からない」は実行中とみなす側に倒す(会話の混線という害が、
     /// 誤ってブロックする害より大きいため)。台帳の列挙・読み取りができず何も
     /// 判断できないときは `Err`(送信しない)。
-    fn find_running(&self, session_id: &str) -> Result<Option<RunningSession>, AppError>;
+    ///
+    /// `exclude_pids` は判定から外すプロセスID(issue #391)。app 自身が起動した
+    /// `claude`(実行中セッション。`RunningSessionByApp`)も同じ台帳を書くため、外部で
+    /// 実行中かどうかを調べるときは、自分の PID を除外して見る。
+    fn find_running(
+        &self,
+        session_id: &str,
+        exclude_pids: &[u32],
+    ) -> Result<Option<DetectedRunning>, AppError>;
 }
 
-/// 送信先が実行中とみなされた根拠(issue #345)。エラーメッセージに含め、誤って
+/// 送信先が外部で実行中とみなされた根拠(issue #345。issue #391 で `RunningSession` から
+/// 改名した: domain に、クラス図の実行中セッション `domain::RunningSession` が入ったため)。エラーメッセージに含め、誤って
 /// 止められたときにユーザーが原因(台帳ファイル・PID)を見つけて自分で解消できる
 /// ようにする(壊れた台帳の PID が別のプロセスに使い回されると、そのフォルダへの
 /// 送信が止まり続けうるため)。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RunningSession {
+pub struct DetectedRunning {
     /// 根拠になった実行中セッション台帳(`~/.claude/sessions/<PID>.json`)のパス。
     pub ledger_path: PathBuf,
     pub pid: u32,
     pub evidence: RunningEvidence,
 }
 
-/// [`RunningSession`] の根拠の強さ。
+/// [`DetectedRunning`] の根拠の強さ。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunningEvidence {
     /// 台帳の `sessionId` が送信先と一致し、そのプロセスが生きている。
@@ -427,7 +445,7 @@ pub enum RunningEvidence {
     LedgerUnreadable,
 }
 
-impl RunningSession {
+impl DetectedRunning {
     /// 送信を止めるときにユーザーへ見せる理由。台帳のパスと PID を含める。
     fn block_message(&self) -> String {
         let path = self.ledger_path.display();
@@ -709,7 +727,7 @@ pub fn send_message(
         return Err(AppError::InvalidInput("不正なセッションIDです".to_string()));
     }
 
-    if let Some(running) = running_sessions.find_running(session_id)? {
+    if let Some(running) = running_sessions.find_running(session_id, &[])? {
         return Err(AppError::SessionBusy(running.block_message()));
     }
 
@@ -1854,13 +1872,13 @@ mod tests {
 
     #[derive(Default)]
     struct FakeRunningSessionSource {
-        running: Option<RunningSession>,
+        running: Option<DetectedRunning>,
     }
 
     impl FakeRunningSessionSource {
         fn running() -> Self {
             Self {
-                running: Some(RunningSession {
+                running: Some(DetectedRunning {
                     ledger_path: PathBuf::from("/home/u/.claude/sessions/123.json"),
                     pid: 123,
                     evidence: RunningEvidence::SessionMatched,
@@ -1870,7 +1888,16 @@ mod tests {
     }
 
     impl RunningSessionSource for FakeRunningSessionSource {
-        fn find_running(&self, _session_id: &str) -> Result<Option<RunningSession>, AppError> {
+        fn find_running(
+            &self,
+            _session_id: &str,
+            exclude_pids: &[u32],
+        ) -> Result<Option<DetectedRunning>, AppError> {
+            if let Some(running) = &self.running {
+                if exclude_pids.contains(&running.pid) {
+                    return Ok(None);
+                }
+            }
             Ok(self.running.clone())
         }
     }
@@ -2822,7 +2849,7 @@ mod tests {
             let source = FakeSessionSource::new("s1", vec![]);
             let agent = FakeAgentGateway::default();
             let running_sessions = FakeRunningSessionSource {
-                running: Some(RunningSession {
+                running: Some(DetectedRunning {
                     ledger_path: PathBuf::from("/home/u/.claude/sessions/19104.json"),
                     pid: 19104,
                     evidence,

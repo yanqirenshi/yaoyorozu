@@ -1,7 +1,9 @@
 mod claude_cli_agent;
+mod claude_cli_process;
 mod claude_dir_store;
 mod claude_md_store;
 mod claude_settings_store;
+mod claude_stream_json;
 mod execution_environment_source;
 mod git_ledger_store;
 mod git_state_source;
@@ -22,6 +24,7 @@ mod skills_store;
 mod viewer_tabs_store;
 
 pub use claude_cli_agent::ClaudeCliAgent;
+pub use claude_cli_process::ClaudeCliProcessLauncher;
 pub use claude_dir_store::{claude_home_dir, FileClaudeDirStore};
 pub use claude_md_store::FileClaudeMdStore;
 pub use claude_settings_store::FileClaudeSettingsStore;
