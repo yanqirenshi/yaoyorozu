@@ -15,6 +15,9 @@
  * - `running_session.rs`: 実行中セッションの command 群(関数なので図には描かない)と、
  *   `RunningSessionEventSink` の実装 `ChannelSink`(private)。
  * - `session_scan_queue.rs`: 走査キューの `ScanProgressDto`・`RescanOutcome`(どちらも private)。
+ * - `lib.rs` の `WatcherSlot`(private な型エイリアス。`Mutex<Option<infra::SessionWatcher>>`。
+ *   ファイル監視の保持先で、Tauri の管理状態)は、`SessionWatcher`(`classes-infra.ts`)を包むだけの
+ *   別名なので載せない(issue #420)。
  *
  * 【実行中セッション(Phase 2。issue #407。PR #413)】`AppState.running_session`(1つ)は
  * `running_sessions`(複数)になり、`RunningSessionSlot` は購読(`ProgressSubscriber`)を持つ。
