@@ -110,6 +110,7 @@ import {
   method,
   type ClassDef,
   type ClassFilePaths,
+  type ClassLayers,
 } from "./classDiagram";
 
 const DEFS: ClassDef[] = [
@@ -202,6 +203,8 @@ const DEFS: ClassDef[] = [
     // GitRepository の真下に置く(GitRepository の下辺 → Profile の上辺)。
     position: { x: 468, y: 500 },
     filePath: "apps/native/crates/domain/src/profile.rs",
+    // アプリ固有の設定の単位で、TM のモノではない(冒頭の【TM との違い・未決】)。
+    layer: "application",
     // github_project の名前と型の列が重なるので広げる(LogLine の size の説明を参照)。
     size: { w: 280, h: 0 },
   },
@@ -448,12 +451,17 @@ const DEFS: ClassDef[] = [
       "SentLineConfirmed { uuid: String }",
     ].map(label),
     position: { x: 900, y: 1650 },
+    // 画面へ流す出力で、ユースケース(app)の入出力にあたる。TM のモノではない。
+    layer: "application",
     // データを持つバリアントの表記が長いので広げる(LogLine の size の説明を参照)。
     size: { w: 470, h: 0 },
   },
 ];
 
-const { classes, rel, filePaths } = defineDiagram(DEFS);
+// 既定は企業のビジネスルール(TM を元にしたドメインの型)。アプリ固有のものだけ layer を書く。
+const { classes, rel, filePaths, layers } = defineDiagram(DEFS, {
+  layerOf: () => "enterprise",
+});
 
 const RELATIONSHIPS = [
   // TM: PC．ユーザー(対照表、属性なし)。1台に1人以上。
@@ -610,3 +618,4 @@ export const DOMAIN_CLASS_DATA: DiagramInput = {
 // PermissionRequestKind・PermissionResponse・PermissionBehavior・PermissionSuggestion・
 // ProgressEvent。issue #388)は設計のみで、まだ実装されていないため filePath を持たない。
 export const DOMAIN_CLASS_FILE_PATHS: ClassFilePaths = filePaths;
+export const DOMAIN_CLASS_LAYERS: ClassLayers = layers;

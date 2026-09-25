@@ -17,8 +17,28 @@ import type {
   RelationshipInput,
 } from "@yanqirenshi/d3.classes";
 
+/**
+ * クリーンアーキテクチャの層(定義と色は `classArchitecture.ts`)。
+ * enterprise = 企業のビジネスルール / application = アプリケーションのビジネスルール /
+ * adapter = インターフェイスアダプター / framework = フレームワークとドライバ。
+ */
+export type ArchitectureLayer =
+  | "enterprise"
+  | "application"
+  | "adapter"
+  | "framework";
+
+/** 物理名 → 層。全クラスが持つ(`defineDiagram` が決める)。 */
+export type ClassLayers = Record<string, ArchitectureLayer>;
+
 /** クラス定義。id は物理名から付けるので書かない。 */
 export type ClassDef = Omit<ClassInput, "id"> & {
+  /**
+   * クリーンアーキテクチャの層。省略すると図ごとの既定(`defineDiagram` の `layerOf`)に
+   * 従う。既定と違うクラスにだけ書く。d3.classes には渡さない(`defineDiagram` が取り除く)、
+   * インスペクタ表示と色分け専用の値。
+   */
+  layer?: ArchitectureLayer;
   /**
    * 対応する Rust の実装ファイル(リポジトリルートからの相対パス。例:
    * `apps/native/crates/domain/src/pc.rs`)。まだ実装されていないクラス
@@ -78,14 +98,22 @@ export const method = (
  * 関係線の id は `<起点>-><終点>`。接続辺の手調整(layout/classes.json)のキーに使う。
  * 同じ組に2本以上張るときは `options.key` を渡し、`<起点>-><終点>#<key>` にする。
  * 渡し忘れると id が重複し、d3.classes が例外を出す(黙って上書きしない)。
+ * `options.layerOf` は、`layer` を書いていないクラスの層を決める(図ごとの既定)。
  */
-export function defineDiagram(defs: ClassDef[]) {
-  // filePath は d3.classes の ClassInput に無いフィールドなので、渡す前に取り除く。
+export function defineDiagram(
+  defs: ClassDef[],
+  options: { layerOf: (def: ClassDef) => ArchitectureLayer },
+) {
+  // filePath・layer は d3.classes の ClassInput に無いフィールドなので、渡す前に取り除く。
   const classes: ClassInput[] = defs.map((c) => {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- filePath を捨てるためだけの分割代入
-    const { filePath, ...rest } = c;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- filePath・layer を捨てるためだけの分割代入
+    const { filePath, layer, ...rest } = c;
     return { ...rest, id: c.name.physical };
   });
+
+  const layers: ClassLayers = Object.fromEntries(
+    defs.map((c) => [c.name.physical, c.layer ?? options.layerOf(c)]),
+  );
 
   const filePaths: ClassFilePaths = Object.fromEntries(
     defs
@@ -118,7 +146,7 @@ export function defineDiagram(defs: ClassDef[]) {
     ...multiplicity,
   });
 
-  return { classes, rel, filePaths };
+  return { classes, rel, filePaths, layers };
 }
 
 /**

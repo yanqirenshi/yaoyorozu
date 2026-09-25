@@ -2,7 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ClassDiagram, type RelationshipInput } from "@yanqirenshi/d3.classes";
-import { CLASS_DIAGRAM_DATA, CLASS_FILE_PATHS } from "@/data/classes";
+import { ARCHITECTURE_LAYER_BY_KEY } from "@/data/classArchitecture";
+import {
+  CLASS_DIAGRAM_DATA,
+  CLASS_FILE_PATHS,
+  CLASS_LAYERS,
+} from "@/data/classes";
 import {
   applyLayoutOverrides,
   applyPortOverrides,
@@ -16,6 +21,7 @@ import {
   type LayoutOverrides,
   type PortOverrides,
 } from "@/data/classesLayoutStorage";
+import ClassesLegend from "./classes/ClassesLegend";
 import ClassesInspector, {
   type ClassesInspectorPort,
   type ClassesInspectorTarget,
@@ -121,6 +127,18 @@ export default function ClassesTab() {
     const svg = container.querySelector("svg");
     if (svg) applyCamera(svg);
 
+    // 箱の色をクリーンアーキテクチャの層で塗り分ける。d3.classes に色の指定が無いため、
+    // 描いた直後に本体の矩形へ style で当てる(ドラッグで動かしても矩形は残るので一度でよい)。
+    container.querySelectorAll<SVGGElement>("g.class-box").forEach((el) => {
+      const dataId = el.getAttribute("data-id");
+      const layerKey = dataId ? CLASS_LAYERS[dataId] : undefined;
+      const body = el.querySelector<SVGRectElement>(".box-body");
+      if (!layerKey || !body) return;
+      const layer = ARCHITECTURE_LAYER_BY_KEY[layerKey];
+      body.style.fill = layer.fill;
+      body.style.stroke = layer.border;
+    });
+
     // d3.classes の ClassBox はドラッグ移動をライブラリ内部で完結させており、
     // 通知コールバック(dragend相当)が無い。SitemapTab と同じ方式で、
     // レンダー結果のDOM(data-id + transform)を読み取って対応する。
@@ -194,6 +212,9 @@ export default function ClassesTab() {
         position: { ...cls.position },
         ports: buildPorts(cls.name.physical, relationshipsRef.current),
         filePath: CLASS_FILE_PATHS[cls.name.physical],
+        layer: CLASS_LAYERS[cls.name.physical]
+          ? ARCHITECTURE_LAYER_BY_KEY[CLASS_LAYERS[cls.name.physical]]
+          : undefined,
       });
     };
 
@@ -291,6 +312,7 @@ export default function ClassesTab() {
       }}
     >
       <div ref={containerRef} className="min-h-0 w-full flex-1" />
+      <ClassesLegend />
 
       {selected && (
         <div

@@ -26,6 +26,10 @@ export const GUIDE_FILES: GuideFile[] = [
     role: "infra クレートの型と、それが実現する app の port(trait)を、コードのまま写した図。",
   },
   {
+    path: "src/data/classArchitecture.ts",
+    role: "クリーンアーキテクチャの4つの層(名前・意味・このプロジェクトでの対応・色)の定義。箱の色分けと、インスペクタの層の表示に使う。",
+  },
+  {
     path: "src/data/classDiagram.ts",
     role: "書くための道具(attr / label / method / defineDiagram / rel / mergeDiagrams)。",
   },
@@ -108,6 +112,12 @@ export const GUIDE_CLASS_ITEMS: GuideClassItem[] = [
     howTo:
       "箱の幅は中身から計算されず 200 で固定なので、名前と型の列が重なるときだけ size.w で広げる。高さは中身から計算され、size.h は使われない(0 を書く)。",
     example: "size: { w: 250, h: 0 }",
+  },
+  {
+    item: "層(クリーンアーキテクチャ)",
+    howTo:
+      "クラスは、企業のビジネスルール / アプリケーションのビジネスルール / インターフェイスアダプター / フレームワークとドライバ のどれかに分類される(箱の色とインスペクタに出る)。図ごとに既定がある(classes-domain.ts = 企業、classes-native-prototype.ts = アプリケーション、classes-infra.ts = port(interface)はアプリケーション・実装はインターフェイスアダプター、classes-tauri.ts = インターフェイスアダプター)ので、既定と違うクラスにだけ layer を書く。",
+    example: 'layer: "application"',
   },
   {
     item: "実装ファイル",
