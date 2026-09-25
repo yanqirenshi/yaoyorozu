@@ -294,6 +294,12 @@ body,
   color: var(--text-secondary);
 }
 
+/* 入力欄に添える注意書き(表示名でタイトルが変わること。issue #424)。 */
+.hub-inspector-form-note {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
 .hub-inspector-form-row select,
 .hub-inspector-form-row input {
   border: 1px solid var(--border-default);
