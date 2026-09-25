@@ -1,3 +1,4 @@
+import type { BadgeTone } from "./Badge";
 import type {
   PermissionSuggestionDto,
   ProcessStateDto,
@@ -22,6 +23,23 @@ export function processStateLabel(state: ProcessStateDto | null): string {
       return "終了";
     default:
       return "未起動";
+  }
+}
+
+/**
+ * プロセスの状態のバッジのトーン(意味で選ぶ。issue #411): まだ始まっていない・終わって落ち着いて
+ * いる(未起動・停止中・待機)は `idle`、いま動いている・人の操作を待っている(起動中・実行中・
+ * 権限待ち)は `running`。異常終了を区別する値は画面に来ていない(終了コードは通知だけ)ので、
+ * `error` は使わない。
+ */
+export function processStateTone(state: ProcessStateDto | null): BadgeTone {
+  switch (state) {
+    case "starting":
+    case "running":
+    case "awaiting_permission":
+      return "running";
+    default:
+      return "idle";
   }
 }
 

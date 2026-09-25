@@ -2386,6 +2386,54 @@ button.claude-explorer-name {
   --ld-size: var(--icon-32) !important;
 }
 
+/* ====== バッジ(部品。issue #411)======
+   仕様の正は apps/web の uiBadge.ts(/ui?item=part-badge)。値はトークンだけで書く。
+   境界は持たない(境界を持つボタンと形で区別する)。文字の太さはトーン・サイズで変えない。 */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  padding: 0 var(--space-2);
+  border: none;
+  border-radius: var(--radius-4);
+  white-space: nowrap;
+  font-size: var(--text-ui-14n-100-size);
+  font-weight: var(--text-ui-14n-100-weight);
+  line-height: var(--text-ui-14n-100-line-height);
+  letter-spacing: var(--text-ui-14n-100-tracking);
+}
+
+/* 高さは仕様の値(small = 20px / medium = 24px)。 */
+.badge-small {
+  height: 20px;
+}
+
+.badge-medium {
+  height: 24px;
+}
+
+.badge-idle {
+  background: var(--color-sumi-100);
+  color: var(--text-secondary);
+}
+
+.badge-running {
+  background: var(--color-kincha-100);
+  color: var(--color-kincha-800);
+}
+
+.badge-done {
+  background: var(--color-kusairo-100);
+  color: var(--color-kusairo-800);
+}
+
+.badge-error {
+  background: var(--color-suou-100);
+  color: var(--color-suou-700);
+}
+
 /* ====== 実行中セッション(issue #392。Phase 1)====== */
 
 /* 会話ビューの上部の状態表示(プロセスの状態・権限モード・中断/終了)。 */
@@ -2396,19 +2444,14 @@ button.claude-explorer-name {
   gap: var(--space-3);
   padding: var(--space-2) var(--space-6);
   border-bottom: 1px solid var(--border-default);
-  font-size: 0.85rem;
+  font-size: var(--text-dns-14n-150-size);
   color: var(--text-secondary);
 }
 
-.running-bar-state {
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-/* 実行中・権限待ちは草色の文字色で目立たせる(既存のアクセント。機能カラーは使わない)。 */
-.running-bar-state[data-state="running"],
-.running-bar-state[data-state="awaiting_permission"] {
-  color: var(--color-kusairo-800);
+/* 状態表示(バッジ)を包む領域。状態が変わったことを支援技術に伝える(role="status")。 */
+.running-bar-status {
+  display: inline-flex;
+  align-items: center;
 }
 
 .running-bar-mode {
@@ -2430,7 +2473,7 @@ button.claude-explorer-name {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-4);
   padding: var(--space-1) var(--space-3);
-  font-size: 0.85rem;
+  font-size: var(--text-ui-14n-100-size);
   font-family: inherit;
   color: var(--text-primary);
   background: var(--surface-base);
@@ -2455,7 +2498,7 @@ button.claude-explorer-name {
 }
 
 .message-meta-live {
-  color: var(--color-kusairo-800);
+  color: var(--color-kincha-800);
 }
 
 .live-tools {
@@ -2465,7 +2508,7 @@ button.claude-explorer-name {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
-  font-size: 0.8rem;
+  font-size: var(--text-dns-14n-150-size);
 }
 
 .live-tool {
@@ -2504,29 +2547,29 @@ button.claude-explorer-name {
 
 .permission-title {
   margin: 0;
-  font-weight: 600;
+  font-weight: var(--text-dns-14b-150-weight);
   color: var(--text-primary);
 }
 
 .permission-tool {
   margin-left: var(--space-2);
-  padding: 1px var(--space-2);
+  padding: 0 var(--space-2);
   border-radius: var(--radius-4);
   background: var(--surface-sunken);
-  font-weight: 400;
+  font-weight: var(--text-dns-14n-150-weight);
   font-family: monospace;
 }
 
 .permission-description {
   margin: var(--space-1) 0 0;
-  font-size: 0.9rem;
+  font-size: var(--text-dns-14n-150-size);
   color: var(--text-secondary);
   overflow-wrap: anywhere;
 }
 
 .permission-details {
   margin-top: var(--space-2);
-  font-size: 0.85rem;
+  font-size: var(--text-dns-14n-150-size);
   color: var(--text-secondary);
 }
 
@@ -2541,7 +2584,7 @@ button.claude-explorer-name {
   overflow: auto;
   border-radius: var(--radius-4);
   background: var(--surface-sunken);
-  font-size: 0.8rem;
+  font-size: var(--text-mono-14n-150-size);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -2569,9 +2612,12 @@ button.claude-explorer-name {
   opacity: 0.9;
 }
 
+/* 無効は色だけ(不透明度)で表さない。部品「ボタン」の無効の状態と同じ値(/ui?item=part-button)。 */
 .permission-button:disabled {
-  opacity: 0.5;
-  cursor: default;
+  background: var(--state-disabled);
+  color: var(--text-disabled);
+  border-color: var(--border-default);
+  cursor: not-allowed;
 }
 
 .permission-question {
@@ -2582,22 +2628,22 @@ button.claude-explorer-name {
 
 .permission-question-text {
   padding: 0;
-  font-weight: 600;
+  font-weight: var(--text-dns-14b-150-weight);
 }
 
 .permission-question-header {
   margin-right: var(--space-2);
-  padding: 1px var(--space-2);
+  padding: 0 var(--space-2);
   border-radius: var(--radius-4);
   background: var(--surface-sunken);
-  font-weight: 400;
-  font-size: 0.8rem;
+  font-weight: var(--text-dns-14n-150-weight);
+  font-size: var(--text-dns-14n-150-size);
 }
 
 .permission-question-note {
   margin-left: var(--space-2);
-  font-weight: 400;
-  font-size: 0.8rem;
+  font-weight: var(--text-dns-14n-150-weight);
+  font-size: var(--text-dns-14n-150-size);
   color: var(--text-secondary);
 }
 
@@ -2607,7 +2653,7 @@ button.claude-explorer-name {
   align-items: baseline;
   gap: var(--space-2);
   margin-top: var(--space-2);
-  font-size: 0.9rem;
+  font-size: var(--text-dns-14n-150-size);
 }
 
 .permission-option-label {
@@ -2617,7 +2663,7 @@ button.claude-explorer-name {
 .permission-option-description {
   flex-basis: 100%;
   padding-left: var(--space-6);
-  font-size: 0.8rem;
+  font-size: var(--text-dns-14n-150-size);
   color: var(--text-secondary);
 }
 
@@ -2628,7 +2674,7 @@ button.claude-explorer-name {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-4);
   padding: var(--space-1) var(--space-2);
-  font-size: 0.9rem;
+  font-size: var(--text-ui-14n-100-size);
   font-family: inherit;
   color: var(--text-primary);
   background: var(--surface-base);
@@ -2644,4 +2690,142 @@ button.claude-explorer-name {
   margin-top: var(--space-2);
   max-height: 360px;
   overflow: auto;
+}
+
+/* ====== 状態バーの切り替え・新規セッション(issue #409)====== */
+
+/* 状態バーの、値の表示 + 選択ボタン + 一覧(位置の基準)。 */
+.running-bar-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.running-bar-menu {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  z-index: 20;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-1);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-8);
+  box-shadow: var(--elevation-3);
+}
+
+.running-bar-menu-item {
+  border: none;
+  background: none;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-4);
+  font-family: inherit;
+  font-size: var(--text-ui-14n-100-size);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.running-bar-menu-item:hover {
+  background: var(--state-hover);
+}
+
+.running-bar-menu-item:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.running-bar-menu-item.active {
+  font-weight: var(--text-dns-14b-150-weight);
+  color: var(--color-primary);
+}
+
+/* 再開に付ける表示名の入力欄。 */
+.running-bar-name {
+  min-width: 0;
+  width: 160px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-4);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-ui-14n-100-size);
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--surface-base);
+}
+
+/* 左の一覧の先頭: 「+ セッションを追加」と「+ 新規」を並べる。 */
+.session-list-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.session-list-actions .session-list-add {
+  width: auto;
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+/* 「+ 新規」は文字の幅だけ(「+ セッションを追加」を折り返させない)。 */
+.session-list-actions .session-list-add:last-child {
+  flex: 0 0 auto;
+}
+
+.session-pending-note {
+  margin: 0 0 var(--space-3);
+  color: var(--text-secondary);
+}
+
+/* 新規セッションのモーダル(`settings-dialog` を土台にする)。 */
+.new-session-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 360px;
+}
+
+.new-session-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.new-session-label {
+  padding: 0;
+  font-size: var(--text-dns-14b-150-size);
+  font-weight: var(--text-dns-14b-150-weight);
+  color: var(--text-primary);
+}
+
+.new-session-name {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-4);
+  padding: var(--space-2);
+  font-size: var(--text-ui-14n-100-size);
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--surface-base);
+}
+
+.new-session-mode {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-dns-14n-150-size);
+}
+
+.new-session-note {
+  margin: 0;
+  font-size: var(--text-dns-14n-150-size);
+  color: var(--text-secondary);
 }
