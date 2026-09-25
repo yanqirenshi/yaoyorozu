@@ -6,6 +6,7 @@ use infra::{
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 設定の `claude_projects_dir` と既定値(`~/.claude/projects/`)から、
@@ -18,6 +19,18 @@ pub fn resolve_effective_projects_dir(settings: &Settings) -> Result<PathBuf, Ap
         settings.claude_projects_dir.as_deref(),
         &default,
     ))
+}
+
+/// app が起動して持っている実行中セッション(issue #391)。Phase 1 は同時に1つ。
+pub struct RunningSessionSlot {
+    /// 会話ファイルのあるプロジェクトフォルダ名。
+    pub project: String,
+    /// 何番目に起動したか。読み取りの出来事は起動した世代のものだけを反映する(次の起動の
+    /// 状態を、前のプロセスの遅れて届いた出来事で動かさない)。
+    pub generation: u64,
+    pub session: domain::RunningSessionByApp,
+    /// 子プロセスの操作口(標準入力への書き込み・中断・停止)。
+    pub process: Arc<dyn app::RunningProcess>,
 }
 
 /// アプリの唯一の真実(SSoT)。`tauri::State<tokio::sync::Mutex<AppState>>` として
@@ -83,6 +96,14 @@ pub struct AppState {
     /// ファイルの状態(更新時刻 + サイズ)とセットで持ち、`get_session`(ページ送り)は
     /// 状態が変わっていなければファイルを読み直さずここから切り出す。
     pub loaded_messages: HashMap<PathBuf, app::CachedMessages>,
+    /// app が起動した実行中セッション(issue #391)。終了しても、次に起動して置き換えるまで
+    /// 終了状態のまま残す(画面が終了を知るため)。ランタイム状態で保存しない。
+    pub running_session: Option<RunningSessionSlot>,
+    /// 実行中セッションを起動している最中か(起動は数秒かかりうるため、その間にもう1つ
+    /// 起動されないようにする。Phase 1 は同時に1つ)。
+    pub running_session_starting: bool,
+    /// 実行中セッションの世代番号(起動のたびに増やす)。
+    pub running_session_generation: u64,
     /// `git_ledger`/`user_sessions` の読み込みが完了したかどうか
     /// (issue #218)。起動時は`false`で、起動後のバックグラウンドタスク・
     /// ハブの「再読み込み」操作のいずれかが一度でも完了すれば(成否に
@@ -200,6 +221,9 @@ impl AppState {
                 user_sessions: Vec::new(),
                 loaded_log_lines: HashMap::new(),
                 loaded_messages: HashMap::new(),
+                running_session: None,
+                running_session_starting: false,
+                running_session_generation: 0,
                 pc_data_loaded: false,
                 session_scan_generation: 0,
                 session_rescan: app::RescanQueue::default(),

@@ -35,7 +35,13 @@
  *   を反映している。
  */
 import type { DiagramInput } from "@yanqirenshi/d3.classes";
-import { attr, defineDiagram, label, type ClassDef } from "./classDiagram";
+import {
+  attr,
+  defineDiagram,
+  label,
+  type ClassDef,
+  type ClassLayers,
+} from "./classDiagram";
 
 const DEFS: ClassDef[] = [
   // ============ セッション閲覧 ============
@@ -377,6 +383,8 @@ const DEFS: ClassDef[] = [
     ],
     position: { x: 2100, y: 10500 },
     filePath: "apps/native/tauri/src/state.rs",
+    // Tauri の状態管理・ローカルAPIサーバの実行に属する(フレームワーク側)。
+    layer: "framework",
     size: { w: 260, h: 0 },
   },
   {
@@ -384,6 +392,8 @@ const DEFS: ClassDef[] = [
     attributes: [attr("recovered_from_corruption", "bool")],
     position: { x: 2500, y: 10500 },
     filePath: "apps/native/tauri/src/state.rs",
+    // Tauri の状態管理・ローカルAPIサーバの実行に属する(フレームワーク側)。
+    layer: "framework",
     size: { w: 220, h: 0 },
   },
   // ============ ローカルAPI ============
@@ -396,6 +406,8 @@ const DEFS: ClassDef[] = [
     ],
     position: { x: 2100, y: 10900 },
     filePath: "apps/native/tauri/src/local_api.rs",
+    // Tauri の状態管理・ローカルAPIサーバの実行に属する(フレームワーク側)。
+    layer: "framework",
     size: { w: 220, h: 0 },
   },
   {
@@ -489,7 +501,11 @@ const DEFS: ClassDef[] = [
   },
 ];
 
-const { classes, rel, filePaths } = defineDiagram(DEFS);
+// 既定はインターフェイスアダプター(DTO・コマンドの入出力)。Tauri 本体に属する状態などだけ
+// layer を書く。
+const { classes, rel, filePaths, layers } = defineDiagram(DEFS, {
+  layerOf: () => "adapter",
+});
 
 const RELATIONSHIPS = [
   // セッション閲覧(AgentKindDto に3クラスから集まるので角度で分ける)
@@ -528,3 +544,4 @@ export const TAURI_CLASS_DATA: DiagramInput = {
 };
 
 export const TAURI_CLASS_FILE_PATHS = filePaths;
+export const TAURI_CLASS_LAYERS: ClassLayers = layers;

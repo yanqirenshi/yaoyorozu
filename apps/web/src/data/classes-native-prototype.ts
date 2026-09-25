@@ -88,6 +88,7 @@ import {
   label,
   type ClassDef,
   type ClassFilePaths,
+  type ClassLayers,
 } from "./classDiagram";
 
 const DEFS: ClassDef[] = [
@@ -467,6 +468,8 @@ const DEFS: ClassDef[] = [
     ],
     position: { x: 4100, y: 450 },
     filePath: "apps/native/crates/domain/src/session_line/scanned_line.rs",
+    // jsonl の1行(wire 形式の SessionLine)を、走査が読みやすい形に見せる変換の型。
+    layer: "adapter",
   },
   {
     name: { physical: "ParsedSession", logical: "ParsedSession", description: "User::load_sessions(オブジェクトモデル側)への入力。Session/SessionFile を組み立てるための、ただの運搬型(GitLedger の ObservedGitState と同じ設計)。issue #208・#214・#217" },
@@ -490,7 +493,11 @@ const DEFS: ClassDef[] = [
   },
 ];
 
-const { classes, rel, filePaths } = defineDiagram(DEFS);
+// 既定はアプリケーションのビジネスルール(ユースケースの入出力・アプリ固有の状態)。
+// それ以外のものだけ layer を書く。
+const { classes, rel, filePaths, layers } = defineDiagram(DEFS, {
+  layerOf: () => "application",
+});
 
 const RELATIONSHIPS = [
   // セッション閲覧(プロトタイプ)
@@ -527,3 +534,4 @@ export const NATIVE_PROTOTYPE_CLASS_DATA: DiagramInput = {
 };
 
 export const NATIVE_PROTOTYPE_CLASS_FILE_PATHS: ClassFilePaths = filePaths;
+export const NATIVE_PROTOTYPE_CLASS_LAYERS: ClassLayers = layers;

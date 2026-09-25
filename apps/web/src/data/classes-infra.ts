@@ -46,6 +46,7 @@ import {
   method,
   type ClassDef,
   type ClassFilePaths,
+  type ClassLayers,
 } from "./classDiagram";
 
 const DEFS: ClassDef[] = [
@@ -77,6 +78,8 @@ const DEFS: ClassDef[] = [
     attributes: [],
     position: { x: 2750, y: 2400 },
     filePath: "apps/native/crates/infra/src/session_source.rs",
+    // ファイル監視ライブラリ(notify)の型そのもの。
+    layer: "framework",
   },
   // ============ 設定・プロファイル ============
   {
@@ -385,7 +388,11 @@ const DEFS: ClassDef[] = [
   },
 ];
 
-const { classes, rel, filePaths } = defineDiagram(DEFS);
+// port(interface)は app クレートが定義するのでアプリケーションのビジネスルール、
+// それを実装する型はインターフェイスアダプター。それ以外のものだけ layer を書く。
+const { classes, rel, filePaths, layers } = defineDiagram(DEFS, {
+  layerOf: (def) => (def.stereotype === "interface" ? "application" : "adapter"),
+});
 
 const RELATIONSHIPS = [
   rel("realization", "FileSystemRepository", "SessionSource", undefined, "top", "bottom"),
@@ -416,3 +423,4 @@ export const INFRA_CLASS_DATA: DiagramInput = {
 };
 
 export const INFRA_CLASS_FILE_PATHS: ClassFilePaths = filePaths;
+export const INFRA_CLASS_LAYERS: ClassLayers = layers;

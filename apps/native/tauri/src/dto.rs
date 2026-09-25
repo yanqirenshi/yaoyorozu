@@ -1029,3 +1029,230 @@ impl From<domain::Pc> for PcDto {
         }
     }
 }
+
+// ============ 実行中セッション(issue #391。Phase 1「1セッションを app から対話する」) ============
+
+/// 起動時に選ぶ権限モード。Phase 1 は `plan` と `default` の2つ。
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RunningPermissionModeDto {
+    Plan,
+    Default,
+}
+
+impl From<RunningPermissionModeDto> for app::RunningPermissionMode {
+    fn from(mode: RunningPermissionModeDto) -> Self {
+        match mode {
+            RunningPermissionModeDto::Plan => app::RunningPermissionMode::Plan,
+            RunningPermissionModeDto::Default => app::RunningPermissionMode::Default,
+        }
+    }
+}
+
+/// 途中経過(Channel で流す)。`kind` で区別する。`domain::ProgressEvent` の写し。
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ProgressEventDto {
+    TextDelta {
+        text: String,
+    },
+    ToolStarted {
+        tool_use_id: String,
+        tool_name: String,
+    },
+    ToolResultArrived {
+        tool_use_id: String,
+        is_error: bool,
+    },
+    TurnFinished {
+        succeeded: bool,
+    },
+    SentLineConfirmed {
+        uuid: String,
+    },
+}
+
+impl From<domain::ProgressEvent> for ProgressEventDto {
+    fn from(event: domain::ProgressEvent) -> Self {
+        match event {
+            domain::ProgressEvent::TextDelta { text } => Self::TextDelta { text },
+            domain::ProgressEvent::ToolStarted {
+                tool_use_id,
+                tool_name,
+            } => Self::ToolStarted {
+                tool_use_id,
+                tool_name,
+            },
+            domain::ProgressEvent::ToolResultArrived {
+                tool_use_id,
+                is_error,
+            } => Self::ToolResultArrived {
+                tool_use_id,
+                is_error,
+            },
+            domain::ProgressEvent::TurnFinished { succeeded } => Self::TurnFinished { succeeded },
+            domain::ProgressEvent::SentLineConfirmed { uuid } => Self::SentLineConfirmed { uuid },
+        }
+    }
+}
+
+/// プロセスの状態。`domain::ProcessState` の写し。
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessStateDto {
+    Starting,
+    Idle,
+    Running,
+    AwaitingPermission,
+    Exited,
+}
+
+impl From<domain::ProcessState> for ProcessStateDto {
+    fn from(state: domain::ProcessState) -> Self {
+        match state {
+            domain::ProcessState::Starting => Self::Starting,
+            domain::ProcessState::Idle => Self::Idle,
+            domain::ProcessState::Running => Self::Running,
+            domain::ProcessState::AwaitingPermission => Self::AwaitingPermission,
+            domain::ProcessState::Exited => Self::Exited,
+        }
+    }
+}
+
+/// 権限の問い合わせの種別。`domain::PermissionRequestKind` の写し。
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionRequestKindDto {
+    ToolUse,
+    AskUserQuestion,
+    ExitPlanMode,
+}
+
+impl From<domain::PermissionRequestKind> for PermissionRequestKindDto {
+    fn from(kind: domain::PermissionRequestKind) -> Self {
+        match kind {
+            domain::PermissionRequestKind::ToolUse => Self::ToolUse,
+            domain::PermissionRequestKind::AskUserQuestion => Self::AskUserQuestion,
+            domain::PermissionRequestKind::ExitPlanMode => Self::ExitPlanMode,
+        }
+    }
+}
+
+/// 権限の提案(「今後も許可」に使える更新)。問い合わせで受け取り、許可の応答で選んだものを
+/// そのまま返す(`updated_permissions`)ので、`Serialize` と `Deserialize` の両方を持つ。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct PermissionSuggestionDto {
+    pub suggestion_type: String,
+    pub suggestion_destination: String,
+    pub suggestion_content: serde_json::Value,
+}
+
+impl From<domain::PermissionSuggestion> for PermissionSuggestionDto {
+    fn from(suggestion: domain::PermissionSuggestion) -> Self {
+        Self {
+            suggestion_type: suggestion.suggestion_type,
+            suggestion_destination: suggestion.suggestion_destination,
+            suggestion_content: suggestion.suggestion_content,
+        }
+    }
+}
+
+impl From<PermissionSuggestionDto> for domain::PermissionSuggestion {
+    fn from(dto: PermissionSuggestionDto) -> Self {
+        Self {
+            suggestion_type: dto.suggestion_type,
+            suggestion_destination: dto.suggestion_destination,
+            suggestion_content: dto.suggestion_content,
+        }
+    }
+}
+
+/// 答え待ちの権限の問い合わせ。`tool_input` はツールごとに形が違うので JSON のまま通す。
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct PermissionRequestDto {
+    pub request_id: String,
+    pub tool_name: String,
+    pub display_name: Option<String>,
+    pub description: Option<String>,
+    pub tool_use_id: String,
+    pub tool_input: serde_json::Value,
+    pub blocked_path: Option<String>,
+    pub requested_at: u64,
+    pub request_kind: PermissionRequestKindDto,
+    pub suggestions: Vec<PermissionSuggestionDto>,
+}
+
+impl From<domain::PermissionRequest> for PermissionRequestDto {
+    fn from(request: domain::PermissionRequest) -> Self {
+        let request_kind = request.request_kind().into();
+        Self {
+            request_id: request.request_id,
+            tool_name: request.tool_name,
+            display_name: request.display_name,
+            description: request.description,
+            tool_use_id: request.tool_use_id,
+            tool_input: request.tool_input,
+            blocked_path: request
+                .blocked_path
+                .map(|path| path.to_string_lossy().to_string()),
+            requested_at: request.requested_at,
+            request_kind,
+            suggestions: request.suggestions.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// app が起動した実行中セッションの現在の状態(`get_running_session` の戻り値)。
+/// 台帳の秘匿値(`peer_token`)は載せない。
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct RunningSessionDto {
+    pub project: String,
+    pub session_id: String,
+    pub pid: u32,
+    pub started_at: u64,
+    pub cwd: Option<String>,
+    pub process_state: ProcessStateDto,
+    pub process_state_at: u64,
+    pub permission_requests: Vec<PermissionRequestDto>,
+}
+
+impl RunningSessionDto {
+    pub fn from_session(project: &str, session: domain::RunningSessionByApp) -> Self {
+        Self {
+            project: project.to_string(),
+            session_id: session.base.session_id,
+            pid: session.base.pid,
+            started_at: session.base.started_at,
+            cwd: session
+                .base
+                .cwd
+                .map(|path| path.to_string_lossy().to_string()),
+            process_state: session.process_state.into(),
+            process_state_at: session.process_state_at,
+            permission_requests: session
+                .permission_requests
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        }
+    }
+}
+
+/// 状態変化・権限の問い合わせ到着を知らせる軽量イベント(`running-session:changed`)の
+/// ペイロード。データ本体は `get_running_session` で取り直す(native.md §3.2)。
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct RunningSessionChangedEventDto {
+    pub session_id: String,
+    pub process_state: ProcessStateDto,
+    pub pending_permission_count: usize,
+    /// 終了したときの終了コード(終了以外は `None`)。
+    pub exit_code: Option<i32>,
+}
+
+/// 権限の問い合わせへの答えの種別。取り消し(Cancelled)は CLI 側が決めるので選べない。
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionBehaviorDto {
+    Allow,
+    Deny,
+}

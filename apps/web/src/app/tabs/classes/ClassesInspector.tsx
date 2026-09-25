@@ -7,6 +7,7 @@ import IconButton from "@mui/material/IconButton";
 import Tab from "@mui/material/Tab";
 import Tabs from "@mui/material/Tabs";
 import TextField from "@mui/material/TextField";
+import type { ArchitectureLayerDef } from "@/data/classArchitecture";
 import { normalizeAngle } from "@/data/classesLayoutStorage";
 
 /**
@@ -48,6 +49,8 @@ export type ClassesInspectorTarget = {
    * まだ実装されていないクラス(`classes-domain.ts` の大半)は無い。
    */
   filePath?: string;
+  /** クリーンアーキテクチャの層(`classArchitecture.ts`)。全クラスが持つ。 */
+  layer?: ArchitectureLayerDef;
 };
 
 type ClassesInspectorProps = {
@@ -158,6 +161,19 @@ export default function ClassesInspector({
           >
             {target.filePath ?? "(未実装)"}
           </div>
+          {target.layer && (
+            <div
+              className="mt-1.5 inline-block rounded border px-2 py-0.5 text-xs"
+              style={{
+                backgroundColor: target.layer.fill,
+                borderColor: target.layer.border,
+                color: "var(--text-primary)",
+              }}
+              title={`${target.layer.english}: ${target.layer.role}`}
+            >
+              {target.layer.label}
+            </div>
+          )}
         </div>
         <IconButton size="small" aria-label="閉じる" onClick={onClose}>
           ✕
