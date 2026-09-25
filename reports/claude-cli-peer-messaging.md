@@ -212,6 +212,11 @@ app が読む必要は今のところ無い。
 | 送れるか | 280 から送ると `No agent named 'poc429-old' is reachable` | — |
 | 台帳の `status` | 無い | `idle` / `busy` / `waiting` |
 
+追記(2026-09-25、PATH の WinGet 版を 2.1.268 に上げたあとに確認): **2.1.268 でも使える**。
+`ListAgents` / `SendMessage`、`messagingSocketPath`、`.key` がそろい、Desktop の一覧に現れて双方向に届いた(Issue #429 のコメント参照)。
+280 との差は、台帳に `status` が無い(一覧に idle/busy が出ない)ことと、`SendMessage` の tool_result に「queued there — …」の説明文が無いことだけ。
+機能の有無の境界は 2.1.150 と 2.1.268 の間にあり、正確な版は未確認。
+
 **「CLI を上げれば使える」で済む**。
 app が起動する `claude` を Desktop 同梱の 2.1.280(または同等以上)にすれば、Desktop の全セッションと相互に届く。
 PATH の WinGet 版を上げる(`winget upgrade Anthropic.ClaudeCode`)か、app が実行ファイルの場所を選べるようにする(#345 で `claude_executable()` に閉じてある)。
