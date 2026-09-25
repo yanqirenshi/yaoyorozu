@@ -56,6 +56,7 @@ mod user_content;
 mod user_content_block;
 mod user_line;
 mod user_message;
+mod user_origin;
 
 pub use ai_title_line::AiTitleLine;
 pub use api_error_detail::ApiErrorDetail;
@@ -95,3 +96,4 @@ pub use user_content::UserContent;
 pub use user_content_block::UserContentBlock;
 pub use user_line::UserLine;
 pub use user_message::UserMessage;
+pub use user_origin::UserOrigin;

@@ -2904,3 +2904,15 @@ button.claude-explorer-name {
   font-weight: var(--text-dns-14n-150-weight);
   color: var(--text-secondary);
 }
+
+/* セッション間メッセージ(受信・送信・送信の結果。issue #437)。通常の会話と見分けがつくよう、
+   枠を点線にする(色だけに頼らない)。 */
+.message-peer {
+  border-style: dotted;
+}
+
+/* 状態バーの補足(セッション間メッセージに対応していない版の警告。issue #437)。 */
+.running-bar-note {
+  font-size: var(--text-dns-14n-150-size);
+  color: var(--text-secondary);
+}

@@ -3,7 +3,7 @@
 //! まとめる)。
 
 use super::{AssistantContentBlock, SessionLine, UserContent, UserContentBlock};
-use crate::{Message, MessageStatus, Role};
+use crate::{Message, MessageKind, MessageStatus, Role};
 
 fn user_content_text(content: &Option<UserContent>) -> String {
     match content {
@@ -31,6 +31,46 @@ fn assistant_content_text(blocks: &[AssistantContentBlock]) -> String {
         .join("\n\n")
 }
 
+/// `tool_result` の `content`(文字列、または `{type:"text", text}` の配列)の本文。
+fn tool_result_text(content: &serde_json::Value) -> String {
+    match content {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(items) => items
+            .iter()
+            .filter_map(|item| item.get("text").and_then(serde_json::Value::as_str))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
+/// `SendMessage` の結果らしい tool_result を、送信の結果として取り出す(issue #437)。結果は
+/// JSON の文字列(`{"success":true,"message":"…","msg_id":"…"}`。PoC #429 レポート §1.2)。
+/// 形だけで見るので、ほかのツールの結果が拾われることもある(送信との突き合わせは
+/// [`crate::keep_peer_send_results_of_sent_messages`])。
+fn peer_send_result(line: &super::UserLine) -> Option<(String, bool, String)> {
+    let Some(UserContent::Blocks(blocks)) = &line.message.content else {
+        return None;
+    };
+    blocks.iter().find_map(|block| {
+        let UserContentBlock::ToolResult(result) = block else {
+            return None;
+        };
+        let text = tool_result_text(&result.content);
+        let json: serde_json::Value = serde_json::from_str(text.trim()).ok()?;
+        let success = json.get("success")?.as_bool()?;
+        if json.get("msg_id").is_none() && json.get("message").is_none() {
+            return None;
+        }
+        let note = json
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        Some((result.tool_use_id.clone(), success, note))
+    })
+}
+
 /// 1行分のJSONLエントリから、会話として表示すべきメッセージを取り出す。
 /// thinking / tool_use / tool_result などの内部情報は読み飛ばす
 /// (表示対象の抽出ルールは従来と同じ。issue #39)。
@@ -43,15 +83,50 @@ pub fn extract_message(value: &serde_json::Value) -> Option<Message> {
 /// `extract_message`(`&Value` 版)と `ScannedLine::message`(issue #302)が
 /// 共有する、抽出ルールの唯一の実装。
 pub(super) fn message_from_line(line: &SessionLine) -> Option<Message> {
-    let (role, text, timestamp, uuid, image_count, status) = match line {
-        SessionLine::User(l) => (
-            Role::User,
-            user_content_text(&l.message.content),
-            l.base.timestamp.clone().unwrap_or_default(),
-            l.base.uuid.clone(),
-            l.base64_images().len(),
-            MessageStatus::Normal,
-        ),
+    let (role, text, timestamp, uuid, image_count, status, kind) = match line {
+        SessionLine::User(l) => {
+            let timestamp = l.base.timestamp.clone().unwrap_or_default();
+            let uuid = l.base.uuid.clone();
+            // 他のセッションから届いたメッセージ: 封筒を剥いだ本文(`origin.body`)を出す
+            // (issue #437)。本文が無い版では、通常の user 行と同じ扱いに落とす。
+            let peer = l.origin.as_ref().filter(|o| o.is_peer());
+            if let Some(body) = peer.and_then(|o| o.body.clone()) {
+                (
+                    Role::User,
+                    body,
+                    timestamp,
+                    uuid,
+                    0,
+                    MessageStatus::Normal,
+                    MessageKind::PeerReceived {
+                        from_name: peer.and_then(|o| o.name.clone()),
+                    },
+                )
+            } else if let Some((tool_use_id, success, note)) = peer_send_result(l) {
+                (
+                    Role::User,
+                    note,
+                    timestamp,
+                    uuid,
+                    0,
+                    MessageStatus::Normal,
+                    MessageKind::PeerSendResult {
+                        success,
+                        tool_use_id,
+                    },
+                )
+            } else {
+                (
+                    Role::User,
+                    user_content_text(&l.message.content),
+                    timestamp,
+                    uuid,
+                    l.base64_images().len(),
+                    MessageStatus::Normal,
+                    MessageKind::Normal,
+                )
+            }
+        }
         SessionLine::Assistant(l) => (
             Role::Assistant,
             assistant_content_text(&l.message.content),
@@ -65,8 +140,39 @@ pub(super) fn message_from_line(line: &SessionLine) -> Option<Message> {
             } else {
                 MessageStatus::Normal
             },
+            MessageKind::Normal,
         ),
         _ => return None,
+    };
+
+    // 他のセッションへ送った(`SendMessage` の tool_use の行。issue #437): 本文が空の assistant 行
+    // だけを、送信として出す(送った文が本文)。
+    let (text, kind) = match (line, kind) {
+        (SessionLine::Assistant(l), MessageKind::Normal) if text.trim().is_empty() => l
+            .message
+            .content
+            .iter()
+            .find_map(|block| match block {
+                AssistantContentBlock::ToolUse(tool) if tool.name == "SendMessage" => Some((
+                    tool.input
+                        .get("message")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    MessageKind::PeerSent {
+                        to: tool
+                            .input
+                            .get("to")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        tool_use_id: tool.id.clone(),
+                    },
+                )),
+                _ => None,
+            })
+            .unwrap_or((text, MessageKind::Normal)),
+        (_, kind) => (text, kind),
     };
 
     // 本文が空でも、画像が付いていれば表示対象にする(画像だけの貼り付け。issue #349)。
@@ -81,6 +187,7 @@ pub(super) fn message_from_line(line: &SessionLine) -> Option<Message> {
         uuid,
         image_count,
         status,
+        kind,
     })
 }
 
@@ -672,5 +779,203 @@ mod tests {
         });
         let line: SessionLine = serde_json::from_value(value).expect("should not error");
         assert!(matches!(line, SessionLine::CustomTitle(_)));
+    }
+
+    // ---- セッション間メッセージ(issue #437。PoC #429 レポート §1・§5 の実出力の形) ----
+
+    fn peer_line() -> serde_json::Value {
+        json!({
+            "type": "user", "isMeta": true, "uuid": "u-peer", "timestamp": "2026-09-25T01:00:00.000Z",
+            "message": { "role": "user", "content": "Another Claude session sent a message:\n<cross-session-message from=\"uds:x\" from-name=\"poc429-A\" from-mode=\"prompting\">\nhello from A (poc429)\n</cross-session-message>\n\nThis came from another Claude session …" },
+            "origin": {
+                "kind": "peer", "from": "uds:\\\\.\\pipe\\LOCAL\\cc-msg-x", "msg_id": "3e8394a8",
+                "name": "poc429-A", "fromMode": "prompting", "body": "hello from A (poc429)"
+            }
+        })
+    }
+
+    #[test]
+    fn a_peer_line_shows_the_body_without_the_envelope_and_the_sender() {
+        let message = extract_message(&peer_line()).expect("should be shown");
+
+        assert_eq!(message.role, Role::User);
+        assert_eq!(message.text, "hello from A (poc429)");
+        assert_eq!(
+            message.kind,
+            MessageKind::PeerReceived {
+                from_name: Some("poc429-A".to_string())
+            }
+        );
+        assert!(!message.text.contains("cross-session-message"));
+    }
+
+    #[test]
+    fn a_desktop_peer_line_also_carries_from_session_and_hop_chain_without_breaking() {
+        let mut line = peer_line();
+        line["origin"]["fromSession"] = json!("local_e7b23019");
+        line["origin"]["hopChain"] = json!(["a", "b"]);
+        line["origin"]["name"] = json!("デザイン (全体)");
+
+        let message = extract_message(&line).unwrap();
+
+        assert_eq!(
+            message.kind,
+            MessageKind::PeerReceived {
+                from_name: Some("デザイン (全体)".to_string())
+            }
+        );
+    }
+
+    #[test]
+    fn a_peer_line_without_a_body_falls_back_to_an_ordinary_user_line() {
+        let mut line = peer_line();
+        line["origin"].as_object_mut().unwrap().remove("body");
+
+        let message = extract_message(&line).unwrap();
+
+        assert_eq!(message.kind, MessageKind::Normal);
+        assert!(message.text.contains("cross-session-message"));
+    }
+
+    #[test]
+    fn a_user_line_with_another_origin_kind_is_an_ordinary_user_line() {
+        let line = json!({
+            "type": "user", "uuid": "u-1",
+            "message": { "role": "user", "content": "hi" },
+            "origin": { "kind": "human", "body": "should not be used" }
+        });
+
+        let message = extract_message(&line).unwrap();
+
+        assert_eq!(message.text, "hi");
+        assert_eq!(message.kind, MessageKind::Normal);
+    }
+
+    fn send_message_tool_use_line() -> serde_json::Value {
+        json!({
+            "type": "assistant", "uuid": "a-send", "timestamp": "2026-09-25T01:00:05.000Z",
+            "message": { "role": "assistant", "content": [
+                { "type": "tool_use", "id": "toolu_send1", "name": "SendMessage",
+                  "input": { "to": "poc429-B", "message": "hello from A (poc429)", "summary": "greet" } }
+            ] }
+        })
+    }
+
+    fn send_message_result_line() -> serde_json::Value {
+        json!({
+            "type": "user", "uuid": "u-result", "timestamp": "2026-09-25T01:00:06.000Z",
+            "message": { "role": "user", "content": [
+                { "type": "tool_result", "tool_use_id": "toolu_send1",
+                  "content": "{\"success\":true,\"message\":\"“hello” → poc429-B (another Claude session on this machine; queued there)\",\"msg_id\":\"3e8394a8\"}" }
+            ] }
+        })
+    }
+
+    #[test]
+    fn a_send_message_tool_use_is_shown_as_a_sent_message_to_the_addressee() {
+        let message = extract_message(&send_message_tool_use_line()).expect("should be shown");
+
+        assert_eq!(message.role, Role::Assistant);
+        assert_eq!(message.text, "hello from A (poc429)");
+        assert_eq!(
+            message.kind,
+            MessageKind::PeerSent {
+                to: "poc429-B".to_string(),
+                tool_use_id: "toolu_send1".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn a_send_message_result_is_shown_with_its_success_and_the_note() {
+        let message = extract_message(&send_message_result_line()).expect("should be shown");
+
+        assert_eq!(message.role, Role::User);
+        assert!(message.text.contains("queued there"));
+        assert_eq!(
+            message.kind,
+            MessageKind::PeerSendResult {
+                success: true,
+                tool_use_id: "toolu_send1".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn a_failed_send_message_result_is_marked_as_a_failure() {
+        let line = json!({
+            "type": "user", "uuid": "u-r2",
+            "message": { "role": "user", "content": [
+                { "type": "tool_result", "tool_use_id": "toolu_send2",
+                  "content": "{\"success\":false,\"message\":\"2 agents are named 'poc429-dup'. Re-send with the ref\"}" }
+            ] }
+        });
+
+        let message = extract_message(&line).unwrap();
+
+        assert!(matches!(
+            message.kind,
+            MessageKind::PeerSendResult { success: false, .. }
+        ));
+    }
+
+    #[test]
+    fn other_tool_use_and_tool_result_lines_are_still_hidden() {
+        let other_tool = json!({
+            "type": "assistant", "uuid": "a-1",
+            "message": { "role": "assistant", "content": [
+                { "type": "tool_use", "id": "t1", "name": "Read", "input": { "file_path": "a.txt" } }
+            ] }
+        });
+        let plain_result = json!({
+            "type": "user", "uuid": "u-1",
+            "message": { "role": "user", "content": [
+                { "type": "tool_result", "tool_use_id": "t1", "content": "file contents" }
+            ] }
+        });
+
+        assert!(extract_message(&other_tool).is_none());
+        assert!(extract_message(&plain_result).is_none());
+    }
+
+    #[test]
+    fn an_assistant_line_with_text_and_a_send_message_keeps_the_text_as_an_ordinary_message() {
+        let line = json!({
+            "type": "assistant", "uuid": "a-2",
+            "message": { "role": "assistant", "content": [
+                { "type": "text", "text": "送ります" },
+                { "type": "tool_use", "id": "t9", "name": "SendMessage", "input": { "to": "x", "message": "m" } }
+            ] }
+        });
+
+        let message = extract_message(&line).unwrap();
+
+        assert_eq!(message.text, "送ります");
+        assert_eq!(message.kind, MessageKind::Normal);
+    }
+
+    #[test]
+    fn results_without_a_matching_sent_message_are_dropped_from_the_list() {
+        let sent = extract_message(&send_message_tool_use_line()).unwrap();
+        let matching = extract_message(&send_message_result_line()).unwrap();
+        // 別のツールの JSON の結果(success と message を持つが、SendMessage の呼び出しは無い)。
+        let stray = extract_message(&json!({
+            "type": "user", "uuid": "u-stray",
+            "message": { "role": "user", "content": [
+                { "type": "tool_result", "tool_use_id": "toolu_other",
+                  "content": "{\"success\":true,\"message\":\"done\"}" }
+            ] }
+        }))
+        .unwrap();
+        let mut messages = vec![sent, matching, stray];
+
+        crate::keep_peer_send_results_of_sent_messages(&mut messages);
+
+        assert_eq!(messages.len(), 2);
+        assert!(matches!(messages[0].kind, MessageKind::PeerSent { .. }));
+        assert!(matches!(
+            messages[1].kind,
+            MessageKind::PeerSendResult { .. }
+        ));
     }
 }

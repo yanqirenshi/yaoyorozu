@@ -14,13 +14,23 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+mod cli_version;
+mod worktree;
+pub use worktree::{
+    prepare_worktree, same_path, validate_branch_name, worktree_dir_name, worktree_path,
+    GitWorktreeManager, MergeOutcome, PreparedWorktree, ResolvedWorktree, WorktreeEntry,
+    WorktreeIndex, WorktreeSpec, ORIGIN_MAIN,
+};
 mod running_session;
 mod running_session_summary;
+pub use cli_version::{
+    parse_cli_version, peer_messaging_warning, supports_peer_messaging, MIN_PEER_MESSAGING_VERSION,
+};
 pub use running_session::{
     apply_running_session_event, begin_respond_permission, begin_send_to_running_session,
     begin_switch_running_session, create_running_session, ensure_can_start, exited_to_forget,
     interrupt_running_session, new_session_id, own_running_pids, respond_permission,
-    resume_running_session, send_to_running_session, stop_running_session,
+    resume_running_session, send_to_running_session, stop_running_session, unique_session_name,
     write_permission_response, write_switch, write_user_message, AvailableModel,
     CreateRunningSession, NowMs, PermissionDecision, ResumeRunningSession, RunningPermissionMode,
     RunningProcess, RunningSessionEvent, RunningSessionEventSink, RunningSessionLauncher,
@@ -86,6 +96,10 @@ pub enum AppError {
     /// 使う(issue #53。既存の `ClaudeMdConflict` との統合は将来の課題)。
     #[error("{0}")]
     FileConflict(String),
+    /// 起動前の worktree の最新化(`git fetch` + `git merge origin/main`)で、競合などにより
+    /// 取り込めなかった。取り込みは取り消してあり、起動は止めている(issue #437)。
+    #[error("{0}")]
+    WorktreeSyncFailed(String),
 }
 
 /// 会話ファイルの状態の目印(更新時刻 + サイズ)。解析済みの結果を使い回してよいかの
@@ -422,6 +436,12 @@ pub trait RunningSessionSource {
         session_id: &str,
         exclude_pids: &[u32],
     ) -> Result<Option<DetectedRunning>, AppError>;
+
+    /// 台帳にある実行中セッションの名前(`name`。`--name` / Desktop のタブ名。issue #437)。
+    /// セッション間メッセージは名前で宛先を指定するので、起動する CLI の名前をこれと重ならない
+    /// ようにするために使う。終了済みの台帳の名前も含みうる(重ならないよう余分に避けるだけで
+    /// 害は無い)。
+    fn taken_names(&self) -> Result<Vec<String>, AppError>;
 }
 
 /// 送信先が外部で実行中とみなされた根拠(issue #345。issue #391 で `RunningSession` から
@@ -546,6 +566,7 @@ pub fn reload_session(
     } = source.read_session(project, session_id)?;
     // 送信に失敗した質問とエラー行に印を付ける(表示のためだけ。会話ファイルには触らない。
     // issue #364)。記録順のうちに付け、そのあと新しい順に並べる。
+    domain::keep_peer_send_results_of_sent_messages(&mut messages);
     mark_failed_questions(&mut messages);
     order_messages_newest_first(&mut messages);
     Ok(ReloadedSession {
@@ -1852,6 +1873,7 @@ mod tests {
                     timestamp: "".to_string(),
                     uuid: None,
                     image_count: 0,
+                    kind: domain::MessageKind::Normal,
                     status: MessageStatus::Normal,
                 },
                 Message {
@@ -1860,6 +1882,7 @@ mod tests {
                     timestamp: "".to_string(),
                     uuid: None,
                     image_count: 0,
+                    kind: domain::MessageKind::Normal,
                     status: MessageStatus::Normal,
                 },
             ],
@@ -1885,6 +1908,7 @@ mod tests {
                     timestamp: "".to_string(),
                     uuid: None,
                     image_count: 0,
+                    kind: domain::MessageKind::Normal,
                     status: MessageStatus::Normal,
                 })
                 .collect(),
@@ -1913,6 +1937,7 @@ mod tests {
             timestamp: "".to_string(),
             uuid: None,
             image_count: 0,
+            kind: domain::MessageKind::Normal,
             status: MessageStatus::Normal,
         }
     }

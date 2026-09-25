@@ -31,6 +31,18 @@ pub struct GitWorktree {
     pub checked_out_branch: Option<String>,
 }
 
+/// リポジトリ本体の作業ツリー(1つ目の worktree)を指す `worktree_id`(issue #437。Phase 3)。
+/// git ではリポジトリ本体のディレクトリも1つ目の worktree だが、台帳(`GitWorktree`)は本体を
+/// 記録しない(`git worktree list` の先頭は本体であり、`GitWorktree` としては記録しない。
+/// issue #193)ので、台帳に ID が無い。app が本体で起動したセッションの
+/// `RunningSessionByApp.worktree_id` には、この予約 ID を入れる。
+pub const MAIN_WORKTREE_ID: &str = "main-worktree";
+
+/// リポジトリの worktree のどれでもない場所(既存の会話の cwd がリポジトリの外など)で
+/// 起動したセッションの `worktree_id`(issue #437)。再開は会話ファイルに記録された cwd で
+/// 起動するので、その cwd が台帳の worktree に当たらないことがある。
+pub const OUTSIDE_WORKTREE_ID: &str = "outside-repository";
+
 /// パス末尾のフォルダ名を取り出す。`GitRepository` の
 /// `repository_name_from_path`(issue #189)と同じ発想。末尾が取れない
 /// (ルート等)場合はパス全体の文字列表現にフォールバックする。

@@ -63,6 +63,22 @@ pub struct MessageDto {
     pub image_count: usize,
     /// 送信の失敗に関する見分け(issue #364)。フロントは表示の切り替えにだけ使う。
     pub status: MessageStatusDto,
+    /// セッション間メッセージの見分け(issue #437)。フロントは見出しと見た目の切り替えにだけ使う。
+    pub kind: MessageKindDto,
+    /// 相手の名前: 受信(`peer_received`)は送り元、送信(`peer_sent`)は宛先。それ以外は null。
+    pub peer_name: Option<String>,
+    /// 送信の結果(`peer_send_result`)の成否。それ以外は null。
+    pub peer_success: Option<bool>,
+}
+
+/// `domain::MessageKind` の DTO(issue #437)。
+#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageKindDto {
+    Normal,
+    PeerReceived,
+    PeerSent,
+    PeerSendResult,
 }
 
 /// `domain::MessageStatus` の DTO(issue #364)。
@@ -88,7 +104,22 @@ impl From<domain::MessageStatus> for MessageStatusDto {
 
 impl From<domain::Message> for MessageDto {
     fn from(message: domain::Message) -> Self {
+        let (kind, peer_name, peer_success) = match &message.kind {
+            domain::MessageKind::Normal => (MessageKindDto::Normal, None, None),
+            domain::MessageKind::PeerReceived { from_name } => {
+                (MessageKindDto::PeerReceived, from_name.clone(), None)
+            }
+            domain::MessageKind::PeerSent { to, .. } => {
+                (MessageKindDto::PeerSent, Some(to.clone()), None)
+            }
+            domain::MessageKind::PeerSendResult { success, .. } => {
+                (MessageKindDto::PeerSendResult, None, Some(*success))
+            }
+        };
         Self {
+            kind,
+            peer_name,
+            peer_success,
             role: message.role.into(),
             text: message.text,
             timestamp: message.timestamp,
@@ -577,6 +608,7 @@ impl From<app::AppError> for AppErrorDto {
             }
             app::AppError::ClaudeMdConflict(message) => ("claude_md_conflict", message),
             app::AppError::FileConflict(message) => ("file_conflict", message),
+            app::AppError::WorktreeSyncFailed(message) => ("worktree_sync_failed", message),
         };
         Self {
             code: code.to_string(),
@@ -1089,18 +1121,51 @@ impl From<RunningSessionRefDto> for app::RunningSessionRef {
 #[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StartRunningSessionDto {
-    /// 既存の会話を開く。
+    /// 既存の会話を開く。`worktree` を省くと、会話ファイルに記録された cwd で開く(従来どおり)。
     Resume {
         project: String,
         session_id: String,
         mode: RunningPermissionModeDto,
         name: Option<String>,
+        #[serde(default)]
+        worktree: Option<WorktreeSpecDto>,
+        /// 起動前の最新化(`git fetch` + `git merge origin/main`)を行うか(省略で行う)。
+        #[serde(default)]
+        sync_origin_main: Option<bool>,
     },
-    /// 新しい会話を始める(ID は app が決める)。
+    /// 新しい会話を始める(ID は app が決める)。`worktree` を省くと、リポジトリ本体で始める。
     New {
         mode: RunningPermissionModeDto,
         name: Option<String>,
+        #[serde(default)]
+        worktree: Option<WorktreeSpecDto>,
+        /// 起動前の最新化を行うか(省略で行う)。
+        #[serde(default)]
+        sync_origin_main: Option<bool>,
     },
+}
+
+/// どの worktree で起動するかの指定(`app::WorktreeSpec` の写し。issue #437)。パスは含まない:
+/// パスは app が決める(native.md §4)。
+#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WorktreeSpecDto {
+    /// リポジトリ本体(1つ目の worktree。worktree は作らない)。
+    Main,
+    /// 既存の worktree(台帳の `worktree_id`)。
+    Existing { worktree_id: String },
+    /// このブランチの worktree(無ければ app が用意する。ブランチも無ければ `origin/main` から作る)。
+    Branch { branch_name: String },
+}
+
+impl From<WorktreeSpecDto> for app::WorktreeSpec {
+    fn from(dto: WorktreeSpecDto) -> Self {
+        match dto {
+            WorktreeSpecDto::Main => Self::Main,
+            WorktreeSpecDto::Existing { worktree_id } => Self::Existing { worktree_id },
+            WorktreeSpecDto::Branch { branch_name } => Self::Branch { branch_name },
+        }
+    }
 }
 
 /// 起動中に切り替える設定(`app::RunningSessionSwitch` の写し)。
@@ -1317,6 +1382,8 @@ pub struct RunningSessionDto {
     pub project: Option<String>,
     pub session_id: String,
     pub repository_path: String,
+    /// 起動した worktree の ID(リポジトリ本体は `main-worktree`。issue #437)。
+    pub worktree_id: String,
     pub cwd: Option<String>,
     /// 起動時に付けた表示名(`--name`)。
     pub name: Option<String>,
@@ -1329,6 +1396,12 @@ pub struct RunningSessionDto {
     /// 選べるモデル(CLI の `initialize` の応答。起動の直後は空)。`set_model` は名前を検証しないので、
     /// 画面はここから選ばせる。
     pub available_models: Vec<AvailableModelDto>,
+    /// 起動した `claude` の版(`claude --version` の出力。読めなければ null。issue #437)。
+    pub cli_version: Option<String>,
+    /// セッション間メッセージに使える版か(null は版が分からない)。
+    pub peer_messaging: Option<bool>,
+    /// 使えない版のときの説明(状態バーに出す。使える・分からないときは null)。起動は止めない。
+    pub peer_messaging_warning: Option<String>,
     pub permission_requests: Vec<PermissionRequestDto>,
 }
 
@@ -1338,12 +1411,17 @@ impl RunningSessionDto {
         session: domain::RunningSessionByApp,
         available_models: Vec<app::AvailableModel>,
     ) -> Self {
+        let version = session.base.version.clone();
         Self {
+            peer_messaging: version.as_deref().and_then(app::supports_peer_messaging),
+            peer_messaging_warning: version.as_deref().and_then(app::peer_messaging_warning),
+            cli_version: version,
             available_models: available_models.into_iter().map(Into::into).collect(),
             target: app::RunningSessionRef::of(&session).into(),
             project: project.map(str::to_string),
             session_id: session.base.session_id,
             repository_path: session.repository_path.to_string_lossy().to_string(),
+            worktree_id: session.worktree_id,
             cwd: session
                 .base
                 .cwd
@@ -1374,6 +1452,9 @@ pub struct RunningSessionSummaryDto {
     pub current_model: Option<String>,
     pub current_permission_mode: Option<String>,
     pub cwd: Option<String>,
+    /// 起動した `claude` の版と、セッション間メッセージに使える版か(issue #437)。
+    pub cli_version: Option<String>,
+    pub peer_messaging: Option<bool>,
     pub name: Option<String>,
 }
 
@@ -1388,6 +1469,8 @@ impl From<app::RunningSessionSummary> for RunningSessionSummaryDto {
             current_model: summary.current_model,
             current_permission_mode: summary.current_permission_mode,
             cwd: summary.cwd.map(|path| path.to_string_lossy().to_string()),
+            cli_version: summary.cli_version,
+            peer_messaging: summary.peer_messaging,
             name: summary.name,
         }
     }

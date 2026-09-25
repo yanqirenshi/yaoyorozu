@@ -28,13 +28,26 @@ pub struct RunningSessionByApp {
     /// app が起動時にプロファイル(登録済みリポジトリ)から選んだ記録された事実で、cwd からの
     /// 推測ではない(cwd はリポジトリの worktree など別の場所でもありうる)。
     pub repository_path: PathBuf,
+    /// 起動した worktree(`GitWorktree.worktree_id`への参照。R。TM: ワーキングツリーID。
+    /// issue #437。Phase 3)。app が起動時に「このリポジトリの、このブランチの worktree」を
+    /// 用意して選ぶので、cwd からの推測ではなく記録された事実になる。リポジトリ本体で起動した
+    /// ときは [`crate::MAIN_WORKTREE_ID`]、worktree のどれでもない場所なら
+    /// [`crate::OUTSIDE_WORKTREE_ID`]。`repository_path` は、worktree を指す鍵(worktree_id +
+    /// リポジトリパス)の片方として残る。
+    pub worktree_id: String,
 }
 
 impl RunningSessionByApp {
     /// 起動直後(`Starting`)の状態で作る。現在のモデル・権限モードは分かったときに
     /// [`Self::observe_configuration`] などで入れる(起動時に選んだ権限モードは呼び出し側が入れる)。
-    pub fn new(base: RunningSession, repository_path: PathBuf, at_time: u64) -> Self {
+    pub fn new(
+        base: RunningSession,
+        repository_path: PathBuf,
+        worktree_id: &str,
+        at_time: u64,
+    ) -> Self {
         Self {
+            worktree_id: worktree_id.to_string(),
             base,
             process_state: ProcessState::Starting,
             process_state_at: at_time,
@@ -143,6 +156,7 @@ mod tests {
         RunningSessionByApp::new(
             RunningSession::new("s1", "windows:PC", 100, 1),
             PathBuf::from("/repo"),
+            "wt-1",
             10,
         )
     }
@@ -181,6 +195,7 @@ mod tests {
         let s = session();
 
         assert_eq!(s.repository_path, PathBuf::from("/repo"));
+        assert_eq!(s.worktree_id, "wt-1");
         assert_eq!(s.current_model, None);
         assert_eq!(s.current_permission_mode, None);
     }

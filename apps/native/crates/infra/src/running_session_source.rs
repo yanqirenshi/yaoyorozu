@@ -162,6 +162,29 @@ impl RunningSessionSource for FileRunningSessionSource {
             &self.sessions_dir,
         )
     }
+
+    fn taken_names(&self) -> Result<Vec<String>, AppError> {
+        let entries = match std::fs::read_dir(&self.sessions_dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => {
+                return Err(AppError::Io(format!(
+                    "実行中セッションの台帳({})を読めませんでした: {e}",
+                    self.sessions_dir.display()
+                )))
+            }
+        };
+        Ok(entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("json"))
+            .filter_map(|path| {
+                let value: serde_json::Value =
+                    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+                value.get("name")?.as_str().map(str::to_string)
+            })
+            .collect())
+    }
 }
 
 /// 台帳のパスの列(ディレクトリの列挙結果)から、`session_id` が実行中とみなせる

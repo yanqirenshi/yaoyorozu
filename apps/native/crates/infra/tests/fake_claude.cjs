@@ -7,7 +7,8 @@
 //   PLAN  → ExitPlanMode(計画の承認)の問い合わせを出す
 //   SLOW  → 100ms ごとに text_delta を出し続け、interrupt で止まる
 //   HANG  → 標準入力を閉じても終了しない(kill されるまで生きている)
-//   ARGS  → 起動引数(argv)を text_delta で返す(--session-id / --name / --permission-mode の確認用)
+//   ARGS  → 起動引数(argv)を text_delta で返す(--session-id / --name / --permission-mode / --settings の確認用)
+//   CWD   → 作業ディレクトリを text_delta で返す(worktree で起動されたことの確認用。issue #437)
 //   DIE   → 標準エラーに 1 行出して exit 3(--resume の ID が無いときの実出力に合わせた文言)
 //   それ以外 → text_delta を1つ出して result(success)
 // 標準入力が閉じたら exit 0(HANG のあとを除く)。
@@ -31,6 +32,11 @@ let lastEcho = null;
 
 // 起動引数(--resume=<ID> / --session-id=<UUID> / --name=<名前> / --permission-mode <モード>)。
 const ARGV = process.argv.slice(2);
+// `claude --version`(app が起動前に版を読む。issue #437)。環境変数 FAKE_CLAUDE_VERSION で変えられる。
+if (ARGV.includes("--version")) {
+  process.stdout.write((process.env.FAKE_CLAUDE_VERSION || "2.1.280 (Claude Code)") + "\n");
+  process.exit(0);
+}
 const argValue = (name) => {
   const eq = ARGV.find((a) => a.startsWith(name + "="));
   if (eq) return eq.slice(name.length + 1);
@@ -125,6 +131,9 @@ rl.on("line", (line) => {
           permission_suggestions: [{ destination: "session", mode: "acceptEdits", type: "setMode" }],
         },
       });
+    } else if (text.includes("CWD")) {
+      delta(`cwd: ${process.cwd()}`);
+      result(false);
     } else if (text.includes("ARGS")) {
       delta(`args: ${JSON.stringify(ARGV)}`);
       result(false);

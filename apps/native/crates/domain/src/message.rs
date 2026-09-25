@@ -1,4 +1,4 @@
-use crate::Role;
+use crate::{MessageKind, Role};
 
 /// 送信の失敗に関する、メッセージの見分け(issue #364)。
 ///
@@ -34,6 +34,26 @@ pub struct Message {
     /// 送信の失敗に関する見分け(issue #364)。行から取り出した直後は、エラー行だけが
     /// `Error`(それ以外は `Normal`)。質問との対応は `mark_failed_questions` が付ける。
     pub status: MessageStatus,
+    /// セッション間メッセージの受信・送信・送信の結果の見分け(issue #437)。
+    pub kind: MessageKind,
+}
+
+/// 送信の結果([`MessageKind::PeerSendResult`])のうち、対応する送信([`MessageKind::PeerSent`]。
+/// `tool_use_id` が同じ)が無いものを取り除く(issue #437)。行から取り出した時点では、
+/// 送信の結果らしい形(`success` と `msg_id` / `message` を持つ JSON)の tool_result の行を
+/// すべて拾うので、`SendMessage` 以外のツールの結果が混ざりうる。記録順(古い順)の一覧に使う。
+pub fn keep_peer_send_results_of_sent_messages(messages: &mut Vec<Message>) {
+    let sent_ids: std::collections::HashSet<String> = messages
+        .iter()
+        .filter_map(|m| match &m.kind {
+            MessageKind::PeerSent { tool_use_id, .. } => Some(tool_use_id.clone()),
+            _ => None,
+        })
+        .collect();
+    messages.retain(|m| match &m.kind {
+        MessageKind::PeerSendResult { tool_use_id, .. } => sent_ids.contains(tool_use_id),
+        _ => true,
+    });
 }
 
 /// 送信失敗のエラー行(`Error`)の直前が user メッセージなら、その user メッセージを
@@ -79,6 +99,7 @@ mod tests {
                 timestamp: "1".to_string(),
                 uuid: None,
                 image_count: 0,
+                kind: MessageKind::Normal,
                 status: MessageStatus::Normal,
             },
             Message {
@@ -87,6 +108,7 @@ mod tests {
                 timestamp: "2".to_string(),
                 uuid: None,
                 image_count: 0,
+                kind: MessageKind::Normal,
                 status: MessageStatus::Normal,
             },
         ];
@@ -104,6 +126,7 @@ mod tests {
             timestamp: String::new(),
             uuid: None,
             image_count: 0,
+            kind: MessageKind::Normal,
             status: MessageStatus::Normal,
         }
     }

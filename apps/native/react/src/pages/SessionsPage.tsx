@@ -108,6 +108,25 @@ function sessionTabKey(folder: string, sessionId: string): string {
   return `${folder}${SESSION_TAB_SEPARATOR}${sessionId}`;
 }
 
+/**
+ * 吹き出しの横の見出し(role)。セッション間メッセージ(issue #437)は、通常の会話と見分けて
+ * 「他セッションから(送り元)」「送信: 宛先」「送信の結果」と出す。
+ */
+function messageRoleLabel(m: MessageDto): string {
+  switch (m.kind) {
+    case "peer_received":
+      return m.peer_name ? `他セッションから(${m.peer_name})` : "他セッションから";
+    case "peer_sent":
+      // 返信の宛先は名前ではなく受信口のアドレス(uds:…)になることがある。長いのでそのまま出さない。
+      if (m.peer_name?.startsWith("uds:")) return "送信(返信)";
+      return m.peer_name ? `送信: ${m.peer_name}` : "送信";
+    case "peer_send_result":
+      return m.peer_success === false ? "送信の結果(失敗)" : "送信の結果";
+    default:
+      return m.role;
+  }
+}
+
 type SessionsPageProps = {
   // 画面状態はURLクエリを状態源とする `useUrlViewerNav`(`ViewerPage`)から
   // 渡される(issue #91。「1ウィンドウ=1プロファイル」への一本化でウィンドウ
@@ -1118,7 +1137,9 @@ function SessionsPage({ nav }: SessionsPageProps) {
                           className={`message-row message-row-${m.role}${isSendError ? " message-row-send-error" : ""}`}
                         >
                           <div className={`message-meta message-meta-${m.role}`}>
-                            <span className="message-meta-role">{isSendError ? "error" : m.role}</span>
+                            <span className="message-meta-role">
+                              {isSendError ? "error" : messageRoleLabel(m)}
+                            </span>
                             {time && <span className="message-meta-time">{time}</span>}
                             {isFailedQuestion && (
                               <span className="message-meta-failed">送信に失敗</span>
@@ -1135,7 +1156,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
                             )}
                           </div>
                           <div
-                            className={`message message-${m.role}${isSendError ? " message-send-error" : ""}${isFailedQuestion ? " message-failed-question" : ""}`}
+                            className={`message message-${m.role}${isSendError ? " message-send-error" : ""}${isFailedQuestion ? " message-failed-question" : ""}${m.kind !== "normal" ? " message-peer" : ""}`}
                           >
                             {isSendError ? (
                               <SendErrorBody text={m.text} status={m.status} />

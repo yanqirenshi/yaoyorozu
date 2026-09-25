@@ -71,6 +71,29 @@ impl Default for ClaudeCliProcessLauncher {
 }
 
 impl RunningSessionLauncher for ClaudeCliProcessLauncher {
+    fn cli_version(&self) -> Option<String> {
+        let mut command = Command::new(&self.program);
+        command.args(&self.leading_args).arg("--version");
+        for var in DESKTOP_LINEAGE_ENV_VARS {
+            command.env_remove(var);
+        }
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        let output = command.output().ok().filter(|o| o.status.success())?;
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .next()
+            .map(|line| line.trim().to_string())
+            .filter(|line| !line.is_empty())
+    }
+
     fn start(
         &self,
         request: &StartRunningSession,
@@ -418,6 +441,7 @@ mod tests {
             cwd: cwd.to_path_buf(),
             mode: RunningPermissionMode::Default,
             repository_path: cwd.to_path_buf(),
+            worktree_id: "wt-test".to_string(),
             name: None,
         }
     }
@@ -751,6 +775,7 @@ mod tests {
             cwd: dir.path().to_path_buf(),
             mode: RunningPermissionMode::Plan,
             repository_path: dir.path().to_path_buf(),
+            worktree_id: "wt-test".to_string(),
             name: Some("調査 A".to_string()),
         };
         let process = fake_launcher().start(&request, sink).unwrap();
@@ -850,6 +875,7 @@ mod tests {
                     cwd: PathBuf::from(&cwd),
                     mode: RunningPermissionMode::Default,
                     repository_path: PathBuf::from(cwd),
+                    worktree_id: "wt-test".to_string(),
                     name: None,
                 },
                 sink,

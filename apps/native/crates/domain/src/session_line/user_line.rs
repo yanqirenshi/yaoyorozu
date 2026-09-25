@@ -1,4 +1,4 @@
-use super::{ChainLineBase, UserContent, UserContentBlock, UserMessage};
+use super::{ChainLineBase, UserContent, UserContentBlock, UserMessage, UserOrigin};
 use serde::Deserialize;
 
 /// ユーザー入力(`content` が文字列)またはツール実行結果
@@ -12,6 +12,8 @@ pub struct UserLine {
     pub prompt_id: Option<String>,
     pub permission_mode: Option<String>,
     pub tool_use_result: Option<serde_json::Value>,
+    /// 入力の出どころ(他のセッションから届いたメッセージは `kind: "peer"`。issue #437)。
+    pub origin: Option<UserOrigin>,
     #[serde(rename = "sourceToolAssistantUUID")]
     pub source_tool_assistant_uuid: Option<String>,
 }

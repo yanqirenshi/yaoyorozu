@@ -202,6 +202,63 @@ fn spawn_event_loop(
     });
 }
 
+/// 起動する worktree を用意する(必要なら作り、起動前に最新化する。issue #437)。用意できたら、
+/// 新しい worktree を Git 台帳へ反映してから、その `worktree_id` を引く(台帳の ID は反映で採番される)。
+/// `spec` が `None` なら何もしない(再開で worktree を指定しないとき)。失敗(競合・ネットワーク・
+/// 不正な指定)は、起動しないでそのまま返す。
+async fn prepare_start_worktree(
+    app_handle: &tauri::AppHandle,
+    state: &tauri::State<'_, Mutex<AppState>>,
+    repository: Option<&std::path::Path>,
+    spec: Option<app::WorktreeSpec>,
+    sync: bool,
+) -> Result<(Option<app::ResolvedWorktree>, app::WorktreeIndex), AppError> {
+    let Some(repository) = repository else {
+        return match spec {
+            Some(_) => Err(AppError::InvalidInput(
+                "プロファイルにリポジトリが設定されていません".to_string(),
+            )),
+            None => Ok((None, app::WorktreeIndex::default())),
+        };
+    };
+    let ledger = state.lock().await.git_ledger.clone();
+    let index = app::WorktreeIndex::from_ledger(&ledger, repository);
+    let Some(spec) = spec else {
+        return Ok((None, index));
+    };
+
+    let repo = repository.to_path_buf();
+    let index_for_task = index.clone();
+    let prepared = tauri::async_runtime::spawn_blocking(move || {
+        app::prepare_worktree(
+            &infra::SystemGitWorktreeManager::new(),
+            &repo,
+            &spec,
+            &index_for_task,
+            sync,
+        )
+    })
+    .await
+    .unwrap_or_else(|_| Err(background_failed()))?;
+
+    // 新しく作った(または台帳が知らない)worktree は、台帳へ反映して ID を得る。
+    let index = if prepared.is_main || index.knows(&prepared.path) {
+        index
+    } else {
+        crate::reload_git_ledger(app_handle).await?;
+        let ledger = state.lock().await.git_ledger.clone();
+        app::WorktreeIndex::from_ledger(&ledger, repository)
+    };
+    let worktree_id = index.id_of(&prepared.path);
+    Ok((
+        Some(app::ResolvedWorktree {
+            path: prepared.path,
+            worktree_id,
+        }),
+        index,
+    ))
+}
+
 /// 実行中セッションを起動する。`Resume` は既存の会話を `--resume` で、`New` は新しい会話を
 /// `--session-id`(app が決めた UUID v4)で開く。同じ会話の二重起動と上限
 /// (`app::MAX_RUNNING_SESSIONS`)は `session_busy`。`profile_id` は対象プロファイルの解決に使う
@@ -259,6 +316,46 @@ pub async fn start_running_session(
         }
     };
 
+    // 起動する worktree(新規の既定はリポジトリ本体。再開で指定が無ければ、会話ファイルの cwd)。
+    let (spec, sync) = match &request {
+        StartRunningSessionDto::Resume {
+            worktree,
+            sync_origin_main,
+            ..
+        } => (
+            worktree.clone().map(app::WorktreeSpec::from),
+            sync_origin_main.unwrap_or(true),
+        ),
+        StartRunningSessionDto::New {
+            worktree,
+            sync_origin_main,
+            ..
+        } => (
+            Some(
+                worktree
+                    .clone()
+                    .map(app::WorktreeSpec::from)
+                    .unwrap_or(app::WorktreeSpec::Main),
+            ),
+            sync_origin_main.unwrap_or(true),
+        ),
+    };
+    let (worktree, worktree_index) = match prepare_start_worktree(
+        &app_handle,
+        &state,
+        repository.as_deref(),
+        spec,
+        sync,
+    )
+    .await
+    {
+        Ok(prepared) => prepared,
+        Err(e) => {
+            release(&mut *state.lock().await);
+            return Err(e.into());
+        }
+    };
+
     let (tx, rx) = mpsc::unbounded_channel();
     let sink: Arc<dyn RunningSessionEventSink> = Arc::new(ChannelSink(tx));
     let resumed_project = match &request {
@@ -276,6 +373,7 @@ pub async fn start_running_session(
                     session_id,
                     mode,
                     name,
+                    ..
                 } => {
                     let source = FileSystemRepository::new(root);
                     let ledger = FileRunningSessionSource::new(
@@ -293,25 +391,36 @@ pub async fn start_running_session(
                             mode: mode.into(),
                             repository_path: repository,
                             name,
+                            worktree,
+                            worktree_index,
                         },
                         sink,
                         now_ms(),
                     )
                 }
-                StartRunningSessionDto::New { mode, name } => {
+                StartRunningSessionDto::New { mode, name, .. } => {
                     let repository_path = repository.ok_or_else(|| {
                         AppError::InvalidInput(
                             "プロファイルにリポジトリが設定されていません".to_string(),
                         )
                     })?;
+                    let ledger = FileRunningSessionSource::new(
+                        FileRunningSessionSource::default_sessions_dir()?,
+                    );
                     app::create_running_session(
                         &launcher,
+                        &ledger,
                         &running,
                         &starting,
                         &app::CreateRunningSession {
                             repository_path,
                             mode: mode.into(),
                             name,
+                            worktree: worktree.ok_or_else(|| {
+                                AppError::InvalidInput(
+                                    "起動する worktree が決まりません".to_string(),
+                                )
+                            })?,
                         },
                         session_id_for_task,
                         sink,
