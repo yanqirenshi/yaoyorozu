@@ -2486,6 +2486,9 @@ button.claude-explorer-name {
 .running-bar {
   flex-shrink: 0;
   display: flex;
+  /* 幅に収まらない要素(表示名の入力欄と注意書きなど)は次の行へ(issue #426)。 */
+  flex-wrap: wrap;
+  row-gap: var(--space-1);
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-2) var(--space-6);
@@ -2873,5 +2876,25 @@ button.claude-explorer-name {
 .new-session-note {
   margin: 0;
   font-size: var(--text-dns-14n-150-size);
+  color: var(--text-secondary);
+}
+
+/* 表示名の入力欄と、その注意書き(issue #426)。 */
+.running-bar-name-field {
+  display: inline-flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+/* 状態バーの注意書きは1行に収める(短い文言。バーの高さを増やさない)。 */
+.running-bar-name-note {
+  white-space: nowrap;
+}
+
+.running-bar-name-note,
+.new-session-hint {
+  font-size: var(--text-dns-14n-150-size);
+  font-weight: var(--text-dns-14n-150-weight);
   color: var(--text-secondary);
 }
