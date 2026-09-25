@@ -18,11 +18,22 @@ export function unconfirmedSegments(live: LiveTurn, messages: MessageDto[]) {
   return live.segments.filter((segment) => !confirmed.includes(segment.text.trim()));
 }
 
-/** 送信中の行が、まだ確定した行として現れていないか。 */
+/**
+ * 送信中の行が、まだ確定した行として現れていないか。uuid が分かるとき(`SentLineConfirmed`)は
+ * uuid で、分からないとき(画面の再読み込み・移動で途中経過の通知を受け損ねた場合)は
+ * このターンを始めたあとに現れた user 行と本文で突き合わせる(実機の確認で、通知を受け損ねると
+ * 確定した行の下に送信中の行が残り続けたため。issue #392)。
+ */
 export function isPendingLineVisible(live: LiveTurn, messages: MessageDto[]) {
   const pending = live.pendingLine;
   if (!pending) return false;
-  return pending.uuid === null || !messages.some((m) => m.uuid === pending.uuid);
+  if (pending.uuid !== null) return !messages.some((m) => m.uuid === pending.uuid);
+  const baseline = new Set(live.baselineUuids);
+  const text = pending.text.trim();
+  return !messages.some(
+    (m) =>
+      m.role === "user" && (m.uuid === null || !baseline.has(m.uuid)) && m.text.trim() === text,
+  );
 }
 
 type Props = {

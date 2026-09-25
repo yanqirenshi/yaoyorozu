@@ -115,7 +115,19 @@ export function useRunningSession({ onTurnFinished, onError, getMessageUuids }: 
   useEffect(() => {
     void refresh();
     const unlistenPromise = onRunningSessionChanged((event) => {
-      void refresh();
+      const before = runningRef.current?.process_state;
+      void refresh().then((next) => {
+        // 返答中(実行中・権限待ち)から待機に戻ったら、ターンは終わっている。途中経過の通知
+        // (Channel)は起動した画面にしか届かないため、画面の再読み込みなどで受け損ねても
+        // 表示が残らないよう、状態の変化でも片付ける(通常は `turn_finished` が先に片付ける)。
+        if (
+          (before === "running" || before === "awaiting_permission") &&
+          next?.process_state === "idle" &&
+          liveRef.current !== EMPTY_TURN
+        ) {
+          Promise.resolve(callbacks.current.onTurnFinished(next)).finally(resetLive);
+        }
+      });
       if (event.process_state === "exited" && event.exit_code !== null) {
         const byUser = stoppedByUserRef.current;
         stoppedByUserRef.current = false;
