@@ -600,9 +600,9 @@ const RELATIONSHIPS = [
   rel("realization", "ClaudeCliProcess", "RunningProcess", undefined, "top", "bottom"),
   // exit は Arc で共有される(所有ではないので関連)。
   rel("association", "ClaudeCliProcess", "ExitSignal", "exit", "right", "left"),
-  // 値として持つ enum なので、コンポジション(線は「部分 → 全体」の向き)。
-  rel("composition", "RunningPermissionMode", "StartRunningSession", "mode", "top", "bottom"),
-  rel("composition", "RunningEvidence", "DetectedRunning", "evidence", "top", "bottom"),
+  // 値として持つ enum なので、コンポジション(この図の書き方どおり、持つ側 → enum)。
+  rel("composition", "StartRunningSession", "RunningPermissionMode", "mode", "bottom", "top"),
+  rel("composition", "DetectedRunning", "RunningEvidence", "evidence", "bottom", "top"),
 ];
 
 export const INFRA_CLASS_DATA: DiagramInput = {
