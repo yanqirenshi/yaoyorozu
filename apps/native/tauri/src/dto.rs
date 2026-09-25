@@ -201,24 +201,6 @@ pub struct SessionChangedEventDto {
     pub agent: AgentKindDto,
 }
 
-/// 送信時のツール実行権限モード。フロントから送られてくるため `Deserialize` が要る
-/// (他の DTO は Rust → フロントの一方向なので `Serialize` のみで足りていた)。
-#[derive(Deserialize, Clone, Copy)]
-#[serde(rename_all = "kebab-case")]
-pub enum AgentModeDto {
-    Chat,
-    Read,
-}
-
-impl From<AgentModeDto> for app::AgentMode {
-    fn from(mode: AgentModeDto) -> Self {
-        match mode {
-            AgentModeDto::Chat => app::AgentMode::Chat,
-            AgentModeDto::Read => app::AgentMode::Read,
-        }
-    }
-}
-
 /// プロジェクトの `.claude/` 配下にある設定ファイルの選択。フロントから
 /// ファイル名を自由入力させず、この enum で選ばせる(native.md §4。
 /// issue #70)。`Deserialize` が要るのは `AgentModeDto` と同じ理由。
@@ -1033,11 +1015,20 @@ impl From<domain::Pc> for PcDto {
 // ============ 実行中セッション(issue #391。Phase 1「1セッションを app から対話する」) ============
 
 /// 起動時に選ぶ権限モード。Phase 1 は `plan` と `default` の2つ。
-#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RunningPermissionModeDto {
     Plan,
     Default,
+}
+
+impl From<app::RunningPermissionMode> for RunningPermissionModeDto {
+    fn from(mode: app::RunningPermissionMode) -> Self {
+        match mode {
+            app::RunningPermissionMode::Plan => RunningPermissionModeDto::Plan,
+            app::RunningPermissionMode::Default => RunningPermissionModeDto::Default,
+        }
+    }
 }
 
 impl From<RunningPermissionModeDto> for app::RunningPermissionMode {
@@ -1213,13 +1204,20 @@ pub struct RunningSessionDto {
     pub cwd: Option<String>,
     pub process_state: ProcessStateDto,
     pub process_state_at: u64,
+    /// 起動時に選んだ権限モード(Phase 1 は途中で切り替えない)。
+    pub permission_mode: RunningPermissionModeDto,
     pub permission_requests: Vec<PermissionRequestDto>,
 }
 
 impl RunningSessionDto {
-    pub fn from_session(project: &str, session: domain::RunningSessionByApp) -> Self {
+    pub fn from_session(
+        project: &str,
+        permission_mode: app::RunningPermissionMode,
+        session: domain::RunningSessionByApp,
+    ) -> Self {
         Self {
             project: project.to_string(),
+            permission_mode: permission_mode.into(),
             session_id: session.base.session_id,
             pid: session.base.pid,
             started_at: session.base.started_at,

@@ -2385,3 +2385,263 @@ button.claude-explorer-name {
 .loading-icon-large .ld-ring {
   --ld-size: var(--icon-32) !important;
 }
+
+/* ====== 実行中セッション(issue #392。Phase 1)====== */
+
+/* 会話ビューの上部の状態表示(プロセスの状態・権限モード・中断/終了)。 */
+.running-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-6);
+  border-bottom: 1px solid var(--border-default);
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.running-bar-state {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* 実行中・権限待ちは草色の文字色で目立たせる(既存のアクセント。機能カラーは使わない)。 */
+.running-bar-state[data-state="running"],
+.running-bar-state[data-state="awaiting_permission"] {
+  color: var(--color-kusairo-800);
+}
+
+.running-bar-mode {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.running-bar-actions {
+  margin-left: auto;
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* 控えめな枠線のみのボタン(添付ボタン .message-attach と同じ見た目の小さい版)。 */
+.running-bar-button,
+.permission-button {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-4);
+  padding: var(--space-1) var(--space-3);
+  font-size: 0.85rem;
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--surface-base);
+  cursor: pointer;
+}
+
+.running-bar-button:hover,
+.permission-button:hover:not(:disabled) {
+  background: var(--state-hover);
+}
+
+.running-bar-button:focus-visible,
+.permission-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* 返答中の表示(作成中の AI の吹き出し・送信中の行)。確定した行と見分けがつくよう、
+   枠を破線にして、メタ情報に「作成中」「送信中」を添える。 */
+.message-live {
+  border-style: dashed;
+}
+
+.message-meta-live {
+  color: var(--color-kusairo-800);
+}
+
+.live-tools {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: 0.8rem;
+}
+
+.live-tool {
+  display: inline-flex;
+  gap: var(--space-2);
+  padding: 2px var(--space-2);
+  border: 1px solid var(--color-kusairo-100);
+  border-radius: var(--radius-4);
+  color: var(--text-secondary);
+}
+
+.live-tool-name {
+  color: var(--text-primary);
+}
+
+/* ツールがエラーになったときだけ、失敗を示すセマンティックカラーを使う。 */
+.live-tool-error {
+  border-color: var(--semantic-error-border);
+}
+
+.live-tool-error .live-tool-state {
+  color: var(--semantic-error-fg);
+}
+
+/* AI からの問い合わせ(権限の問い合わせ・選択肢の質問・計画の承認)のカード。
+   会話の吹き出しとは別物と分かるよう、幅いっぱいで警告色の面にせず、草色の枠にする。 */
+.permission-card {
+  box-sizing: border-box;
+  max-width: 720px;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-kusairo-800);
+  border-radius: var(--radius-8);
+  background: var(--surface-raised);
+  box-shadow: var(--elevation-1);
+}
+
+.permission-title {
+  margin: 0;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.permission-tool {
+  margin-left: var(--space-2);
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-4);
+  background: var(--surface-sunken);
+  font-weight: 400;
+  font-family: monospace;
+}
+
+.permission-description {
+  margin: var(--space-1) 0 0;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.permission-details {
+  margin-top: var(--space-2);
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.permission-details summary {
+  cursor: pointer;
+}
+
+.permission-input {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) var(--space-3);
+  max-height: 240px;
+  overflow: auto;
+  border-radius: var(--radius-4);
+  background: var(--surface-sunken);
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.permission-actions,
+.permission-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.permission-suggestions {
+  margin-top: var(--space-2);
+}
+
+.permission-button-primary {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: var(--surface-base);
+}
+
+.permission-button-primary:hover:not(:disabled) {
+  background: var(--color-primary);
+  opacity: 0.9;
+}
+
+.permission-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.permission-question {
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  border: none;
+}
+
+.permission-question-text {
+  padding: 0;
+  font-weight: 600;
+}
+
+.permission-question-header {
+  margin-right: var(--space-2);
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-4);
+  background: var(--surface-sunken);
+  font-weight: 400;
+  font-size: 0.8rem;
+}
+
+.permission-question-note {
+  margin-left: var(--space-2);
+  font-weight: 400;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.permission-option {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  font-size: 0.9rem;
+}
+
+.permission-option-label {
+  color: var(--text-primary);
+}
+
+.permission-option-description {
+  flex-basis: 100%;
+  padding-left: var(--space-6);
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.permission-other-input {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-4);
+  padding: var(--space-1) var(--space-2);
+  font-size: 0.9rem;
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--surface-base);
+}
+
+.permission-feedback {
+  display: block;
+  width: 100%;
+  margin-top: var(--space-3);
+}
+
+.permission-plan {
+  margin-top: var(--space-2);
+  max-height: 360px;
+  overflow: auto;
+}

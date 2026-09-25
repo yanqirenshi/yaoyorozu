@@ -210,10 +210,11 @@ pub async fn start_running_session(
         let slot = RunningSessionSlot {
             project: project.clone(),
             generation,
+            mode: mode.into(),
             session: started.session,
             process: started.process,
         };
-        let dto = RunningSessionDto::from_session(&project, slot.session.clone());
+        let dto = RunningSessionDto::from_session(&project, slot.mode, slot.session.clone());
         let payload = changed_event(&slot, None);
         guard.running_session = Some(slot);
         (dto, payload)
@@ -229,10 +230,9 @@ pub async fn get_running_session(
     state: tauri::State<'_, Mutex<AppState>>,
 ) -> Result<Option<RunningSessionDto>, AppErrorDto> {
     let guard = state.lock().await;
-    Ok(guard
-        .running_session
-        .as_ref()
-        .map(|slot| RunningSessionDto::from_session(&slot.project, slot.session.clone())))
+    Ok(guard.running_session.as_ref().map(|slot| {
+        RunningSessionDto::from_session(&slot.project, slot.mode, slot.session.clone())
+    }))
 }
 
 /// 実行中セッションへ user メッセージ(本文と画像)を送る。
@@ -396,26 +396,4 @@ pub fn stop_running_session_on_exit(app_handle: &tauri::AppHandle) {
     if let Some(process) = process {
         process.stop();
     }
-}
-
-/// 1回きり送信(`send_message`)が、app が起動した実行中セッションと同じ会話へ並行して書き込ま
-/// ないための確認。app 自身の子プロセスは #361 のガードには「他のプロセス」として見えるので、
-/// 別の理由で止めるメッセージを返す。
-pub async fn ensure_not_running_by_app(
-    state: &Mutex<AppState>,
-    session_id: &str,
-) -> Result<(), AppErrorDto> {
-    let guard = state.lock().await;
-    let busy = guard.running_session.as_ref().is_some_and(|slot| {
-        slot.session.base.session_id == session_id
-            && slot.session.process_state != ProcessState::Exited
-    });
-    if busy {
-        return Err(AppError::SessionBusy(
-            "このセッションは app が起動した実行中のセッションで開いています。そちらから送信するか、先に停止してください"
-                .to_string(),
-        )
-        .into());
-    }
-    Ok(())
 }

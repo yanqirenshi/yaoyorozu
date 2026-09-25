@@ -6,19 +6,19 @@ mod state;
 
 use app::{SettingsStore, TokenStore};
 use dto::{
-    AgentKindDto, AgentModeDto, AppErrorDto, CameraDto, ClaudeDirPageDto, ClaudeMdDto,
-    ClaudeSettingsDto, ConversationDto, DeviceCodeDto, GithubAuthFailedEventDto,
-    GithubAuthStatusDto, GithubAuthenticatedEventDto, GithubProjectDto, GithubProjectSummaryDto,
-    HubLayoutDto, HubTuningDto, MessageImageDto, NodePositionDto, PcDto, ProfileSummaryDto,
-    ProjectDto, ProjectItemsPageDto, ProjectSettingsFileDto, RuleDto, RuleSummaryDto,
-    SessionChangedEventDto, SessionSummaryDto, SettingsCorruptedEventDto, SettingsDto,
-    SettingsInputDto, SkillDto, SkillSummaryDto, ViewerTabDto, WindowStateDto, WindowTabDto,
+    AgentKindDto, AppErrorDto, CameraDto, ClaudeDirPageDto, ClaudeMdDto, ClaudeSettingsDto,
+    ConversationDto, DeviceCodeDto, GithubAuthFailedEventDto, GithubAuthStatusDto,
+    GithubAuthenticatedEventDto, GithubProjectDto, GithubProjectSummaryDto, HubLayoutDto,
+    HubTuningDto, MessageImageDto, NodePositionDto, PcDto, ProfileSummaryDto, ProjectDto,
+    ProjectItemsPageDto, ProjectSettingsFileDto, RuleDto, RuleSummaryDto, SessionChangedEventDto,
+    SessionSummaryDto, SettingsCorruptedEventDto, SettingsDto, SettingsInputDto, SkillDto,
+    SkillSummaryDto, ViewerTabDto, WindowStateDto, WindowTabDto,
 };
 use infra::{
-    ClaudeCliAgent, FileClaudeDirStore, FileClaudeMdStore, FileClaudeSettingsStore,
-    FileHubLayoutStore, FileHubTuningStore, FileProjectSettingsStore, FileRulesStore,
-    FileRunningSessionSource, FileSettingsStore, FileSkillsStore, FileSystemRepository,
-    FileViewerTabsStore, GithubApiClient, GithubAuthLog, KeyringTokenStore,
+    FileClaudeDirStore, FileClaudeMdStore, FileClaudeSettingsStore, FileHubLayoutStore,
+    FileHubTuningStore, FileProjectSettingsStore, FileRulesStore, FileSettingsStore,
+    FileSkillsStore, FileSystemRepository, FileViewerTabsStore, GithubApiClient, GithubAuthLog,
+    KeyringTokenStore,
 };
 use state::{resolve_effective_projects_dir, AppState};
 use std::path::PathBuf;
@@ -217,46 +217,6 @@ async fn list_sessions(
             Ok(sessions.into_iter().map(SessionSummaryDto::from).collect())
         },
     )
-    .await
-    .unwrap_or_else(|_| {
-        Err(app::AppError::Io(
-            "バックグラウンド処理に失敗しました".to_string(),
-        ))
-    })
-    .map_err(Into::into)
-}
-
-#[tauri::command]
-async fn send_message(
-    state: tauri::State<'_, Mutex<AppState>>,
-    project: String,
-    session_id: String,
-    text: String,
-    images: Vec<String>,
-    mode: AgentModeDto,
-) -> Result<(), AppErrorDto> {
-    // app が起動して持っている実行中セッションと同じ会話には、1回きり送信を並行して
-    // 書き込まない(issue #391。同じ会話ファイルへの並行追記による混線の防止)。
-    running_session::ensure_not_running_by_app(&state, &session_id).await?;
-    let root = effective_projects_dir_from_state(&state).await?;
-    // claude CLI の起動は数秒〜数十秒かかるため、async ランタイムを塞がないよう
-    // ブロッキングスレッドで実行する。
-    tauri::async_runtime::spawn_blocking(move || -> Result<(), app::AppError> {
-        let source = FileSystemRepository::new(root);
-        let agent = ClaudeCliAgent::new();
-        let sessions_dir = FileRunningSessionSource::default_sessions_dir()?;
-        let running_sessions = FileRunningSessionSource::new(sessions_dir);
-        app::send_message(
-            &source,
-            &agent,
-            &running_sessions,
-            &project,
-            &session_id,
-            &text,
-            &images,
-            mode.into(),
-        )
-    })
     .await
     .unwrap_or_else(|_| {
         Err(app::AppError::Io(
@@ -1690,7 +1650,6 @@ pub fn run() {
             list_projects,
             get_session,
             list_sessions,
-            send_message,
             running_session::start_running_session,
             running_session::get_running_session,
             running_session::send_to_running_session,

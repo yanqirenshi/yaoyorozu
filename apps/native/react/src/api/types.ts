@@ -1,7 +1,5 @@
 export type AgentKindDto = "claude-code";
 
-// 送信時のツール実行権限モード。既定は "chat"。
-export type AgentModeDto = "chat" | "read";
 
 // プロジェクトの `.claude/` 配下にある設定ファイルの選択(issue #70)。
 export type ProjectSettingsFileDto = "settings" | "settings_local";
@@ -395,6 +393,8 @@ export type RunningSessionDto = {
   cwd: string | null;
   process_state: ProcessStateDto;
   process_state_at: number;
+  // 起動時に選んだ権限モード(Phase 1 は途中で切り替えない)。
+  permission_mode: RunningPermissionModeDto;
   permission_requests: PermissionRequestDto[];
 };
 

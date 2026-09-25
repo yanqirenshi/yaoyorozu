@@ -1,7 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
-  AgentModeDto,
   AppErrorDto,
   ClaudeDirPageDto,
   ClaudeMdDto,
@@ -43,8 +42,16 @@ import type {
 } from "./types";
 
 export type {
+  PermissionBehaviorDto,
+  PermissionRequestDto,
+  PermissionRequestKindDto,
+  PermissionSuggestionDto,
+  ProcessStateDto,
+  ProgressEventDto,
+  RunningPermissionModeDto,
+  RunningSessionChangedEvent,
+  RunningSessionDto,
   AgentKindDto,
-  AgentModeDto,
   AppErrorDto,
   ClaudeDirEntryDto,
   ClaudeDirEntryKindDto,
@@ -126,18 +133,6 @@ export function saveViewerTabs(profileId: string, tabs: ViewerTabDto[]): Promise
 
 export function listSessions(project: string): Promise<SessionSummaryDto[]> {
   return invoke<SessionSummaryDto[]>("list_sessions", { project });
-}
-
-// images は添付画像の base64(data: プレフィックス無し)。パスではなくバイト列を渡す
-// (native.md §4。issue #349)。検証(形式・サイズ・枚数)は Rust 側。
-export function sendMessage(
-  project: string,
-  sessionId: string,
-  text: string,
-  images: string[],
-  mode: AgentModeDto,
-): Promise<void> {
-  return invoke<void>("send_message", { project, sessionId, text, images, mode });
 }
 
 // 画像を1枚添付する前の事前検証(issue #349)。existingCount は添付済みの枚数。
