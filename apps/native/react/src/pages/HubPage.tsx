@@ -277,6 +277,8 @@ type HubNodeCore = {
   project?: string | null;
   ownerProfileId?: string;
   ownerProfileName?: string;
+  // 会話ファイル(jsonl)がまだ無い、実行中セッションだけの仮ノード(issue #424)。
+  provisional?: boolean;
   // リポジトリノードから新規セッションを作るときに使うプロファイル
   // (このリポジトリを対象にしているもの。issue #408)。
   repositoryProfileId?: string;
@@ -745,7 +747,73 @@ function buildGraphData(
     }
   });
 
+  // 仮のセッションノード(issue #424)。app が起動した新しい会話は、会話ファイル
+  // (jsonl)ができるまで `User.sessions` に現れない(ハブのセッションノードは
+  // `~/.claude/projects` の走査結果から作るため)。起動しているのにノードが無いと
+  // 状態も見られず止められないので、実行中セッションの一覧にあって図に無いものを
+  // 仮のノードとして描く。ノードIDは通常のセッションノードと同じ
+  // (`session:<session_id>`)にしてあるので、会話ファイルができて通常のノードが
+  // 現れたら、そのまま置き換わる(インスペクタで選んでいた対象も保たれる)。
+  const drawnSessionIds = new Set(sessions.map((session) => session.session_id));
+  runningBySessionId.forEach((running, sessionId) => {
+    if (drawnSessionIds.has(sessionId)) return;
+    const sessionNodeId = `session:${sessionId}`;
+    const repository = repositoryNodeByPath.get(
+      normalizePathForComparison(running.repository_path),
+    );
+    const owningProfile = findProfileForRepository(running.repository_path, profiles);
+    // 起動元のリポジトリの高さから描き始める(線で結ぶので、あとはシミュレー
+    // ションがリポジトリの近くへ寄せる)。
+    const position = currentPositions.get(sessionNodeId) ?? {
+      x: SESSION_GRID_ORIGIN.x,
+      y: repository?.y ?? SESSION_GRID_ORIGIN.y,
+    };
+    // 表示名(`--name`)があればそれを、無ければ session_id の先頭8文字を出す
+    // (通常のセッションノードのタイトル解決と同じ流儀)。
+    const title = running.name ?? sessionId.slice(0, SESSION_ID_PREFIX_CHARS);
+    nodes.push({
+      id: sessionNodeId,
+      x: position.x,
+      y: position.y,
+      move: "will",
+      label: {
+        text: truncate(title, SESSION_LABEL_MAX_CHARS),
+        fill: COLOR_SUMI,
+        font: { size: 12 },
+        y: labelYBelowCircle(20),
+      },
+      circle: { r: 20, ...sessionNodeCircleStyle(running) },
+      icon: { url: HUB_NODE_ICON_URIS.session },
+      kind: "session",
+      provisional: true,
+      sessionId,
+      sessionTitle: title,
+      cwd: running.cwd,
+      // 会話ファイルがまだ無いので `project` は決まらない(ビューアで開けない)。
+      project: null,
+      ownerProfileId: owningProfile?.id,
+      ownerProfileName: owningProfile?.name,
+    });
+    if (repository) {
+      edges.push({
+        id: `e${edgeSeq++}`,
+        source: sessionNodeId,
+        target: repository.nodeId,
+        line: { width: 1, color: COLOR_BORDER },
+      });
+    }
+  });
+
   return { nodes, edges, positionKeys };
+}
+
+// ノードの `_core` から、グラフのノードID(`buildGraphData` が振ったもの)を
+// 求める(issue #424)。描き直したあとにインスペクタの中身を最新へ差し替える
+// ために使う。セッションは session_id 由来、それ以外は位置の保存キーがそのまま
+// ノードIDになっている。
+function nodeIdOfCore(core: HubNodeCore): string | null {
+  if (core.kind === "session") return core.sessionId ? `session:${core.sessionId}` : null;
+  return core.positionKey ?? null;
 }
 
 // インスペクタから行える操作(issue #229・#408)。実処理は呼び出し側
@@ -769,7 +837,18 @@ type InspectorHandlers = {
 // 起動(再開・新規)の入力欄(issue #408)。権限モードは画面で選べるモード
 // (`PERMISSION_MODE_LABELS`)から選び、表示名(claude の `--name`)は任意。
 // 値は呼び出し側が持ち、ここは表示だけ。
-function HubStartSessionForm({ handlers }: { handlers: InspectorHandlers }) {
+// `nameNote` は表示名の入力欄に添える注意書き(issue #424)。既存の会話を
+// 再開するときに表示名を付けると、claude CLI が会話ファイルへ
+// `type=custom-title` の行を追記するため、その会話のタイトルが変わる
+// (#408 の実機確認で分かった副作用)。既定は空のままなので、何もしなければ
+// タイトルは変わらない。
+function HubStartSessionForm({
+  handlers,
+  nameNote,
+}: {
+  handlers: InspectorHandlers;
+  nameNote?: string;
+}) {
   return (
     <>
       <label className="hub-inspector-form-row">
@@ -797,10 +876,14 @@ function HubStartSessionForm({ handlers }: { handlers: InspectorHandlers }) {
           placeholder="(任意)"
           onChange={(e) => handlers.onStartNameChange(e.target.value)}
         />
+        {nameNote && <small className="hub-inspector-form-note">{nameNote}</small>}
       </label>
     </>
   );
 }
+
+// 既存の会話を再開するときの注意書き(issue #424)。
+const RESUME_NAME_NOTE = "表示名を付けると、この会話のタイトルが変わります";
 
 // ノードの `_core`(issue #109)からインスペクタの表示内容を組み立てる。
 // グラフ構築時に `_core` へ埋め込んだ値と、実行中セッションの一覧
@@ -934,6 +1017,18 @@ function buildSessionInspectorContent(
       disabled: handlers.busy || !canAddress,
     });
   }
+  // 会話ファイルがまだ無い仮ノード(issue #424)は、モデル属性(会話ファイルから
+  // 読むもの)がまだ無いので、その旨だけを出す。
+  const modelFields: InspectorField[] = core.provisional
+    ? [
+        {
+          label: "会話ファイル",
+          value: "(まだありません。最初のやり取りで作られます)",
+        },
+        { label: "セッションID", value: core.sessionId ?? "" },
+        { label: "cwd(表示補助)", value: core.cwd ?? "(未記録)" },
+      ]
+    : sessionModelFields(core, conversationFiles);
   return {
     title: truncate(core.sessionTitle ?? "セッション", SESSION_TITLE_MAX_CHARS),
     fields: [
@@ -947,45 +1042,57 @@ function buildSessionInspectorContent(
           core.ownerProfileName ??
           "(このセッションのリポジトリを対象にしたプロファイルがありません)",
       },
-      { label: "フォルダ(project)", value: core.project ?? "(不明)" },
-      // モデル属性(`domain::Session`。issue #197)。
-      { label: "セッションID", value: core.sessionId ?? "" },
-      { label: "custom_title", value: core.customTitle ?? "(未設定)" },
-      { label: "ai_title", value: core.aiTitle ?? "(未設定)" },
-      { label: "mode", value: core.mode ?? "(未設定)" },
-      { label: "slug", value: core.slug ?? "(未設定)" },
-      { label: "last_prompt", value: core.lastPrompt ?? "(未設定)" },
-      // Session.conversation_files/subagent_files(issue #208)。行
-      // (LogLine)は遅延読み込みのため、読み込み状態・行数もあわせて
-      // 表示する(未読み込みなら「未読み込み」・0件)。conversation_files は
-      // issue #217 で1..*になった(worktree移動で同じsession_idのjsonlが
-      // 複数フォルダにできるケースに対応)。1件のときは従来どおりの見え方に
-      // なる。並びは更新時刻の古い順。改行区切りで複数件を表示する(App.css
-      // の `.hub-inspector-field dd` に `white-space: pre-line` を設定済み)。
-      {
-        label: "会話ファイル",
-        value: conversationFiles.map((f) => f.filePath).join("\n"),
-      },
-      {
-        label: "会話ファイルの行",
-        value: conversationFiles
-          .map((f) => (f.linesLoaded ? `読み込み済み(${f.lineCount}行)` : "未読み込み"))
-          .join("\n"),
-      },
-      {
-        label: "サブエージェント数",
-        value: String(core.subagentFileCount ?? 0),
-      },
-      // 表示補助データ(issue #224)。セッション→ブランチの線の根拠を
-      // インスペクタで確認できるようにする(`domain::Session`の属性ではない)。
-      { label: "cwd(表示補助)", value: core.cwd ?? "(未記録)" },
-      { label: "git_branch(表示補助)", value: core.gitBranch ?? "(未記録)" },
+      { label: "フォルダ(project)", value: core.project ?? "(会話ファイルができるまで不明)" },
+      ...modelFields,
     ],
     // 起動していないときだけ、起動の入力欄を出す。
-    body: running ? undefined : <HubStartSessionForm handlers={handlers} />,
+    body: running ? undefined : (
+      <HubStartSessionForm handlers={handlers} nameNote={RESUME_NAME_NOTE} />
+    ),
     action: null,
     actions,
   };
+}
+
+// 通常のセッションノードで出す、モデル属性(`domain::Session`。issue #197)と
+// 表示補助データ(issue #224)の項目。
+function sessionModelFields(
+  core: HubNodeCore,
+  conversationFiles: NonNullable<HubNodeCore["conversationFiles"]>,
+): InspectorField[] {
+  return [
+    { label: "セッションID", value: core.sessionId ?? "" },
+    { label: "custom_title", value: core.customTitle ?? "(未設定)" },
+    { label: "ai_title", value: core.aiTitle ?? "(未設定)" },
+    { label: "mode", value: core.mode ?? "(未設定)" },
+    { label: "slug", value: core.slug ?? "(未設定)" },
+    { label: "last_prompt", value: core.lastPrompt ?? "(未設定)" },
+    // Session.conversation_files/subagent_files(issue #208)。行
+    // (LogLine)は遅延読み込みのため、読み込み状態・行数もあわせて
+    // 表示する(未読み込みなら「未読み込み」・0件)。conversation_files は
+    // issue #217 で1..*になった(worktree移動で同じsession_idのjsonlが
+    // 複数フォルダにできるケースに対応)。1件のときは従来どおりの見え方に
+    // なる。並びは更新時刻の古い順。改行区切りで複数件を表示する(App.css
+    // の `.hub-inspector-field dd` に `white-space: pre-line` を設定済み)。
+    {
+      label: "会話ファイル",
+      value: conversationFiles.map((f) => f.filePath).join("\n"),
+    },
+    {
+      label: "会話ファイルの行",
+      value: conversationFiles
+        .map((f) => (f.linesLoaded ? `読み込み済み(${f.lineCount}行)` : "未読み込み"))
+        .join("\n"),
+    },
+    {
+      label: "サブエージェント数",
+      value: String(core.subagentFileCount ?? 0),
+    },
+    // 表示補助データ(issue #224)。セッション→ブランチの線の根拠を
+    // インスペクタで確認できるようにする(`domain::Session`の属性ではない)。
+    { label: "cwd(表示補助)", value: core.cwd ?? "(未記録)" },
+    { label: "git_branch(表示補助)", value: core.gitBranch ?? "(未記録)" },
+  ];
 }
 
 // GitRepository(issue #224)。`domain::GitRepository`のモデル属性のみを表示
@@ -1333,34 +1440,33 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
     [runInspectorAction],
   );
 
-  // セッションをビューア(プロファイルのウィンドウ)で開く(issue #408)。
+  // セッションをビューア(プロファイルのウィンドウ)で開く(issue #408・#424)。
   // ビューアが表示するのは「プロファイルごとのセッションタブの並び」
-  // (`save_viewer_tabs`。issue #353)なので、まだ無ければそこへ足してから
-  // ウィンドウを開く(既に開いていれば前面化する)。
-  // 制約(この画面だけでは解けないため、共有層を持つ 実装:APP(共通)へ相談する):
-  //  - `open_profile_window` はプロファイルしか受け取らず、開いたビューアで
-  //    そのセッションを選択させられない(選択はビューアの URL クエリ)。
-  //  - ビューアはタブの並びを起動時にしか読まないため、既に開いているウィンドウ
-  //    には足したタブがすぐには現れない(開き直すと現れる)。
+  // (`save_viewer_tabs`。issue #353)なので、まだ無ければそこへ足してから、
+  // そのセッションを指定してウィンドウを開く(既に開いていれば前面化して
+  // そのセッションへ移動させる)。
+  // #408 では `open_profile_window` がプロファイルしか受け取らず「開くだけ・
+  // 選択されない」「既に開いているウィンドウには足したタブがすぐ出ない」と
+  // いう制約があったが、共有層(issue #422)で `session` 引数と
+  // `viewer-tabs:changed` が入ったため、どちらもここで解消している
+  // (タブの反映はビューア側が購読して取り直すので、ハブ側の追加処理は不要)。
   const handleOpenInViewer = useCallback(
     (core: HubNodeCore) => {
       const { project, sessionId, ownerProfileId } = core;
       if (!project || !sessionId || !ownerProfileId) return;
       const profile = profiles.find((p) => p.id === ownerProfileId);
+      const session = { project, session_id: sessionId };
       runInspectorAction(() =>
         getViewerTabs(ownerProfileId)
           .then((tabs) =>
             tabs.some((tab) => tab.project === project && tab.session_id === sessionId)
               ? undefined
-              : saveViewerTabs(ownerProfileId, [
-                  ...tabs,
-                  { project, session_id: sessionId },
-                ]),
+              : saveViewerTabs(ownerProfileId, [...tabs, session]),
           )
           .then(() =>
             profile?.windowLabel
-              ? focusWindow(profile.windowLabel)
-              : openProfileWindow(ownerProfileId),
+              ? focusWindow(profile.windowLabel, session)
+              : openProfileWindow(ownerProfileId, session),
           ),
       );
     },
@@ -1542,6 +1648,21 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
     validPositionKeysRef.current = positionKeys;
     rectum.data({ nodes, edges });
     restartSimulation(rectum);
+    // 開いているインスペクタの中身を、描き直したノードの値で更新する
+    // (issue #424)。仮ノードが会話ファイルのできた通常のノードへ置き換わった
+    // ときに、選択を保ったまま中身(フォルダ名・会話ファイル等)が最新になる。
+    // 対象のノードが消えたときは直前の値をそのまま残す(パネルを閉じるのは
+    // ×・Esc・グラフの空白部のクリックだけにする)。
+    setInspectorCore((prev) => {
+      if (!prev) return prev;
+      const id = nodeIdOfCore(prev);
+      if (!id) return prev;
+      const groups = Array.from(hubPageRef.current?.querySelectorAll("g.ng-node") ?? []);
+      const hit = groups.find(
+        (el) => (el as Element & { __data__?: NodeDatum }).__data__?.id === id,
+      ) as (Element & { __data__?: NodeDatum }) | undefined;
+      return (hit?.__data__?._core as HubNodeCore | undefined) ?? prev;
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rectum, dataKey]);
 
@@ -1574,10 +1695,15 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
 
   // 別のノードを選んだら、起動の入力(権限モード・表示名)を初期値へ戻す
   // (前のノードで入れた表示名が残らないようにする。issue #408)。
+  // 見るのは選んでいるノードのIDで、`inspectorCore` そのものではない。core は
+  // グラフを描き直すたびに新しい値へ差し替える(issue #424)ため、それを
+  // 見てしまうと、同じノードを見ている最中の再描画(実行中セッションの状態
+  // 変化など)で入力中の表示名が消えてしまう。
+  const inspectorNodeId = inspectorCore ? nodeIdOfCore(inspectorCore) : null;
   useEffect(() => {
     setStartMode("default");
     setStartName("");
-  }, [inspectorCore]);
+  }, [inspectorNodeId]);
 
   // グラフの調整メニュー(issue #246・#249)。値は `hub-tuning.json` に保存し
   // (スライダー変更後に `HUB_TUNING_SAVE_DEBOUNCE_MS` でまとめて保存)、
