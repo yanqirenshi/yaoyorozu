@@ -1,10 +1,12 @@
 # cli-probe
 
-`claude` CLI を**起動したまま** stream-json で対話する、探査用の使い捨て CLI です(Rust。約 430 行)。
+`claude` CLI を**起動したまま** stream-json で対話する、探査用の使い捨て CLI です(Rust。約 460 行)。
 PoC #382 で、Phase 1(#381)の設計材料を実測するために使いました。
 Phase 1 の実装者が「CLI をどう起動し、どう対話し、何を読めばよいか」を確かめるための**参照実装**として、リポジトリに残しています。
+PoC #429(claude CLI 同士のセッション間メッセージ)で、`listen` シナリオと `--`(以降を `claude` にそのまま渡す)を足しました。
 
 - 実測の結果とその読み方: [`reports/claude-cli-stream-json-session.md`](../../claude-cli-stream-json-session.md)(このツールの説明は [付録 A](../../claude-cli-stream-json-session.md#付録-a-探査ツール-cli-probe)、実行の一覧は付録 B)
+- `listen` と `--` を足した PoC #429 の結果: [`reports/claude-cli-peer-messaging.md`](../../claude-cli-peer-messaging.md)(足した内容は [付録 B](../../claude-cli-peer-messaging.md#付録-b-探査ツールの変更))
 - app 本体(`apps/native`)・Cargo workspace には**入っていません**。単独の crate です(`apps/native/Cargo.toml` の `members` に加えないでください)。
 - 製品コードではありません。探査のために書いたもので、エラー処理は最小限です(引数の誤りは `panic!` します)。
 
@@ -12,7 +14,9 @@ Phase 1 の実装者が「CLI をどう起動し、どう対話し、何を読�
 
 **実運用の会話・リポジトリには向けないでください。** 必ず、このツールのための使い捨てフォルダ(と使い捨ての会話)を `<cwd>` に指定します。
 
-- **権限の問い合わせに自動で許可を返します。** `perm-allow` / `perm-write` / `set-mode` / `prompt` は、`can_use_tool` に `allow`(入力はそのまま)で即答するので、`Bash` や `Write` が実際に実行されます。`prompt` は本文の内容しだいで任意のツールが許可されます。
+- **権限の問い合わせに自動で許可を返します。** `perm-allow` / `perm-write` / `set-mode` / `prompt` / `listen` は、`can_use_tool` に `allow`(入力はそのまま)で即答するので、`Bash` や `Write` が実際に実行されます。`prompt` は本文の内容しだいで任意のツールが許可されます。
+- **`listen` は他のセッションからのメッセージを受け取ります。** 受け取った内容が `Bash` や `Write` を呼ばせても、自動で許可されます。送り手は自分が用意した使い捨てのセッションだけにしてください(`<cwd>` も使い捨てフォルダに)。
+- **`--` 以降は `claude` にそのまま渡ります。** 権限やツールに関わる引数(`--dangerously-skip-permissions` など)も、確認なしに渡ります。
 - **ファイルを作ります。** `perm-write` は `<cwd>` に `poc382.txt` を、`perm-write-deny` は `poc382-deny.txt` を、`perm-interrupt` は `poc382-int.txt` を作らせようとします。
 - **既存の会話へ書き込みます。** `--resume ID` を付けると、その会話の jsonl に追記されます。実運用の会話の ID を渡さないでください。
 - **実行中セッションの台帳を残すことがあります。** `kill` はプロセスを強制終了するため、`~/.claude/sessions/<PID>.json` が残ります(レポート §4.3)。
@@ -29,7 +33,7 @@ cargo run -- <claude.exe> <cwd> <scenario> [オプション]
 ```
 
 ```
-cli-probe <claude.exe> <cwd> <scenario> [--resume ID] [--permission-mode M] [--print] [--no-init] [--name N] [--model M] [--log FILE]
+cli-probe <claude.exe> <cwd> <scenario> [--resume ID] [--permission-mode M] [--print] [--no-init] [--name N] [--model M] [--log FILE] [-- <claude にそのまま渡す引数…>]
 ```
 
 | 引数 | 意味 |
@@ -44,8 +48,17 @@ cli-probe <claude.exe> <cwd> <scenario> [--resume ID] [--permission-mode M] [--p
 | `--name N` | `--name N`(表示名)を付ける |
 | `--model M` | `--model M` を付ける |
 | `--log FILE` | 標準出力に出す要約とは別に、**行全体**を `FILE` に書き出す |
+| `--` | これ以降の引数を**すべて** `claude` にそのまま渡す(このツールの引数としては解釈しない)。他のオプションは `--` より前に書く |
 
-子プロセスは常に次の引数で起動します: `--output-format stream-json --verbose --input-format stream-json --permission-prompt-tool stdio --replay-user-messages --include-partial-messages`(`--print` などのオプションは上に足されます)。
+子プロセスは常に次の引数で起動します: `--output-format stream-json --verbose --input-format stream-json --permission-prompt-tool stdio --replay-user-messages --include-partial-messages`(`--print` などのオプションは上に足されます。`--` 以降は、`--model` などの**あとの末尾**に足されます)。
+
+### `--` で `claude` に引数を渡す
+
+このツールに無い `claude` の引数を試すためのものです。PoC #429 では、受信した他セッションのメッセージを「保留」にする設定を渡すのに使いました(設定の意味はレポート `claude-cli-peer-messaging.md` §4.3)。
+
+```bash
+cargo run -- <claude.exe> <cwd> listen --name poc-B -- --settings '{"crossSessionInbound":"hold"}'
+```
 
 ## シナリオ一覧
 
@@ -66,11 +79,34 @@ cli-probe <claude.exe> <cwd> <scenario> [--resume ID] [--permission-mode M] [--p
 | `set-mode` | `set_permission_mode`(`plan`)を送ってから `Bash` を依頼し、許可で答える |
 | `kill` | 1語を頼み、台帳を読み、プロセスを `kill` して、台帳が残るかを見る |
 | `prompt` | 環境変数 `POC_PROMPT` の本文をそのまま送り、権限の問い合わせには許可で答える |
+| `listen` | **受信側**。`POC_PROMPT` があれば先に送り、そのあと `POC_LISTEN_SECS` 秒のあいだ、届くものを全部記録する。権限の問い合わせには許可で答える(PoC #429) |
 
 `prompt` は、上のシナリオにない依頼を試すためのものです。
 
 ```bash
 POC_PROMPT="Reply with exactly one word: HELLO" cargo run -- <claude.exe> <cwd> prompt --log probe.log
+```
+
+### `listen`(PoC #429)
+
+プロセスを起動したまま待機し、**他のセッションから届いたメッセージ**(claude CLI 同士のセッション間メッセージ)などを標準出力・`--log` に記録します。
+別の端末から送り手(別の `claude` セッション)が `SendMessage` で宛先を指定して送ると、その到着が `<<` 行に出ます。宛先の名前の決まり方はレポート [`claude-cli-peer-messaging.md` §0.2](../../claude-cli-peer-messaging.md) を参照してください。
+
+| 環境変数 | 意味 |
+|---|---|
+| `POC_PROMPT` | あれば、待機に入る前にユーザーメッセージとして送る。無ければ何も送らずに待機する |
+| `POC_NOWAIT` | **設定されていれば**(値は何でもよい。`1` を推奨)、`POC_PROMPT` を送ったあと `result` を待たずにすぐ待機に入る。未設定なら `result` が来るまで待つ |
+| `POC_LISTEN_SECS` | 待機する秒数。既定は `60`。数値として読めなければ既定になる |
+
+待機中に `can_use_tool` が来たら許可で答えます。待機は `POC_LISTEN_SECS` 秒たつか、子プロセスが終了したところで終わり、あとは他のシナリオと同じく標準入力を閉じて終了を待ちます。
+
+```bash
+# 60秒(既定)待機して、届くものを listen.log に記録する
+cargo run -- <claude.exe> <cwd> listen --name poc-B --log listen.log
+
+# 先に1件送ってすぐ待機に入り、120秒待つ
+POC_PROMPT="Reply with exactly one word: READY" POC_NOWAIT=1 POC_LISTEN_SECS=120 \
+  cargo run -- <claude.exe> <cwd> listen --name poc-B --log listen.log
 ```
 
 ## 出力の見方

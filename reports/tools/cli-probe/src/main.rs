@@ -20,6 +20,8 @@ struct Opts {
     name: Option<String>,
     model: Option<String>,
     log: Option<String>,
+    /// `--` 以降はそのまま claude に渡す
+    extra: Vec<String>,
 }
 
 fn parse_opts() -> Opts {
@@ -35,6 +37,7 @@ fn parse_opts() -> Opts {
         name: None,
         model: None,
         log: None,
+        extra: Vec::new(),
     };
     let mut i = 4;
     while i < a.len() {
@@ -46,6 +49,7 @@ fn parse_opts() -> Opts {
             "--log" => { o.log = Some(a[i + 1].clone()); i += 1; }
             "--print" => o.print = true,
             "--no-init" => o.no_init = true,
+            "--" => { o.extra = a[i + 1..].to_vec(); break; }
             x => panic!("unknown arg {x}"),
         }
         i += 1;
@@ -276,6 +280,7 @@ fn main() {
     if let Some(m) = &o.permission_mode { args.push("--permission-mode".into()); args.push(m.clone()); }
     if let Some(n) = &o.name { args.push("--name".into()); args.push(n.clone()); }
     if let Some(m) = &o.model { args.push("--model".into()); args.push(m.clone()); }
+    args.extend(o.extra.iter().cloned());
     println!("## exe={} cwd={} scenario={} args={:?}", o.exe, o.cwd, o.scenario, args);
     cmd.args(&args);
     cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -413,6 +418,30 @@ fn main() {
             let text = std::env::var("POC_PROMPT").expect("POC_PROMPT");
             p.send_user(&text);
             p.wait_result(long, &mut |p, req| allow(p, req));
+        }
+        "listen" => {
+            // 受信側: POC_PROMPT があれば先に送り(POC_NOWAIT=1 なら result を待たない)、
+            // そのあと POC_LISTEN_SECS 秒のあいだ届くものを全部記録する
+            if let Ok(text) = std::env::var("POC_PROMPT") {
+                p.send_user(&text);
+                if std::env::var("POC_NOWAIT").is_err() {
+                    p.wait_result(long, &mut |p, req| allow(p, req));
+                }
+            }
+            let secs: u64 = std::env::var("POC_LISTEN_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(60);
+            println!("## listening for {secs}s (pid={})", p.child.id());
+            let deadline = Instant::now() + Duration::from_secs(secs);
+            loop {
+                let remain = deadline.saturating_duration_since(Instant::now());
+                if remain.is_zero() { break; }
+                match p.next(remain) {
+                    Some(Ev::Out(v)) => {
+                        if v["type"] == "control_request" && v["request"]["subtype"] == "can_use_tool" { allow(&mut p, &v); }
+                    }
+                    Some(Ev::Exit(_)) | None => break,
+                    _ => {}
+                }
+            }
         }
         x => panic!("unknown scenario {x}"),
     }
