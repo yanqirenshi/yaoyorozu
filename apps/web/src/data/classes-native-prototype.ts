@@ -76,6 +76,13 @@
  *   だけの薄い取り出し口であり、型の形を決めるのは private な `line` 1つのため。
  *   一覧は説明(description)に書いた。
  *
+ * 【Phase 1 の型(実行中セッション・権限・途中経過)】#391 で domain クレートに実装された
+ * 11型(`RunningSession` など。`running_session.rs`・`permission_*.rs`・`progress_event.rs`・
+ * `process_*.rs`)は、この図には描かず、`classes-domain.ts` に載せている(#388 の設計と
+ * 同じ名前で、`mergeDiagrams` はクラス名の重複を許さないため。Pc・User・Profile と同じ
+ * 扱い)。設計と実装の差は、`classes-domain.ts` の冒頭【Phase 1: 実装との差】と各クラスの
+ * 説明に書いた。app・infra・tauri 側の型は `classes-infra.ts`・`classes-tauri.ts` にある。
+ *
  * 【ParsedSession】`parsed_session.rs`(issue #208・#214・#217)。`User::load_sessions`
  * (オブジェクトモデル側。`classes-domain.ts`)への入力で、`GitLedger` の
  * `ObservedGitState` と同じ「ただの運搬型」。`ScannedLine` と同じ節に置く
