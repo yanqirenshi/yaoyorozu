@@ -193,6 +193,24 @@ const HUB_TUNING_SAVE_DEBOUNCE_MS = 500;
 // (`rectum.simulation.simulation`)を直接再開する。alphaTarget はライブラリの
 // 既定値(0.6 の `Simulation.js` の `DEFAULT_OPTIONS.alpha.target` = 0.002)に
 // 戻し、alpha は再描画のたびにノードが大きく動き回らない程度の小さな値にする。
+// 実行中セッション → worktree の線(issue #438)の印。d3.network 0.6.1 の
+// `Edges.js`(`makeDataLine`)は辺ごとの `line.color` を読まず、Rectum に渡した
+// 既定色で全部の辺を塗る(ライブラリ側に「本来はデータに持たせるべき」という
+// TODO コメントがある)。そのため、描いた直後にこの印の付いた辺だけ stroke を
+// 上書きする(`applyRunningWorktreeEdgeColor`)。`tick` は色に触らないので、
+// 上書きはシミュレーションが動いても消えない。
+const RUNNING_WORKTREE_RELATION = "running-worktree";
+
+function applyRunningWorktreeEdgeColor(container: HTMLElement | null): void {
+  container?.querySelectorAll("path.ng-edge").forEach((el) => {
+    const core = (el as Element & { __data__?: { _core?: Record<string, unknown> } }).__data__
+      ?._core;
+    if (core?.relation !== RUNNING_WORKTREE_RELATION) return;
+    const line = core.line as { color?: string } | undefined;
+    if (line?.color) el.setAttribute("stroke", line.color);
+  });
+}
+
 const SIMULATION_RESTART_ALPHA = 0.1;
 const SIMULATION_DEFAULT_ALPHA_TARGET = 0.002;
 type D3SimulationLike = {
@@ -410,8 +428,21 @@ function worktreeChoicesOf(repository: GitRepositoryDto | undefined): WorktreeCh
   return (repository?.worktrees ?? []).map((worktree) => ({
     id: worktree.worktree_id,
     name: worktree.worktree_name,
-    branch: worktree.checked_out_branch,
+    branch: checkedOutBranchName(worktree, repository),
   }));
+}
+
+// `GitWorktree.checked_out_branch` は台帳の GitBranch の個体指定子(ID)なので、
+// 画面に出すときはブランチ名へ直す(issue #438。実機で ID が出て気づいた)。
+function checkedOutBranchName(
+  worktree: GitWorktreeDto,
+  repository: GitRepositoryDto | undefined,
+): string | null {
+  if (!worktree.checked_out_branch) return null;
+  return (
+    repository?.branches.find((branch) => branch.branch_id === worktree.checked_out_branch)
+      ?.branch_name ?? null
+  );
 }
 
 // 実行中セッションが動いている worktree(issue #438)。起動時の指定は backend が
@@ -612,7 +643,7 @@ function buildGraphData(
         worktreeName: worktree.worktree_name,
         worktreeFolderPath: worktree.worktree_folder_path,
         worktreeDescription: worktree.description,
-        worktreeCheckedOutBranch: worktree.checked_out_branch,
+        worktreeCheckedOutBranch: checkedOutBranchName(worktree, repo),
         worktreeCreatedAtTime: worktree.created_at_time,
       });
       // GitRepository → GitWorktree(所有。台帳どおり)。
@@ -883,6 +914,7 @@ function buildGraphData(
           source: sessionNodeId,
           target: worktreeNodeId,
           line: { width: 2, color: COLOR_KINCHA_500 },
+          relation: RUNNING_WORKTREE_RELATION,
         });
       }
     }
@@ -956,6 +988,7 @@ function buildGraphData(
           source: sessionNodeId,
           target: worktreeNodeId,
           line: { width: 2, color: COLOR_KINCHA_500 },
+          relation: RUNNING_WORKTREE_RELATION,
         });
       }
     }
@@ -2001,6 +2034,8 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
     );
     validPositionKeysRef.current = positionKeys;
     rectum.data({ nodes, edges });
+    // 辺ごとの色はライブラリが読まないため、描いた直後に上書きする(issue #438)。
+    applyRunningWorktreeEdgeColor(hubPageRef.current);
     restartSimulation(rectum);
     // 開いているインスペクタの中身を、描き直したノードの値で更新する
     // (issue #424)。仮ノードが会話ファイルのできた通常のノードへ置き換わった
