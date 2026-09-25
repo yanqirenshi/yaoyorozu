@@ -2348,3 +2348,40 @@ button.claude-explorer-name {
 .claude-explorer-more:hover {
   background: var(--state-hover);
 }
+
+/* ローディングアイコン(LoadingIcon。issue #393)。仕様の正は apps/web の uiLoading.ts。
+   枠は inline-flex で、幅・高さをアイコンと同じにする(余分な余白を持たない)。色は
+   指定しない(置いた場所の文字色を継ぐ)。
+   Ring は SVG の style 属性に `--ld-size: <size>px` を必ず書く(size の既定 20)ため、
+   px の直書きを避けて `--icon-*` トークンを使うには、この変数を `!important` で
+   上書きする(スタイルシートの !important は style 属性の値に勝つ)。 */
+.loading-icon {
+  display: inline-flex;
+}
+
+.loading-icon-small {
+  width: var(--icon-16);
+  height: var(--icon-16);
+}
+
+.loading-icon-medium {
+  width: var(--icon-20);
+  height: var(--icon-20);
+}
+
+.loading-icon-large {
+  width: var(--icon-32);
+  height: var(--icon-32);
+}
+
+.loading-icon-small .ld-ring {
+  --ld-size: var(--icon-16) !important;
+}
+
+.loading-icon-medium .ld-ring {
+  --ld-size: var(--icon-20) !important;
+}
+
+.loading-icon-large .ld-ring {
+  --ld-size: var(--icon-32) !important;
+}
