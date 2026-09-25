@@ -170,6 +170,14 @@ export default function RunningSessionBar({
 
       {switching && <LoadingIcon size="small" label="設定を切り替え中" />}
 
+      {/* 起動した claude がセッション間メッセージに対応していない版のときの説明(起動は止めない。
+          issue #437)。 */}
+      {alive && running.peer_messaging_warning && (
+        <span className="running-bar-note" role="note">
+          {running.peer_messaging_warning}
+        </span>
+      )}
+
       {!alive && canNameOnResume && (
         <span className="running-bar-name-field">
           <input

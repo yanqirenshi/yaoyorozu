@@ -22,6 +22,7 @@ mod image_attachment;
 mod log_line;
 mod message;
 mod message_image;
+mod message_kind;
 mod node_position;
 mod observed_git_state;
 mod parsed_session;
@@ -71,7 +72,7 @@ pub use conversation::Conversation;
 pub use git_branch::{reconcile_branches, GitBranch};
 pub use git_ledger::{GitLedger, GitRepositoryLedger, CURRENT_GIT_LEDGER_VERSION};
 pub use git_repository::{repositories_from_profiles, GitRepository};
-pub use git_worktree::{reconcile_worktrees, GitWorktree};
+pub use git_worktree::{reconcile_worktrees, GitWorktree, MAIN_WORKTREE_ID, OUTSIDE_WORKTREE_ID};
 pub use github_project::GithubProject;
 pub use github_project_summary::GithubProjectSummary;
 pub use hub_layout::{HubLayout, CURRENT_HUB_LAYOUT_VERSION};
@@ -85,9 +86,11 @@ pub use log_line::{
     LogLine, LogLineBase, LogLineConversionError, SystemLogLine, UserLogLine,
 };
 pub use message::{
-    mark_failed_questions, order_messages_newest_first, paginate_messages, Message, MessageStatus,
+    keep_peer_send_results_of_sent_messages, mark_failed_questions, order_messages_newest_first,
+    paginate_messages, Message, MessageStatus,
 };
 pub use message_image::{extract_message_images, MessageImage};
+pub use message_kind::MessageKind;
 pub use node_position::NodePosition;
 pub use observed_git_state::{ObservedGitState, ObservedWorktree};
 pub use parsed_session::ParsedSession;

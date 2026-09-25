@@ -76,6 +76,11 @@ pub struct RunningSessionSummary {
     pub current_model: Option<String>,
     pub current_permission_mode: Option<String>,
     pub cwd: Option<PathBuf>,
+    /// 起動した `claude` の版(`claude --version` の出力。読めなければ `None`。issue #437)。
+    pub cli_version: Option<String>,
+    /// セッション間メッセージに使える版か(`None` は版が分からない)。使えない版なら、状態バー・
+    /// 一覧に警告を出す(起動は止めない)。
+    pub peer_messaging: Option<bool>,
     /// 起動時に付けた表示名(`--name`)。会話ファイルができる前(新規作成の直後)は、会話の
     /// タイトルがまだ無いので、一覧はこれを名前に使える(申し送り(e)への追加。issue #407)。
     pub name: Option<String>,
@@ -92,6 +97,12 @@ pub fn summarize(session: &RunningSessionByApp) -> RunningSessionSummary {
         current_model: session.current_model.clone(),
         current_permission_mode: session.current_permission_mode.clone(),
         cwd: session.base.cwd.clone(),
+        cli_version: session.base.version.clone(),
+        peer_messaging: session
+            .base
+            .version
+            .as_deref()
+            .and_then(crate::supports_peer_messaging),
         name: session.base.name.clone(),
     }
 }
@@ -105,7 +116,7 @@ mod tests {
         let mut base = RunningSession::new(session_id, "windows:PC", pid, started_at);
         base.cwd = Some(PathBuf::from("/work/wt"));
         base.name = Some("調査".to_string());
-        RunningSessionByApp::new(base, PathBuf::from("/repo"), started_at)
+        RunningSessionByApp::new(base, PathBuf::from("/repo"), "wt-1", started_at)
     }
 
     fn request(id: &str) -> PermissionRequest {
@@ -165,6 +176,23 @@ mod tests {
         assert_eq!(summary.current_permission_mode.as_deref(), Some("plan"));
         assert_eq!(summary.cwd, Some(PathBuf::from("/work/wt")));
         assert_eq!(summary.name.as_deref(), Some("調査"));
+        assert_eq!(summary.cli_version, None);
+        assert_eq!(summary.peer_messaging, None, "版が分からなければ分からない");
+    }
+
+    #[test]
+    fn summarize_says_whether_the_cli_supports_peer_messaging() {
+        let mut old = session("s1", 100, 5);
+        old.base.version = Some("2.1.150 (Claude Code)".to_string());
+        let mut new = session("s2", 101, 5);
+        new.base.version = Some("2.1.280 (Claude Code)".to_string());
+
+        assert_eq!(summarize(&old).peer_messaging, Some(false));
+        assert_eq!(summarize(&new).peer_messaging, Some(true));
+        assert_eq!(
+            summarize(&old).cli_version.as_deref(),
+            Some("2.1.150 (Claude Code)")
+        );
     }
 
     #[test]

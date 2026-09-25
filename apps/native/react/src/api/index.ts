@@ -62,6 +62,7 @@ export type {
   RunningSessionSummaryDto,
   RunningSessionSwitchDto,
   StartRunningSessionDto,
+  WorktreeSpecDto,
   AgentKindDto,
   AppErrorDto,
   ClaudeDirEntryDto,

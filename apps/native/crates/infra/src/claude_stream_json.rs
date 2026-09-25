@@ -21,6 +21,13 @@ use std::sync::Mutex;
 
 /// 子プロセスの起動引数(PoC #382 レポート §0.3)。`--print` は付けない(付けると対話が
 /// 1回で終わる)。`--verbose` は必須(無いと exit 1。#345)。
+/// app が起動する CLI に渡す設定(`--settings`)。セッション間メッセージの受信を、送り元の
+/// 権限モードのクラス(prompting / bypass)によらず受け入れる(`accept`)。渡さないと、送り元と
+/// 受け手のクラスが違うとき「保留」になり、stream-json では承認する口が無く、終了時に捨てられる
+/// (PoC #429 レポート §4.3)。app が起動する CLI はすべて app の管理下なので、受け入れてよい
+/// (判断は PR に記録。issue #437)。
+pub(crate) const PEER_SETTINGS: &str = r#"{"crossSessionInbound":"accept"}"#;
+
 /// 再開は `--resume=<ID>`、新規は `--session-id=<UUID>`(app が決めた ID。issue #407)。
 /// 表示名は `--name=<名前>`(任意。先頭が `-` でもオプションと取り違えないよう `=` で1引数に
 /// する)。`--permission-mode` には起動時に選んだモードを渡す。
@@ -50,6 +57,8 @@ pub(crate) fn build_args(request: &StartRunningSession) -> Vec<String> {
     if let Some(name) = request.name() {
         args.push(format!("--name={name}"));
     }
+    args.push("--settings".to_string());
+    args.push(PEER_SETTINGS.to_string());
     args.push("--permission-mode".to_string());
     args.push(mode_value(request.mode()).to_string());
     args
@@ -910,6 +919,7 @@ mod tests {
             cwd: PathBuf::from("/w"),
             mode,
             repository_path: PathBuf::from("/r"),
+            worktree_id: "wt-test".to_string(),
             name: name.map(str::to_string),
         }
     }
@@ -931,6 +941,8 @@ mod tests {
                 "--replay-user-messages",
                 "--include-partial-messages",
                 "--resume=abc-123",
+                "--settings",
+                r#"{"crossSessionInbound":"accept"}"#,
                 "--permission-mode",
                 "plan",
             ]
@@ -947,6 +959,7 @@ mod tests {
             cwd: PathBuf::from("/r"),
             mode: RunningPermissionMode::AcceptEdits,
             repository_path: PathBuf::from("/r"),
+            worktree_id: "wt-test".to_string(),
             name: None,
         });
 
@@ -954,8 +967,13 @@ mod tests {
         assert!(!args.iter().any(|a| a.starts_with("--resume")));
         assert!(!args.iter().any(|a| a.starts_with("--name")));
         assert_eq!(
-            &args[args.len() - 2..],
-            ["--permission-mode", "acceptEdits"]
+            &args[args.len() - 4..],
+            [
+                "--settings",
+                r#"{"crossSessionInbound":"accept"}"#,
+                "--permission-mode",
+                "acceptEdits"
+            ]
         );
     }
 

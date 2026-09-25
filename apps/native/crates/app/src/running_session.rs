@@ -5,7 +5,7 @@
 //! ここには状態遷移を動かす規則と、入力の検証・順序だけを置く(native.md §1)。
 //! 途中経過(`ProgressEvent`)は画面へ流すだけで保存しない。
 
-use crate::{AppError, RunningSessionSource, SessionSource};
+use crate::{AppError, ResolvedWorktree, RunningSessionSource, SessionSource, WorktreeIndex};
 use domain::{
     is_valid_project_dir_name, is_valid_session_id, validate_image_attachments, ImageAttachment,
     PermissionRequest, PermissionResponse, ProcessState, ProcessTrigger, ProgressEvent,
@@ -87,6 +87,8 @@ pub enum StartRunningSession {
         mode: RunningPermissionMode,
         /// プロファイルのリポジトリ。
         repository_path: PathBuf,
+        /// 起動する worktree の ID(記録用。issue #437)。
+        worktree_id: String,
         /// 表示名(`--name`)。任意。
         name: Option<String>,
     },
@@ -96,6 +98,8 @@ pub enum StartRunningSession {
         cwd: PathBuf,
         mode: RunningPermissionMode,
         repository_path: PathBuf,
+        /// 起動する worktree の ID(記録用。issue #437)。
+        worktree_id: String,
         name: Option<String>,
     },
 }
@@ -127,6 +131,12 @@ impl StartRunningSession {
             | Self::New {
                 repository_path, ..
             } => repository_path,
+        }
+    }
+
+    pub fn worktree_id(&self) -> &str {
+        match self {
+            Self::Resume { worktree_id, .. } | Self::New { worktree_id, .. } => worktree_id,
         }
     }
 
@@ -220,6 +230,11 @@ pub trait RunningProcess: Send + Sync {
 
 /// 子プロセスを起動する(port。実装は infra)。
 pub trait RunningSessionLauncher: Send + Sync {
+    /// 起動する `claude` の版(`claude --version` の出力。`2.1.150 (Claude Code)` など。issue #437)。
+    /// セッション間メッセージに対応した版か([`crate::supports_peer_messaging`])を、起動の前に
+    /// 知らせるために読む。読めなければ `None`(起動は止めない)。
+    fn cli_version(&self) -> Option<String>;
+
     /// `request` で `claude` を起動する。起動後の出来事は `sink` へ流す。
     fn start(
         &self,
@@ -248,16 +263,26 @@ pub struct ResumeRunningSession {
     pub repository_path: Option<PathBuf>,
     /// 表示名(`--name`)。任意。
     pub name: Option<String>,
+    /// 指定された worktree(用意済み。issue #437)。あればそこが cwd(その worktree の
+    /// プロジェクトフォルダに会話ファイルがあること)。無ければ従来どおり、会話ファイルに記録された
+    /// cwd で起動する(`--resume` は cwd のプロジェクトフォルダから会話を探すため。#345)。
+    pub worktree: Option<ResolvedWorktree>,
+    /// 台帳から作った worktree の対応(`worktree` が無いとき、会話の cwd がどの worktree かを
+    /// 記録するために使う)。
+    pub worktree_index: WorktreeIndex,
 }
 
 /// 新規作成する会話の指定。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateRunningSession {
-    /// プロファイルのリポジトリ。新規の cwd になる(パスはフロントから受け取らない。native.md §4)。
+    /// プロファイルのリポジトリ(パスはフロントから受け取らない。native.md §4)。
     pub repository_path: PathBuf,
     pub mode: RunningPermissionMode,
     /// 表示名(`--name`)。任意。
     pub name: Option<String>,
+    /// 起動する worktree(用意済み。issue #437)。そのパスが cwd になる(リポジトリ本体で起動する
+    /// ときは、本体のパスと予約 ID)。
+    pub worktree: ResolvedWorktree,
 }
 
 /// 新しい会話の ID(UUID v4)を決める。app が決めて `--session-id` に渡す(起動時に
@@ -340,6 +365,39 @@ pub fn exited_to_forget(
     forget
 }
 
+/// 名前が既に使われていれば、末尾に連番(`-2`、`-3`、…)を付けて、使われていない名前にする
+/// (純粋な規則。issue #437)。セッション間メッセージは名前で宛先を指定するので、同じ名前が2つ
+/// あると送信側が宛先を選べず届かない(PoC #429 レポート §2)。`taken` は app が持つ実行中セッション
+/// と台帳の名前。
+pub fn unique_session_name(requested: &str, taken: &[String]) -> String {
+    let is_taken = |name: &str| taken.iter().any(|t| t == name);
+    if !is_taken(requested) {
+        return requested.to_string();
+    }
+    (2..)
+        .map(|n| format!("{requested}-{n}"))
+        .find(|candidate| !is_taken(candidate))
+        .expect("連番は尽きない")
+}
+
+/// 表示名が他と重ならないようにする(issue #437)。app が持つ実行中セッション(終了していない
+/// もの)と、台帳の名前を避ける。台帳を読めなくても、起動は止めない(重ならないことは便宜で、
+/// 読めた分だけ避ける)。
+fn make_name_unique(
+    name: Option<String>,
+    running: &[RunningSessionByApp],
+    ledger: &dyn RunningSessionSource,
+) -> Option<String> {
+    let name = name?;
+    let mut taken: Vec<String> = running
+        .iter()
+        .filter(|s| s.process_state != ProcessState::Exited)
+        .filter_map(|s| s.base.name.clone())
+        .collect();
+    taken.extend(ledger.taken_names().unwrap_or_default());
+    Some(unique_session_name(&name, &taken))
+}
+
 /// 表示名の検証(空白だけなら `None`)。子プロセスの引数になるので、長さと制御文字を制限する。
 fn validate_name(name: Option<&str>) -> Result<Option<String>, AppError> {
     let Some(name) = name.map(str::trim).filter(|n| !n.is_empty()) else {
@@ -360,6 +418,8 @@ fn launch(
     sink: Arc<dyn RunningSessionEventSink>,
     now: NowMs,
 ) -> Result<StartedRunningSession, AppError> {
+    // 版は起動の前に読む(古ければ画面が警告を出す。起動は止めない)。
+    let version = launcher.cli_version();
     let process = launcher.start(&request, sink)?;
 
     let mut base = RunningSession::new(
@@ -370,7 +430,13 @@ fn launch(
     );
     base.cwd = Some(request.cwd().to_path_buf());
     base.name = request.name().map(str::to_string);
-    let mut session = RunningSessionByApp::new(base, request.repository_path().to_path_buf(), now);
+    base.version = version;
+    let mut session = RunningSessionByApp::new(
+        base,
+        request.repository_path().to_path_buf(),
+        request.worktree_id(),
+        now,
+    );
     // 起動時に選んだ権限モードが、CLI が最初のターンで `system/init` を出すまでの現在値。
     session.current_permission_mode = Some(request.mode().as_cli_value().to_string());
     Ok(StartedRunningSession { session, process })
@@ -404,12 +470,21 @@ pub fn resume_running_session(
     }
     let name = validate_name(request.name.as_deref())?;
     ensure_can_start(running, starting, &request.session_id)?;
+    let name = make_name_unique(name, running, ledger);
 
     if let Some(found) = ledger.find_running(&request.session_id, &own_running_pids(running))? {
         return Err(AppError::SessionBusy(found.block_message()));
     }
 
-    let cwd = source.session_cwd(&request.project, &request.session_id)?;
+    // cwd: 用意された worktree があればそこ、無ければ会話ファイルに記録された cwd。
+    let (cwd, worktree_id) = match &request.worktree {
+        Some(worktree) => (worktree.path.clone(), worktree.worktree_id.clone()),
+        None => {
+            let cwd = source.session_cwd(&request.project, &request.session_id)?;
+            let id = request.worktree_index.id_of(&cwd);
+            (cwd, id)
+        }
+    };
     let repository_path = request
         .repository_path
         .clone()
@@ -421,6 +496,7 @@ pub fn resume_running_session(
             cwd,
             mode: request.mode,
             repository_path,
+            worktree_id,
             name,
         },
         sink,
@@ -430,11 +506,14 @@ pub fn resume_running_session(
 
 /// 新しい会話を、子プロセスの `claude` として起動する(`--session-id`)。`session_id` は
 /// [`new_session_id`] で決めた UUID(呼び出し側が渡す。時計・乱数は app に置かない)。
-/// cwd はリポジトリ(`request.repository_path`)。会話ファイルは最初のメッセージが送られるまで
+/// cwd は用意した worktree(`request.worktree`。本体で起動するときはリポジトリ)。会話ファイルは最初のメッセージが送られるまで
 /// できない([`domain::Session::without_files`])。新規の ID は他で使われていないので、#361 の
-/// ガード(外部の実行の検知)は見ない。
+/// ガード(外部の実行の検知)は見ない。表示名は、ほかの名前と重ならないようにする
+/// ([`unique_session_name`])。
+#[allow(clippy::too_many_arguments)]
 pub fn create_running_session(
     launcher: &dyn RunningSessionLauncher,
+    ledger: &dyn RunningSessionSource,
     running: &[RunningSessionByApp],
     starting: &[String],
     request: &CreateRunningSession,
@@ -447,13 +526,15 @@ pub fn create_running_session(
     }
     let name = validate_name(request.name.as_deref())?;
     ensure_can_start(running, starting, &session_id)?;
+    let name = make_name_unique(name, running, ledger);
     launch(
         launcher,
         StartRunningSession::New {
             session_id,
-            cwd: request.repository_path.clone(),
+            cwd: request.worktree.path.clone(),
             mode: request.mode,
             repository_path: request.repository_path.clone(),
+            worktree_id: request.worktree.worktree_id.clone(),
             name,
         },
         sink,
@@ -802,6 +883,7 @@ mod tests {
     struct FakeLauncher {
         process: Arc<FakeProcess>,
         started: Mutex<Vec<StartRunningSession>>,
+        version: Option<String>,
     }
 
     impl FakeLauncher {
@@ -815,11 +897,22 @@ mod tests {
                     ..FakeProcess::default()
                 }),
                 started: Mutex::new(Vec::new()),
+                version: Some("2.1.280 (Claude Code)".to_string()),
+            }
+        }
+        fn with_version(version: Option<&str>) -> Self {
+            Self {
+                version: version.map(str::to_string),
+                ..Self::new()
             }
         }
     }
 
     impl RunningSessionLauncher for FakeLauncher {
+        fn cli_version(&self) -> Option<String> {
+            self.version.clone()
+        }
+
         fn start(
             &self,
             request: &StartRunningSession,
@@ -840,6 +933,7 @@ mod tests {
     struct FakeLedger {
         running_pid: Option<u32>,
         asked_excludes: Mutex<Vec<Vec<u32>>>,
+        names: Vec<String>,
     }
 
     impl FakeLedger {
@@ -847,12 +941,20 @@ mod tests {
             Self {
                 running_pid: None,
                 asked_excludes: Mutex::new(Vec::new()),
+                names: Vec::new(),
             }
         }
         fn with_pid(pid: u32) -> Self {
             Self {
                 running_pid: Some(pid),
                 asked_excludes: Mutex::new(Vec::new()),
+                names: Vec::new(),
+            }
+        }
+        fn with_names(names: &[&str]) -> Self {
+            Self {
+                names: names.iter().map(|n| n.to_string()).collect(),
+                ..Self::none()
             }
         }
     }
@@ -875,6 +977,10 @@ mod tests {
                     pid,
                     evidence: crate::RunningEvidence::SessionMatched,
                 }))
+        }
+
+        fn taken_names(&self) -> Result<Vec<String>, AppError> {
+            Ok(self.names.clone())
         }
     }
 
@@ -930,6 +1036,8 @@ mod tests {
             mode: RunningPermissionMode::Default,
             repository_path: Some(PathBuf::from("/repo")),
             name: None,
+            worktree: None,
+            worktree_index: WorktreeIndex::default(),
         }
     }
 
@@ -964,6 +1072,10 @@ mod tests {
             repository_path: PathBuf::from("/repo"),
             mode: RunningPermissionMode::Plan,
             name: Some("調査".to_string()),
+            worktree: ResolvedWorktree {
+                path: PathBuf::from("/repo"),
+                worktree_id: domain::MAIN_WORKTREE_ID.to_string(),
+            },
         }
     }
 
@@ -1013,10 +1125,12 @@ mod tests {
                 cwd: PathBuf::from("/work/proj"),
                 mode: RunningPermissionMode::Default,
                 repository_path: PathBuf::from("/repo"),
+                worktree_id: domain::OUTSIDE_WORKTREE_ID.to_string(),
                 name: None,
             }
         );
         assert_eq!(started.session.process_state, ProcessState::Starting);
+        assert_eq!(started.session.worktree_id, domain::OUTSIDE_WORKTREE_ID);
         assert_eq!(started.session.repository_path, PathBuf::from("/repo"));
         assert_eq!(
             started.session.current_permission_mode.as_deref(),
@@ -1178,6 +1292,10 @@ mod tests {
             ) -> Result<Option<DetectedRunning>, AppError> {
                 Ok(Some(self.0.clone()))
             }
+
+            fn taken_names(&self) -> Result<Vec<String>, AppError> {
+                Ok(Vec::new())
+            }
         }
         for evidence in [
             crate::RunningEvidence::SessionMatched,
@@ -1275,6 +1393,7 @@ mod tests {
 
         let started = create_running_session(
             &launcher,
+            &FakeLedger::none(),
             &[],
             &[],
             &create_request(),
@@ -1291,6 +1410,7 @@ mod tests {
                 cwd: PathBuf::from("/repo"),
                 mode: RunningPermissionMode::Plan,
                 repository_path: PathBuf::from("/repo"),
+                worktree_id: domain::MAIN_WORKTREE_ID.to_string(),
                 name: Some("調査".to_string()),
             }]
         );
@@ -1317,6 +1437,7 @@ mod tests {
 
         let duplicate = create_running_session(
             &launcher,
+            &FakeLedger::none(),
             &[existing],
             &[],
             &create_request(),
@@ -1326,6 +1447,7 @@ mod tests {
         );
         let bad_id = create_running_session(
             &launcher,
+            &FakeLedger::none(),
             &[],
             &[],
             &create_request(),
@@ -1359,6 +1481,7 @@ mod tests {
 
         let started = create_running_session(
             &launcher,
+            &FakeLedger::none(),
             &[],
             &[],
             &request,
@@ -1391,6 +1514,264 @@ mod tests {
         .unwrap();
 
         assert_eq!(started.session.repository_path, PathBuf::from("/work/proj"));
+    }
+
+    // ---- worktree(issue #437) ----
+
+    #[test]
+    fn a_prepared_worktree_becomes_the_cwd_and_its_id_is_recorded() {
+        let launcher = FakeLauncher::with_pid(101);
+
+        let started = create_running_session(
+            &launcher,
+            &FakeLedger::none(),
+            &[],
+            &[],
+            &CreateRunningSession {
+                worktree: ResolvedWorktree {
+                    path: PathBuf::from("/repo/.claude/worktrees/session-x"),
+                    worktree_id: "wt-uuid-1".to_string(),
+                },
+                ..create_request()
+            },
+            "s-new".to_string(),
+            sink(),
+            1,
+        )
+        .unwrap();
+
+        let requests = launcher.started.lock().unwrap();
+        assert_eq!(
+            requests[0].cwd(),
+            std::path::Path::new("/repo/.claude/worktrees/session-x")
+        );
+        assert_eq!(requests[0].worktree_id(), "wt-uuid-1");
+        // リポジトリは worktree を指す鍵の一部として残る。
+        assert_eq!(started.session.repository_path, PathBuf::from("/repo"));
+        assert_eq!(started.session.worktree_id, "wt-uuid-1");
+        assert_eq!(
+            started.session.base.cwd,
+            Some(PathBuf::from("/repo/.claude/worktrees/session-x"))
+        );
+    }
+
+    #[test]
+    fn a_new_conversation_in_the_repository_itself_records_the_main_worktree() {
+        let launcher = FakeLauncher::new();
+
+        let started = create_running_session(
+            &launcher,
+            &FakeLedger::none(),
+            &[],
+            &[],
+            &create_request(),
+            "s-new".to_string(),
+            sink(),
+            1,
+        )
+        .unwrap();
+
+        assert_eq!(started.session.worktree_id, domain::MAIN_WORKTREE_ID);
+    }
+
+    #[test]
+    fn resuming_records_which_worktree_the_conversation_cwd_belongs_to() {
+        // 会話の cwd(FakeSource は /work/proj)が台帳の worktree なら、その ID を記録する。
+        let mut ledger = domain::GitLedger::default();
+        ledger.repositories.insert(
+            "/repo".to_string(),
+            domain::GitRepositoryLedger {
+                branches: Vec::new(),
+                worktrees: vec![domain::GitWorktree {
+                    worktree_id: "wt-proj".to_string(),
+                    worktree_name: "proj".to_string(),
+                    description: String::new(),
+                    worktree_folder_path: PathBuf::from("/work/proj"),
+                    worktree_git_file_path: PathBuf::from("/work/proj/.git"),
+                    created_at_time: 1,
+                    deleted_at_time: None,
+                    checked_out_branch: None,
+                }],
+            },
+        );
+        let launcher = FakeLauncher::new();
+
+        let started = resume_running_session(
+            &FakeSource,
+            &launcher,
+            &FakeLedger::none(),
+            &[],
+            &[],
+            &ResumeRunningSession {
+                worktree_index: WorktreeIndex::from_ledger(&ledger, std::path::Path::new("/repo")),
+                ..resume_request("s1")
+            },
+            sink(),
+            1,
+        )
+        .unwrap();
+
+        assert_eq!(started.session.worktree_id, "wt-proj");
+    }
+
+    #[test]
+    fn resuming_in_a_specified_worktree_uses_it_instead_of_the_recorded_cwd() {
+        let launcher = FakeLauncher::new();
+
+        let started = resume_running_session(
+            &FakeSource,
+            &launcher,
+            &FakeLedger::none(),
+            &[],
+            &[],
+            &ResumeRunningSession {
+                worktree: Some(ResolvedWorktree {
+                    path: PathBuf::from("/repo/.claude/worktrees/x"),
+                    worktree_id: "wt-x".to_string(),
+                }),
+                ..resume_request("s1")
+            },
+            sink(),
+            1,
+        )
+        .unwrap();
+
+        assert_eq!(
+            launcher.started.lock().unwrap()[0].cwd(),
+            std::path::Path::new("/repo/.claude/worktrees/x")
+        );
+        assert_eq!(started.session.worktree_id, "wt-x");
+    }
+
+    // ---- 表示名の一意化(issue #437) ----
+
+    #[test]
+    fn a_taken_name_gets_a_numeric_suffix_until_it_is_free() {
+        let taken: Vec<String> = ["調査", "調査-2", "別"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        assert_eq!(unique_session_name("新規", &taken), "新規");
+        assert_eq!(unique_session_name("調査", &taken), "調査-3");
+        assert_eq!(unique_session_name("別", &taken), "別-2");
+    }
+
+    #[test]
+    fn a_new_conversation_avoids_the_names_of_running_sessions_and_the_ledger() {
+        let launcher = FakeLauncher::with_pid(101);
+        let mut existing = alive("s1", 100, ProcessState::Idle);
+        existing.base.name = Some("調査".to_string());
+        // 台帳(Desktop のタブ名など)の名前も避ける。
+        let ledger = FakeLedger::with_names(&["調査-2", "Lab (PM)"]);
+
+        let started = create_running_session(
+            &launcher,
+            &ledger,
+            &[existing],
+            &[],
+            &CreateRunningSession {
+                name: Some("調査".to_string()),
+                ..create_request()
+            },
+            "s-new".to_string(),
+            sink(),
+            1,
+        )
+        .unwrap();
+
+        assert_eq!(started.session.base.name.as_deref(), Some("調査-3"));
+        assert_eq!(
+            launcher.started.lock().unwrap()[0].name(),
+            Some("調査-3"),
+            "CLI へ渡す名前も一意にしたもの"
+        );
+    }
+
+    #[test]
+    fn an_exited_session_does_not_hold_its_name() {
+        let launcher = FakeLauncher::with_pid(101);
+        let mut gone = alive("s1", 100, ProcessState::Exited);
+        gone.base.name = Some("調査".to_string());
+
+        let started = create_running_session(
+            &launcher,
+            &FakeLedger::none(),
+            &[gone],
+            &[],
+            &CreateRunningSession {
+                name: Some("調査".to_string()),
+                ..create_request()
+            },
+            "s-new".to_string(),
+            sink(),
+            1,
+        )
+        .unwrap();
+
+        assert_eq!(started.session.base.name.as_deref(), Some("調査"));
+    }
+
+    #[test]
+    fn resuming_without_a_name_keeps_the_conversation_title_untouched_and_with_one_it_is_made_unique(
+    ) {
+        let launcher = FakeLauncher::new();
+        let ledger = FakeLedger::with_names(&["再開"]);
+
+        let plain = resume(&launcher, &ledger, &[], "s1").unwrap();
+        let named = resume_running_session(
+            &FakeSource,
+            &FakeLauncher::new(),
+            &ledger,
+            &[],
+            &[],
+            &ResumeRunningSession {
+                name: Some("再開".to_string()),
+                ..resume_request("s2")
+            },
+            sink(),
+            1,
+        )
+        .unwrap();
+
+        // 名前を付けない再開は、`--name` を付けない(会話のタイトルを変えない)。
+        assert_eq!(plain.session.base.name, None);
+        assert_eq!(named.session.base.name.as_deref(), Some("再開-2"));
+    }
+
+    // ---- CLI の版(issue #437) ----
+
+    #[test]
+    fn the_cli_version_is_read_before_starting_and_recorded_on_the_session() {
+        let launcher = FakeLauncher::with_version(Some("2.1.150 (Claude Code)"));
+
+        let started = resume(&launcher, &FakeLedger::none(), &[], "s1").unwrap();
+
+        assert_eq!(
+            started.session.base.version.as_deref(),
+            Some("2.1.150 (Claude Code)")
+        );
+        // 古い版でも、起動は止めない。
+        assert_eq!(launcher.started.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_unreadable_cli_version_does_not_stop_the_start() {
+        let launcher = FakeLauncher::with_version(None);
+
+        let started = create_running_session(
+            &launcher,
+            &FakeLedger::none(),
+            &[],
+            &[],
+            &create_request(),
+            "s-new".to_string(),
+            sink(),
+            1,
+        )
+        .unwrap();
+
+        assert_eq!(started.session.base.version, None);
     }
 
     // ---- 切り替え ----

@@ -26,7 +26,17 @@ export type MessageDto = {
   //  - error_for_question: 送信失敗のエラー行(直前が答えのない質問)
   //  - error: 送信失敗のエラー行(直前に AI の返答がある=返答の途中で失敗)
   status: MessageStatusDto;
+  // セッション間メッセージ(CLI の SendMessage)の見分け(issue #437)。会話ファイルは書き換えず、
+  // 表示だけで分かるようにする。
+  //  - peer_received: 他のセッションから届いた(text は封筒を剥いだ本文。peer_name は送り元)
+  //  - peer_sent: 他のセッションへ送った(text は送った文。peer_name は宛先)
+  //  - peer_send_result: 送信の結果(text は結果の説明。peer_success は成否)
+  kind: MessageKindDto;
+  peer_name: string | null;
+  peer_success: boolean | null;
 };
+
+export type MessageKindDto = "normal" | "peer_received" | "peer_sent" | "peer_send_result";
 
 export type MessageStatusDto = "normal" | "failed_question" | "error_for_question" | "error";
 
@@ -367,8 +377,28 @@ export type StartRunningSessionDto =
       session_id: string;
       mode: RunningPermissionModeDto;
       name: string | null;
+      // 省略すると、会話ファイルに記録された cwd で開く(従来どおり)。issue #437。
+      worktree?: WorktreeSpecDto | null;
+      // 起動前の最新化(git fetch + git merge origin/main)。省略で行う。
+      sync_origin_main?: boolean | null;
     }
-  | { kind: "new"; mode: RunningPermissionModeDto; name: string | null };
+  | {
+      kind: "new";
+      mode: RunningPermissionModeDto;
+      name: string | null;
+      // 省略すると、リポジトリ本体で始める。issue #437。
+      worktree?: WorktreeSpecDto | null;
+      sync_origin_main?: boolean | null;
+    };
+
+// どの worktree で起動するか(パスは渡さない。issue #437)。
+//  - main: リポジトリ本体
+//  - existing: 既存の worktree(台帳の worktree_id)
+//  - branch: このブランチの worktree(無ければ backend が用意する。ブランチも無ければ origin/main から作る)
+export type WorktreeSpecDto =
+  | { kind: "main" }
+  | { kind: "existing"; worktree_id: string }
+  | { kind: "branch"; branch_name: string };
 
 // 起動中に切り替える設定(set_model / set_permission_mode)。
 export type RunningSessionSwitchDto =
@@ -431,6 +461,8 @@ export type RunningSessionDto = {
   project: string | null;
   session_id: string;
   repository_path: string;
+  // 起動した worktree の ID(リポジトリ本体は main-worktree。issue #437)。
+  worktree_id: string;
   cwd: string | null;
   // 起動時に付けた表示名(--name)。
   name: string | null;
@@ -443,6 +475,12 @@ export type RunningSessionDto = {
   // 選べるモデル(CLI の initialize の応答。起動の直後は空)。set_model は名前を検証しないので、
   // 画面はここから選ばせる。
   available_models: AvailableModelDto[];
+  // 起動した claude の版(claude --version の出力。読めなければ null。issue #437)。
+  cli_version: string | null;
+  // セッション間メッセージに使える版か(2.1.268 以上。null は版が分からない)。
+  peer_messaging: boolean | null;
+  // 使えない版のときの説明(状態バーに出す。使える・分からないときは null)。起動は止めない。
+  peer_messaging_warning: string | null;
   permission_requests: PermissionRequestDto[];
 };
 
@@ -463,6 +501,9 @@ export type RunningSessionSummaryDto = {
   current_model: string | null;
   current_permission_mode: string | null;
   cwd: string | null;
+  // 起動した claude の版と、セッション間メッセージに使える版か(issue #437。ハブのインスペクタ用)。
+  cli_version: string | null;
+  peer_messaging: boolean | null;
   name: string | null;
 };
 
