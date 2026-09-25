@@ -171,15 +171,24 @@ export default function RunningSessionBar({
       {switching && <LoadingIcon size="small" label="設定を切り替え中" />}
 
       {!alive && canNameOnResume && (
-        <input
-          type="text"
-          className="running-bar-name"
-          value={resumeName}
-          maxLength={100}
-          onChange={(e) => onResumeNameChange(e.target.value)}
-          placeholder="表示名(任意)"
-          aria-label="表示名(任意。次に開くときに付ける)"
-        />
+        <span className="running-bar-name-field">
+          <input
+            type="text"
+            className="running-bar-name"
+            value={resumeName}
+            maxLength={100}
+            onChange={(e) => onResumeNameChange(e.target.value)}
+            placeholder="表示名(任意)"
+            aria-label="表示名(任意。次に開くときに付ける)"
+            aria-describedby="running-bar-name-note"
+          />
+          {/* 表示名を付けて再開すると、CLI が会話ファイルにタイトルの行を足して、この会話の
+              タイトルが変わる(最後のタイトルの行が採用される。CLI の挙動。issue #426)。
+              意図せず変えないよう、空のまま(既定)なら何も変わらないことも添える。 */}
+          <span id="running-bar-name-note" className="running-bar-name-note">
+            付けるとタイトルが変わります
+          </span>
+        </span>
       )}
 
       <span className="running-bar-actions">
