@@ -338,8 +338,40 @@ export type ClaudeDirPageDto = {
 
 // ============ 実行中セッション(issue #391。Phase 1「1セッションを app から対話する」) ============
 
-// 起動時に選ぶ権限モード。Phase 1 は plan と default の2つ。
-export type RunningPermissionModeDto = "plan" | "default";
+// 画面で選べる権限モード(issue #392 の plan / default に、#407 で accept_edits / auto を足した)。
+export type RunningPermissionModeDto = "plan" | "default" | "accept_edits" | "auto";
+
+// 実行中セッション1つの宛先(app::RunningSessionRef の写し。issue #407)。pid は OS が使い回すので、
+// pid_domain + pid + started_at の3つで1つの個体を指す。画面が持ち回って、送信・応答・購読・
+// 切り替えの対象を指定する。
+export type RunningSessionRefDto = {
+  pid_domain: string;
+  pid: number;
+  started_at: number;
+};
+
+// 起動の要求。再開(既存の会話を --resume)と新規(新しい会話。ID は backend が決める)で値が違う。
+// パス(cwd・リポジトリ)は渡さない(backend が会話ファイル・プロファイルから解決する)。
+export type StartRunningSessionDto =
+  | {
+      kind: "resume";
+      project: string;
+      session_id: string;
+      mode: RunningPermissionModeDto;
+      name: string | null;
+    }
+  | { kind: "new"; mode: RunningPermissionModeDto; name: string | null };
+
+// 起動中に切り替える設定(set_model / set_permission_mode)。
+export type RunningSessionSwitchDto =
+  | { kind: "model"; model: string }
+  | { kind: "permission_mode"; mode: RunningPermissionModeDto };
+
+// 宛先付きの途中経過(画面ごとの購読で流れてくる)。
+export type AddressedProgressDto = {
+  target: RunningSessionRefDto;
+  event: ProgressEventDto;
+};
 
 // 途中経過(Channel で流れてくる)。kind で区別する。
 export type ProgressEventDto =
@@ -386,20 +418,40 @@ export type PermissionRequestDto = {
 
 // app が起動した実行中セッションの現在の状態。
 export type RunningSessionDto = {
-  project: string;
+  target: RunningSessionRefDto;
+  // 会話ファイルのあるプロジェクトフォルダ名。再開のときだけ(新規は会話ファイルができるまで null)。
+  project: string | null;
   session_id: string;
-  pid: number;
-  started_at: number;
+  repository_path: string;
   cwd: string | null;
+  // 起動時に付けた表示名(--name)。
+  name: string | null;
   process_state: ProcessStateDto;
   process_state_at: number;
-  // 起動時に選んだ権限モード(Phase 1 は途中で切り替えない)。
-  permission_mode: RunningPermissionModeDto;
+  // いまのモデル(system/init か set_model の結果。最初のターンまでは null)。
+  current_model: string | null;
+  // いまの権限モード。CLI が返す値のまま(default / manual など、版で名前が変わる)。
+  current_permission_mode: string | null;
   permission_requests: PermissionRequestDto[];
 };
 
-// running-session:changed のペイロード(軽量。データ本体は getRunningSession で取り直す)。
+// 実行中セッションの一覧の1項目(ハブなどが並べる。答え待ちの問い合わせは数だけ)。
+export type RunningSessionSummaryDto = {
+  target: RunningSessionRefDto;
+  session_id: string;
+  repository_path: string;
+  process_state: ProcessStateDto;
+  pending_permission_count: number;
+  current_model: string | null;
+  current_permission_mode: string | null;
+  cwd: string | null;
+  name: string | null;
+};
+
+// running-session:changed のペイロード(宛先付き。軽量。データ本体は getRunningSession /
+// listRunningSessions で取り直す)。
 export type RunningSessionChangedEvent = {
+  target: RunningSessionRefDto;
   session_id: string;
   process_state: ProcessStateDto;
   pending_permission_count: number;

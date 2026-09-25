@@ -1,21 +1,35 @@
-//! app が起動したまま持つ claude CLI(実行中セッション)の Command 群(issue #391。
-//! Phase 1「1セッションを app から対話する」)。native.md §1 のとおり、ここは薄い層:
-//! 引数の変換 → ユースケース(`app`)の呼び出し → DTO 化。状態遷移の規則は domain / app にある。
+//! app が起動したまま持つ claude CLI(実行中セッション)の Command 群(issue #391。Phase 1
+//! 「1セッションを app から対話する」、issue #407。Phase 2「複数・新規作成・モード切替・画面ごとの
+//! 購読」)。native.md §1 のとおり、ここは薄い層:引数の変換 → ユースケース(`app`)の呼び出し →
+//! DTO 化。状態遷移・起動の可否の規則は domain / app にある。
 //!
-//! - 途中経過(テキストの断片・ツールの開始など)は **Channel**(`ProgressEventDto`)で流す。
-//! - 状態変化・権限の問い合わせの到着は**軽量イベント** `running-session:changed` で知らせ、
-//!   データ本体はフロントが `get_running_session` で取り直す(native.md §3.2)。
+//! - 実行中セッションは**複数**持てる。対象は `RunningSessionRefDto`(pid_domain + pid +
+//!   started_at)で指定する。
+//! - 途中経過(テキストの断片・ツールの開始など)は **Channel**(`AddressedProgressDto`)で流す。
+//!   Channel は起動した画面にしか届かないため、**画面ごとに購読する**
+//!   (`subscribe_running_session_progress`)。再読み込み・別ウィンドウでも購読し直せる。購読が無い
+//!   間の出来事は捨ててよい(状態・答え待ちの問い合わせは Query で取れる)。
+//! - 状態変化・権限の問い合わせの到着は**軽量イベント** `running-session:changed`(宛先付き)で
+//!   知らせ、データ本体はフロントが `get_running_session` / `list_running_sessions` で取り直す
+//!   (native.md §3.2)。
 //! - ロック(`AppState`)の中でファイル I/O・子プロセスへの書き込み・`emit` をしない(§2)。
 //!   状態を先に動かし、ロックを外してから書き込む(`app::begin_*` の説明)。
-//! - フロントから cwd やパスは受け取らない(§4)。cwd は会話ファイルから app が求める。
+//! - フロントから cwd やパスは受け取らない(§4)。cwd・リポジトリは会話ファイル・プロファイルから
+//!   app が求める。
 
 use crate::dto::{
-    AppErrorDto, PermissionBehaviorDto, PermissionSuggestionDto, ProgressEventDto,
-    RunningPermissionModeDto, RunningSessionChangedEventDto, RunningSessionDto,
+    AddressedProgressDto, AppErrorDto, PermissionBehaviorDto, PermissionSuggestionDto,
+    RunningSessionChangedEventDto, RunningSessionDto, RunningSessionRefDto,
+    RunningSessionSummaryDto, RunningSessionSwitchDto, StartRunningSessionDto,
 };
-use crate::state::{resolve_effective_projects_dir, AppState, RunningSessionSlot};
-use app::{AppError, PermissionDecision, RunningSessionEvent, RunningSessionEventSink};
-use domain::{PermissionSuggestion, ProcessState};
+use crate::state::{
+    resolve_effective_projects_dir, AppState, ProgressSubscriber, RunningSessionSlot,
+};
+use app::{
+    AddressedRunningSessionEvent, AppError, PermissionDecision, RunningSessionEvent,
+    RunningSessionEventSink, RunningSessionRef,
+};
+use domain::{PermissionSuggestion, ProcessState, RunningSessionByApp};
 use infra::{ClaudeCliProcessLauncher, FileRunningSessionSource, FileSystemRepository};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -34,7 +48,14 @@ fn now_ms() -> u64 {
 }
 
 fn not_running() -> AppErrorDto {
-    AppError::NotFound("実行中のセッションがありません。先に開始してください".to_string()).into()
+    AppError::NotFound(
+        "実行中のセッションが見つかりません(すでに忘れられたか、まだ開始していません)".to_string(),
+    )
+    .into()
+}
+
+fn background_failed() -> AppError {
+    AppError::Io("バックグラウンド処理に失敗しました".to_string())
 }
 
 /// 読み取りスレッドから、順序を保ったまま tauri 層の処理タスクへ出来事を渡す受け口。
@@ -47,37 +68,68 @@ impl RunningSessionEventSink for ChannelSink {
     }
 }
 
+fn find_slot<'a>(
+    state: &'a AppState,
+    target: &RunningSessionRef,
+) -> Option<&'a RunningSessionSlot> {
+    state
+        .running_sessions
+        .iter()
+        .find(|slot| target.matches(&slot.session))
+}
+
+fn find_slot_mut<'a>(
+    state: &'a mut AppState,
+    target: &RunningSessionRef,
+) -> Option<&'a mut RunningSessionSlot> {
+    state
+        .running_sessions
+        .iter_mut()
+        .find(|slot| target.matches(&slot.session))
+}
+
 fn changed_event(
-    slot: &RunningSessionSlot,
+    session: &RunningSessionByApp,
     exit_code: Option<i32>,
 ) -> RunningSessionChangedEventDto {
     RunningSessionChangedEventDto {
-        session_id: slot.session.base.session_id.clone(),
-        process_state: slot.session.process_state.into(),
-        pending_permission_count: slot.session.permission_requests.len(),
+        target: RunningSessionRef::of(session).into(),
+        session_id: session.base.session_id.clone(),
+        process_state: session.process_state.into(),
+        pending_permission_count: session.permission_requests.len(),
         exit_code,
     }
 }
 
-/// 起動した世代 `generation` の出来事を、順に処理する。途中経過は Channel へ流し、状態を
-/// 動かす出来事は `AppState` へ反映して軽量イベントで知らせる。`Exited` で終わる。
+/// 状態の変化を見るための要約(状態・答え待ちの数・現在のモデルと権限モード)。
+fn watched(session: &RunningSessionByApp) -> (ProcessState, usize, Option<String>, Option<String>) {
+    (
+        session.process_state,
+        session.permission_requests.len(),
+        session.current_model.clone(),
+        session.current_permission_mode.clone(),
+    )
+}
+
+/// 起動した子プロセス1つ(`target`)の出来事を、順に処理する。途中経過は購読中の画面の Channel へ
+/// 宛先付きで流し、状態を動かす出来事は `AppState` へ反映して軽量イベントで知らせる。
+/// `Exited` で終わる。
 fn spawn_event_loop(
     app_handle: tauri::AppHandle,
-    generation: u64,
+    target: RunningSessionRef,
     mut rx: mpsc::UnboundedReceiver<RunningSessionEvent>,
-    on_progress: Channel<ProgressEventDto>,
 ) {
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
-            if let RunningSessionEvent::Progress(progress) = &event {
-                // 画面が閉じている等で送れなくても、状態の反映は続ける。
-                let _ = on_progress.send(ProgressEventDto::from(progress.clone()));
-            }
-            let exit_code = match &event {
+            let addressed = AddressedRunningSessionEvent {
+                target: target.clone(),
+                event,
+            };
+            let exit_code = match &addressed.event {
                 RunningSessionEvent::Exited { exit_code, .. } => *exit_code,
                 _ => None,
             };
-            if let RunningSessionEvent::Exited { stderr_tail, .. } = &event {
+            if let RunningSessionEvent::Exited { stderr_tail, .. } = &addressed.event {
                 if !stderr_tail.is_empty() {
                     // 起動失敗などの手がかり(正常系では何も出ない)。秘匿値は含まれない想定だが、
                     // 画面には出さずログにだけ残す。
@@ -85,154 +137,282 @@ fn spawn_event_loop(
                 }
             }
 
-            let notify = {
+            let (notify, subscribers) = {
                 let state = app_handle.state::<Mutex<AppState>>();
                 let mut guard = state.lock().await;
-                match guard
-                    .running_session
-                    .as_mut()
-                    .filter(|slot| slot.generation == generation)
-                {
+                match find_slot_mut(&mut guard, &target) {
                     Some(slot) => {
-                        let before = (
-                            slot.session.process_state,
-                            slot.session.permission_requests.len(),
+                        let before = watched(&slot.session);
+                        app::apply_running_session_event(
+                            &mut slot.session,
+                            &addressed.event,
+                            now_ms(),
                         );
-                        app::apply_running_session_event(&mut slot.session, &event, now_ms());
-                        let after = (
-                            slot.session.process_state,
-                            slot.session.permission_requests.len(),
-                        );
-                        (before != after || exit_code.is_some())
-                            .then(|| changed_event(slot, exit_code))
+                        let changed = before != watched(&slot.session) || exit_code.is_some();
+                        let subscribers = if addressed.as_progress().is_some() {
+                            slot.subscribers.clone()
+                        } else {
+                            Vec::new()
+                        };
+                        if matches!(addressed.event, RunningSessionEvent::Exited { .. }) {
+                            slot.subscribers.clear();
+                        }
+                        (
+                            changed.then(|| changed_event(&slot.session, exit_code)),
+                            subscribers,
+                        )
                     }
-                    None => None,
+                    None => (None, Vec::new()),
                 }
             };
+
+            // 途中経過を、購読中の画面へ流す(ロックの外)。送れなくなった購読は取り除く。
+            if let Some(progress) = addressed.as_progress() {
+                let dto = AddressedProgressDto::from(progress);
+                let failed: Vec<u64> = subscribers
+                    .iter()
+                    .filter(|subscriber| subscriber.channel.send(dto.clone()).is_err())
+                    .map(|subscriber| subscriber.id)
+                    .collect();
+                if !failed.is_empty() {
+                    let state = app_handle.state::<Mutex<AppState>>();
+                    let mut guard = state.lock().await;
+                    if let Some(slot) = find_slot_mut(&mut guard, &target) {
+                        slot.subscribers.retain(|s| !failed.contains(&s.id));
+                    }
+                }
+            }
             if let Some(payload) = notify {
                 let _ = app_handle.emit(RUNNING_SESSION_CHANGED_EVENT, payload);
             }
-            if matches!(event, RunningSessionEvent::Exited { .. }) {
+            if matches!(addressed.event, RunningSessionEvent::Exited { .. }) {
                 break;
             }
         }
     });
 }
 
-/// 会話 `session_id` を、子プロセスの `claude` として起動する(`--resume`)。Phase 1 は同時に
-/// 1つ。起動済み(終了していない)があれば `session_busy`。`profile_id` は対象プロファイルの
-/// 確認に使う(省略時はアクティブなプロファイル)。
+/// 実行中セッションを起動する。`Resume` は既存の会話を `--resume` で、`New` は新しい会話を
+/// `--session-id`(app が決めた UUID v4)で開く。同じ会話の二重起動と上限
+/// (`app::MAX_RUNNING_SESSIONS`)は `session_busy`。`profile_id` は対象プロファイルの解決に使う
+/// (省略時はアクティブなプロファイル)。途中経過は起動後に `subscribe_running_session_progress` で
+/// 購読する(起動の前後で出来事を取りこぼしても、状態は Query で取れる)。
 #[tauri::command]
 pub async fn start_running_session(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, Mutex<AppState>>,
     profile_id: Option<String>,
-    project: String,
-    session_id: String,
-    mode: RunningPermissionModeDto,
-    on_progress: Channel<ProgressEventDto>,
+    request: StartRunningSessionDto,
 ) -> Result<RunningSessionDto, AppErrorDto> {
-    let (settings, current, generation) = {
-        let mut guard = state.lock().await;
-        // 起動は数秒かかりうる。その間に2つ目が起動されないよう、先に印を付ける。
-        if guard.running_session_starting {
-            return Err(AppError::SessionBusy(
-                "実行中のセッションを起動している最中です".to_string(),
-            )
-            .into());
-        }
-        guard.running_session_starting = true;
-        guard.running_session_generation += 1;
-        (
-            guard.settings.clone(),
-            guard
-                .running_session
-                .as_ref()
-                .map(|slot| slot.session.clone()),
-            guard.running_session_generation,
-        )
+    // 会話の ID(再開は指定された ID、新規は app が決める)。
+    let session_id = match &request {
+        StartRunningSessionDto::Resume { session_id, .. } => session_id.clone(),
+        StartRunningSessionDto::New { .. } => app::new_session_id(),
     };
 
-    let prepared = (|| -> Result<std::path::PathBuf, AppError> {
-        app::resolve_profile(&settings, profile_id.as_deref())?;
-        resolve_effective_projects_dir(&settings)
+    // 起動してよいかを見て、起動の最中の印を付ける(起動は数秒かかりうるので、その間に来る同じ会話・
+    // 上限超えの起動を止める)。
+    let (settings, running, starting) = {
+        let mut guard = state.lock().await;
+        let running: Vec<RunningSessionByApp> = guard
+            .running_sessions
+            .iter()
+            .map(|slot| slot.session.clone())
+            .collect();
+        let starting = guard.starting_session_ids.clone();
+        app::ensure_can_start(&running, &starting, &session_id)?;
+        guard.starting_session_ids.push(session_id.clone());
+        (guard.settings.clone(), running, starting)
+    };
+    // 起動の最中の印を外す(成功・失敗のどちらでも)。
+    let release = |guard: &mut AppState| {
+        guard.starting_session_ids.retain(|id| id != &session_id);
+    };
+
+    let prepared = (|| -> Result<(Option<std::path::PathBuf>, std::path::PathBuf), AppError> {
+        let profile = app::resolve_profile(&settings, profile_id.as_deref())?;
+        let repository = match &request {
+            StartRunningSessionDto::Resume { .. } => profile.repository_path.clone(),
+            // 新規は、プロファイルのリポジトリが cwd になる(未設定なら InvalidInput)。
+            StartRunningSessionDto::New { .. } => Some(app::resolve_repository_dir(
+                &settings,
+                profile_id.as_deref(),
+            )?),
+        };
+        Ok((repository, resolve_effective_projects_dir(&settings)?))
     })();
-    let root = match prepared {
-        Ok(root) => root,
+    let (repository, root) = match prepared {
+        Ok(prepared) => prepared,
         Err(e) => {
-            state.lock().await.running_session_starting = false;
+            release(&mut *state.lock().await);
             return Err(e.into());
         }
     };
 
     let (tx, rx) = mpsc::unbounded_channel();
     let sink: Arc<dyn RunningSessionEventSink> = Arc::new(ChannelSink(tx));
-    let project_for_task = project.clone();
+    let resumed_project = match &request {
+        StartRunningSessionDto::Resume { project, .. } => Some(project.clone()),
+        StartRunningSessionDto::New { .. } => None,
+    };
     let session_id_for_task = session_id.clone();
     // claude の起動は数秒かかりうるため、async ランタイムを塞がないようブロッキングスレッドで行う。
     let started = tauri::async_runtime::spawn_blocking(
         move || -> Result<app::StartedRunningSession, AppError> {
-            let source = FileSystemRepository::new(root);
             let launcher = ClaudeCliProcessLauncher::new();
-            let ledger =
-                FileRunningSessionSource::new(FileRunningSessionSource::default_sessions_dir()?);
-            app::start_running_session(
-                &source,
-                &launcher,
-                &ledger,
-                current.as_ref(),
-                &project_for_task,
-                &session_id_for_task,
-                mode.into(),
-                sink,
-                now_ms(),
-            )
+            match request {
+                StartRunningSessionDto::Resume {
+                    project,
+                    session_id,
+                    mode,
+                    name,
+                } => {
+                    let source = FileSystemRepository::new(root);
+                    let ledger = FileRunningSessionSource::new(
+                        FileRunningSessionSource::default_sessions_dir()?,
+                    );
+                    app::resume_running_session(
+                        &source,
+                        &launcher,
+                        &ledger,
+                        &running,
+                        &starting,
+                        &app::ResumeRunningSession {
+                            project,
+                            session_id,
+                            mode: mode.into(),
+                            repository_path: repository,
+                            name,
+                        },
+                        sink,
+                        now_ms(),
+                    )
+                }
+                StartRunningSessionDto::New { mode, name } => {
+                    let repository_path = repository.ok_or_else(|| {
+                        AppError::InvalidInput(
+                            "プロファイルにリポジトリが設定されていません".to_string(),
+                        )
+                    })?;
+                    app::create_running_session(
+                        &launcher,
+                        &running,
+                        &starting,
+                        &app::CreateRunningSession {
+                            repository_path,
+                            mode: mode.into(),
+                            name,
+                        },
+                        session_id_for_task,
+                        sink,
+                        now_ms(),
+                    )
+                }
+            }
         },
     )
     .await
-    .unwrap_or_else(|_| {
-        Err(AppError::Io(
-            "バックグラウンド処理に失敗しました".to_string(),
-        ))
-    });
+    .unwrap_or_else(|_| Err(background_failed()));
 
     let started = match started {
         Ok(started) => started,
         Err(e) => {
-            state.lock().await.running_session_starting = false;
+            release(&mut *state.lock().await);
             return Err(e.into());
         }
     };
 
+    let target = RunningSessionRef::of(&started.session);
     let (dto, payload) = {
         let mut guard = state.lock().await;
-        guard.running_session_starting = false;
+        release(&mut guard);
+        // 同じ会話の終了済みは置き換え、終了済みが増えすぎないよう古いものを忘れる。
+        let current: Vec<RunningSessionByApp> = guard
+            .running_sessions
+            .iter()
+            .map(|slot| slot.session.clone())
+            .collect();
+        for gone in app::exited_to_forget(&current, &session_id) {
+            guard
+                .running_sessions
+                .retain(|slot| !gone.matches(&slot.session));
+        }
         let slot = RunningSessionSlot {
-            project: project.clone(),
-            generation,
-            mode: mode.into(),
+            project: resumed_project,
             session: started.session,
             process: started.process,
+            subscribers: Vec::new(),
         };
-        let dto = RunningSessionDto::from_session(&project, slot.mode, slot.session.clone());
-        let payload = changed_event(&slot, None);
-        guard.running_session = Some(slot);
+        let dto = RunningSessionDto::from_session(slot.project.as_deref(), slot.session.clone());
+        let payload = changed_event(&slot.session, None);
+        guard.running_sessions.push(slot);
         (dto, payload)
     };
-    spawn_event_loop(app_handle.clone(), generation, rx, on_progress);
+    spawn_event_loop(app_handle.clone(), target, rx);
     let _ = app_handle.emit(RUNNING_SESSION_CHANGED_EVENT, payload);
     Ok(dto)
 }
 
-/// 起動済みの実行中セッションの現在の状態(答え待ちの問い合わせを含む)。無ければ `None`。
+/// app が起動している実行中セッションの一覧(終了済みで残っているものを含む。起動が古い順)。
+/// ハブなどが並べる項目で、答え待ちの問い合わせは数だけ(中身は `get_running_session`)。
+#[tauri::command]
+pub async fn list_running_sessions(
+    state: tauri::State<'_, Mutex<AppState>>,
+) -> Result<Vec<RunningSessionSummaryDto>, AppErrorDto> {
+    let guard = state.lock().await;
+    let mut summaries: Vec<app::RunningSessionSummary> = guard
+        .running_sessions
+        .iter()
+        .map(|slot| app::summarize(&slot.session))
+        .collect();
+    summaries.sort_by_key(|s| s.target.started_at);
+    Ok(summaries.into_iter().map(Into::into).collect())
+}
+
+/// 実行中セッション1つの現在の状態(答え待ちの問い合わせを含む)。無ければ `None`。
 #[tauri::command]
 pub async fn get_running_session(
     state: tauri::State<'_, Mutex<AppState>>,
+    target: RunningSessionRefDto,
 ) -> Result<Option<RunningSessionDto>, AppErrorDto> {
+    let target: RunningSessionRef = target.into();
     let guard = state.lock().await;
-    Ok(guard.running_session.as_ref().map(|slot| {
-        RunningSessionDto::from_session(&slot.project, slot.mode, slot.session.clone())
-    }))
+    Ok(find_slot(&guard, &target)
+        .map(|slot| RunningSessionDto::from_session(slot.project.as_deref(), slot.session.clone())))
+}
+
+/// 実行中セッションの途中経過を、この画面(`on_progress`)へ流し始める。購読 ID を返す。
+/// 画面ごとに購読するので、再読み込み・別ウィンドウ・複数の画面から購読し直せる。購読が無い間の
+/// 出来事は捨てる。送れなくなった(画面が閉じた)購読は自動で外れる。
+#[tauri::command]
+pub async fn subscribe_running_session_progress(
+    state: tauri::State<'_, Mutex<AppState>>,
+    target: RunningSessionRefDto,
+    on_progress: Channel<AddressedProgressDto>,
+) -> Result<u64, AppErrorDto> {
+    let target: RunningSessionRef = target.into();
+    let mut guard = state.lock().await;
+    let id = guard.next_progress_subscription_id;
+    let slot = find_slot_mut(&mut guard, &target).ok_or_else(not_running)?;
+    slot.subscribers.push(ProgressSubscriber {
+        id,
+        channel: on_progress,
+    });
+    guard.next_progress_subscription_id += 1;
+    Ok(id)
+}
+
+/// 途中経過の購読をやめる(画面を閉じる・別の会話に切り替えるとき)。無い購読 ID は何もしない。
+#[tauri::command]
+pub async fn unsubscribe_running_session_progress(
+    state: tauri::State<'_, Mutex<AppState>>,
+    subscription_id: u64,
+) -> Result<(), AppErrorDto> {
+    let mut guard = state.lock().await;
+    for slot in &mut guard.running_sessions {
+        slot.subscribers.retain(|s| s.id != subscription_id);
+    }
+    Ok(())
 }
 
 /// 実行中セッションへ user メッセージ(本文と画像)を送る。
@@ -240,16 +420,22 @@ pub async fn get_running_session(
 pub async fn send_to_running_session(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, Mutex<AppState>>,
+    target: RunningSessionRefDto,
     text: String,
     images: Vec<String>,
 ) -> Result<(), AppErrorDto> {
+    let target: RunningSessionRef = target.into();
     // 状態を先に動かす(ロックの中。書き込みはロックの外)。
     let (process, validated, payload) = {
         let mut guard = state.lock().await;
-        let slot = guard.running_session.as_mut().ok_or_else(not_running)?;
+        let slot = find_slot_mut(&mut guard, &target).ok_or_else(not_running)?;
         let validated =
             app::begin_send_to_running_session(&mut slot.session, &text, &images, now_ms())?;
-        (slot.process.clone(), validated, changed_event(slot, None))
+        (
+            slot.process.clone(),
+            validated,
+            changed_event(&slot.session, None),
+        )
     };
     let _ = app_handle.emit(RUNNING_SESSION_CHANGED_EVENT, payload);
 
@@ -257,11 +443,7 @@ pub async fn send_to_running_session(
         app::write_user_message(process.as_ref(), &text, &validated)
     })
     .await
-    .unwrap_or_else(|_| {
-        Err(AppError::Io(
-            "バックグラウンド処理に失敗しました".to_string(),
-        ))
-    })
+    .unwrap_or_else(|_| Err(background_failed()))
     .map_err(Into::into)
 }
 
@@ -269,15 +451,18 @@ pub async fn send_to_running_session(
 /// 入力のまま)と `updated_permissions`(「今後も許可」にする提案。問い合わせの `suggestions` から
 /// 選んだもの)を、拒否(`deny`)は `message` を添えられる。
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn respond_permission(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, Mutex<AppState>>,
+    target: RunningSessionRefDto,
     request_id: String,
     behavior: PermissionBehaviorDto,
     updated_input: Option<serde_json::Value>,
     updated_permissions: Option<Vec<PermissionSuggestionDto>>,
     message: Option<String>,
 ) -> Result<(), AppErrorDto> {
+    let target: RunningSessionRef = target.into();
     let decision = match behavior {
         PermissionBehaviorDto::Allow => PermissionDecision::Allow {
             updated_input,
@@ -294,10 +479,14 @@ pub async fn respond_permission(
 
     let (process, response, payload) = {
         let mut guard = state.lock().await;
-        let slot = guard.running_session.as_mut().ok_or_else(not_running)?;
+        let slot = find_slot_mut(&mut guard, &target).ok_or_else(not_running)?;
         let response =
             app::begin_respond_permission(&mut slot.session, &request_id, decision, now_ms())?;
-        (slot.process.clone(), response, changed_event(slot, None))
+        (
+            slot.process.clone(),
+            response,
+            changed_event(&slot.session, None),
+        )
     };
     let _ = app_handle.emit(RUNNING_SESSION_CHANGED_EVENT, payload);
 
@@ -305,11 +494,7 @@ pub async fn respond_permission(
         app::write_permission_response(process.as_ref(), &response)
     })
     .await
-    .unwrap_or_else(|_| {
-        Err(AppError::Io(
-            "バックグラウンド処理に失敗しました".to_string(),
-        ))
-    })
+    .unwrap_or_else(|_| Err(background_failed()))
     .map_err(Into::into)
 }
 
@@ -317,36 +502,58 @@ pub async fn respond_permission(
 #[tauri::command]
 pub async fn interrupt_running_session(
     state: tauri::State<'_, Mutex<AppState>>,
+    target: RunningSessionRefDto,
 ) -> Result<(), AppErrorDto> {
+    let target: RunningSessionRef = target.into();
     let (snapshot, process) = {
         let guard = state.lock().await;
-        let slot = guard.running_session.as_ref().ok_or_else(not_running)?;
+        let slot = find_slot(&guard, &target).ok_or_else(not_running)?;
         (slot.session.clone(), slot.process.clone())
     };
     tauri::async_runtime::spawn_blocking(move || {
         app::interrupt_running_session(&snapshot, process.as_ref())
     })
     .await
-    .unwrap_or_else(|_| {
-        Err(AppError::Io(
-            "バックグラウンド処理に失敗しました".to_string(),
-        ))
-    })
+    .unwrap_or_else(|_| Err(background_failed()))
     .map_err(Into::into)
 }
 
-/// 実行中セッションを止める(標準入力を閉じて終了を待つ。約1秒)。無い・終了済みなら何もしない。
+/// 起動中に、モデル・権限モードを切り替える(`set_model` / `set_permission_mode`)。結果(現在の
+/// モデル・権限モード)は CLI が受け入れたとき(応答)に反映され、`running-session:changed` で
+/// 知らせる。要求しただけでは現在値を変えない(画面は状態を取り直して表示する)。
+#[tauri::command]
+pub async fn switch_running_session(
+    state: tauri::State<'_, Mutex<AppState>>,
+    target: RunningSessionRefDto,
+    switch: RunningSessionSwitchDto,
+) -> Result<(), AppErrorDto> {
+    let target: RunningSessionRef = target.into();
+    let switch: app::RunningSessionSwitch = switch.into();
+    let process = {
+        let guard = state.lock().await;
+        let slot = find_slot(&guard, &target).ok_or_else(not_running)?;
+        app::begin_switch_running_session(&slot.session, &switch)?;
+        slot.process.clone()
+    };
+    tauri::async_runtime::spawn_blocking(move || app::write_switch(process.as_ref(), &switch))
+        .await
+        .unwrap_or_else(|_| Err(background_failed()))
+        .map_err(Into::into)
+}
+
+/// 実行中セッションを止める(標準入力を閉じて終了を待つ。約1秒)。終了済みなら何もしない。
+/// 対象が見つからなければ `not_found`。
 #[tauri::command]
 pub async fn stop_running_session(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, Mutex<AppState>>,
+    target: RunningSessionRefDto,
 ) -> Result<(), AppErrorDto> {
-    let (mut snapshot, process, generation) = {
+    let target: RunningSessionRef = target.into();
+    let (mut snapshot, process) = {
         let guard = state.lock().await;
-        match guard.running_session.as_ref() {
-            Some(slot) => (slot.session.clone(), slot.process.clone(), slot.generation),
-            None => return Ok(()),
-        }
+        let slot = find_slot(&guard, &target).ok_or_else(not_running)?;
+        (slot.session.clone(), slot.process.clone())
     };
     if snapshot.process_state == ProcessState::Exited {
         return Ok(());
@@ -357,23 +564,16 @@ pub async fn stop_running_session(
         snapshot
     })
     .await
-    .map_err(|_| AppError::Io("バックグラウンド処理に失敗しました".to_string()))?;
+    .map_err(|_| background_failed())?;
 
     // 読み取りスレッドの `Exited` も同じ反映をするが、画面が停止直後に状態を取り直せるよう
     // ここでも終了に揃える(冪等)。
     let payload = {
         let mut guard = state.lock().await;
-        match guard
-            .running_session
-            .as_mut()
-            .filter(|slot| slot.generation == generation)
-        {
-            Some(slot) => {
-                slot.session = snapshot;
-                Some(changed_event(slot, None))
-            }
-            None => None,
-        }
+        find_slot_mut(&mut guard, &target).map(|slot| {
+            slot.session = snapshot;
+            changed_event(&slot.session, None)
+        })
     };
     if let Some(payload) = payload {
         let _ = app_handle.emit(RUNNING_SESSION_CHANGED_EVENT, payload);
@@ -381,19 +581,23 @@ pub async fn stop_running_session(
     Ok(())
 }
 
-/// app の終了時に、起動したままの子プロセスを止める(残さない)。ウィンドウが閉じられて
-/// アプリが終了するとき(`RunEvent::Exit`)に呼ぶ。同期的に終わるまで待つ(最大で数秒)。
+/// app の終了時に、起動したままの子プロセスを**全部**止める(残さない)。ウィンドウが閉じられて
+/// アプリが終了するとき(`RunEvent::Exit`)に呼ぶ。同期的に終わるまで待つ。停止は最大で数秒
+/// かかるので、並行して止める(セッションの数だけ待たない)。
 pub fn stop_running_session_on_exit(app_handle: &tauri::AppHandle) {
     let state = app_handle.state::<Mutex<AppState>>();
-    let process = tauri::async_runtime::block_on(async {
+    let processes = tauri::async_runtime::block_on(async {
         let guard = state.lock().await;
         guard
-            .running_session
-            .as_ref()
+            .running_sessions
+            .iter()
             .filter(|slot| slot.session.process_state != ProcessState::Exited)
             .map(|slot| slot.process.clone())
+            .collect::<Vec<_>>()
     });
-    if let Some(process) = process {
-        process.stop();
-    }
+    std::thread::scope(|scope| {
+        for process in &processes {
+            scope.spawn(move || process.stop());
+        }
+    });
 }

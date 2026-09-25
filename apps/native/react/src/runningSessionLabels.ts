@@ -25,17 +25,45 @@ export function processStateLabel(state: ProcessStateDto | null): string {
   }
 }
 
-/** 権限モードの表示名(Phase 1 は plan と default の2つ)。 */
+/** 権限モードの表示名(選べるモード。issue #407 で acceptEdits・auto を足した)。 */
 export const PERMISSION_MODE_LABELS: Record<RunningPermissionModeDto, string> = {
   plan: "計画のみ(plan)",
   default: "確認しながら実行(default)",
+  accept_edits: "編集は確認しない(acceptEdits)",
+  auto: "自動(auto)",
 };
 
-/** 権限モードの短い名前(状態表示の並びに置く)。 */
-export const PERMISSION_MODE_SHORT_LABELS: Record<RunningPermissionModeDto, string> = {
-  plan: "plan",
-  default: "default",
-};
+/**
+ * いまの権限モード(CLI が返す値のまま)の短い名前。CLI 2.1.280 は `default` を `manual` に
+ * 改名しているので、どちらも `default` として出す。知らない値はそのまま出す。
+ */
+export function currentPermissionModeLabel(value: string | null): string {
+  switch (value) {
+    case null:
+      return "?";
+    case "manual":
+      return "default";
+    default:
+      return value;
+  }
+}
+
+/** CLI が返す権限モードの値 → 画面で選べるモード(選べないものは `null`)。 */
+export function selectableModeOf(value: string | null): RunningPermissionModeDto | null {
+  switch (value) {
+    case "plan":
+      return "plan";
+    case "default":
+    case "manual":
+      return "default";
+    case "acceptEdits":
+      return "accept_edits";
+    case "auto":
+      return "auto";
+    default:
+      return null;
+  }
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)

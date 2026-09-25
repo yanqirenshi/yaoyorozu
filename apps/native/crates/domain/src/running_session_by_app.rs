@@ -1,4 +1,5 @@
 use crate::{PermissionRequest, ProcessState, ProcessTrigger, RunningSession};
+use std::path::PathBuf;
 
 /// app が子プロセスとして起動した claude CLI(クラス図 `RunningSessionByApp`。issue #391。
 /// PoC #382)。標準入出力(stream-json)で対話し続けるため、このサブクラスだけがプロセスの
@@ -15,16 +16,47 @@ pub struct RunningSessionByApp {
     pub process_state_at: u64,
     /// まだ答えていない権限の問い合わせ(届いた順。0..*)。
     pub permission_requests: Vec<PermissionRequest>,
+    /// いま送るときに使われるモデル(TM: 現在のモデル。issue #407)。CLI の `system/init` の
+    /// `model` か、`set_model` の結果。起動直後は CLI が最初のターンで `init` を出すまで分からない
+    /// (`None`)。モデル名は版で変わるので文字列のまま持つ。
+    pub current_model: Option<String>,
+    /// いま送るときに使われる権限モード(TM: 現在の権限モード)。CLI の `system/init` の
+    /// `permissionMode` か、`set_permission_mode` の結果。CLI の版で名前が変わる
+    /// (`default` / `manual`)ため文字列で持つ(対応づけは app の責務)。
+    pub current_permission_mode: Option<String>,
+    /// この実行中セッションを動かすリポジトリ(`GitRepository.repository_path` への参照。R)。
+    /// app が起動時にプロファイル(登録済みリポジトリ)から選んだ記録された事実で、cwd からの
+    /// 推測ではない(cwd はリポジトリの worktree など別の場所でもありうる)。
+    pub repository_path: PathBuf,
 }
 
 impl RunningSessionByApp {
-    /// 起動直後(`Starting`)の状態で作る。
-    pub fn new(base: RunningSession, at_time: u64) -> Self {
+    /// 起動直後(`Starting`)の状態で作る。現在のモデル・権限モードは分かったときに
+    /// [`Self::observe_configuration`] などで入れる(起動時に選んだ権限モードは呼び出し側が入れる)。
+    pub fn new(base: RunningSession, repository_path: PathBuf, at_time: u64) -> Self {
         Self {
             base,
             process_state: ProcessState::Starting,
             process_state_at: at_time,
             permission_requests: Vec::new(),
+            current_model: None,
+            current_permission_mode: None,
+            repository_path,
+        }
+    }
+
+    /// CLI が報告した現在の設定(`system/init` の `model` / `permissionMode`)を反映する。
+    /// 値のあるものだけ更新する(欠けた項目では、分かっている値を消さない)。
+    pub fn observe_configuration(
+        &mut self,
+        model: Option<String>,
+        permission_mode: Option<String>,
+    ) {
+        if model.is_some() {
+            self.current_model = model;
+        }
+        if permission_mode.is_some() {
+            self.current_permission_mode = permission_mode;
         }
     }
 
@@ -108,7 +140,11 @@ mod tests {
     use ProcessTrigger::*;
 
     fn session() -> RunningSessionByApp {
-        RunningSessionByApp::new(RunningSession::new("s1", "windows:PC", 100, 1), 10)
+        RunningSessionByApp::new(
+            RunningSession::new("s1", "windows:PC", 100, 1),
+            PathBuf::from("/repo"),
+            10,
+        )
     }
 
     fn in_state(state: ProcessState) -> RunningSessionByApp {
@@ -138,6 +174,35 @@ mod tests {
         assert_eq!(s.process_state, Starting);
         assert_eq!(s.process_state_at, 10);
         assert!(s.permission_requests.is_empty());
+    }
+
+    #[test]
+    fn a_new_session_knows_its_repository_but_not_yet_its_model_or_mode() {
+        let s = session();
+
+        assert_eq!(s.repository_path, PathBuf::from("/repo"));
+        assert_eq!(s.current_model, None);
+        assert_eq!(s.current_permission_mode, None);
+    }
+
+    #[test]
+    fn observing_the_configuration_updates_only_the_values_that_are_present() {
+        let mut s = session();
+
+        s.observe_configuration(
+            Some("claude-opus-4-7".to_string()),
+            Some("default".to_string()),
+        );
+        assert_eq!(s.current_model.as_deref(), Some("claude-opus-4-7"));
+        assert_eq!(s.current_permission_mode.as_deref(), Some("default"));
+
+        // 項目が欠けた報告では、分かっている値を消さない。
+        s.observe_configuration(None, Some("plan".to_string()));
+        assert_eq!(s.current_model.as_deref(), Some("claude-opus-4-7"));
+        assert_eq!(s.current_permission_mode.as_deref(), Some("plan"));
+
+        s.observe_configuration(None, None);
+        assert_eq!(s.current_permission_mode.as_deref(), Some("plan"));
     }
 
     /// 遷移表の全行(クラス図のコメント)。

@@ -49,7 +49,7 @@ import { SendErrorBody } from "../SendErrorBody";
 import LiveTurnView from "../LiveTurnView";
 import PermissionRequestCard from "../PermissionRequestCard";
 import RunningSessionBar from "../RunningSessionBar";
-import { PERMISSION_MODE_LABELS } from "../runningSessionLabels";
+import { PERMISSION_MODE_LABELS, selectableModeOf } from "../runningSessionLabels";
 import { useRunningSession } from "../useRunningSession";
 import ViewerSideMenu from "../ViewerSideMenu";
 import ViewerToolbar from "../ViewerToolbar";
@@ -270,11 +270,13 @@ function SessionsPage({ nav }: SessionsPageProps) {
     send: sendToSession,
     respond: respondToPermission,
     interrupt: interruptRunning,
+    switchTo: switchRunning,
     stop: stopRunning,
   } = useRunningSession({
+    sessionId: sessionParam ?? null,
     onTurnFinished: (target) => {
-      if (target && target.project === projectParam && target.session_id === sessionParam) {
-        return refreshSessionInPlace(target.project, target.session_id);
+      if (projectParam && sessionParam && target && target.session_id === sessionParam) {
+        return refreshSessionInPlace(projectParam, sessionParam);
       }
     },
     onError: (message) => setError(message),
@@ -518,17 +520,9 @@ function SessionsPage({ nav }: SessionsPageProps) {
   // `--resume <ID>` 化(issue #345)により、一覧に出るセッションはすべて送信対象に
   // できる(表示中のセッション ID へ送る。旧「最新のみ送信可」の制約は撤廃)。
   const canSend = !!selectedSummary;
-  // app が起動している実行中セッションが、表示中の会話か(別の会話のときは、送信すると
-  // 先に停止して切り替える。Phase 1 は同時に1つ)。
+  // 表示中の会話の実行中セッションが動いているか(実行中セッションは会話ごとに複数持てる。
+  // 別の会話が実行中でも、この会話へ送るときはそのまま新しく起動する。issue #407)。
   const runningAlive = running !== null && running.process_state !== "exited";
-  const runningIsThisSession =
-    runningAlive && running.project === projectParam && running.session_id === sessionParam;
-  const runningOtherTitle =
-    runningAlive && !runningIsThisSession
-      ? (sessionGroups
-          .flatMap((g) => g.sessions)
-          .find((s) => s.id === running.session_id)?.title ?? null)
-      : null;
 
   // ウィンドウレジストリ(issue #83)へこのウィンドウの表示状態を報告する。
   // 「1ウィンドウ=1プロファイル」への一本化(issue #91)でタブが無くなった
@@ -616,24 +610,15 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const canSubmit = !!draft.trim() || attachments.length > 0;
 
   // 送信(issue #392)。app が起動したままの claude 経由で送る: 未起動なら起動して、待機に
-  // なってから送る(backend が、起動中の送信を断るため。#391)。別の会話が実行中なら、確認して
-  // 先に停止する(Phase 1 は同時に1つ)。外部(ターミナル・Desktop)で同じ会話が実行中なら、
-  // 従来どおり backend が止める(#361。エラー表示)。
+  // なってから送る(backend が、起動中の送信を断るため。#391)。別の会話の実行中セッションは
+  // そのまま動かす(#407。同時数の上限を超えるときは backend が session_busy で止める)。
+  // 外部(ターミナル・Desktop)で同じ会話が実行中なら、従来どおり backend が止める(#361。
+  // エラー表示)。
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     if (!projectParam || !sessionParam || !canSend || sending || !canSubmit) return;
 
     setError(null);
-    if (runningAlive && !runningIsThisSession) {
-      if (
-        !window.confirm(
-          "別のセッションが実行中です。停止して、このセッションで開始しますか?",
-        )
-      ) {
-        return;
-      }
-      await stopRunning();
-    }
     const sent = await sendToSession({
       profileId: resolvedProfileId,
       project: projectParam,
@@ -661,12 +646,20 @@ function SessionsPage({ nav }: SessionsPageProps) {
       {
         id: "mode",
         label: MODE_ICON,
-        title: "権限モード(次の起動から)",
-        popup: (["default", "plan"] as RunningPermissionModeDto[]).map((value) => ({
-          label: PERMISSION_MODE_LABELS[value],
-          active: mode === value,
-          onSelect: () => setMode(value),
-        })),
+        // 未起動なら次の起動から、起動中ならいまの実行中セッションを切り替える(結果は CLI が
+        // 受け入れたあと、状態の取り直しで表示に反映される。issue #407)。
+        title: runningAlive ? "権限モード(実行中のセッションを切り替え)" : "権限モード(次の起動から)",
+        popup: (["default", "plan", "accept_edits", "auto"] as RunningPermissionModeDto[]).map(
+          (value) => ({
+            label: PERMISSION_MODE_LABELS[value],
+            active:
+              (runningAlive ? selectableModeOf(running.current_permission_mode) : mode) === value,
+            onSelect: () => {
+              setMode(value);
+              if (runningAlive) void switchRunning({ kind: "permission_mode", mode: value });
+            },
+          }),
+        ),
       },
     ];
     if (view === "claude-md") {
@@ -819,8 +812,6 @@ function SessionsPage({ nav }: SessionsPageProps) {
             {projectParam && sessionParam && (
               <RunningSessionBar
                 running={running}
-                isThisSession={runningIsThisSession || !runningAlive}
-                otherTitle={runningOtherTitle}
                 selectedMode={mode}
                 onInterrupt={() => void interruptRunning()}
                 onStop={() => void stopRunning()}
@@ -920,7 +911,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
                   )}
                   <div className="messages">
                     {/* 権限の問い合わせと返答中の表示(issue #392)。新しい順なので先頭に置く。 */}
-                    {runningIsThisSession &&
+                    {runningAlive &&
                       running.permission_requests.map((request) => (
                         <PermissionRequestCard
                           key={request.request_id}
@@ -930,7 +921,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
                           }
                         />
                       ))}
-                    {(runningIsThisSession || sending) && (
+                    {(runningAlive || sending) && (
                       <LiveTurnView live={live} messages={messages} />
                     )}
                     {messages.map((m, i) => {

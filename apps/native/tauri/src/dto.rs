@@ -1014,12 +1014,15 @@ impl From<domain::Pc> for PcDto {
 
 // ============ 実行中セッション(issue #391。Phase 1「1セッションを app から対話する」) ============
 
-/// 起動時に選ぶ権限モード。Phase 1 は `plan` と `default` の2つ。
+/// 画面で選べる権限モード(`app::RunningPermissionMode` の写し。issue #407 で `accept_edits` と
+/// `auto` を足した)。
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RunningPermissionModeDto {
     Plan,
     Default,
+    AcceptEdits,
+    Auto,
 }
 
 impl From<app::RunningPermissionMode> for RunningPermissionModeDto {
@@ -1027,6 +1030,8 @@ impl From<app::RunningPermissionMode> for RunningPermissionModeDto {
         match mode {
             app::RunningPermissionMode::Plan => RunningPermissionModeDto::Plan,
             app::RunningPermissionMode::Default => RunningPermissionModeDto::Default,
+            app::RunningPermissionMode::AcceptEdits => RunningPermissionModeDto::AcceptEdits,
+            app::RunningPermissionMode::Auto => RunningPermissionModeDto::Auto,
         }
     }
 }
@@ -1036,6 +1041,74 @@ impl From<RunningPermissionModeDto> for app::RunningPermissionMode {
         match mode {
             RunningPermissionModeDto::Plan => app::RunningPermissionMode::Plan,
             RunningPermissionModeDto::Default => app::RunningPermissionMode::Default,
+            RunningPermissionModeDto::AcceptEdits => app::RunningPermissionMode::AcceptEdits,
+            RunningPermissionModeDto::Auto => app::RunningPermissionMode::Auto,
+        }
+    }
+}
+
+/// 実行中セッション1つの宛先(`app::RunningSessionRef` の写し)。画面が持ち回って、送信・応答・
+/// 購読・切り替えの対象を指定する。`started_at` は epoch ms で、JS の数値で安全に扱える範囲。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct RunningSessionRefDto {
+    pub pid_domain: String,
+    pub pid: u32,
+    pub started_at: u64,
+}
+
+impl From<app::RunningSessionRef> for RunningSessionRefDto {
+    fn from(target: app::RunningSessionRef) -> Self {
+        Self {
+            pid_domain: target.pid_domain,
+            pid: target.pid,
+            started_at: target.started_at,
+        }
+    }
+}
+
+impl From<RunningSessionRefDto> for app::RunningSessionRef {
+    fn from(dto: RunningSessionRefDto) -> Self {
+        Self {
+            pid_domain: dto.pid_domain,
+            pid: dto.pid,
+            started_at: dto.started_at,
+        }
+    }
+}
+
+/// 起動の要求(`start_running_session` の引数)。再開と新規で持つ値が違うので、`kind` で区別する
+/// (`app::StartRunningSession` と同じ形)。パス(cwd・リポジトリ)は受け取らない: app が会話ファイル・
+/// プロファイルから求める(native.md §4)。
+#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StartRunningSessionDto {
+    /// 既存の会話を開く。
+    Resume {
+        project: String,
+        session_id: String,
+        mode: RunningPermissionModeDto,
+        name: Option<String>,
+    },
+    /// 新しい会話を始める(ID は app が決める)。
+    New {
+        mode: RunningPermissionModeDto,
+        name: Option<String>,
+    },
+}
+
+/// 起動中に切り替える設定(`app::RunningSessionSwitch` の写し)。
+#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RunningSessionSwitchDto {
+    Model { model: String },
+    PermissionMode { mode: RunningPermissionModeDto },
+}
+
+impl From<RunningSessionSwitchDto> for app::RunningSessionSwitch {
+    fn from(dto: RunningSessionSwitchDto) -> Self {
+        match dto {
+            RunningSessionSwitchDto::Model { model } => Self::Model(model),
+            RunningSessionSwitchDto::PermissionMode { mode } => Self::PermissionMode(mode.into()),
         }
     }
 }
@@ -1193,40 +1266,60 @@ impl From<domain::PermissionRequest> for PermissionRequestDto {
     }
 }
 
+/// 宛先を付けた途中経過(Channel で流す。`app::AddressedProgress` の写し。issue #407)。
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct AddressedProgressDto {
+    pub target: RunningSessionRefDto,
+    pub event: ProgressEventDto,
+}
+
+impl From<app::AddressedProgress> for AddressedProgressDto {
+    fn from(progress: app::AddressedProgress) -> Self {
+        Self {
+            target: progress.target.into(),
+            event: progress.event.into(),
+        }
+    }
+}
+
 /// app が起動した実行中セッションの現在の状態(`get_running_session` の戻り値)。
 /// 台帳の秘匿値(`peer_token`)は載せない。
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct RunningSessionDto {
-    pub project: String,
+    pub target: RunningSessionRefDto,
+    /// 会話ファイルのあるプロジェクトフォルダ名。再開のときだけ(新規は、会話ファイルが
+    /// できるまで分からないので `None`)。
+    pub project: Option<String>,
     pub session_id: String,
-    pub pid: u32,
-    pub started_at: u64,
+    pub repository_path: String,
     pub cwd: Option<String>,
+    /// 起動時に付けた表示名(`--name`)。
+    pub name: Option<String>,
     pub process_state: ProcessStateDto,
     pub process_state_at: u64,
-    /// 起動時に選んだ権限モード(Phase 1 は途中で切り替えない)。
-    pub permission_mode: RunningPermissionModeDto,
+    /// いまのモデル(`system/init` か `set_model` の結果。最初のターンまでは `None`)。
+    pub current_model: Option<String>,
+    /// いまの権限モード(CLI が返す値のまま。`default` / `manual` など、版で名前が変わる)。
+    pub current_permission_mode: Option<String>,
     pub permission_requests: Vec<PermissionRequestDto>,
 }
 
 impl RunningSessionDto {
-    pub fn from_session(
-        project: &str,
-        permission_mode: app::RunningPermissionMode,
-        session: domain::RunningSessionByApp,
-    ) -> Self {
+    pub fn from_session(project: Option<&str>, session: domain::RunningSessionByApp) -> Self {
         Self {
-            project: project.to_string(),
-            permission_mode: permission_mode.into(),
+            target: app::RunningSessionRef::of(&session).into(),
+            project: project.map(str::to_string),
             session_id: session.base.session_id,
-            pid: session.base.pid,
-            started_at: session.base.started_at,
+            repository_path: session.repository_path.to_string_lossy().to_string(),
             cwd: session
                 .base
                 .cwd
                 .map(|path| path.to_string_lossy().to_string()),
+            name: session.base.name,
             process_state: session.process_state.into(),
             process_state_at: session.process_state_at,
+            current_model: session.current_model,
+            current_permission_mode: session.current_permission_mode,
             permission_requests: session
                 .permission_requests
                 .into_iter()
@@ -1236,10 +1329,42 @@ impl RunningSessionDto {
     }
 }
 
+/// ハブなどが並べる一覧の1項目(`list_running_sessions` の戻り値。`app::RunningSessionSummary` の写し)。
+/// 答え待ちの問い合わせは数だけ(中身は `get_running_session`)。
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct RunningSessionSummaryDto {
+    pub target: RunningSessionRefDto,
+    pub session_id: String,
+    pub repository_path: String,
+    pub process_state: ProcessStateDto,
+    pub pending_permission_count: usize,
+    pub current_model: Option<String>,
+    pub current_permission_mode: Option<String>,
+    pub cwd: Option<String>,
+    pub name: Option<String>,
+}
+
+impl From<app::RunningSessionSummary> for RunningSessionSummaryDto {
+    fn from(summary: app::RunningSessionSummary) -> Self {
+        Self {
+            target: summary.target.into(),
+            session_id: summary.session_id,
+            repository_path: summary.repository_path.to_string_lossy().to_string(),
+            process_state: summary.process_state.into(),
+            pending_permission_count: summary.pending_permission_count,
+            current_model: summary.current_model,
+            current_permission_mode: summary.current_permission_mode,
+            cwd: summary.cwd.map(|path| path.to_string_lossy().to_string()),
+            name: summary.name,
+        }
+    }
+}
+
 /// 状態変化・権限の問い合わせ到着を知らせる軽量イベント(`running-session:changed`)の
-/// ペイロード。データ本体は `get_running_session` で取り直す(native.md §3.2)。
+/// ペイロード(宛先付き)。データ本体は `get_running_session` で取り直す(native.md §3.2)。
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct RunningSessionChangedEventDto {
+    pub target: RunningSessionRefDto,
     pub session_id: String,
     pub process_state: ProcessStateDto,
     pub pending_permission_count: usize,
