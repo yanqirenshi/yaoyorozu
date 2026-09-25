@@ -15,6 +15,9 @@
  * - `running_session.rs`: 実行中セッションの command 群(関数なので図には描かない)と、
  *   `RunningSessionEventSink` の実装 `ChannelSink`(private)。
  * - `session_scan_queue.rs`: 走査キューの `ScanProgressDto`・`RescanOutcome`(どちらも private)。
+ * - `lib.rs` の `WatcherSlot`(private な型エイリアス。`Mutex<Option<infra::SessionWatcher>>`。
+ *   ファイル監視の保持先で、Tauri の管理状態)は、`SessionWatcher`(`classes-infra.ts`)を包むだけの
+ *   別名なので載せない(issue #420)。
  *
  * 【実行中セッション(Phase 2。issue #407。PR #413)】`AppState.running_session`(1つ)は
  * `running_sessions`(複数)になり、`RunningSessionSlot` は購読(`ProgressSubscriber`)を持つ。
@@ -38,9 +41,11 @@
  *   `classes-native-prototype.ts`・`classes-domain.ts` に載っている実在の
  *   クラスだが、別の図の離れた位置にあり線を引くと図をまたいで長く伸びるため、
  *   線は引かない(属性の型名にそのまま `domain::` を残して分かるようにする)。
- *   `AppState.window_states`(`app::WindowRegistry`)・`AppState.git_ledger`
- *   (`domain::GitLedger`)は、この図にも他の図にも無い型なので、同様に線を
- *   引かない。
+ *   `AppState.window_states`(`app::WindowRegistry`)・`AppState.loaded_messages`
+ *   (`app::CachedMessages`)・`AppState.session_rescan`(`app::RescanQueue`)は
+ *   `classes-infra.ts`(app の型)に、`AppState.git_ledger`(`domain::GitLedger`)は
+ *   `classes-native-prototype.ts` に載っているが、別の図の離れた位置にあるため、同様に線を
+ *   引かない(issue #420 で、以前「どの図にも無い」としていたものを infra 図へ載せた)。
  * - `From<domain::X>`/`From<app::X>` の実装(DTOへの変換)がある型は、対応する
  *   クラスをコメントに書いた(`classes-native-prototype.ts`・`classes-infra.ts`
  *   に同名 + `Dto` を外した名前で載っている)。線では結ばない(変換であって
@@ -251,6 +256,8 @@ const DEFS: ClassDef[] = [
     attributes: [attr("login", "String")],
     position: { x: 3300, y: 8250 },
     filePath: "apps/native/tauri/src/dto.rs",
+    // 名前が長く枠からはみ出すので広げる(次の GithubAuthFailedEventDto は x = 3700)。
+    size: { w: 350, h: 0 },
   },
   {
     name: { physical: "GithubAuthFailedEventDto", logical: "GithubAuthFailedEventDto", description: "github:auth_failed イベントのペイロード。デバイスフローのタイムアウト・拒否・エラーを通知する" },
@@ -378,11 +385,11 @@ const DEFS: ClassDef[] = [
       attr("settings", "domain::Settings"),
       attr("save_path", "PathBuf"),
       attr("github_login", "Option<String>"),
-      // app::WindowRegistry。この図にも他の図にも無い型なので線は引かない。
+      // app::WindowRegistry(classes-infra.ts。別の図の離れた位置にあるため線は引かない)。
       attr("window_states", "app::WindowRegistry"),
       // domain::Pc(classes-domain.ts の Pc)そのもの。線は引かない(冒頭コメントを参照)。
       attr("pc", "domain::Pc"),
-      // domain::GitLedger。この図にも他の図にも無い型なので線は引かない。
+      // domain::GitLedger(classes-native-prototype.ts。別の図の離れた位置にあるため線は引かない)。
       attr("git_ledger", "domain::GitLedger"),
       attr("git_ledger_path", "PathBuf"),
       // 走査で読んだ、会話ファイル単位の結果(domain::ParsedSession。classes-native-prototype.ts)。
@@ -391,7 +398,7 @@ const DEFS: ClassDef[] = [
       attr("user_sessions", "Vec<domain::ParsedSession>"),
       // 遅延読み込みした LogLine(セッションを開いたときに構築。issue #207)。
       attr("loaded_log_lines", "HashMap<PathBuf, Vec<domain::LogLine>>"),
-      // 読み込んだメッセージのキャッシュ(app::CachedMessages。この図にも他の図にも無い型なので線は引かない)。
+      // 読み込んだメッセージのキャッシュ(app::CachedMessages。classes-infra.ts の離れた位置にあるため線は引かない)。
       attr("loaded_messages", "HashMap<PathBuf, app::CachedMessages>"),
       // app が起動した実行中セッション(issue #391。#407 で複数を持てるようになった)。終了しても、
       // 同じ会話を起動し直すか、MAX_KEPT_EXITED_SESSIONS(10)を超えて忘れるまで終了状態のまま残す
@@ -404,7 +411,7 @@ const DEFS: ClassDef[] = [
       attr("next_progress_subscription_id", "u64"),
       attr("pc_data_loaded", "bool"),
       attr("session_scan_generation", "u64"),
-      // app::RescanQueue(この図にも他の図にも無い型なので線は引かない)。
+      // app::RescanQueue(classes-infra.ts の離れた位置にあるため線は引かない)。
       attr("session_rescan", "app::RescanQueue"),
     ],
     position: { x: 2100, y: 10500 },

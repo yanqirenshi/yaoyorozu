@@ -317,8 +317,9 @@ const DEFS: ClassDef[] = [
   {
     name: { physical: "Camera", logical: "Camera", description: "ハブのグラフの視点(パン・ズーム)。d3-zoom の transform に対応する(screen = world * k + (x, y))。HubLayout.camera として hub-layout.json に保存する。issue #268" },
     attributes: [attr("x", "f64"), attr("y", "f64"), attr("k", "f64")],
-    // HubLayout の斜め下(HubTuning の右)に置く。
-    position: { x: 2450, y: 1950 },
+    // HubLayout の斜め下に置く。下の infra 図(classes-infra.ts の SessionSource は y = 2050)と
+    // 重ならないよう、以前の y = 1950 から上げた(issue #420)。
+    position: { x: 2450, y: 1900 },
     filePath: "apps/native/crates/domain/src/camera.rs",
   },
   {
@@ -330,8 +331,9 @@ const DEFS: ClassDef[] = [
       attr("charge_strength", "f64"),
       attr("collide_radius", "f64"),
     ],
-    // HubLayout の真下に置く。他クラスへの参照は無いので線は無い。
-    position: { x: 2100, y: 1950 },
+    // HubLayout・NodePosition の右に置く。他クラスへの参照は無いので線は無い。以前は HubLayout の
+    // 真下(y = 1950)だったが、infra 図の SessionSource(y = 2050)と重なるため移した(issue #420)。
+    position: { x: 2800, y: 1650 },
     filePath: "apps/native/crates/domain/src/hub_tuning.rs",
   },
   {
@@ -340,7 +342,7 @@ const DEFS: ClassDef[] = [
       attr("version", "u32"),
       attr("tabs", "Vec<ViewerTab>"),
     ],
-    // HubTuning の真下に置く(ViewerTab は右隣)。
+    // ViewerTab は右隣に置く(以前は HubTuning の真下。#420 で HubTuning を右へ移した)。
     position: { x: 2100, y: 2250 },
     filePath: "apps/native/crates/domain/src/viewer_tabs.rs",
   },
