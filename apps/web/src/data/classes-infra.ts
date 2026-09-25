@@ -31,9 +31,35 @@
  * 【対象・ファイル対応】infra クレートは domain と違い、まだ1型=1ファイルに
  * 揃っている(型名 snake_case のファイル。例外: `FileClaudeDirStore` は
  * `claude_dir_store.rs`、`SessionWatcher`/`FileSystemRepository` は
- * `session_source.rs` に同居、`ClaudeCliProcess`・`ExitSignal` は `ClaudeCliProcessLauncher` と
- * 同じ `claude_cli_process.rs` に同居)。全24型(実装23 + SessionWatcher)と、
- * app の port 22個を載せた(1回きり送信の `AgentGateway`・`ClaudeCliAgent` は #392 で撤去)。
+ * `session_source.rs` に同居(`SessionFileRef`・`SessionFsChange` も同じ)、`ClaudeCliProcess`・
+ * `ExitSignal` は `ClaudeCliProcessLauncher` と同じ `claude_cli_process.rs` に同居)。
+ * infra の型 28個(port を実装するもの22 + port を実装しない補助の型6: `SessionWatcher`・
+ * `SessionFileRef`・`SessionFsChange`・`GithubAuthLog`・`ExitSignal`・`PendingSwitches`)と、
+ * app の port 23個を載せた(1回きり送信の `AgentGateway`・`ClaudeCliAgent` は #392 で撤去。
+ * `ViewerTabsStore`・`FileViewerTabsStore` は #420 で追加)。
+ *
+ * 【app の port の入出力の型(issue #420)】方針: app の非 port の型は、port のシグネチャ(引数・
+ * 戻り値・エラー)に出てくるものだけを載せる(層はアプリケーションのビジネスルール)。
+ * 載せたもの: `AppError`(ほぼすべての port のエラー)・`FileFingerprint`・`SessionContent`
+ * (`SessionSource`)・`LoadedSettings`(`SettingsStore`)・`ProjectSettingsFile`
+ * (`ProjectSettingsStore`)・`DeviceAuthorization`・`PollResult`・`GithubViewer`(`GithubGateway`)。
+ * これに加えて、tauri 層の `AppState` が持つ `CachedMessages`・`RescanQueue`・`WindowRegistry`
+ * (tauri 図から参照される型)も載せた。
+ * **載せないもの(理由)**:
+ * - ユースケースの戻り値のための型: `OpenedSession`・`ReloadedSession`・`SessionDisplayHint`・
+ *   `ReconcileGitLedgerResult`・`BuildUserSessionsResult`・`ViewerCheckOutcome`(関数の結果であって、
+ *   port の入出力でも状態でもない。関数は図に描かない)。
+ * - 型エイリアス `NowMs`(= u64)。
+ * - infra の private な型: `DeviceCodeResponse`(GitHub の応答の読み取り用)・`LedgerEntry`・
+ *   `ProcessProbe`(実行中セッションの台帳の読み取り・生存確認)・`SessionCwdSelector`・
+ *   `CachedSessionSummary`(セッション走査の内部)・`LegacySettingsRaw`・`SettingsV4Raw`・
+ *   `SettingsV5Raw`(設定ファイルの旧版の読み取り = マイグレーション用)・`ViewerTabsV1`・
+ *   `ViewerTabV1`(タブの旧版の読み取り用)。wire / ファイル形式の写し(serde)で、外から見える
+ *   構造ではない。`ExitSignal` は複数の型が共有するため例外として載せている。
+ * - domain クレートの `session_line/`(33型。JSONL 行の読み取り用。`classes-native-prototype.ts` の
+ *   説明を参照)と、`LogLineBase`(`LogLine` の共通属性を Rust では埋め込み struct にしたもの。
+ *   `classes-domain.ts` の `LogLine` の属性として描いている)・`LogLineConversionError`
+ *   (JSONL 行 → `LogLine` の変換関数のエラー)。
  *
  * 【実行中セッション(Phase 1。issue #391)】`RunningSessionSource`(#361 のガード。
  * `exclude_pids` が加わった)・`RunningSessionLauncher`・`RunningProcess`・
@@ -400,6 +426,188 @@ const DEFS: ClassDef[] = [
     position: { x: 5600, y: 2400 },
     filePath: "apps/native/crates/infra/src/git_state_source.rs",
   },
+  // ============ セッションタブ・診断ログ・ファイル監視の変更(issue #420) ============
+  {
+    name: { physical: "SessionFileRef", logical: "SessionFileRef", description: "走査キュー(セッション一覧の逐次読み込み)の対象1件。列挙時点ではファイルの中身を読まず、パスとメタデータだけで組み立てる軽量な参照(session_source.rs。pub)。FileSystemRepository の enumerate_session_file_refs / session_file_ref の戻り値。session_id はファイル名(<セッションID>.jsonl)から取り、中身の sessionId とは照合しない(中身は走査 parse_session_file が正)" },
+    attributes: [
+      attr("project", "String"), // プロジェクトフォルダ名(projects_dir 直下)
+      attr("file_path", "PathBuf"), // 会話ファイルの絶対パス
+      attr("session_id", "String"), // ファイル名由来のセッションID
+      attr("modified_at_ms", "u64"), // ファイルの最終更新時刻(キューの実行優先度に使う)
+    ],
+    position: { x: 2100, y: 2570 },
+    filePath: "apps/native/crates/infra/src/session_source.rs",
+    size: { w: 340, h: 0 },
+  },
+  {
+    name: { physical: "SessionFsChange", logical: "SessionFsChange", description: "ファイル監視(FileSystemRepository の watch_projects)が通知する1プロジェクト分の変更(session_source.rs。pub)。project はビューアの session:changed 用。conversation_files は変更のあった会話ファイルの絶対パスで、サブエージェントのファイルの変更は持ち主の会話ファイルとして数える(issue #311。ハブの差分再走査用)。会話ファイルに結びつかない変更は含まない" },
+    attributes: [
+      attr("project", "String"),
+      attr("conversation_files", "Vec<PathBuf>"),
+    ],
+    position: { x: 2500, y: 2570 },
+    filePath: "apps/native/crates/infra/src/session_source.rs",
+    size: { w: 360, h: 0 },
+  },
+  {
+    name: { physical: "ViewerTabsStore", logical: "ViewerTabsStore", description: "ビューアのセッションタブの並び(domain::ViewerTabs。issue #353)の永続化(port)。プロファイルごとに別ファイルへ保存する。app::lib.rs。ファイルが無い・壊れている場合の load は空(ViewerTabs::default())" },
+    stereotype: "interface",
+    methods: [
+      method("load", ["profile_id: &str"], "Result<ViewerTabs, AppError>"),
+      method("save", ["profile_id: &str", "tabs: &ViewerTabs"], "Result<(), AppError>"),
+    ],
+    position: { x: 4950, y: 2800 },
+    filePath: "apps/native/crates/app/src/lib.rs",
+    // save の引数が長く、戻り値型の列と重なるので広げる(HubTuningStore と同じ理由)。
+    size: { w: 480, h: 0 },
+  },
+  {
+    name: { physical: "FileViewerTabsStore", logical: "FileViewerTabsStore", description: "ViewerTabs をプロファイルごとの JSON ファイル(<dir>/<プロファイルID>.json)として永続化(viewer_tabs_store.rs。issue #353)。FileHubTuningStore と同じ流儀: アトミック書き込み・破損時は *.corrupt.<timestamp> へ退避して空で始める。v1(キーが series_key)のファイルは v2(キーが session_id。#369)へ移行して読む(ViewerTabsV1・ViewerTabV1 はそのための private な読み取り用の型で、図には描かない)。プロファイルIDは app 層で検証済みの前提" },
+    attributes: [attr("dir", "PathBuf")],
+    position: { x: 4950, y: 3150 },
+    filePath: "apps/native/crates/infra/src/viewer_tabs_store.rs",
+  },
+  {
+    name: { physical: "GithubAuthLog", logical: "GithubAuthLog", description: "GitHub 認証まわりの診断ログ(github_auth_log.rs。issue #261)。いつ・どの操作で・どのインスタンスがトークンを無効と判断/削除したかの証拠を、app_data_dir 配下の追記式ファイル(1行1イベント。ローカル専用)に残す。トークン全文・Authorization ヘッダは書かない(識別は token_fingerprint の先頭・末尾数文字のみ)。ベストエフォート(書き込みに失敗してもアプリの動作を妨げない)。port を実装しない補助の型で、tauri 層が record を呼ぶ。1MB を超えたら <name>.1 へ退避する" },
+    attributes: [
+      attr("path", "PathBuf"),
+      // 複数インスタンス(dev / リリース / worktree 検証)がキーチェーンを共有するため、各行に含める。
+      attr("instance", "String"),
+    ],
+    position: { x: 4100, y: 3550 },
+    filePath: "apps/native/crates/infra/src/github_auth_log.rs",
+  },
+  // ============ app の port の入出力の型(issue #420) ============
+  // port のシグネチャに出てくる app の型(層はアプリケーションのビジネスルール)。線は、この図の中で
+  // 型が別の型を持つところだけ引く(Message・LogLine・Settings は別の図の離れた位置にあるため引かない)。
+  {
+    name: { physical: "AppError", logical: "AppError", description: "app の port・ユースケースが返すエラー(app::lib.rs。ほぼすべての port の Result のエラー型。thiserror。表示は中身の文字列そのまま)。NotFound / Io / InvalidInput / SessionBusy(送信先が他のプロセスで実行中。issue #345)/ CliNotFound / CliFailed / Timeout / CwdMissing / GithubUnauthenticated / GithubAuthExpired(認証のタイムアウト・拒否・トークンの確定的な失効 401。#54)/ GithubApiFailed / ClaudeMdConflict / GithubScopeInsufficient(#50)/ FileConflict(汎用の保存競合。#53)。多くの port に出てくるので、各 port への線は引かない" },
+    stereotype: "enumeration",
+    attributes: [
+      "NotFound(String)",
+      "Io(String)",
+      "InvalidInput(String)",
+      "SessionBusy(String)",
+      "CliNotFound(String)",
+      "CliFailed(String)",
+      "Timeout(String)",
+      "CwdMissing(String)",
+      "GithubUnauthenticated(String)",
+      "GithubAuthExpired(String)",
+      "GithubApiFailed(String)",
+      "ClaudeMdConflict(String)",
+      "GithubScopeInsufficient(String)",
+      "FileConflict(String)",
+    ].map(label),
+    position: { x: 7700, y: 4400 },
+    filePath: "apps/native/crates/app/src/lib.rs",
+    layer: "application",
+    size: { w: 320, h: 0 },
+  },
+  {
+    name: { physical: "FileFingerprint", logical: "FileFingerprint", description: "会話ファイルの状態の目印(更新時刻 + サイズ。app::lib.rs。issue #350)。解析済みの結果を使い回してよいかの判定に使う" },
+    attributes: [
+      attr("modified_nanos", "u128"),
+      attr("len", "u64"),
+    ],
+    position: { x: 8100, y: 4400 },
+    filePath: "apps/native/crates/app/src/lib.rs",
+    layer: "application",
+    size: { w: 300, h: 0 },
+  },
+  {
+    name: { physical: "SessionContent", logical: "SessionContent", description: "会話ファイルを1回読んで得た内容(SessionSource::read_session の戻り値。app::lib.rs。issue #350)。messages は表示用のメッセージで記録順(古い順)。Message・LogLine は classes-native-prototype.ts / classes-domain.ts の離れた位置にあるため線は引かない" },
+    attributes: [
+      attr("fingerprint", "FileFingerprint"),
+      attr("messages", "Vec<Message>"), // 記録順(古い順)
+      attr("lines", "Vec<LogLine>"),
+    ],
+    position: { x: 8100, y: 4650 },
+    filePath: "apps/native/crates/app/src/lib.rs",
+    layer: "application",
+    size: { w: 340, h: 0 },
+  },
+  {
+    name: { physical: "CachedMessages", logical: "CachedMessages", description: "解析済みメッセージのキャッシュ(ファイルごと。app::lib.rs。issue #350)。tauri 層の AppState.loaded_messages が持つ(classes-tauri.ts)。ページ送りのたびに巨大な会話ファイルを読み直さないための保存先" },
+    attributes: [
+      attr("fingerprint", "FileFingerprint"),
+      attr("messages", "Arc<Vec<Message>>"), // 新しい順に並べ済み(表示のたびに並べ替え・複製をしない)
+    ],
+    position: { x: 8650, y: 4650 },
+    filePath: "apps/native/crates/app/src/lib.rs",
+    layer: "application",
+    size: { w: 380, h: 0 },
+  },
+  {
+    name: { physical: "LoadedSettings", logical: "LoadedSettings", description: "起動時に読み込んだ設定(SettingsStore::load の戻り値。app::lib.rs)。ファイルが存在しない場合と破損していた場合を区別しない(どちらもデフォルト値へフォールバックする)が、破損からの復旧があったかどうかは tauri 層が app:warning を出すか判断するために保持する" },
+    attributes: [
+      attr("settings", "Settings"),
+      attr("recovered_from_corruption", "bool"),
+    ],
+    position: { x: 8100, y: 5000 },
+    filePath: "apps/native/crates/app/src/lib.rs",
+    layer: "application",
+    size: { w: 420, h: 0 },
+  },
+  {
+    name: { physical: "ProjectSettingsFile", logical: "ProjectSettingsFile", description: "プロジェクトの .claude/ 配下にある2種類の設定ファイル(ProjectSettingsStore の引数。app::lib.rs。issue #70)。フロントからファイル名を自由入力させず、この enum で選ばせてパスを固定する(native.md §4)。tauri の ProjectSettingsFileDto から変換される" },
+    stereotype: "enumeration",
+    attributes: ["Settings", "SettingsLocal"].map(label),
+    position: { x: 8650, y: 4400 },
+    filePath: "apps/native/crates/app/src/lib.rs",
+    layer: "application",
+    size: { w: 300, h: 0 },
+  },
+  {
+    name: { physical: "RescanQueue", logical: "RescanQueue", description: "セッション再走査の待ち行列(app::lib.rs)。書き込み中の jsonl は頻繁に更新されるため、変更のたびに走査すると暴れる。ワーカーは常に高々1つ(動いていなければ起動し、1回の処理が終わるたびに最短間隔だけ待ってから、溜まった変更をまとめて取り出す)。同じファイルの変更は集合で1件に畳まれる。フィールドは private(操作は push 等のメソッド経由)。tauri 層の AppState.session_rescan が持つ" },
+    attributes: [
+      { ...attr("pending", "BTreeSet<PathBuf>"), visibility: "private" },
+      { ...attr("worker_running", "bool"), visibility: "private" },
+    ],
+    position: { x: 8650, y: 5000 },
+    filePath: "apps/native/crates/app/src/lib.rs",
+    layer: "application",
+    size: { w: 420, h: 0 },
+  },
+  {
+    name: { physical: "WindowRegistry", logical: "WindowRegistry", description: "ウィンドウレジストリの型エイリアス(app::lib.rs。ハブ化 その1。issue #83)。std::collections::HashMap<String, domain::WindowState>。設定ファイルには保存しないランタイム状態(tauri 層の AppState.window_states)で、キーはウィンドウのラベル" },
+    stereotype: "type alias",
+    attributes: [],
+    position: { x: 8100, y: 5300 },
+    filePath: "apps/native/crates/app/src/lib.rs",
+    layer: "application",
+  },
+  {
+    name: { physical: "DeviceAuthorization", logical: "DeviceAuthorization", description: "デバイスフロー開始時に GitHub から返る値(GithubGateway::start_device_flow の戻り値。app::lib.rs)" },
+    attributes: [
+      attr("device_code", "String"),
+      attr("user_code", "String"),
+      attr("verification_uri", "String"),
+      attr("interval_secs", "u64"),
+      attr("expires_in_secs", "u64"),
+    ],
+    position: { x: 9200, y: 4400 },
+    filePath: "apps/native/crates/app/src/lib.rs",
+    layer: "application",
+    size: { w: 340, h: 0 },
+  },
+  {
+    name: { physical: "PollResult", logical: "PollResult", description: "トークンポーリング1回の結果(GithubGateway::poll_for_token の戻り値。app::lib.rs)。Pending: ユーザーがまだ認可していない(interval_secs 待って再試行)/ SlowDown: ポーリング間隔が短すぎた(間隔を広げて再試行)/ Token: 認可完了" },
+    stereotype: "enumeration",
+    attributes: ["Pending", "SlowDown", "Token(String)"].map(label),
+    position: { x: 9200, y: 4800 },
+    filePath: "apps/native/crates/app/src/lib.rs",
+    layer: "application",
+    size: { w: 300, h: 0 },
+  },
+  {
+    name: { physical: "GithubViewer", logical: "GithubViewer", description: "ログイン中の GitHub ユーザー(GithubGateway::fetch_viewer の戻り値。app::lib.rs)" },
+    attributes: [attr("login", "String")],
+    position: { x: 9200, y: 5100 },
+    filePath: "apps/native/crates/app/src/lib.rs",
+    layer: "application",
+    size: { w: 300, h: 0 },
+  },
   // ============ 実行中セッション(Phase 1。issue #391) ============
   // 実行中の検知(#361 のガード)。#391 で find_running に除外する PID(exclude_pids)が加わった。
   {
@@ -716,6 +924,7 @@ const RELATIONSHIPS = [
   rel("realization", "FileProjectSettingsStore", "ProjectSettingsStore", undefined, "top", "bottom"),
   rel("realization", "FileHubLayoutStore", "HubLayoutStore", undefined, "top", "bottom"),
   rel("realization", "FileHubTuningStore", "HubTuningStore", undefined, "top", "bottom"),
+  rel("realization", "FileViewerTabsStore", "ViewerTabsStore", undefined, "top", "bottom"),
   rel("realization", "WindowsExecutionEnvironmentSource", "ExecutionEnvironmentSource", undefined, "top", "bottom"),
   rel("realization", "GithubApiClient", "GithubGateway", undefined, "top", "bottom"),
   rel("realization", "KeyringTokenStore", "TokenStore", undefined, "top", "bottom"),
@@ -726,6 +935,9 @@ const RELATIONSHIPS = [
   // Git台帳・観測(第3弾)
   rel("realization", "FileGitLedgerStore", "GitLedgerStore", undefined, "top", "bottom"),
   rel("realization", "SystemGitStateSource", "GitStateSource", undefined, "top", "bottom"),
+  // app の入出力の型(issue #420)。持つ側 → 型(holder → 型の向き)。
+  rel("composition", "SessionContent", "FileFingerprint", "fingerprint", "top", "bottom"),
+  rel("composition", "CachedMessages", "FileFingerprint", "fingerprint", "top", "right"),
   // 実行中セッション(Phase 1)
   rel("realization", "FileRunningSessionSource", "RunningSessionSource", undefined, "top", "bottom"),
   rel("realization", "ClaudeCliProcessLauncher", "RunningSessionLauncher", undefined, "top", "bottom"),
