@@ -1,7 +1,7 @@
-use app::{AppError, SessionSource};
+use app::{AppError, FileFingerprint, SessionContent, SessionSource};
 use domain::{
-    convert_json_line_to_log_line, extract_cwd, extract_message, resolve_session_title, AgentKind,
-    Conversation, LogLine, ParsedSession, Project, ScannedLine, SessionSummary,
+    extract_cwd, resolve_session_title, AgentKind, ParsedSession, Project, ScannedLine,
+    SessionSummary,
 };
 use notify::RecursiveMode;
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
@@ -247,6 +247,27 @@ fn project_name_from_path(projects_dir: &Path, path: &Path) -> Option<String> {
         .map(|c| c.as_os_str().to_string_lossy().to_string())
 }
 
+/// 開いたファイルの状態の目印(更新時刻 + サイズ)。解析済みキャッシュの照合に使う
+/// (issue #350)。更新時刻は同じミリ秒内の書き込みを取りこぼさないようナノ秒で持つ。
+fn fingerprint_of(file: &fs::File, path: &Path) -> Result<FileFingerprint, AppError> {
+    let metadata = file.metadata().map_err(|e| {
+        AppError::Io(format!(
+            "{} の状態を取得できませんでした: {e}",
+            path.display()
+        ))
+    })?;
+    let modified_nanos = metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    Ok(FileFingerprint {
+        modified_nanos,
+        len: metadata.len(),
+    })
+}
+
 fn to_millis(time: std::io::Result<std::time::SystemTime>) -> u64 {
     time.ok()
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
@@ -410,7 +431,7 @@ impl SessionSource for FileSystemRepository {
         Ok(projects)
     }
 
-    fn session(&self, project: &str, session_id: &str) -> Result<Conversation, AppError> {
+    fn read_session(&self, project: &str, session_id: &str) -> Result<SessionContent, AppError> {
         // `session_id` は app 層の `is_valid_session_id` で英数字とハイフンのみに
         // 検証済みの前提(native.md §4)。ここでは検証済みの値としてそのまま
         // ファイル名の構築に使う。
@@ -420,19 +441,54 @@ impl SessionSource for FileSystemRepository {
             .join(format!("{session_id}.jsonl"));
         let file = fs::File::open(&path)
             .map_err(|e| AppError::NotFound(format!("{} が見つかりません: {e}", path.display())))?;
+        // 読み始める前の状態を控える(読んでいる途中で伸びたら、次の照合で
+        // 「古い」と判定されて読み直される側に倒れる。app::SessionSource 参照)。
+        let fingerprint = fingerprint_of(&file, &path)?;
 
-        let messages = BufReader::new(file)
-            .lines()
-            .map_while(Result::ok)
-            .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
-            .filter_map(|value| extract_message(&value))
-            .collect();
+        // 1行を1回だけパースし、表示用メッセージと LogLine を同時に取り出す
+        // (issue #350。従来は同じファイルを2回、1行あたりそれぞれ複数回パースしていた)。
+        let mut messages = Vec::new();
+        let mut lines = Vec::new();
+        for text in BufReader::new(file).lines().map_while(Result::ok) {
+            let Some(scanned) = ScannedLine::parse(&text) else {
+                continue;
+            };
+            let (message, log_line) = scanned.into_message_and_log_line();
+            messages.extend(message);
+            match log_line {
+                Ok(Some(log_line)) => lines.push(log_line),
+                Ok(None) => {}
+                Err(reason) => {
+                    // uuid/timestampを変換できないチェーン行はスキップする
+                    // (issue #208本文: 実データで発生したかを確認し、発生した
+                    // 場合はデザインへ報告すること。まずは警告ログで可視化する)。
+                    eprintln!(
+                        "{} の1行を LogLine に変換できずスキップしました: {reason:?}",
+                        path.display()
+                    );
+                }
+            }
+        }
 
-        Ok(Conversation {
-            id: session_id.to_string(),
+        Ok(SessionContent {
+            fingerprint,
             messages,
-            agent: AgentKind::ClaudeCode,
+            lines,
         })
+    }
+
+    fn session_fingerprint(
+        &self,
+        project: &str,
+        session_id: &str,
+    ) -> Result<FileFingerprint, AppError> {
+        let path = self
+            .projects_dir
+            .join(project)
+            .join(format!("{session_id}.jsonl"));
+        let file = fs::File::open(&path)
+            .map_err(|e| AppError::NotFound(format!("{} が見つかりません: {e}", path.display())))?;
+        fingerprint_of(&file, &path)
     }
 
     fn session_line_raw(
@@ -468,40 +524,6 @@ impl SessionSource for FileSystemRepository {
         ))
     }
 
-    fn session_lines(&self, project: &str, session_id: &str) -> Result<Vec<LogLine>, AppError> {
-        // `session()`とは別にファイルを開く(issue #208。`app::SessionSource`
-        // のドキュメントコメント参照: セッションを開いた瞬間の1回だけの
-        // コストであり、以後はtauri層のキャッシュにより再読み込みしない)。
-        let path = self
-            .projects_dir
-            .join(project)
-            .join(format!("{session_id}.jsonl"));
-        let file = fs::File::open(&path)
-            .map_err(|e| AppError::NotFound(format!("{} が見つかりません: {e}", path.display())))?;
-
-        let lines = BufReader::new(file)
-            .lines()
-            .map_while(Result::ok)
-            .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
-            .filter_map(|value| match convert_json_line_to_log_line(&value) {
-                Ok(log_line) => log_line,
-                Err(reason) => {
-                    // uuid/timestampを変換できないチェーン行はスキップする
-                    // (issue本文: 実データで発生したかを確認し、発生した
-                    // 場合はデザインへ報告すること。まずは警告ログで
-                    // 可視化する)。
-                    eprintln!(
-                        "{} の1行を LogLine に変換できずスキップしました: {reason:?}",
-                        path.display()
-                    );
-                    None
-                }
-            })
-            .collect();
-
-        Ok(lines)
-    }
-
     fn session_cwd(&self, project: &str, session_id: &str) -> Result<PathBuf, AppError> {
         let path = self
             .projects_dir
@@ -523,7 +545,6 @@ impl SessionSource for FileSystemRepository {
                     modified_at_ms,
                     cwd: scanned.cwd,
                     git_branch: scanned.git_branch,
-                    root_uuid: scanned.root_uuid,
                 })
             })
             .collect()
@@ -609,9 +630,6 @@ struct CachedSessionSummary {
     mode: Option<String>,
     slug: Option<String>,
     last_prompt: Option<String>,
-    /// 会話チェーンの根(最初の `parentUuid: null` 行の `uuid`)。フォーク系列の
-    /// グループ化キー(issue #345。`domain::SessionSummary.root_uuid`)。
-    root_uuid: Option<String>,
 }
 
 static SESSION_SUMMARY_CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedSessionSummary>>> =
@@ -673,7 +691,6 @@ fn scan_session_summary(path: &Path) -> Result<CachedSessionSummary, AppError> {
     let mut mode: Option<String> = None;
     let mut slug: Option<String> = None;
     let mut last_prompt: Option<String> = None;
-    let mut root_uuid: Option<String> = None;
 
     // 1行につき `SessionLine` を1回だけ構築し、各値をそのフィールドから直接読む
     // (issue #302。従来は `extract_*` を最大9回呼び、そのたびに `Value` の
@@ -712,16 +729,6 @@ fn scan_session_summary(path: &Path) -> Result<CachedSessionSummary, AppError> {
         if let Some(value) = scanned.last_prompt() {
             last_prompt = Some(value.to_string());
         }
-        // 会話チェーンの根(最初の `parentUuid: null` 行のuuid。issue #345)。
-        // `uuid` を持たないセッションメタ行・未知の行はどちらも `None` を
-        // 返すため、`uuid` の有無で会話チェーン行かどうかを見分ける。
-        if root_uuid.is_none() {
-            if let Some(uuid) = scanned.uuid() {
-                if scanned.parent_uuid().is_none() {
-                    root_uuid = Some(uuid.to_string());
-                }
-            }
-        }
     }
 
     let id = id.ok_or_else(|| AppError::Io("セッションIDを取得できませんでした".to_string()))?;
@@ -743,14 +750,13 @@ fn scan_session_summary(path: &Path) -> Result<CachedSessionSummary, AppError> {
         mode,
         slug,
         last_prompt,
-        root_uuid,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use domain::Role;
+    use domain::{convert_json_line_to_log_line, extract_message, LogLine, Role};
     use domain::{
         extract_ai_title, extract_custom_title, extract_git_branch, extract_last_prompt,
         extract_mode, extract_session_id, extract_slug,
@@ -773,7 +779,6 @@ mod tests {
         let mut mode: Option<String> = None;
         let mut slug: Option<String> = None;
         let mut last_prompt: Option<String> = None;
-        let mut root_uuid: Option<String> = None;
 
         for value in BufReader::new(file)
             .lines()
@@ -813,15 +818,6 @@ mod tests {
             if let Some(value) = extract_last_prompt(&value) {
                 last_prompt = Some(value);
             }
-            if root_uuid.is_none() {
-                if let Ok(line) = serde_json::from_value::<domain::SessionLine>(value.clone()) {
-                    if let Some(uuid) = line.uuid() {
-                        if line.parent_uuid().is_none() {
-                            root_uuid = Some(uuid.to_string());
-                        }
-                    }
-                }
-            }
         }
 
         let id =
@@ -844,7 +840,6 @@ mod tests {
             mode,
             slug,
             last_prompt,
-            root_uuid,
         })
     }
 
@@ -867,11 +862,167 @@ mod tests {
         write_session_file(&project_dir, "s2", &project_dir);
 
         let repo = FileSystemRepository::new(dir.path().to_path_buf());
-        let session = repo.session("proj", "s1").expect("should read session");
+        let content = repo
+            .read_session("proj", "s1")
+            .expect("should read session");
 
-        assert_eq!(session.id, "s1");
-        assert_eq!(session.messages.len(), 1);
-        assert_eq!(session.messages[0].text, "hello");
+        assert_eq!(content.messages.len(), 1);
+        assert_eq!(content.messages[0].text, "hello");
+    }
+
+    /// 旧実装(issue #350 より前)の読み方。`Value` を経由して1行を何度もパースし、
+    /// メッセージと LogLine を別々のファイル読みで取っていた。新しい `read_session` の
+    /// 結果が従来と一致することを確かめる比較の基準として、テストにだけ残してある。
+    fn legacy_messages(path: &Path) -> Vec<domain::Message> {
+        let file = fs::File::open(path).unwrap();
+        BufReader::new(file)
+            .lines()
+            .map_while(Result::ok)
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
+            .filter_map(|value| extract_message(&value))
+            .collect()
+    }
+
+    /// 旧実装の LogLine 読み(上の `legacy_messages` と同じ位置づけ)。
+    fn legacy_lines(path: &Path) -> Vec<LogLine> {
+        let file = fs::File::open(path).unwrap();
+        BufReader::new(file)
+            .lines()
+            .map_while(Result::ok)
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
+            .filter_map(|value| convert_json_line_to_log_line(&value).unwrap_or(None))
+            .collect()
+    }
+
+    /// `Message` は `PartialEq` を持たないため、比較用に全項目のタプルにする。
+    fn message_parts(
+        m: &domain::Message,
+    ) -> (
+        Role,
+        String,
+        String,
+        Option<String>,
+        usize,
+        domain::MessageStatus,
+    ) {
+        (
+            m.role,
+            m.text.clone(),
+            m.timestamp.clone(),
+            m.uuid.clone(),
+            m.image_count,
+            m.status,
+        )
+    }
+
+    /// 実データで観測される主な行の形(チェーン行・メタ行・壊れた行・空行)を並べた
+    /// 会話ファイルを作る。最終行は改行で終えない(従来どおり読めることも確かめる)。
+    fn write_mixed_session_file(dir: &Path, id: &str) -> PathBuf {
+        let lines = [
+            r#"{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"s1","cwd":"/work","timestamp":"2026-01-01T00:00:00.000Z","message":{"role":"user","content":"hello"}}"#,
+            r#"{"type":"assistant","uuid":"a1","parentUuid":"u1","sessionId":"s1","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"t","signature":"s"},{"type":"text","text":"first"},{"type":"tool_use","id":"toolu_1","name":"x","input":{}},{"type":"text","text":"second"}]}}"#,
+            r#"{"type":"user","uuid":"u2","parentUuid":"a1","sessionId":"s1","timestamp":"2026-01-01T00:00:02.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"result"}]}}"#,
+            r#"{"type":"user","uuid":"u3","parentUuid":"u2","sessionId":"s1","timestamp":"2026-01-01T00:00:03.000Z","message":{"role":"user","content":[{"type":"text","text":"画像つき"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}]}}"#,
+            r#"{"type":"user","uuid":"u4","parentUuid":"u3","sessionId":"s1","timestamp":"2026-01-01T00:00:04.000Z","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"BBBB"}}]}}"#,
+            r#"{"type":"user","uuid":"u5","parentUuid":"u4","sessionId":"s1","timestamp":"2026-01-01T00:00:05.000Z","message":{"role":"user","content":"   "}}"#,
+            r#"{"type":"system","subtype":"informational","content":"x","level":"info","uuid":"sy1","parentUuid":"u5","sessionId":"s1","timestamp":"2026-01-01T00:00:06.000Z"}"#,
+            r#"{"type":"assistant","uuid":"e1","parentUuid":"sy1","sessionId":"s1","timestamp":"2026-01-01T00:00:06.500Z","isApiErrorMessage":true,"error":"server_error","message":{"role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"API Error: 500 Internal server error."}]}}"#,
+            r#"{"type":"custom-title","customTitle":"タイトル","sessionId":"s1"}"#,
+            r#"{"type":"queue-operation","operation":"enqueue","sessionId":"s1"}"#,
+            r#"{"type":"some-future-type","sessionId":"s1"}"#,
+            r#"{"type":"user","sessionId":"s1","message":{"role":"user","content":"uuidなし(LogLineにはならない)"}}"#,
+            "",
+            "これはJSONではない行",
+            r#"[1,2,3]"#,
+            r#"{"type":"assistant","uuid":"a2","parentUuid":"u1","sessionId":"s1","timestamp":"2026-01-01T00:00:07.000Z","message":{"role":"assistant","content":[{"type":"text","text":"最終行(改行なし)"}]}}"#,
+        ];
+        let path = dir.join(format!("{id}.jsonl"));
+        fs::write(&path, lines.join("\n")).unwrap();
+        path
+    }
+
+    #[test]
+    fn read_session_matches_the_legacy_two_pass_readers_line_by_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        let path = write_mixed_session_file(&project_dir, "s1");
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let content = repo.read_session("proj", "s1").expect("should read");
+
+        let new_messages: Vec<_> = content.messages.iter().map(message_parts).collect();
+        let old_messages: Vec<_> = legacy_messages(&path).iter().map(message_parts).collect();
+        assert_eq!(
+            new_messages, old_messages,
+            "表示用メッセージが従来と一致する"
+        );
+        assert_eq!(
+            content.lines,
+            legacy_lines(&path),
+            "LogLine が従来と一致する"
+        );
+        // 標本の中身を取り違えていない(空の一致で通らない)ことの確認。
+        assert_eq!(content.messages.len(), 7);
+        assert_eq!(content.lines.len(), 9);
+        assert_eq!(
+            content
+                .messages
+                .iter()
+                .filter(|m| m.status == domain::MessageStatus::Error)
+                .count(),
+            1,
+            "エラー行は1件だけ(会話ファイルは読むだけで、印は表示側で付ける)"
+        );
+    }
+
+    #[test]
+    fn session_fingerprint_reflects_size_and_modified_time_and_matches_read_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        let path = write_mixed_session_file(&project_dir, "s1");
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+
+        let before = repo.session_fingerprint("proj", "s1").unwrap();
+        assert_eq!(before.len, fs::metadata(&path).unwrap().len());
+        assert_eq!(repo.read_session("proj", "s1").unwrap().fingerprint, before);
+        assert_eq!(repo.session_fingerprint("proj", "s1").unwrap(), before);
+
+        // 追記するとサイズが変わり、目印も変わる(キャッシュは古いと判定される)。
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(file).unwrap();
+        writeln!(
+            file,
+            r#"{{"type":"custom-title","customTitle":"x","sessionId":"s1"}}"#
+        )
+        .unwrap();
+        drop(file);
+        let after = repo.session_fingerprint("proj", "s1").unwrap();
+        assert_ne!(after, before);
+        assert!(after.len > before.len);
+
+        // 同じサイズのまま更新時刻だけ変わった場合も、目印が変わる。
+        let file = fs::File::options().write(true).open(&path).unwrap();
+        file.set_modified(std::time::SystemTime::now() + Duration::from_secs(5))
+            .unwrap();
+        drop(file);
+        let touched = repo.session_fingerprint("proj", "s1").unwrap();
+        assert_eq!(touched.len, after.len);
+        assert_ne!(touched, after);
+    }
+
+    #[test]
+    fn session_fingerprint_returns_not_found_for_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("proj")).unwrap();
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+
+        let error = repo
+            .session_fingerprint("proj", "does-not-exist")
+            .expect_err("should fail for missing session file");
+
+        assert!(matches!(error, AppError::NotFound(_)));
     }
 
     #[test]
@@ -892,8 +1043,9 @@ mod tests {
 
         let repo = FileSystemRepository::new(dir.path().to_path_buf());
         let lines = repo
-            .session_lines("proj", "s1")
-            .expect("should read log lines");
+            .read_session("proj", "s1")
+            .expect("should read log lines")
+            .lines;
 
         // custom-titleはチェーン行ではないため対象外(2行だけがLogLineになる)。
         assert_eq!(lines.len(), 2);
@@ -912,8 +1064,9 @@ mod tests {
 
         let repo = FileSystemRepository::new(dir.path().to_path_buf());
         let lines = repo
-            .session_lines("proj", "s1")
-            .expect("should not error even when every line is skipped");
+            .read_session("proj", "s1")
+            .expect("should not error even when every line is skipped")
+            .lines;
 
         assert!(lines.is_empty());
     }
@@ -926,7 +1079,7 @@ mod tests {
 
         let repo = FileSystemRepository::new(dir.path().to_path_buf());
         let error = repo
-            .session_lines("proj", "does-not-exist")
+            .read_session("proj", "does-not-exist")
             .expect_err("should fail for missing session file");
 
         assert!(matches!(error, AppError::NotFound(_)));
@@ -940,7 +1093,7 @@ mod tests {
 
         let repo = FileSystemRepository::new(dir.path().to_path_buf());
         let error = repo
-            .session("proj", "does-not-exist")
+            .read_session("proj", "does-not-exist")
             .expect_err("should fail for missing session file");
 
         assert!(matches!(error, AppError::NotFound(_)));
@@ -1110,49 +1263,6 @@ mod tests {
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].cwd.as_deref(), Some("/repo"));
         assert_eq!(sessions[0].git_branch.as_deref(), Some("feature/x"));
-    }
-
-    #[test]
-    fn list_sessions_extracts_root_uuid_from_the_first_chain_root_line() {
-        // issue #345: 根uuidは「parentUuidが無い最初の会話チェーン行」の
-        // uuid。sessionメタ行(mode等)はuuidを持たないため無視される。
-        let dir = tempfile::tempdir().unwrap();
-        let project_dir = dir.path().join("proj");
-        fs::create_dir_all(&project_dir).unwrap();
-        fs::write(
-            project_dir.join("s1.jsonl"),
-            [
-                r#"{"type":"mode","mode":"normal","sessionId":"s1"}"#,
-                r#"{"type":"user","uuid":"root-1","sessionId":"s1","message":{"content":"hello"}}"#,
-                r#"{"type":"assistant","uuid":"a-1","parentUuid":"root-1","sessionId":"s1","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}"#,
-            ]
-            .join("\n"),
-        )
-        .unwrap();
-
-        let repo = FileSystemRepository::new(dir.path().to_path_buf());
-        let sessions = repo.list_sessions("proj").expect("should list sessions");
-
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].root_uuid.as_deref(), Some("root-1"));
-    }
-
-    #[test]
-    fn list_sessions_leaves_root_uuid_none_when_no_chain_root_line_present() {
-        let dir = tempfile::tempdir().unwrap();
-        let project_dir = dir.path().join("proj");
-        fs::create_dir_all(&project_dir).unwrap();
-        fs::write(
-            project_dir.join("s1.jsonl"),
-            r#"{"type":"custom-title","customTitle":"タイトル","sessionId":"s1"}"#,
-        )
-        .unwrap();
-
-        let repo = FileSystemRepository::new(dir.path().to_path_buf());
-        let sessions = repo.list_sessions("proj").expect("should list sessions");
-
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].root_uuid, None);
     }
 
     #[test]
@@ -1427,6 +1537,105 @@ mod tests {
         println!("timestamp欠損/不正でスキップ: {missing_or_invalid_timestamp}");
         for example in &examples {
             println!("  例: {example}");
+        }
+    }
+
+    // native.md §5からの意図的な逸脱(`diagnose_real_log_line_conversion` と同じ理由):
+    // 実ユーザーディレクトリを**読み取りのみ**で走査する一回限りの手動診断で、通常の
+    // `cargo test` では実行されない(`#[ignore]`)。issue #349: 既存の会話の画像
+    // (Desktopで貼ったもの)の件数・「画像だけのメッセージ」の有無と、画像の最も多い
+    // ファイルでの `session_line_raw`+画像抽出のオンデマンド取得の所要時間を出す。
+    // 実行例: `cargo test -p infra --release -- --ignored --nocapture diagnose_real_message_images`
+    #[test]
+    #[ignore]
+    fn diagnose_real_message_images() {
+        let projects_dir =
+            FileSystemRepository::default_projects_dir().expect("should resolve home directory");
+        if !projects_dir.is_dir() {
+            println!("{} が無いためスキップします", projects_dir.display());
+            return;
+        }
+
+        let (mut files_with_images, mut image_messages, mut image_only_messages) =
+            (0u64, 0u64, 0u64);
+        let mut total_images = 0u64;
+        // (ファイルサイズ, プロジェクト, セッションID, 最後の画像行のuuid)
+        let mut biggest: Option<(u64, String, String, String)> = None;
+
+        for project_entry in fs::read_dir(&projects_dir).unwrap().flatten() {
+            let project_path = project_entry.path();
+            let Some(project) = project_path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let Ok(entries) = fs::read_dir(&project_path) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                    continue;
+                }
+                let Ok(file) = fs::File::open(&path) else {
+                    continue;
+                };
+                let mut file_has_images = false;
+                let mut last_image_uuid: Option<String> = None;
+                for line in BufReader::new(file).lines().map_while(Result::ok) {
+                    // 画像を含む行だけをパースする(大半の行を読み飛ばす)。
+                    if !line.contains("\"type\":\"image\"") {
+                        continue;
+                    }
+                    let Some(message) = ScannedLine::parse(&line).and_then(|l| l.message()) else {
+                        continue;
+                    };
+                    if message.image_count == 0 {
+                        continue;
+                    }
+                    file_has_images = true;
+                    image_messages += 1;
+                    total_images += message.image_count as u64;
+                    if message.text.trim().is_empty() {
+                        image_only_messages += 1;
+                    }
+                    last_image_uuid = message.uuid.clone();
+                }
+                if file_has_images {
+                    files_with_images += 1;
+                    let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                    if let (Some(uuid), Some(id)) =
+                        (last_image_uuid, path.file_stem().and_then(|s| s.to_str()))
+                    {
+                        if biggest.as_ref().is_none_or(|(s, ..)| size > *s) {
+                            biggest = Some((size, project.to_string(), id.to_string(), uuid));
+                        }
+                    }
+                }
+            }
+        }
+
+        println!("=== 既存会話の画像 実データ診断 (issue #349) ===");
+        println!("画像を含むファイル数: {files_with_images}");
+        println!("画像を含むメッセージ数: {image_messages}(うち本文が空の画像だけ: {image_only_messages})");
+        println!("画像の合計枚数: {total_images}");
+
+        if let Some((size, project, session_id, uuid)) = biggest {
+            let repo = FileSystemRepository::new(projects_dir);
+            let started = std::time::Instant::now();
+            let raw = repo.session_line_raw(&project, &session_id, &uuid);
+            let lookup = started.elapsed();
+            let images = raw
+                .as_deref()
+                .map(domain::extract_message_images)
+                .unwrap_or_default();
+            println!(
+                "画像の最も多いファイル: {project}/{session_id}.jsonl ({:.1}MB)",
+                size as f64 / 1_048_576.0
+            );
+            println!(
+                "最後の画像行(uuid={uuid})の取得: 行探索 {lookup:?} + 抽出込みで {:?}、画像 {} 枚",
+                started.elapsed(),
+                images.len()
+            );
         }
     }
 
@@ -1728,5 +1937,78 @@ mod tests {
             repo.session_line_raw("proj", "nope", "u-1"),
             Err(AppError::Io(_))
         ));
+    }
+
+    // native.md §5からの意図的な逸脱(`diagnose_real_log_line_conversion` と同じ理由):
+    // 実ユーザーディレクトリの巨大な会話ファイルを**読み取りのみ**で開く一回限りの
+    // 手動計測・同一性確認(通常の `cargo test` では実行されない)。issue #350:
+    // 会話を開くときの所要時間を、旧実装(2回読み)と新実装(1回読み)で比べ、
+    // 結果(メッセージ・LogLine 全件)が一致することも確かめる。対象は環境変数
+    // `YAOYOROZU_BENCH_FILE`(`.jsonl` のフルパス)で指定する。
+    // 実行例: `YAOYOROZU_BENCH_FILE=... cargo test -p infra --release -- --ignored --nocapture bench_real_session_open`
+    #[test]
+    #[ignore]
+    fn bench_real_session_open() {
+        let Ok(target) = std::env::var("YAOYOROZU_BENCH_FILE") else {
+            println!("YAOYOROZU_BENCH_FILE が未指定のためスキップします");
+            return;
+        };
+        let target = PathBuf::from(target);
+        let session_id = target.file_stem().unwrap().to_string_lossy().to_string();
+        let project_dir = target.parent().unwrap();
+        let project = project_dir
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let repo = FileSystemRepository::new(project_dir.parent().unwrap().to_path_buf());
+        println!(
+            "対象: {} ({} bytes)",
+            target.display(),
+            fs::metadata(&target).unwrap().len()
+        );
+
+        for round in 1..=2 {
+            let t = std::time::Instant::now();
+            let old_messages = legacy_messages(&target);
+            let t_msg = t.elapsed();
+            let t = std::time::Instant::now();
+            let old_lines = legacy_lines(&target);
+            let t_lines = t.elapsed();
+            println!(
+                "[旧 {round}回目] メッセージ: {t_msg:?}({}件) + LogLine: {t_lines:?}({}件) = {:?}",
+                old_messages.len(),
+                old_lines.len(),
+                t_msg + t_lines
+            );
+
+            let t = std::time::Instant::now();
+            let content = repo.read_session(&project, &session_id).unwrap();
+            println!(
+                "[新 {round}回目] read_session: {:?}(メッセージ{}件 / LogLine{}件)",
+                t.elapsed(),
+                content.messages.len(),
+                content.lines.len()
+            );
+
+            // 計測中に会話が伸びると件数がずれるため、旧の読みより後に新を読んだ分だけ
+            // 先頭が一致することを確かめる(伸びていなければ完全一致)。
+            let same_len = old_messages.len() == content.messages.len()
+                && old_lines.len() == content.lines.len();
+            let prefix = old_messages.len().min(content.messages.len());
+            assert!(
+                old_messages[..prefix]
+                    .iter()
+                    .map(message_parts)
+                    .eq(content.messages[..prefix].iter().map(message_parts)),
+                "メッセージが一致しない"
+            );
+            let prefix = old_lines.len().min(content.lines.len());
+            assert!(
+                old_lines[..prefix] == content.lines[..prefix],
+                "LogLine が一致しない"
+            );
+            println!("[一致確認 {round}回目] 件数も一致: {same_len}(伸びていれば先頭部分の一致)");
+        }
     }
 }

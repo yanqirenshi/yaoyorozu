@@ -3,7 +3,7 @@
 //! まとめる)。
 
 use super::{AssistantContentBlock, SessionLine, UserContent, UserContentBlock};
-use crate::{Message, Role};
+use crate::{Message, MessageStatus, Role};
 
 fn user_content_text(content: &Option<UserContent>) -> String {
     match content {
@@ -43,23 +43,34 @@ pub fn extract_message(value: &serde_json::Value) -> Option<Message> {
 /// `extract_message`(`&Value` 版)と `ScannedLine::message`(issue #302)が
 /// 共有する、抽出ルールの唯一の実装。
 pub(super) fn message_from_line(line: &SessionLine) -> Option<Message> {
-    let (role, text, timestamp, uuid) = match line {
+    let (role, text, timestamp, uuid, image_count, status) = match line {
         SessionLine::User(l) => (
             Role::User,
             user_content_text(&l.message.content),
             l.base.timestamp.clone().unwrap_or_default(),
             l.base.uuid.clone(),
+            l.base64_images().len(),
+            MessageStatus::Normal,
         ),
         SessionLine::Assistant(l) => (
             Role::Assistant,
             assistant_content_text(&l.message.content),
             l.base.timestamp.clone().unwrap_or_default(),
             l.base.uuid.clone(),
+            0,
+            // 送信の失敗を示すエラー行(issue #364)。`model: "<synthetic>"` だけでは
+            // 判別しない(失敗ではない synthetic 行があるため。実データで確認)。
+            if l.is_api_error_message == Some(true) {
+                MessageStatus::Error
+            } else {
+                MessageStatus::Normal
+            },
         ),
         _ => return None,
     };
 
-    if text.trim().is_empty() {
+    // 本文が空でも、画像が付いていれば表示対象にする(画像だけの貼り付け。issue #349)。
+    if text.trim().is_empty() && image_count == 0 {
         return None;
     }
 
@@ -68,6 +79,8 @@ pub(super) fn message_from_line(line: &SessionLine) -> Option<Message> {
         text,
         timestamp,
         uuid,
+        image_count,
+        status,
     })
 }
 
@@ -180,6 +193,89 @@ mod tests {
             Some("a-1")
         );
         assert_eq!(extract_message(&no_uuid).unwrap().uuid, None);
+    }
+
+    #[test]
+    fn extract_message_marks_only_api_error_lines_as_errors() {
+        // issue #364。実データ(~/.claude/projects の 158 ファイル)の形:
+        // 失敗を示すエラー行は `model: "<synthetic>"` かつ `isApiErrorMessage: true`。
+        // `model: "<synthetic>"` でも `isApiErrorMessage: false`(No response requested. など)は失敗ではない。
+        let error_line = json!({
+            "type": "assistant", "uuid": "e-1", "isApiErrorMessage": true,
+            "error": "authentication_failed", "apiErrorStatus": 401,
+            "message": { "role": "assistant", "model": "<synthetic>", "stop_reason": "stop_sequence",
+                "content": [{ "type": "text", "text": "Failed to authenticate. API Error: 401 OAuth access token has expired." }] }
+        });
+        let message = extract_message(&error_line).expect("error line is displayed");
+        assert_eq!(message.status, MessageStatus::Error);
+        assert!(message.text.contains("401"), "エラーの内容は本文として残る");
+
+        let not_an_error = json!({
+            "type": "assistant", "uuid": "s-1", "isApiErrorMessage": false,
+            "message": { "role": "assistant", "model": "<synthetic>", "stop_reason": "stop_sequence",
+                "content": [{ "type": "text", "text": "No response requested." }] }
+        });
+        assert_eq!(
+            extract_message(&not_an_error).unwrap().status,
+            MessageStatus::Normal
+        );
+
+        // 項目が無い行(普通の返事・ユーザーの発言)は通常。
+        let plain_reply = json!({
+            "type": "assistant", "uuid": "a-1",
+            "message": { "role": "assistant", "content": [{ "type": "text", "text": "hi" }] }
+        });
+        assert_eq!(
+            extract_message(&plain_reply).unwrap().status,
+            MessageStatus::Normal
+        );
+        let user = json!({
+            "type": "user", "uuid": "u-1", "isApiErrorMessage": true,
+            "message": { "role": "user", "content": "hello" }
+        });
+        assert_eq!(
+            extract_message(&user).unwrap().status,
+            MessageStatus::Normal,
+            "エラー行はアシスタント側の行だけ"
+        );
+    }
+
+    #[test]
+    fn extract_message_counts_displayable_images_and_keeps_image_only_messages() {
+        // issue #349: 画像だけの発言も表示対象。URL参照・対応外形式は数えない。
+        let image_only = json!({
+            "type": "user", "uuid": "u-1",
+            "message": { "role": "user", "content": [
+                { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "AAAA" } },
+                { "type": "image", "source": { "type": "base64", "media_type": "image/jpeg", "data": "BBBB" } },
+                { "type": "image", "source": { "type": "url", "url": "https://example.com/a.png" } }
+            ] }
+        });
+        let message = extract_message(&image_only).expect("image-only message is kept");
+        assert_eq!(message.text, "");
+        assert_eq!(message.image_count, 2);
+
+        let with_text = json!({
+            "type": "user",
+            "message": { "role": "user", "content": [
+                { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "AAAA" } },
+                { "type": "text", "text": "見てください" }
+            ] }
+        });
+        let message = extract_message(&with_text).unwrap();
+        assert_eq!(
+            (message.text.as_str(), message.image_count),
+            ("見てください", 1)
+        );
+
+        // 画像も本文も無ければ従来どおり非表示。
+        let unsupported_only = json!({
+            "type": "user",
+            "message": { "role": "user", "content": [
+                { "type": "image", "source": { "type": "base64", "media_type": "image/svg+xml", "data": "AAAA" } }
+            ] }
+        });
+        assert!(extract_message(&unsupported_only).is_none());
     }
 
     #[test]

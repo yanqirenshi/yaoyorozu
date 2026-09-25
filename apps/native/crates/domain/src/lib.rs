@@ -18,8 +18,10 @@ mod github_project;
 mod github_project_summary;
 mod hub_layout;
 mod hub_tuning;
+mod image_attachment;
 mod log_line;
 mod message;
+mod message_image;
 mod node_position;
 mod observed_git_state;
 mod parsed_session;
@@ -63,11 +65,18 @@ pub use github_project::GithubProject;
 pub use github_project_summary::GithubProjectSummary;
 pub use hub_layout::{HubLayout, CURRENT_HUB_LAYOUT_VERSION};
 pub use hub_tuning::{HubTuning, CURRENT_HUB_TUNING_VERSION};
+pub use image_attachment::{
+    validate_image_attachment, validate_image_attachments, validate_image_count, ImageAttachment,
+    ImageAttachmentError, ImageMediaType, MAX_IMAGES_PER_MESSAGE, MAX_IMAGE_BASE64_LEN,
+};
 pub use log_line::{
     convert_json_line_to_log_line, convert_session_line, AssistantLogLine, AttachmentLogLine,
     LogLine, LogLineBase, LogLineConversionError, SystemLogLine, UserLogLine,
 };
-pub use message::{order_messages_newest_first, paginate_messages, Message};
+pub use message::{
+    mark_failed_questions, order_messages_newest_first, paginate_messages, Message, MessageStatus,
+};
+pub use message_image::{extract_message_images, MessageImage};
 pub use node_position::NodePosition;
 pub use observed_git_state::{ObservedGitState, ObservedWorktree};
 pub use parsed_session::ParsedSession;
@@ -81,7 +90,7 @@ pub use role::Role;
 pub use rule_summary::RuleSummary;
 pub use session::Session;
 pub use session_file::SessionFile;
-pub use session_summary::{collapse_session_series, SessionSummary};
+pub use session_summary::{sort_sessions_newest_first, SessionSummary};
 pub use session_title::{excerpt, resolve_session_title};
 pub use settings::{effective_projects_dir, Settings, CURRENT_SETTINGS_VERSION};
 pub use skill_summary::SkillSummary;

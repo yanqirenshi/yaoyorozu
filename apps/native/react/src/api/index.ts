@@ -15,6 +15,7 @@ import type {
   CameraDto,
   HubLayoutDto,
   HubTuningDto,
+  MessageImageDto,
   NodePositionDto,
   PcDto,
   ProfileSummaryDto,
@@ -58,6 +59,7 @@ export type {
   HubLayoutDto,
   HubTuningDto,
   MessageDto,
+  MessageImageDto,
   NodePositionDto,
   PcDto,
   ProfileSummaryDto,
@@ -120,13 +122,31 @@ export function listSessions(project: string): Promise<SessionSummaryDto[]> {
   return invoke<SessionSummaryDto[]>("list_sessions", { project });
 }
 
+// images は添付画像の base64(data: プレフィックス無し)。パスではなくバイト列を渡す
+// (native.md §4。issue #349)。検証(形式・サイズ・枚数)は Rust 側。
 export function sendMessage(
   project: string,
   sessionId: string,
   text: string,
+  images: string[],
   mode: AgentModeDto,
 ): Promise<void> {
-  return invoke<void>("send_message", { project, sessionId, text, mode });
+  return invoke<void>("send_message", { project, sessionId, text, images, mode });
+}
+
+// 画像を1枚添付する前の事前検証(issue #349)。existingCount は添付済みの枚数。
+// 違反なら理由つきの AppErrorDto で reject される。
+export function checkImageAttachment(data: string, existingCount: number): Promise<void> {
+  return invoke<void>("check_image_attachment", { data, existingCount });
+}
+
+// メッセージ(uuid)に含まれる画像をオンデマンドで取る(「画像 n 枚」。issue #349)。
+export function getSessionLineImages(
+  project: string,
+  sessionId: string,
+  uuid: string,
+): Promise<MessageImageDto[]> {
+  return invoke<MessageImageDto[]>("get_session_line_images", { project, sessionId, uuid });
 }
 
 export function onSessionChanged(

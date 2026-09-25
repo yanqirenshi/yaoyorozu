@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { DragEvent, FormEvent } from "react";
+import type { ChangeEvent, ClipboardEvent, DragEvent, FormEvent } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { DockItem } from "command-dock";
 import type { ViewMode } from "@yanqirenshi/markdown.sitter";
 import {
+  checkImageAttachment,
   getGithubAuthStatus,
   getProjectClaudeMd,
   getProjectSettingsFile,
@@ -32,23 +33,25 @@ import type {
 } from "../api";
 import ClaudeMdEditor from "../ClaudeMdEditor";
 import type { ClaudeMdEditorHandle } from "../ClaudeMdEditor";
+import { readImageFile } from "../attachedImage";
+import type { AttachedImage } from "../attachedImage";
 import { createClaudeMdDockItems } from "../claudeMdDockItems";
 import { MODE_ICON, RELOAD_ICON } from "../icons";
 import JsonFileEditor from "../JsonFileEditor";
 import type { JsonFileEditorHandle } from "../JsonFileEditor";
 import { formatTimestamp } from "../formatTimestamp";
+import MessageImagesDialog from "../MessageImagesDialog";
 import MessageText from "../MessageText";
 import ProfileSettingsPane from "../ProfileSettingsPane";
 import SessionPickerDialog from "../SessionPickerDialog";
 import type { SessionPickerCandidate } from "../SessionPickerDialog";
 import RawLineDialog from "../RawLineDialog";
+import { SendErrorBody } from "../SendErrorBody";
 import ViewerSideMenu from "../ViewerSideMenu";
 import ViewerToolbar from "../ViewerToolbar";
 import { createProjectSettingsDockItems } from "../projectSettingsDockItems";
 import RulesPane from "../RulesPane";
 import SkillsPane from "../SkillsPane";
-import Tabs, { tabPanelProps } from "../Tabs";
-import type { TabItem } from "../Tabs";
 import { useReportWindowState } from "../useReportWindowState";
 import { PANE_VIEWS } from "../viewerNav";
 import type { PaneView, ViewerNav } from "../viewerNav";
@@ -79,20 +82,14 @@ const SCOPE_INSUFFICIENT_MESSAGE =
 
 const DISCARD_CONFIRM_MESSAGE = "編集内容を破棄しますか?保存していない変更は失われます。";
 
-// セッションタブの鍵(issue #348・#353)。「フォルダ|系列の鍵」。
-// 系列の鍵はフォーク系列の `root_uuid`(取れなければセッション ID 自身)。
-// 一覧は系列ごとの最新ファイルだけを返し(#345)、フォークすると最新ファイルの
-// セッション ID が変わるため、セッション ID ではなく系列の鍵をタブの同一性
-// (と保存するキー)にする: フォークしてもタブは同じ会話を指し続ける。
-// フォルダ名・セッション ID・root_uuid は英数字と `-` のみで、`|` は含まれない。
+// 左ペインの「選んだセッション」の鍵(issue #348・#353・#369・#379)。「フォルダ|セッション ID」。
+// 1行 = 1セッション(セッション ID = 会話ファイル)。フォークや圧縮で別の
+// ID のファイルに分かれた会話は、別のセッション(別の行)として扱う。
+// フォルダ名・セッション ID は英数字と `-` のみで、`|` は含まれない。
 const SESSION_TAB_SEPARATOR = "|";
 
-function seriesKeyOf(s: SessionSummaryDto): string {
-  return s.root_uuid ?? s.id;
-}
-
-function sessionTabKey(folder: string, seriesKey: string): string {
-  return `${folder}${SESSION_TAB_SEPARATOR}${seriesKey}`;
+function sessionTabKey(folder: string, sessionId: string): string {
+  return `${folder}${SESSION_TAB_SEPARATOR}${sessionId}`;
 }
 
 type SessionsPageProps = {
@@ -110,19 +107,13 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const [resolvedProfileId, setResolvedProfileId] = useState<string | null>(null);
   const [targetFolders, setTargetFolders] = useState<string[]>([]);
   const [sessionGroups, setSessionGroups] = useState<SessionGroup[]>([]);
-  // 開いているセッションタブの並び(issue #353。保存済みの全体)。`null` は読み込み前。
+  // 左ペインに並べる「自分で選んだセッション」の並び(issue #353・#379。保存済みの全体)。`null` は読み込み前。
   // 一覧に見つからないもの(削除・対象フォルダから外れた等)は表示しないだけで、
   // ここには残す(戻ってきたら復活する。エラーにはしない)。
   const [viewerTabs, setViewerTabs] = useState<ViewerTabDto[] | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
-  // タブの保存は順序どおりに実行する(連続操作で古い並びが後勝ちしないように)。
+  // 並びの保存は順序どおりに実行する(連続操作で古い並びが後勝ちしないように)。
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
-  // 選択中セッションの系列の鍵(フォーク後の追従用。下記の effect)。
-  const lastSelectedSeriesRef = useRef<{
-    project: string;
-    sessionId: string;
-    seriesKey: string;
-  } | null>(null);
   const [messages, setMessages] = useState<MessageDto[]>([]);
   // `refreshSessionInPlace` が最新の読み込み件数を参照するための ref(issue #314)。
   // state をそのまま依存配列に入れると、追記のたびに購読(`onSessionChanged` 等)の
@@ -136,6 +127,11 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const [error, setError] = useState<string | null>(null);
   // 「データ」ボタンで開いているメッセージの uuid(閉じていれば null。issue #313)。
   const [rawLineUuid, setRawLineUuid] = useState<string | null>(null);
+  // 「画像 n 枚」で開いているメッセージの uuid(閉じていれば null。issue #349)。
+  const [imagesUuid, setImagesUuid] = useState<string | null>(null);
+  // 送信前の添付画像(issue #349。入力途中の UI 状態。送信で空に戻す)。
+  const [attachments, setAttachments] = useState<AttachedImage[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [mode, setMode] = useState<AgentModeDto>("chat");
@@ -337,30 +333,6 @@ function SessionsPage({ nav }: SessionsPageProps) {
       });
   }, [resolvedProfileId]);
 
-  // フォークへの追従(issue #353)。表示中のセッションがフォークされて一覧の最新
-  // ファイルが別の ID に変わったとき(=表示中の ID が一覧から消え、同じ系列の
-  // 鍵の別 ID が現れたとき)、URL の session を新しい ID へ付け替える。タブは
-  // 系列の鍵で同一性を持つのでタブ自体は変わらず、開いている会話だけを最新
-  // ファイルへ移す。
-  useEffect(() => {
-    if (!projectParam || !sessionParam) return;
-    const group = sessionGroups.find((g) => g.folder === projectParam);
-    if (!group) return;
-    const current = group.sessions.find((s) => s.id === sessionParam);
-    if (current) {
-      lastSelectedSeriesRef.current = {
-        project: projectParam,
-        sessionId: sessionParam,
-        seriesKey: seriesKeyOf(current),
-      };
-      return;
-    }
-    const last = lastSelectedSeriesRef.current;
-    if (!last || last.project !== projectParam || last.sessionId !== sessionParam) return;
-    const successor = group.sessions.find((s) => seriesKeyOf(s) === last.seriesKey);
-    if (successor) nav.setProjectAndSession(projectParam, successor.id);
-  }, [sessionGroups, projectParam, sessionParam, nav.setProjectAndSession]);
-
   // 設定の変更(設定画面でのプロファイル切り替え等)で対象フォルダ・GitHubプロジェクトが変わった
   // ことの通知。表示中のフォルダが新しいプロファイルの対象から外れた場合は
   // 選択を解除する(issue #72)。
@@ -443,37 +415,29 @@ function SessionsPage({ nav }: SessionsPageProps) {
       .finally(() => setMovingItemId(null));
   };
 
-  // 一覧の全セッション(新しい順。フォルダをまたぐ)。系列の鍵つき(issue #353)。
+  // 一覧の全セッション(新しい順。フォルダをまたぐ)。
   const allSessions = sessionGroups
     .flatMap((group) => group.sessions.map((session) => ({ folder: group.folder, session })))
     .sort((a, b) => b.session.modified_at - a.session.modified_at);
   const sessionByTabKey = new Map(
-    allSessions.map(({ folder, session }) => [sessionTabKey(folder, seriesKeyOf(session)), { folder, session }]),
+    allSessions.map(({ folder, session }) => [sessionTabKey(folder, session.id), { folder, session }]),
   );
 
-  // ヘッダのセッションタブ(issue #348)。自分で選んで開いたものだけを、開いた
-  // (保存した)順で並べる(issue #353。以前は全セッションを新しい順に並べていた)。
-  // ラベルは以前の一覧と同じタイトル。同名のセッションを見分けられるよう、複数
-  // フォルダのときはツールチップにフォルダ名を含める。日時はツールチップへ。
+  // 左ペインの縦一覧(issue #379。#348 のヘッダのタブから戻した)。自分で選んだ
+  // セッションだけを、追加した順に並べる(#353 と同じ。初期は0件)。一覧に見つからない
+  // もの(削除・対象フォルダから外れた等)は表示しないだけで、保存済みの並びには残す。
+  // 1行は、タイトルと更新日時。対象フォルダが複数のときは見分けられるようフォルダ名も
+  // 添える(フォルダごとの見出しは出さない)。
   const openTabs = (viewerTabs ?? []).flatMap((tab) => {
-    const hit = sessionByTabKey.get(sessionTabKey(tab.project, tab.series_key));
-    return hit ? [{ key: sessionTabKey(tab.project, tab.series_key), ...hit }] : [];
+    const hit = sessionByTabKey.get(sessionTabKey(tab.project, tab.session_id));
+    return hit ? [{ key: sessionTabKey(tab.project, tab.session_id), ...hit }] : [];
   });
-  const sessionTabs: TabItem[] = openTabs.map(({ key, folder, session }) => ({
-    id: key,
-    label: session.title,
-    title: [
-      session.title,
-      ...(targetFolders.length > 1 ? [folder] : []),
-      new Date(session.modified_at).toLocaleString(),
-    ].join("\n"),
-  }));
   const selectedSessionSummary = sessionGroups
     .find((g) => g.folder === projectParam)
     ?.sessions.find((s) => s.id === sessionParam);
   const selectedTabValue =
     projectParam && selectedSessionSummary
-      ? sessionTabKey(projectParam, seriesKeyOf(selectedSessionSummary))
+      ? sessionTabKey(projectParam, selectedSessionSummary.id)
       : "";
 
   // タブの並びを更新して保存する(追加・閉じるのたびに自動保存)。
@@ -485,30 +449,25 @@ function SessionsPage({ nav }: SessionsPageProps) {
       .catch((e) => setError(isAppError(e) ? e.message : String(e)));
   };
 
-  const handleSelectSessionTab = (key: string) => {
-    const hit = sessionByTabKey.get(key);
-    if (hit) handleSelectSession(hit.folder, hit.session.id);
-  };
-
   // 「+」のモーダルで選んだセッションを、選んだ順に末尾へ足す。足したうちの最初の
-  // タブを選択する。
+  // 行を選択する。
   const handleAddSessionTabs = (keys: string[]) => {
     setPickerOpen(false);
     const added = keys.flatMap((key) => {
       const hit = sessionByTabKey.get(key);
-      return hit ? [{ tab: { project: hit.folder, series_key: seriesKeyOf(hit.session) }, hit }] : [];
+      return hit ? [{ tab: { project: hit.folder, session_id: hit.session.id }, hit }] : [];
     });
     if (added.length === 0) return;
     persistViewerTabs([...(viewerTabs ?? []), ...added.map((a) => a.tab)]);
     handleSelectSession(added[0].hit.folder, added[0].hit.session.id);
   };
 
-  // 「×」(または Delete キー)でタブを閉じる。タブ列から外すだけで会話ファイルは
-  // 消さない。選択中のタブを閉じたら隣のタブ(右、無ければ左)を選択し、最後の1つ
-  // だったら選択を外して 0 件の案内へ戻る。
+  // 行の「×」(または Delete キー)で一覧から外す。一覧から外すだけで会話ファイルは
+  // 消さない。選択中の行を外したら隣の行(下、無ければ上)を選択し、最後の1つ
+  // だったら選択を外して 0 件の案内へ戻る(#353 と同じ遷移)。
   const handleCloseSessionTab = (key: string) => {
     persistViewerTabs(
-      (viewerTabs ?? []).filter((tab) => sessionTabKey(tab.project, tab.series_key) !== key),
+      (viewerTabs ?? []).filter((tab) => sessionTabKey(tab.project, tab.session_id) !== key),
     );
     if (key !== selectedTabValue) return;
     const index = openTabs.findIndex((tab) => tab.key === key);
@@ -521,7 +480,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
   };
 
   const pickerCandidates: SessionPickerCandidate[] = allSessions.map(({ folder, session }) => ({
-    key: sessionTabKey(folder, seriesKeyOf(session)),
+    key: sessionTabKey(folder, session.id),
     folder,
     title: session.title,
     modifiedAt: session.modified_at,
@@ -530,8 +489,8 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const selectedSummary = sessionGroups
     .find((g) => g.folder === projectParam)
     ?.sessions.find((s) => s.id === sessionParam);
-  // `--resume <ID>` 化(issue #345)により、一覧に出る系列先頭のセッションは
-  // すべて送信対象にできる(旧「最新のみ送信可」の制約は撤廃)。
+  // `--resume <ID>` 化(issue #345)により、一覧に出るセッションはすべて送信対象に
+  // できる(表示中のセッション ID へ送る。旧「最新のみ送信可」の制約は撤廃)。
   const canSend = !!selectedSummary;
 
   // ウィンドウレジストリ(issue #83)へこのウィンドウの表示状態を報告する。
@@ -582,15 +541,59 @@ function SessionsPage({ nav }: SessionsPageProps) {
     nav.setSkill(name);
   };
 
+  // 受け取った画像ファイル(貼り付け・ファイル選択)を1枚ずつ Rust で事前検証し、
+  // 通ったものだけをサムネイルにする(形式・サイズ・枚数の規則は Rust の domain が
+  // 唯一の判定元。違反は理由つきで表示して添付しない。issue #349)。
+  const addImageFiles = async (files: File[]) => {
+    setError(null);
+    let count = attachments.length;
+    for (const file of files) {
+      try {
+        const image = await readImageFile(file);
+        await checkImageAttachment(image.base64, count);
+        count += 1;
+        setAttachments((prev) => [...prev, image]);
+      } catch (e) {
+        setError(isAppError(e) ? e.message : String(e));
+      }
+    }
+  };
+
+  const handlePaste = (event: ClipboardEvent<HTMLInputElement>) => {
+    const files = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null);
+    if (files.length === 0) return;
+    event.preventDefault();
+    void addImageFiles(files);
+  };
+
+  const handleFilesSelected = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    // 同じファイルをもう一度選べるように、選択をリセットする。
+    event.target.value = "";
+    if (files.length > 0) void addImageFiles(files);
+  };
+
+  const canSubmit = !!draft.trim() || attachments.length > 0;
+
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
-    if (!projectParam || !sessionParam || !canSend || sending || !draft.trim()) return;
+    if (!projectParam || !sessionParam || !canSend || sending || !canSubmit) return;
 
     setSending(true);
     setError(null);
-    sendMessage(projectParam, sessionParam, draft, mode)
+    sendMessage(
+      projectParam,
+      sessionParam,
+      draft,
+      attachments.map((image) => image.base64),
+      mode,
+    )
       .then(() => {
         setDraft("");
+        setAttachments([]);
         // 送信成功: 同一セッションへの追記(issue #314)。差分再読込でチラつかせない。
         refreshSessionInPlace(projectParam, sessionParam);
       })
@@ -688,40 +691,10 @@ function SessionsPage({ nav }: SessionsPageProps) {
 
   return (
     <div className="viewer-page">
-      {/* 最上段は左端まで届く全幅のヘッダ(issue #291)。会話ビューのときだけ、
-          対象フォルダのセッションをタブで並べて切り替える(issue #348。以前は
-          左のセッション一覧ペインだった。#279 の「会話ビューのときだけ」を引き継ぐ)。
-          プロファイル名とフォルダ名はウィンドウタイトルへ移した(Layout.tsx)。
-          切替の挙動(`handleSelectSession`。URL の project/session の更新→
-          切替時の全クリア、追記時の差分反映 #314)は一覧のときと同じ。 */}
-      <div className="session-conversation-head">
-        {view === "chat" && (
-          <>
-            {/* タブ列の左端の「+」。押すとモーダルで開くセッションを選んで追加する
-                (issue #353)。 */}
-            <button
-              type="button"
-              className="session-tab-add"
-              title="セッションを追加"
-              aria-label="セッションを追加"
-              onClick={() => setPickerOpen(true)}
-            >
-              +
-            </button>
-            {sessionTabs.length > 0 && (
-              <Tabs
-                id="session-tabs"
-                aria-label="セッションの切り替え"
-                size="small"
-                items={sessionTabs}
-                value={selectedTabValue}
-                onChange={handleSelectSessionTab}
-                onClose={handleCloseSessionTab}
-              />
-            )}
-          </>
-        )}
-      </div>
+      {/* 全幅のヘッダは置かない(issue #379)。プロファイル名(#275)はウィンドウ
+          タイトルへ移し(#348・#377)、操作のツールバーは画面下のフッターにあり、
+          セッションのタブも無くなって中身が空になったため。サイドメニュー | 選んだ
+          セッションの一覧 | コンテンツ を並べる。 */}
       {pickerOpen && (
         <SessionPickerDialog
           candidates={pickerCandidates}
@@ -735,42 +708,151 @@ function SessionsPage({ nav }: SessionsPageProps) {
       {/* ビュー切り替えは上部のタブではなく、画面の最左端のサイドメニュー
           (issue #263)。切り替えの挙動(`handleSwitchView`)は従来のまま。 */}
       <ViewerSideMenu active={view} onChange={handleSwitchView} />
-      <div
-        className="session-conversation"
-        {...(view === "chat" && sessionTabs.some((tab) => tab.id === selectedTabValue)
-          ? tabPanelProps("session-tabs", selectedTabValue)
-          : {})}
-      >
+      {/* セッション一覧ペインは「会話」ビューのときだけ表示する(issue #279)。
+          CLAUDE.md / Rules / Skills / settings 系は #269 でセッション不要になり、
+          GitHub Project も元々プロファイル基準のため、それ以外のビューでは
+          一覧を出さずコンテンツ領域を広げる。選択中のセッション・会話の表示は
+          このコンポーネントの状態と URL(`project`/`session`)に持っており、
+          一覧を出し入れしても破棄されない(会話に戻ればそのまま)。 */}
+      {view === "chat" && (
+        <div className="project-list">
+          {/* 「+」(issue #353・#379)。押すとモーダルで追加するセッションを選ぶ。
+              0件のときはこれだけが見える。 */}
+          <button
+            type="button"
+            className="session-list-add"
+            title="セッションを追加"
+            aria-label="セッションを追加"
+            onClick={() => setPickerOpen(true)}
+          >
+            + セッションを追加
+          </button>
+          {openTabs.map(({ key, folder, session }) => (
+            <div key={key} className="session-list-row">
+              <button
+                type="button"
+                className={`project-item session-list-item ${
+                  key === selectedTabValue ? "selected" : ""
+                }`}
+                onClick={() => handleSelectSession(folder, session.id)}
+                onKeyDown={(event) => {
+                  // キーボードからは Delete で外す(× は Tab キーの順序に入れない。#353 と同じ)。
+                  if (event.key !== "Delete") return;
+                  event.preventDefault();
+                  handleCloseSessionTab(key);
+                }}
+              >
+                <span className="session-item-title">{session.title}</span>
+                <span className="session-item-updated">
+                  {new Date(session.modified_at).toLocaleString()}
+                </span>
+                {targetFolders.length > 1 && (
+                  <span className="session-item-folder" title={folder}>
+                    {folder}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                className="session-list-close"
+                tabIndex={-1}
+                title={`${session.title} を外す`}
+                aria-label={`${session.title} を一覧から外す`}
+                onClick={() => handleCloseSessionTab(key)}
+              >
+                {/* 基本デザイン「アイコン」の close(uiIcon.ts)。色は currentColor。 */}
+                <svg
+                  viewBox="0 0 20 20"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.7"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M5 5l10 10M15 5L5 15" />
+                </svg>
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="session-conversation">
         {view === "chat" ? (
           <>
             <form className="message-form" onSubmit={handleSubmit}>
+              {/* 画像の添付(ファイル選択。貼り付けは入力欄の paste で受ける。issue #349) */}
+              <button
+                type="button"
+                className="message-attach"
+                title="画像を添付"
+                aria-label="画像を添付"
+                disabled={!projectParam || !sessionParam || !canSend || sending}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                画像
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                hidden
+                onChange={handleFilesSelected}
+              />
               <input
                 type="text"
                 className="message-input"
-                placeholder="AIにメッセージを送る"
+                placeholder="AIにメッセージを送る(画像は貼り付けでも添付できます)"
                 value={draft}
                 disabled={!projectParam || !sessionParam || !canSend || sending}
                 onChange={(e) => setDraft(e.target.value)}
+                onPaste={handlePaste}
               />
               <button
                 type="submit"
                 className="message-send"
                 disabled={
-                  !projectParam || !sessionParam || !canSend || sending || !draft.trim()
+                  !projectParam || !sessionParam || !canSend || sending || !canSubmit
                 }
               >
                 {sending ? "送信中…" : "送信"}
               </button>
             </form>
+            {attachments.length > 0 && (
+              <div className="message-attachments">
+                {attachments.map((image, i) => (
+                  <div key={image.id} className="message-attachment">
+                    <img
+                      className="message-attachment-thumb"
+                      src={image.dataUrl}
+                      alt={`添付画像 ${i + 1}`}
+                    />
+                    <button
+                      type="button"
+                      className="message-attachment-remove"
+                      title="この画像を外す"
+                      aria-label={`添付画像 ${i + 1} を外す`}
+                      disabled={sending}
+                      onClick={() =>
+                        setAttachments((prev) => prev.filter((a) => a.id !== image.id))
+                      }
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="conversation-scroll">
               {error && <p className="error">{error}</p>}
               {!projectParam || !sessionParam ? (
                 <p>
                   {targetFolders.length === 0
                     ? "設定のClaudeタブで対象フォルダを選択してください。"
-                    : sessionTabs.length === 0
-                      ? "「+」からセッションを追加してください。"
-                      : "上のタブからセッションを選択してください。"}
+                    : openTabs.length === 0
+                      ? "左の「+」からセッションを追加してください。"
+                      : "左の一覧からセッションを選択してください。"}
                 </p>
               ) : (
                 <>
@@ -782,6 +864,14 @@ function SessionsPage({ nav }: SessionsPageProps) {
                       onClose={() => setRawLineUuid(null)}
                     />
                   )}
+                  {imagesUuid && (
+                    <MessageImagesDialog
+                      project={projectParam}
+                      sessionId={sessionParam}
+                      uuid={imagesUuid}
+                      onClose={() => setImagesUuid(null)}
+                    />
+                  )}
                   <div className="messages">
                     {messages.map((m, i) => {
                       // uuid をキーにして、追記のたびの DOM の作り直しを避ける
@@ -790,11 +880,21 @@ function SessionsPage({ nav }: SessionsPageProps) {
                       // 吹き出しの横に、種類(role)と日時を小さく淡く出す
                       // (issue #258)。timestamp が空・不正なら日時は出さない。
                       const time = formatTimestamp(m.timestamp);
+                      // 送信に失敗したことの見分け(issue #364)。エラー行は普通の返事と、
+                      // 答えのない質問は普通の質問と見分けがつくようにする。
+                      const isSendError = m.status === "error" || m.status === "error_for_question";
+                      const isFailedQuestion = m.status === "failed_question";
                       return (
-                        <div key={key} className={`message-row message-row-${m.role}`}>
+                        <div
+                          key={key}
+                          className={`message-row message-row-${m.role}${isSendError ? " message-row-send-error" : ""}`}
+                        >
                           <div className={`message-meta message-meta-${m.role}`}>
-                            <span className="message-meta-role">{m.role}</span>
+                            <span className="message-meta-role">{isSendError ? "error" : m.role}</span>
                             {time && <span className="message-meta-time">{time}</span>}
+                            {isFailedQuestion && (
+                              <span className="message-meta-failed">送信に失敗</span>
+                            )}
                             {/* 元の jsonl 行をモーダルで見る(issue #313)。uuid の無い行は出さない。 */}
                             {m.uuid && (
                               <button
@@ -806,8 +906,28 @@ function SessionsPage({ nav }: SessionsPageProps) {
                               </button>
                             )}
                           </div>
-                          <div className={`message message-${m.role}`}>
-                            <MessageText text={m.text} />
+                          <div
+                            className={`message message-${m.role}${isSendError ? " message-send-error" : ""}${isFailedQuestion ? " message-failed-question" : ""}`}
+                          >
+                            {isSendError ? (
+                              <SendErrorBody text={m.text} status={m.status} />
+                            ) : (
+                              m.text && <MessageText text={m.text} />
+                            )}
+                            {/* 画像は本体を載せず件数だけ。押すとその行の画像を取りに行く(issue #349)。
+                                uuid の無い行は取得できないので件数だけ出す。 */}
+                            {m.image_count > 0 &&
+                              (m.uuid ? (
+                                <button
+                                  type="button"
+                                  className="message-images-button"
+                                  onClick={() => setImagesUuid(m.uuid)}
+                                >
+                                  画像 {m.image_count} 枚
+                                </button>
+                              ) : (
+                                <span className="message-images-count">画像 {m.image_count} 枚</span>
+                              ))}
                           </div>
                         </div>
                       );

@@ -58,6 +58,32 @@ pub struct MessageDto {
     pub timestamp: String,
     /// 元の jsonl 行の `uuid`(ビューアの「データ」表示用。issue #313)。行に無ければ null。
     pub uuid: Option<String>,
+    /// この行に含まれる画像の枚数(issue #349)。画像本体は載せず、押されたときに
+    /// `get_session_line_images` でオンデマンドに取る。
+    pub image_count: usize,
+    /// 送信の失敗に関する見分け(issue #364)。フロントは表示の切り替えにだけ使う。
+    pub status: MessageStatusDto,
+}
+
+/// `domain::MessageStatus` の DTO(issue #364)。
+#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageStatusDto {
+    Normal,
+    FailedQuestion,
+    ErrorForQuestion,
+    Error,
+}
+
+impl From<domain::MessageStatus> for MessageStatusDto {
+    fn from(status: domain::MessageStatus) -> Self {
+        match status {
+            domain::MessageStatus::Normal => Self::Normal,
+            domain::MessageStatus::FailedQuestion => Self::FailedQuestion,
+            domain::MessageStatus::ErrorForQuestion => Self::ErrorForQuestion,
+            domain::MessageStatus::Error => Self::Error,
+        }
+    }
 }
 
 impl From<domain::Message> for MessageDto {
@@ -67,6 +93,24 @@ impl From<domain::Message> for MessageDto {
             text: message.text,
             timestamp: message.timestamp,
             uuid: message.uuid,
+            image_count: message.image_count,
+            status: message.status.into(),
+        }
+    }
+}
+
+/// `get_session_line_images` の1枚分(issue #349)。フロントが `data:` URL を組み立てて表示する。
+#[derive(Serialize, Clone)]
+pub struct MessageImageDto {
+    pub media_type: String,
+    pub data: String,
+}
+
+impl From<domain::MessageImage> for MessageImageDto {
+    fn from(image: domain::MessageImage) -> Self {
+        Self {
+            media_type: image.media_type.as_mime().to_string(),
+            data: image.data_base64,
         }
     }
 }
@@ -95,9 +139,8 @@ impl From<domain::Conversation> for ConversationDto {
     }
 }
 
-/// セッション一覧(ビューア左ペイン)の1件分。`list_sessions` はフォーク系列
-/// (issue #345)ごとに最新ファイルだけへ畳んだ結果を返すため、ここに並ぶのは
-/// 常に各系列の先頭(送信対象にできるセッション)である。
+/// セッション一覧(ビューア左ペイン)の1件分。1件 = 1セッション(セッションID =
+/// 会話ファイル。issue #369)。
 #[derive(Serialize, Clone)]
 pub struct SessionSummaryDto {
     pub id: String,
@@ -109,10 +152,6 @@ pub struct SessionSummaryDto {
     /// セッションのgitブランチ(セッション中の最後の記録値)。`"HEAD"` は
     /// デタッチ状態、記録が無ければ `null`(ハブのグラフ階層用。issue #104)。
     pub git_branch: Option<String>,
-    /// フォーク系列の鍵(`root_uuid`。issue #345)。ビューアのセッションタブが
-    /// 「フォークしても同じ会話を指す」キーとして使う(issue #353)。取得できなければ
-    /// `null`(その場合は `id` 自身が系列の鍵)。
-    pub root_uuid: Option<String>,
 }
 
 impl From<domain::SessionSummary> for SessionSummaryDto {
@@ -123,7 +162,6 @@ impl From<domain::SessionSummary> for SessionSummaryDto {
             modified_at: summary.modified_at_ms,
             cwd: summary.cwd,
             git_branch: summary.git_branch,
-            root_uuid: summary.root_uuid,
         }
     }
 }
@@ -133,14 +171,14 @@ impl From<domain::SessionSummary> for SessionSummaryDto {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ViewerTabDto {
     pub project: String,
-    pub series_key: String,
+    pub session_id: String,
 }
 
 impl From<domain::ViewerTab> for ViewerTabDto {
     fn from(tab: domain::ViewerTab) -> Self {
         Self {
             project: tab.project,
-            series_key: tab.series_key,
+            session_id: tab.session_id,
         }
     }
 }
@@ -149,7 +187,7 @@ impl From<ViewerTabDto> for domain::ViewerTab {
     fn from(dto: ViewerTabDto) -> Self {
         Self {
             project: dto.project,
-            series_key: dto.series_key,
+            session_id: dto.session_id,
         }
     }
 }

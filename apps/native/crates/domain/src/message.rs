@@ -1,5 +1,25 @@
 use crate::Role;
 
+/// 送信の失敗に関する、メッセージの見分け(issue #364)。
+///
+/// ビューアから送信すると、Claude Code は先に質問を会話ファイルへ書き込み、そのあと
+/// AI に問い合わせる。問い合わせが失敗すると、会話ファイルには「答えのない質問」と
+/// 「失敗を示す AI 側のエラー行」が残る(Claude Code 自体の動き。#345 の検証 B-2)。
+/// 会話ファイルは書き換えず、表示のための印だけを付ける。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MessageStatus {
+    /// 通常のメッセージ。
+    #[default]
+    Normal,
+    /// 答えのない質問: 直後(表示される並びで)が送信失敗のエラー行である user メッセージ。
+    FailedQuestion,
+    /// 送信失敗のエラー行(`isApiErrorMessage: true` の AI 側の行)のうち、直前が
+    /// 答えのない質問(`FailedQuestion`)のもの。次に送信すると、その質問にもまとめて答える。
+    ErrorForQuestion,
+    /// 送信失敗のエラー行のうち、直前に AI の返答があるもの(返答の途中で失敗した)。
+    Error,
+}
+
 #[derive(Debug, Clone)]
 pub struct Message {
     pub role: Role,
@@ -8,6 +28,31 @@ pub struct Message {
     /// メッセージの組み立て元の会話チェーン行の `uuid`(issue #313)。元の jsonl 行を
     /// 引き当てるためのキー。行に `uuid` が無ければ `None`。
     pub uuid: Option<String>,
+    /// この行に含まれる表示可能な画像(base64 ソース・対応形式)の枚数(issue #349)。
+    /// 画像本体は持たない(必要なときだけ `extract_message_images` で取り出す)。
+    pub image_count: usize,
+    /// 送信の失敗に関する見分け(issue #364)。行から取り出した直後は、エラー行だけが
+    /// `Error`(それ以外は `Normal`)。質問との対応は `mark_failed_questions` が付ける。
+    pub status: MessageStatus,
+}
+
+/// 送信失敗のエラー行(`Error`)の直前が user メッセージなら、その user メッセージを
+/// 「答えのない質問」(`FailedQuestion`)にし、エラー行を `ErrorForQuestion` にする
+/// (issue #364)。`messages` は**記録順**(古い順)で、表示される並びそのもの
+/// (tool 結果だけの行など、表示されない行は含まれていない)。
+///
+/// 直前が AI の返答なら、返答の途中で失敗したもので、質問には答えが出ているため
+/// 何も変えない(エラー行は `Error` のまま)。
+pub fn mark_failed_questions(messages: &mut [Message]) {
+    for i in 1..messages.len() {
+        if messages[i].status != MessageStatus::Error {
+            continue;
+        }
+        if messages[i - 1].role == Role::User {
+            messages[i - 1].status = MessageStatus::FailedQuestion;
+            messages[i].status = MessageStatus::ErrorForQuestion;
+        }
+    }
 }
 
 /// 会話ログは記録順(古い順)で保持されるため、表示直前に反転して新しい順にする。
@@ -33,12 +78,16 @@ mod tests {
                 text: "first".to_string(),
                 timestamp: "1".to_string(),
                 uuid: None,
+                image_count: 0,
+                status: MessageStatus::Normal,
             },
             Message {
                 role: Role::Assistant,
                 text: "second".to_string(),
                 timestamp: "2".to_string(),
                 uuid: None,
+                image_count: 0,
+                status: MessageStatus::Normal,
             },
         ];
 
@@ -54,7 +103,96 @@ mod tests {
             text: text.to_string(),
             timestamp: String::new(),
             uuid: None,
+            image_count: 0,
+            status: MessageStatus::Normal,
         }
+    }
+
+    fn with(role: Role, status: MessageStatus, text: &str) -> Message {
+        Message {
+            role,
+            status,
+            ..message(text)
+        }
+    }
+
+    #[test]
+    fn mark_failed_questions_marks_the_unanswered_question_and_its_error_line() {
+        // 質問 → 答え → 質問(失敗)→ エラー行 → 次の質問 → 答え
+        let mut messages = vec![
+            with(Role::User, MessageStatus::Normal, "q1"),
+            with(Role::Assistant, MessageStatus::Normal, "a1"),
+            with(Role::User, MessageStatus::Normal, "q2"),
+            with(Role::Assistant, MessageStatus::Error, "err"),
+            with(Role::User, MessageStatus::Normal, "q3"),
+            with(Role::Assistant, MessageStatus::Normal, "a3"),
+        ];
+
+        mark_failed_questions(&mut messages);
+
+        let statuses: Vec<MessageStatus> = messages.iter().map(|m| m.status).collect();
+        assert_eq!(
+            statuses,
+            vec![
+                MessageStatus::Normal,
+                MessageStatus::Normal,
+                MessageStatus::FailedQuestion,
+                MessageStatus::ErrorForQuestion,
+                MessageStatus::Normal,
+                MessageStatus::Normal,
+            ]
+        );
+    }
+
+    #[test]
+    fn mark_failed_questions_leaves_a_mid_turn_error_after_an_assistant_reply_alone() {
+        let mut messages = vec![
+            with(Role::User, MessageStatus::Normal, "q"),
+            with(Role::Assistant, MessageStatus::Normal, "partial answer"),
+            with(Role::Assistant, MessageStatus::Error, "err"),
+        ];
+
+        mark_failed_questions(&mut messages);
+
+        assert_eq!(messages[0].status, MessageStatus::Normal);
+        assert_eq!(messages[2].status, MessageStatus::Error);
+    }
+
+    #[test]
+    fn mark_failed_questions_handles_edges_and_consecutive_errors() {
+        // 先頭がエラー行(直前なし)・空・エラー行が続く場合。
+        let mut messages = vec![with(Role::Assistant, MessageStatus::Error, "err")];
+        mark_failed_questions(&mut messages);
+        assert_eq!(messages[0].status, MessageStatus::Error);
+
+        mark_failed_questions(&mut []);
+
+        let mut messages = vec![
+            with(Role::User, MessageStatus::Normal, "q"),
+            with(Role::Assistant, MessageStatus::Error, "err1"),
+            with(Role::Assistant, MessageStatus::Error, "err2"),
+        ];
+        mark_failed_questions(&mut messages);
+        let statuses: Vec<MessageStatus> = messages.iter().map(|m| m.status).collect();
+        assert_eq!(
+            statuses,
+            vec![
+                MessageStatus::FailedQuestion,
+                MessageStatus::ErrorForQuestion,
+                MessageStatus::Error,
+            ],
+            "最初のエラー行だけが質問に対応する"
+        );
+    }
+
+    #[test]
+    fn mark_failed_questions_does_not_touch_a_user_message_followed_by_a_normal_reply() {
+        let mut messages = vec![
+            with(Role::User, MessageStatus::Normal, "q"),
+            with(Role::Assistant, MessageStatus::Normal, "a"),
+        ];
+        mark_failed_questions(&mut messages);
+        assert!(messages.iter().all(|m| m.status == MessageStatus::Normal));
     }
 
     #[test]

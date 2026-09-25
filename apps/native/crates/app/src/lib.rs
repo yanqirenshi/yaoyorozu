@@ -1,15 +1,18 @@
 use domain::{
-    collapse_session_series, is_valid_claude_dir_path, is_valid_json, is_valid_project_dir_name,
-    is_valid_rule_file_name, is_valid_session_id, is_valid_skill_name, order_messages_newest_first,
-    paginate_messages, reconcile_branches, reconcile_worktrees, repositories_from_profiles,
-    sort_claude_dir_entries, sort_projects_by_recency, Camera, ClaudeDirEntry, ClaudeDirPage,
-    ClaudeMdFile, ClaudeSettingsFile, Conversation, GitLedger, GitRepositoryLedger, HubLayout,
-    HubTuning, LogLine, NodePosition, ParsedSession, Project, RuleSummary, SessionSummary,
+    extract_message_images, is_valid_claude_dir_path, is_valid_json, is_valid_project_dir_name,
+    is_valid_rule_file_name, is_valid_session_id, is_valid_skill_name, mark_failed_questions,
+    order_messages_newest_first, paginate_messages, reconcile_branches, reconcile_worktrees,
+    repositories_from_profiles, sort_claude_dir_entries, sort_projects_by_recency,
+    sort_sessions_newest_first, validate_image_attachment, validate_image_attachments,
+    validate_image_count, Camera, ClaudeDirEntry, ClaudeDirPage, ClaudeMdFile, ClaudeSettingsFile,
+    Conversation, GitLedger, GitRepositoryLedger, HubLayout, HubTuning, ImageAttachment, LogLine,
+    Message, MessageImage, NodePosition, ParsedSession, Project, RuleSummary, SessionSummary,
     Settings, SkillSummary, ViewerTab, ViewerTabs, CURRENT_GIT_LEDGER_VERSION,
     CURRENT_HUB_LAYOUT_VERSION, CURRENT_HUB_TUNING_VERSION, CURRENT_VIEWER_TABS_VERSION,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
@@ -67,6 +70,49 @@ pub enum AppError {
     FileConflict(String),
 }
 
+/// 会話ファイルの状態の目印(更新時刻 + サイズ)。解析済みの結果を使い回してよいかの
+/// 判定に使う(issue #350)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileFingerprint {
+    pub modified_nanos: u128,
+    pub len: u64,
+}
+
+/// 会話ファイルを1回読んで得た内容(`SessionSource::read_session` の戻り値。issue #350)。
+#[derive(Debug, Clone)]
+pub struct SessionContent {
+    pub fingerprint: FileFingerprint,
+    /// 表示用のメッセージ。**記録順**(古い順)。
+    pub messages: Vec<Message>,
+    pub lines: Vec<LogLine>,
+}
+
+/// 解析済みメッセージのキャッシュ(ファイルごと。tauri 層の `AppState` が持つ。issue #350)。
+/// ページ送りのたびに巨大な会話ファイルを読み直さないための保存先。
+#[derive(Debug, Clone)]
+pub struct CachedMessages {
+    pub fingerprint: FileFingerprint,
+    /// **新しい順**に並べ済み(表示のたびに並べ替え・複製をしない)。
+    pub messages: Arc<Vec<Message>>,
+}
+
+/// 会話ファイルを読み直して得た、キャッシュへ入れるべき内容(issue #350)。
+#[derive(Debug, Clone)]
+pub struct ReloadedSession {
+    pub messages: CachedMessages,
+    pub lines: Vec<LogLine>,
+}
+
+/// `open_session` の結果。
+#[derive(Debug, Clone)]
+pub struct OpenedSession {
+    /// 表示する範囲(新しい順)のメッセージ。
+    pub conversation: Conversation,
+    /// ファイルを読み直した場合だけ `Some`(呼び出し側がキャッシュを差し替える)。
+    /// `None` はキャッシュが今のファイルと合っていて、読み直していないことを表す。
+    pub reloaded: Option<ReloadedSession>,
+}
+
 /// プロジェクト・セッションの読み取り(ports)。Claude Code のログ形式
 /// (`~/.claude/projects/` の走査、JSONL解析)に固有の詳細はこの抽象の
 /// 向こう側(infra)に閉じ込め、`app` はプロジェクト名・セッションIDなどの
@@ -74,8 +120,23 @@ pub enum AppError {
 pub trait SessionSource {
     fn list_projects(&self) -> Result<Vec<Project>, AppError>;
 
-    /// 指定セッション(ID + 全メッセージ)を返す。
-    fn session(&self, project: &str, session_id: &str) -> Result<Conversation, AppError>;
+    /// 指定セッションの会話ファイルを**1回だけ**読み、表示用のメッセージ(記録順)と
+    /// `LogLine` 一覧を返す(issue #350)。従来は `session`(メッセージ)と
+    /// `session_lines`(LogLine)が別々に全行を読んでいた(同じ巨大ファイルを2回)。
+    /// 各行のパースも1行1回にすること。行の変換に失敗した行(uuid/timestamp欠損等)は
+    /// 実装側でスキップし、警告ログを出すこと(issue #208 本文の指示)。
+    /// 返す `fingerprint` は**読み始める前**のファイルの状態(読んでいる途中で
+    /// ファイルが伸びても、次回の照合で「古い」と判定されて読み直される側に倒す)。
+    fn read_session(&self, project: &str, session_id: &str) -> Result<SessionContent, AppError>;
+
+    /// 指定セッションの会話ファイルの現在の状態(更新時刻 + サイズ)だけを返す
+    /// (中身は読まない)。解析済みのキャッシュが今のファイルと合っているかの照合に使う
+    /// (issue #350)。
+    fn session_fingerprint(
+        &self,
+        project: &str,
+        session_id: &str,
+    ) -> Result<FileFingerprint, AppError>;
 
     /// 指定セッション自身の作業ディレクトリ(cwd)を返す。`AgentGateway` へ渡す
     /// `SendRequest` を組み立てるために使う(issue #345: `--resume <ID>` は
@@ -98,15 +159,6 @@ pub trait SessionSource {
     /// issue #197で追加した`list_session_models`(ファイルパスを持たない
     /// 版)は、この`ParsedSession`に統合したため廃止した。
     fn list_parsed_sessions(&self, project: &str) -> Result<Vec<ParsedSession>, AppError>;
-
-    /// 指定セッションの会話ファイルを行単位で`LogLine`に変換して返す
-    /// (オブジェクトモデル実装 第6弾。issue #208)。`session`(メッセージ抽出。
-    /// `Conversation`用)とは別に1回ファイルを読む(呼び出し元
-    /// `get_session` commandが同じ操作のついでに呼ぶことで「セッションを
-    /// 開いたとき」に組み立てる意図は満たすが、実装としては別読み込みで
-    /// ある点に注意。行の変換に失敗した行(uuid/timestamp欠損等)は
-    /// 実装側でスキップし、警告ログを出すこと(issue本文の指示)。
-    fn session_lines(&self, project: &str, session_id: &str) -> Result<Vec<LogLine>, AppError>;
 
     /// 指定セッションの会話ファイルから、`uuid` が一致する行の**生のテキスト**を返す
     /// (ビューアの「データ」表示。issue #313)。読み取りのみ。見つからなければ
@@ -344,8 +396,52 @@ pub trait AgentGateway {
 /// 実体(`~/.claude/sessions/<PID>.json` の読み取りとプロセス生存確認)は
 /// infra に閉じ込める。
 pub trait RunningSessionSource {
-    /// `session_id` が現在、他のプロセスの `claude` によって実行中なら `true`。
-    fn is_running(&self, session_id: &str) -> Result<bool, AppError>;
+    /// `session_id` が現在、他のプロセスの `claude` によって実行中(とみなせる)なら、
+    /// その根拠を返す。実行中でないと確定できる場合だけ `None`。
+    ///
+    /// 「読めない・分からない」は実行中とみなす側に倒す(会話の混線という害が、
+    /// 誤ってブロックする害より大きいため)。台帳の列挙・読み取りができず何も
+    /// 判断できないときは `Err`(送信しない)。
+    fn find_running(&self, session_id: &str) -> Result<Option<RunningSession>, AppError>;
+}
+
+/// 送信先が実行中とみなされた根拠(issue #345)。エラーメッセージに含め、誤って
+/// 止められたときにユーザーが原因(台帳ファイル・PID)を見つけて自分で解消できる
+/// ようにする(壊れた台帳の PID が別のプロセスに使い回されると、そのフォルダへの
+/// 送信が止まり続けうるため)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunningSession {
+    /// 根拠になった実行中セッション台帳(`~/.claude/sessions/<PID>.json`)のパス。
+    pub ledger_path: PathBuf,
+    pub pid: u32,
+    pub evidence: RunningEvidence,
+}
+
+/// [`RunningSession`] の根拠の強さ。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunningEvidence {
+    /// 台帳の `sessionId` が送信先と一致し、そのプロセスが生きている。
+    SessionMatched,
+    /// 台帳から `sessionId` を取り出せず(読めない・書き込み途中・欠落)送信先と
+    /// 照合できないが、そのプロセスが生きているため、安全側で実行中とみなした。
+    LedgerUnreadable,
+}
+
+impl RunningSession {
+    /// 送信を止めるときにユーザーへ見せる理由。台帳のパスと PID を含める。
+    fn block_message(&self) -> String {
+        let path = self.ledger_path.display();
+        match self.evidence {
+            RunningEvidence::SessionMatched => format!(
+                "このセッションは他のプロセス(PID {})で実行中です。しばらく待ってから再試行してください(台帳: {path})",
+                self.pid
+            ),
+            RunningEvidence::LedgerUnreadable => format!(
+                "実行中のセッションの台帳を読み取れず、このセッションと照合できないため、送信を止めました(台帳: {path}、PID {})。そのプロセスが終了していて台帳が壊れている・古い場合は、この台帳ファイルを削除してから再試行してください",
+                self.pid
+            ),
+        }
+    }
 }
 
 /// 送信時に許可する権限モード。
@@ -367,8 +463,7 @@ pub enum AgentMode {
 /// 将来の別イシューで扱う)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Continuation {
-    /// この `session_id` へ `--resume` で継続する(フォーク系列の先頭=
-    /// 表示中セッション自身のID)。
+    /// この `session_id`(表示中セッション自身のID)へ `--resume` で継続する。
     Resume(String),
 }
 
@@ -376,6 +471,8 @@ pub enum Continuation {
 pub struct SendRequest {
     pub cwd: PathBuf,
     pub text: String,
+    /// 検証済みの添付画像(issue #349)。空なら従来どおり本文のみの送信。
+    pub images: Vec<ImageAttachment>,
     pub mode: AgentMode,
     pub continuation: Continuation,
 }
@@ -391,20 +488,86 @@ pub fn list_projects(source: &dyn SessionSource) -> Result<Vec<Project>, AppErro
 /// フロント入力をそのままファイルパスの構築に使うことになるため、UUID形式
 /// (英数字とハイフンのみ)であることを検証してから使う(native.md §4。
 /// issue #33)。
-pub fn get_session(
+///
+/// `cached`(このファイルの解析済みキャッシュ)が今のファイルの状態
+/// (更新時刻 + サイズ)と合っていれば、ファイルは読まずにそこから範囲を切り出す
+/// (ページ送りで巨大な会話ファイルを読み直さない。issue #350)。合っていなければ
+/// `read_session` で1回だけ読み直し、キャッシュへ入れるべき内容を `reloaded` で返す。
+pub fn open_session(
     source: &dyn SessionSource,
+    cached: Option<&CachedMessages>,
     project: &str,
     session_id: &str,
     offset: usize,
     limit: usize,
-) -> Result<Conversation, AppError> {
+) -> Result<OpenedSession, AppError> {
     if !is_valid_session_id(session_id) {
         return Err(AppError::InvalidInput("不正なセッションIDです".to_string()));
     }
-    let mut session = source.session(project, session_id)?;
-    order_messages_newest_first(&mut session.messages);
-    session.messages = paginate_messages(&session.messages, offset, limit);
-    Ok(session)
+    let current = source.session_fingerprint(project, session_id)?;
+    if let Some(cached) = cached.filter(|c| c.fingerprint == current) {
+        return Ok(OpenedSession {
+            conversation: page_of_conversation(session_id, &cached.messages, offset, limit),
+            reloaded: None,
+        });
+    }
+    let reloaded = reload_session(source, project, session_id)?;
+    Ok(OpenedSession {
+        conversation: page_of_conversation(session_id, &reloaded.messages.messages, offset, limit),
+        reloaded: Some(reloaded),
+    })
+}
+
+/// 読み直した内容 `incoming` で、既にあるキャッシュ `existing` を置き換えてよいか
+/// (issue #350)。`get_session` と差分再走査は別々のタイミングで同じファイルを読み直し、
+/// 終わった順にキャッシュへ書き込むため、遅れて終わった**古い状態の読み**が
+/// 新しい状態のキャッシュを上書きしないよう、更新時刻が戻る置き換えは避ける。
+pub fn should_replace_cache(existing: Option<&CachedMessages>, incoming: &CachedMessages) -> bool {
+    existing.is_none_or(|e| e.fingerprint.modified_nanos <= incoming.fingerprint.modified_nanos)
+}
+
+/// 新しい順に並べ済みの `messages` から、表示する範囲の `Conversation` を作る。
+fn page_of_conversation(
+    session_id: &str,
+    messages_newest_first: &[Message],
+    offset: usize,
+    limit: usize,
+) -> Conversation {
+    Conversation {
+        id: session_id.to_string(),
+        messages: paginate_messages(messages_newest_first, offset, limit),
+        agent: domain::AgentKind::ClaudeCode,
+    }
+}
+
+/// 指定セッションの会話ファイルを1回読み、キャッシュへ入れる形(メッセージは新しい順、
+/// `LogLine` 一覧つき)で返す(issue #350。旧 `get_session` + `load_session_lines` の
+/// 2回読みを置き換えた)。ファイルの変更を検知した差分再走査(tauri 層)が、
+/// 読み込み済みのセッションのキャッシュを更新するときにも使う。
+pub fn reload_session(
+    source: &dyn SessionSource,
+    project: &str,
+    session_id: &str,
+) -> Result<ReloadedSession, AppError> {
+    if !is_valid_session_id(session_id) {
+        return Err(AppError::InvalidInput("不正なセッションIDです".to_string()));
+    }
+    let SessionContent {
+        fingerprint,
+        mut messages,
+        lines,
+    } = source.read_session(project, session_id)?;
+    // 送信に失敗した質問とエラー行に印を付ける(表示のためだけ。会話ファイルには触らない。
+    // issue #364)。記録順のうちに付け、そのあと新しい順に並べる。
+    mark_failed_questions(&mut messages);
+    order_messages_newest_first(&mut messages);
+    Ok(ReloadedSession {
+        messages: CachedMessages {
+            fingerprint,
+            messages: Arc::new(messages),
+        },
+        lines,
+    })
 }
 
 /// 指定メッセージ(会話チェーン行の `uuid`)の元の jsonl 行を、生のテキストで
@@ -430,22 +593,6 @@ pub fn get_session_line_raw(
         return Err(AppError::InvalidInput("不正なメッセージIDです".to_string()));
     }
     source.session_line_raw(project, session_id, uuid)
-}
-
-/// 指定セッションの会話ファイルを`LogLine`一覧として読み込む(オブジェクト
-/// モデル実装 第6弾。issue #208)。ビューアがセッションを開いたとき
-/// (`get_session`と同じ操作の一部)に呼び、結果は呼び出し元
-/// (tauri層のAppState)がファイルパスをキーにキャッシュして、以後は
-/// 再読み込みしない。
-pub fn load_session_lines(
-    source: &dyn SessionSource,
-    project: &str,
-    session_id: &str,
-) -> Result<Vec<LogLine>, AppError> {
-    if !is_valid_session_id(session_id) {
-        return Err(AppError::InvalidInput("不正なセッションIDです".to_string()));
-    }
-    source.session_lines(project, session_id)
 }
 
 /// `pc`の各ユーザーが持つ`Session.conversation_files`/`subagent_files`へ、
@@ -504,20 +651,21 @@ pub fn resolve_session_display_hints(
     hints
 }
 
-/// 指定プロジェクトのセッション一覧を、フォーク系列(issue #345)ごとに
-/// 最新ファイルだけへ畳んだ上で、最終更新の新しい順に並べて返す(ビューア
-/// 左ペイン用。issue #33)。
+/// 指定プロジェクトのセッション一覧を、最終更新の新しい順に並べて返す(ビューア
+/// 左ペイン用。issue #33)。1件 = 1セッション(セッションID = 会話ファイル)で、
+/// フォークや圧縮で分かれたファイルもそれぞれ別のセッションとして全件返す
+/// (issue #369。#345 の「系列ごとに最新ファイルへ畳む」扱いは廃止した)。
 pub fn list_sessions(
     source: &dyn SessionSource,
     project: &str,
 ) -> Result<Vec<SessionSummary>, AppError> {
-    let sessions = source.list_sessions(project)?;
-    Ok(collapse_session_series(sessions))
+    let mut sessions = source.list_sessions(project)?;
+    sort_sessions_newest_first(&mut sessions);
+    Ok(sessions)
 }
 
-/// `session_id`(表示中のフォーク系列の先頭。`list_sessions` が返すのは
-/// 各系列の最新ファイルのみなので、表示中のIDがそのまま系列の先頭になる)へ
-/// `--resume` でメッセージを送信する(issue #345)。
+/// `session_id`(表示中のセッション)へ `--resume` でメッセージを送信する
+/// (issue #345)。
 ///
 /// 継続方式を `--continue`(カレントディレクトリの最新の会話をそのまま
 /// 継続)から `--resume <ID>` へ変えたことで、旧実装が必要としていた
@@ -533,6 +681,13 @@ pub fn list_sessions(
 /// 同じ会話ファイルへの並行書き込みによる混線を防ぐため、送信前に
 /// `RunningSessionSource` で確認し、実行中なら `SessionBusy` を返して
 /// 送信しない。
+///
+/// `images`(base64。issue #349)があれば検証して添付する。本文が空でも画像が
+/// あれば送れる(画像だけの送信)。画像の有無にかかわらず、上記の実行中ガードは
+/// 同じように効く。
+// 引数が8個になるが、独立した入力(ports 3つ・対象・本文・画像・モード)で、
+// まとめる構造体を作るほどの意味的なまとまりは無いため許容する。
+#[allow(clippy::too_many_arguments)]
 pub fn send_message(
     source: &dyn SessionSource,
     agent: &dyn AgentGateway,
@@ -540,33 +695,60 @@ pub fn send_message(
     project: &str,
     session_id: &str,
     text: &str,
+    images: &[String],
     mode: AgentMode,
 ) -> Result<(), AppError> {
-    if text.trim().is_empty() {
+    if text.trim().is_empty() && images.is_empty() {
         return Err(AppError::InvalidInput(
             "メッセージを入力してください".to_string(),
         ));
     }
+    let images =
+        validate_image_attachments(images).map_err(|e| AppError::InvalidInput(e.to_string()))?;
     if !is_valid_session_id(session_id) {
         return Err(AppError::InvalidInput("不正なセッションIDです".to_string()));
     }
 
-    if running_sessions.is_running(session_id)? {
-        return Err(AppError::SessionBusy(
-            "このセッションは他のプロセスで実行中です。しばらく待ってから再試行してください"
-                .to_string(),
-        ));
+    if let Some(running) = running_sessions.find_running(session_id)? {
+        return Err(AppError::SessionBusy(running.block_message()));
     }
 
     let cwd = source.session_cwd(project, session_id)?;
     agent.send(SendRequest {
         cwd,
         text: text.to_string(),
+        images,
         mode,
         continuation: Continuation::Resume(session_id.to_string()),
     })?;
 
     Ok(())
+}
+
+/// 画像を1枚添付しようとしたときの事前検証(ビューアの添付時。issue #349)。
+/// `existing_count` は既に添付済みの枚数。形式・サイズ・枚数の判定は送信時
+/// ([`send_message`])と同じ domain の関数を通すため、規則の実体は1か所に保たれる
+/// (フロントに上限値を持たせない)。
+pub fn check_image_attachment(data_base64: &str, existing_count: usize) -> Result<(), AppError> {
+    validate_image_count(existing_count.saturating_add(1))
+        .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+    validate_image_attachment(data_base64)
+        .map(|_| ())
+        .map_err(|e| AppError::InvalidInput(e.to_string()))
+}
+
+/// 指定メッセージ(会話チェーン行の `uuid`)に含まれる画像を、記録順に返す
+/// (ビューアの「画像 n 枚」。issue #349)。`get_session_line_raw`(#313)と同じ
+/// オンデマンド取得で、メッセージ一覧には画像本体を載せない。行が見つからなければ
+/// `AppError::NotFound`、画像の無い行は空。
+pub fn get_session_line_images(
+    source: &dyn SessionSource,
+    project: &str,
+    session_id: &str,
+    uuid: &str,
+) -> Result<Vec<MessageImage>, AppError> {
+    let raw = get_session_line_raw(source, project, session_id, uuid)?;
+    Ok(extract_message_images(&raw))
 }
 
 /// 起動時、保存済みの設定を読み込む。ファイルが存在しない/壊れている場合の
@@ -804,16 +986,14 @@ pub fn retain_enumerated_parsed_sessions(
     sessions.retain(|p| enumerated_paths.contains(&p.conversation_file_path));
 }
 
-/// ビューアのウィンドウの初期タイトル(issue #348)。「<プロファイル名> - <フォルダ名>」で、
-/// 対象フォルダが複数のときは「 / 」でつなぎ、無いときはプロファイル名だけ。
-/// ウィンドウ生成時(`open_profile_window`)の値で、その後の設定変更への追従は
-/// フロント(`Layout.tsx` の `viewerWindowTitle`。同じ規則)が `setTitle` で行う。
-pub fn viewer_window_title(profile_name: &str, selected_project_folders: &[String]) -> String {
-    if selected_project_folders.is_empty() {
-        profile_name.to_string()
-    } else {
-        format!("{profile_name} - {}", selected_project_folders.join(" / "))
-    }
+/// ビューアのウィンドウの初期タイトル。プロファイル名だけ(issue #377。issue #348 で
+/// 「<プロファイル名> - <フォルダ名を「 / 」でつないだもの>」にしていたが、対象フォルダが
+/// 増えると長大になり意味も読み取れないため、フォルダ名の列挙をやめた。対象フォルダは
+/// 設定画面で見られる)。ウィンドウ生成時(`open_profile_window`)の値で、その後の
+/// プロファイル名の変更への追従はフロント(`Layout.tsx` の `viewerWindowTitle`。同じ規則)が
+/// `setTitle` で行う。
+pub fn viewer_window_title(profile_name: &str) -> String {
+    profile_name.to_string()
 }
 
 /// 削除された会話ファイルの `ParsedSession` を取り除く(ファイル監視による差分
@@ -877,7 +1057,7 @@ pub fn load_viewer_tabs(
 }
 
 /// ビューアのセッションタブの並びを保存する(issue #353)。並びは呼び出し側が
-/// 持つ全体で丸ごと置き換える。プロジェクト名・系列の鍵を検証し、同じキーの
+/// 持つ全体で丸ごと置き換える。プロジェクト名・セッションIDを検証し、同じキーの
 /// 重複は先頭だけを残す。`version` は現在のバージョンで書く。
 pub fn save_viewer_tabs(
     store: &dyn ViewerTabsStore,
@@ -887,7 +1067,7 @@ pub fn save_viewer_tabs(
     validate_profile_id(profile_id)?;
     let mut unique: Vec<ViewerTab> = Vec::with_capacity(tabs.len());
     for tab in tabs {
-        if !is_valid_project_dir_name(&tab.project) || tab.series_key.trim().is_empty() {
+        if !is_valid_project_dir_name(&tab.project) || !is_valid_session_id(&tab.session_id) {
             return Err(AppError::InvalidInput("不正なタブの指定です".to_string()));
         }
         if !unique.contains(&tab) {
@@ -1554,7 +1734,7 @@ pub fn list_claude_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use domain::{AgentKind, Message, Role};
+    use domain::{AgentKind, Message, MessageStatus, Role};
 
     struct FakeSessionSource {
         projects: Vec<Project>,
@@ -1566,6 +1746,10 @@ mod tests {
         log_lines: Result<Vec<LogLine>, ()>,
         /// `session_line_raw` が返す生の行。`None` は見つからない(`NotFound`)。
         raw_line: Option<String>,
+        /// `session_fingerprint` / `read_session` が返すファイルの状態(テストが書き換える)。
+        fingerprint: std::cell::Cell<FileFingerprint>,
+        /// `read_session` が呼ばれた回数(キャッシュで読み直しを省けたかの確認用)。
+        reads: std::cell::Cell<usize>,
     }
 
     impl FakeSessionSource {
@@ -1583,6 +1767,11 @@ mod tests {
                 parsed_sessions: HashMap::new(),
                 log_lines: Ok(Vec::new()),
                 raw_line: None,
+                fingerprint: std::cell::Cell::new(FileFingerprint {
+                    modified_nanos: 1,
+                    len: 1,
+                }),
+                reads: std::cell::Cell::new(0),
             }
         }
     }
@@ -1595,12 +1784,28 @@ mod tests {
             Ok(self.projects.clone())
         }
 
-        fn session(&self, _project: &str, session_id: &str) -> Result<Conversation, AppError> {
-            Ok(Conversation {
-                id: session_id.to_string(),
+        fn read_session(
+            &self,
+            _project: &str,
+            _session_id: &str,
+        ) -> Result<SessionContent, AppError> {
+            self.reads.set(self.reads.get() + 1);
+            Ok(SessionContent {
+                fingerprint: self.fingerprint.get(),
                 messages: self.messages.clone(),
-                agent: AgentKind::ClaudeCode,
+                lines: self
+                    .log_lines
+                    .clone()
+                    .map_err(|()| AppError::Io("boom".to_string()))?,
             })
+        }
+
+        fn session_fingerprint(
+            &self,
+            _project: &str,
+            _session_id: &str,
+        ) -> Result<FileFingerprint, AppError> {
+            Ok(self.fingerprint.get())
         }
 
         fn session_cwd(&self, _project: &str, _session_id: &str) -> Result<PathBuf, AppError> {
@@ -1617,16 +1822,6 @@ mod tests {
                 Some(Err(())) => Err(AppError::Io("boom".to_string())),
                 None => Ok(Vec::new()),
             }
-        }
-
-        fn session_lines(
-            &self,
-            _project: &str,
-            _session_id: &str,
-        ) -> Result<Vec<LogLine>, AppError> {
-            self.log_lines
-                .clone()
-                .map_err(|()| AppError::Io("boom".to_string()))
         }
 
         fn session_line_raw(
@@ -1659,12 +1854,24 @@ mod tests {
 
     #[derive(Default)]
     struct FakeRunningSessionSource {
-        running: bool,
+        running: Option<RunningSession>,
+    }
+
+    impl FakeRunningSessionSource {
+        fn running() -> Self {
+            Self {
+                running: Some(RunningSession {
+                    ledger_path: PathBuf::from("/home/u/.claude/sessions/123.json"),
+                    pid: 123,
+                    evidence: RunningEvidence::SessionMatched,
+                }),
+            }
+        }
     }
 
     impl RunningSessionSource for FakeRunningSessionSource {
-        fn is_running(&self, _session_id: &str) -> Result<bool, AppError> {
-            Ok(self.running)
+        fn find_running(&self, _session_id: &str) -> Result<Option<RunningSession>, AppError> {
+            Ok(self.running.clone())
         }
     }
 
@@ -1707,18 +1914,23 @@ mod tests {
                     text: "first".to_string(),
                     timestamp: "".to_string(),
                     uuid: None,
+                    image_count: 0,
+                    status: MessageStatus::Normal,
                 },
                 Message {
                     role: Role::Assistant,
                     text: "second".to_string(),
                     timestamp: "".to_string(),
                     uuid: None,
+                    image_count: 0,
+                    status: MessageStatus::Normal,
                 },
             ],
         );
 
-        let session =
-            get_session(&source, "some-project", "s1", 0, 10).expect("should get session");
+        let session = open_session(&source, None, "some-project", "s1", 0, 10)
+            .expect("should get session")
+            .conversation;
         assert_eq!(session.id, "s1");
         let texts: Vec<&str> = session.messages.iter().map(|m| m.text.as_str()).collect();
         assert_eq!(texts, vec!["second", "first"]);
@@ -1735,24 +1947,179 @@ mod tests {
                     text: text.to_string(),
                     timestamp: "".to_string(),
                     uuid: None,
+                    image_count: 0,
+                    status: MessageStatus::Normal,
                 })
                 .collect(),
         );
 
         // 記録順は a,b,c,d -> 新しい順は d,c,b,a -> offset 1, limit 2 で c,b
-        let session = get_session(&source, "some-project", "s1", 1, 2).expect("should get session");
+        let session = open_session(&source, None, "some-project", "s1", 1, 2)
+            .expect("should get session")
+            .conversation;
         let texts: Vec<&str> = session.messages.iter().map(|m| m.text.as_str()).collect();
         assert_eq!(texts, vec!["c", "b"]);
+    }
+
+    fn texts_of(conversation: &Conversation) -> Vec<&str> {
+        conversation
+            .messages
+            .iter()
+            .map(|m| m.text.as_str())
+            .collect()
+    }
+
+    fn user_message(text: &str) -> Message {
+        Message {
+            role: Role::User,
+            text: text.to_string(),
+            timestamp: "".to_string(),
+            uuid: None,
+            image_count: 0,
+            status: MessageStatus::Normal,
+        }
+    }
+
+    #[test]
+    fn open_session_reads_the_file_once_and_returns_content_to_cache() {
+        let mut source = FakeSessionSource::new("s1", vec![user_message("a"), user_message("b")]);
+        source.log_lines = Ok(vec![sample_log_line("l1")]);
+
+        let opened = open_session(&source, None, "p", "s1", 0, 10).expect("should open");
+
+        assert_eq!(
+            source.reads.get(),
+            1,
+            "メッセージとLogLineを1回の読みで得る"
+        );
+        let reloaded = opened.reloaded.expect("初回は読み直した内容が返る");
+        assert_eq!(reloaded.lines, vec![sample_log_line("l1")]);
+        // キャッシュへ入れるメッセージは新しい順に並べ済み。
+        let cached: Vec<&str> = reloaded
+            .messages
+            .messages
+            .iter()
+            .map(|m| m.text.as_str())
+            .collect();
+        assert_eq!(cached, vec!["b", "a"]);
+        assert_eq!(reloaded.messages.fingerprint, source.fingerprint.get());
+    }
+
+    #[test]
+    fn reload_session_marks_failed_questions_before_ordering_newest_first() {
+        // 記録順: 質問1 → 答え1 → 質問2(失敗)→ エラー行
+        let mut error = user_message("err");
+        error.role = Role::Assistant;
+        error.status = MessageStatus::Error;
+        let mut answer = user_message("a1");
+        answer.role = Role::Assistant;
+        let source = FakeSessionSource::new(
+            "s1",
+            vec![user_message("q1"), answer, user_message("q2"), error],
+        );
+
+        let reloaded = reload_session(&source, "p", "s1").expect("should reload");
+
+        // 新しい順: エラー行、失敗した質問、答え、質問1
+        let got: Vec<(&str, MessageStatus)> = reloaded
+            .messages
+            .messages
+            .iter()
+            .map(|m| (m.text.as_str(), m.status))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("err", MessageStatus::ErrorForQuestion),
+                ("q2", MessageStatus::FailedQuestion),
+                ("a1", MessageStatus::Normal),
+                ("q1", MessageStatus::Normal),
+            ]
+        );
+    }
+
+    #[test]
+    fn open_session_uses_cache_without_reading_when_the_file_is_unchanged() {
+        let source = FakeSessionSource::new("s1", ["a", "b", "c", "d"].map(user_message).to_vec());
+        let first = open_session(&source, None, "p", "s1", 0, 2).expect("should open");
+        let cache = first.reloaded.expect("初回は読む").messages;
+        assert_eq!(source.reads.get(), 1);
+
+        // ページ送り(offset を進める)。ファイルは変わっていないので読み直さない。
+        let second = open_session(&source, Some(&cache), "p", "s1", 2, 2).expect("should open");
+
+        assert_eq!(
+            source.reads.get(),
+            1,
+            "キャッシュが合っていれば読み直さない"
+        );
+        assert!(second.reloaded.is_none());
+        assert_eq!(texts_of(&second.conversation), vec!["b", "a"]);
+    }
+
+    #[test]
+    fn should_replace_cache_refuses_to_overwrite_a_newer_state_with_an_older_read() {
+        let cached = |modified_nanos| CachedMessages {
+            fingerprint: FileFingerprint {
+                modified_nanos,
+                len: 1,
+            },
+            messages: Arc::new(Vec::new()),
+        };
+
+        assert!(should_replace_cache(None, &cached(5)), "空なら入れる");
+        assert!(
+            should_replace_cache(Some(&cached(5)), &cached(6)),
+            "新しければ置き換える"
+        );
+        assert!(
+            should_replace_cache(Some(&cached(5)), &cached(5)),
+            "同じ時刻なら置き換える"
+        );
+        assert!(
+            !should_replace_cache(Some(&cached(6)), &cached(5)),
+            "古い読みは捨てる"
+        );
+    }
+
+    #[test]
+    fn open_session_rereads_when_modified_time_or_size_changed() {
+        let source = FakeSessionSource::new("s1", vec![user_message("a")]);
+        let cache = open_session(&source, None, "p", "s1", 0, 10)
+            .unwrap()
+            .reloaded
+            .unwrap()
+            .messages;
+
+        // サイズだけ変わった(同じ更新時刻)。
+        source.fingerprint.set(FileFingerprint {
+            modified_nanos: 1,
+            len: 2,
+        });
+        let opened = open_session(&source, Some(&cache), "p", "s1", 0, 10).unwrap();
+        assert_eq!(source.reads.get(), 2);
+        assert!(opened.reloaded.is_some());
+
+        // 更新時刻だけ変わった(同じサイズ)。
+        let cache = opened.reloaded.unwrap().messages;
+        source.fingerprint.set(FileFingerprint {
+            modified_nanos: 2,
+            len: 2,
+        });
+        let opened = open_session(&source, Some(&cache), "p", "s1", 0, 10).unwrap();
+        assert_eq!(source.reads.get(), 3);
+        assert!(opened.reloaded.is_some());
     }
 
     #[test]
     fn get_session_rejects_invalid_session_id_without_calling_source() {
         let source = FakeSessionSource::new("s1", vec![]);
 
-        let error = get_session(&source, "some-project", "../../etc/passwd", 0, 10)
+        let error = open_session(&source, None, "some-project", "../../etc/passwd", 0, 10)
             .expect_err("should reject invalid session id");
 
         assert!(matches!(error, AppError::InvalidInput(_)));
+        assert_eq!(source.reads.get(), 0);
     }
 
     fn sample_session_summary(id: &str, modified_at_ms: u64) -> SessionSummary {
@@ -1762,7 +2129,6 @@ mod tests {
             modified_at_ms,
             cwd: None,
             git_branch: None,
-            root_uuid: None,
         }
     }
 
@@ -1780,22 +2146,17 @@ mod tests {
     }
 
     #[test]
-    fn list_sessions_collapses_fork_series_to_the_latest_file() {
+    fn list_sessions_returns_every_session_even_when_forked_files_look_alike() {
+        // issue #369: フォークや圧縮で分かれたファイルも、セッションごとに全件返す。
         let mut source = FakeSessionSource::new("s1", vec![]);
         source.sessions = vec![
-            SessionSummary {
-                root_uuid: Some("root-a".to_string()),
-                ..sample_session_summary("fork-1", 1)
-            },
-            SessionSummary {
-                root_uuid: Some("root-a".to_string()),
-                ..sample_session_summary("fork-2", 2)
-            },
+            sample_session_summary("fork-1", 1),
+            sample_session_summary("fork-2", 2),
         ];
 
         let sessions = list_sessions(&source, "some-project").expect("should list sessions");
         let ids: Vec<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
-        assert_eq!(ids, vec!["fork-2"]);
+        assert_eq!(ids, vec!["fork-2", "fork-1"]);
     }
 
     fn sample_parsed_session(session_id: &str) -> ParsedSession {
@@ -1912,7 +2273,7 @@ mod tests {
     fn viewer_tab(project: &str, key: &str) -> ViewerTab {
         ViewerTab {
             project: project.to_string(),
-            series_key: key.to_string(),
+            session_id: key.to_string(),
         }
     }
 
@@ -1970,15 +2331,12 @@ mod tests {
     }
 
     #[test]
-    fn viewer_window_title_joins_profile_name_and_folders() {
-        assert_eq!(viewer_window_title("yaoyorozu", &[]), "yaoyorozu");
+    fn viewer_window_title_is_the_profile_name_only() {
+        // issue #377: 対象フォルダの数によらずプロファイル名だけ(フォルダ名は列挙しない)。
+        assert_eq!(viewer_window_title("yaoyorozu"), "yaoyorozu");
         assert_eq!(
-            viewer_window_title("yaoyorozu", &["C--Users-yanqi-prj-yaoyorozu".to_string()]),
-            "yaoyorozu - C--Users-yanqi-prj-yaoyorozu"
-        );
-        assert_eq!(
-            viewer_window_title("p", &["a".to_string(), "b".to_string()]),
-            "p - a / b"
+            viewer_window_title("メイン プロファイル"),
+            "メイン プロファイル"
         );
     }
 
@@ -2142,20 +2500,20 @@ mod tests {
     }
 
     #[test]
-    fn load_session_lines_delegates_to_source_for_a_valid_session_id() {
+    fn reload_session_delegates_to_source_for_a_valid_session_id() {
         let mut source = FakeSessionSource::new("s1", vec![]);
         source.log_lines = Ok(vec![sample_log_line("l1")]);
 
-        let lines = load_session_lines(&source, "proj", "s1").expect("should load lines");
+        let reloaded = reload_session(&source, "proj", "s1").expect("should reload");
 
-        assert_eq!(lines, vec![sample_log_line("l1")]);
+        assert_eq!(reloaded.lines, vec![sample_log_line("l1")]);
     }
 
     #[test]
-    fn load_session_lines_rejects_invalid_session_id_without_calling_source() {
+    fn reload_session_rejects_invalid_session_id_without_calling_source() {
         let source = FakeSessionSource::new("s1", vec![]);
 
-        let error = load_session_lines(&source, "proj", "../etc/passwd")
+        let error = reload_session(&source, "proj", "../etc/passwd")
             .expect_err("should reject invalid session id");
 
         assert!(matches!(error, AppError::InvalidInput(_)));
@@ -2237,6 +2595,7 @@ mod tests {
             "some-project",
             "s1",
             "hello",
+            &[],
             AgentMode::Chat,
         )
         .expect("should send message");
@@ -2261,6 +2620,7 @@ mod tests {
             "some-project",
             "s1",
             "hello",
+            &[],
             AgentMode::Read,
         )
         .expect("should send message");
@@ -2286,6 +2646,7 @@ mod tests {
             "some-project",
             "s1",
             "   ",
+            &[],
             AgentMode::Chat,
         )
         .expect_err("should reject");
@@ -2305,6 +2666,7 @@ mod tests {
             "some-project",
             "../etc/passwd",
             "hello",
+            &[],
             AgentMode::Chat,
         )
         .expect_err("should reject invalid session id");
@@ -2312,11 +2674,188 @@ mod tests {
         assert!(agent.sent.borrow().is_empty());
     }
 
+    /// PNGのマジックナンバー(8バイト)+ダミー4バイトのbase64。形式判定だけを通す最小データ。
+    const PNG_BASE64: &str = "iVBORw0KGgoAAAAA";
+
+    #[test]
+    fn send_message_passes_validated_images_to_the_agent() {
+        let source = FakeSessionSource::new("s1", vec![]);
+        let agent = FakeAgentGateway::default();
+        let running_sessions = FakeRunningSessionSource::default();
+        send_message(
+            &source,
+            &agent,
+            &running_sessions,
+            "some-project",
+            "s1",
+            "見て",
+            &[PNG_BASE64.to_string()],
+            AgentMode::Chat,
+        )
+        .expect("should send with an image");
+
+        let sent = agent.sent.borrow();
+        assert_eq!(sent[0].images.len(), 1);
+        assert_eq!(sent[0].images[0].data_base64, PNG_BASE64);
+        assert_eq!(sent[0].text, "見て");
+    }
+
+    #[test]
+    fn send_message_allows_an_image_without_text() {
+        let source = FakeSessionSource::new("s1", vec![]);
+        let agent = FakeAgentGateway::default();
+        let running_sessions = FakeRunningSessionSource::default();
+        send_message(
+            &source,
+            &agent,
+            &running_sessions,
+            "some-project",
+            "s1",
+            "  ",
+            &[PNG_BASE64.to_string()],
+            AgentMode::Chat,
+        )
+        .expect("image-only send is allowed");
+        assert_eq!(agent.sent.borrow().len(), 1);
+    }
+
+    #[test]
+    fn send_message_rejects_invalid_images_without_sending() {
+        let source = FakeSessionSource::new("s1", vec![]);
+        let agent = FakeAgentGateway::default();
+        let running_sessions = FakeRunningSessionSource::default();
+        // 形式違い(テキスト)・枚数超過のどちらも、送らずに理由つきで弾く。
+        for images in [
+            vec!["aGVsbG8gd29ybGQh".to_string()],
+            vec![PNG_BASE64.to_string(); domain::MAX_IMAGES_PER_MESSAGE + 1],
+        ] {
+            let error = send_message(
+                &source,
+                &agent,
+                &running_sessions,
+                "some-project",
+                "s1",
+                "hello",
+                &images,
+                AgentMode::Chat,
+            )
+            .expect_err("should reject");
+            assert!(matches!(error, AppError::InvalidInput(_)), "{error:?}");
+        }
+        assert!(agent.sent.borrow().is_empty());
+    }
+
+    #[test]
+    fn send_message_blocks_images_too_when_session_is_running_elsewhere() {
+        // issue #349: 実行中セッションのガード(#346)は画像付き送信にも効く。
+        let source = FakeSessionSource::new("s1", vec![]);
+        let agent = FakeAgentGateway::default();
+        let running_sessions = FakeRunningSessionSource::running();
+        let error = send_message(
+            &source,
+            &agent,
+            &running_sessions,
+            "some-project",
+            "s1",
+            "見て",
+            &[PNG_BASE64.to_string()],
+            AgentMode::Chat,
+        )
+        .expect_err("should be blocked");
+        assert!(matches!(error, AppError::SessionBusy(_)));
+        assert!(agent.sent.borrow().is_empty());
+    }
+
+    #[test]
+    fn check_image_attachment_validates_format_size_and_count() {
+        assert!(check_image_attachment(PNG_BASE64, 0).is_ok());
+        assert!(check_image_attachment(PNG_BASE64, domain::MAX_IMAGES_PER_MESSAGE - 1).is_ok());
+        // 追加すると上限を超える。
+        assert!(matches!(
+            check_image_attachment(PNG_BASE64, domain::MAX_IMAGES_PER_MESSAGE),
+            Err(AppError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            check_image_attachment("aGVsbG8gd29ybGQh", 0),
+            Err(AppError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn get_session_line_images_extracts_images_from_the_raw_line() {
+        let mut source = FakeSessionSource::new("s1", vec![]);
+        source.raw_line = Some(
+            r#"{"type":"user","uuid":"u1","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}},{"type":"text","text":"見て"}]}}"#
+                .to_string(),
+        );
+
+        let images = get_session_line_images(&source, "some-project", "s1", "u1")
+            .expect("should extract images");
+
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].data_base64, "AAAA");
+        assert_eq!(images[0].media_type.as_mime(), "image/png");
+    }
+
+    #[test]
+    fn get_session_line_images_rejects_invalid_ids_and_reports_missing_line() {
+        let source = FakeSessionSource::new("s1", vec![]);
+        assert!(matches!(
+            get_session_line_images(&source, "some-project", "../x", "u1"),
+            Err(AppError::InvalidInput(_))
+        ));
+        // 行が見つからない(FakeSessionSource の既定)は NotFound。
+        assert!(matches!(
+            get_session_line_images(&source, "some-project", "s1", "u1"),
+            Err(AppError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn send_message_block_message_names_the_ledger_file_and_pid_so_the_user_can_resolve_it() {
+        // issue #345 の後続: 台帳が壊れて PID が使い回されると止まり続けうるため、
+        // 止めた理由に原因の台帳のパスと PID を含める(どちらの根拠でも)。
+        for evidence in [
+            RunningEvidence::SessionMatched,
+            RunningEvidence::LedgerUnreadable,
+        ] {
+            let source = FakeSessionSource::new("s1", vec![]);
+            let agent = FakeAgentGateway::default();
+            let running_sessions = FakeRunningSessionSource {
+                running: Some(RunningSession {
+                    ledger_path: PathBuf::from("/home/u/.claude/sessions/19104.json"),
+                    pid: 19104,
+                    evidence,
+                }),
+            };
+
+            let error = send_message(
+                &source,
+                &agent,
+                &running_sessions,
+                "some-project",
+                "s1",
+                "hello",
+                &[],
+                AgentMode::Chat,
+            )
+            .expect_err("should reject");
+
+            let AppError::SessionBusy(message) = error else {
+                panic!("expected SessionBusy");
+            };
+            assert!(
+                message.contains("19104.json") && message.contains("19104"),
+                "{evidence:?}: {message}"
+            );
+        }
+    }
+
     #[test]
     fn send_message_rejects_when_session_is_running_elsewhere() {
         let source = FakeSessionSource::new("s1", vec![]);
         let agent = FakeAgentGateway::default();
-        let running_sessions = FakeRunningSessionSource { running: true };
+        let running_sessions = FakeRunningSessionSource::running();
         let error = send_message(
             &source,
             &agent,
@@ -2324,6 +2863,7 @@ mod tests {
             "some-project",
             "s1",
             "hello",
+            &[],
             AgentMode::Chat,
         )
         .expect_err("should reject when session is busy");

@@ -1,7 +1,6 @@
-use app::{AppError, RunningSessionSource};
-use serde::Deserialize;
-use std::path::PathBuf;
-use windows::Win32::Foundation::{CloseHandle, FILETIME};
+use app::{AppError, RunningEvidence, RunningSession, RunningSessionSource};
+use std::path::{Path, PathBuf};
+use windows::Win32::Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, FILETIME};
 use windows::Win32::System::Threading::{
     GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
 };
@@ -35,35 +34,90 @@ const FILETIME_MATCH_TOLERANCE_TICKS: i64 = 10_000;
 const STARTED_AT_MATCH_TOLERANCE_MS: i64 = 5_000;
 
 /// `~/.claude/sessions/<PID>.json` 1件分(実データ実測。issue #345)。
-/// 未知フィールドは無視する(`session_line`と同じ流儀。native.md 外部形式への
-/// 依存を最小にする)。
+/// **どのフィールドも欠けうる**として読む(`session_line`と同じ流儀。外部形式への
+/// 依存を最小にする)。実測では、同じ版でも台帳の中身が状況で変わる:
+/// - `procStart` は `claude` の版で形式が違う(v2.1.280 Desktop: Windows FILETIME
+///   [UTC、1601年起点の100ns単位]、v2.1.150 CLI: .NET の `DateTime.Ticks`
+///   [ローカル時刻、0001年起点の100ns単位]とみられる値)
+/// - **`--resume` で開き直した対話セッション(v2.1.150)は `procStart` 自体が無い**
+///   (新しく始めた会話には有る)
 ///
-/// `procStart` の形式は `claude` の版によって異なる(issue #345再修正。
-/// Lab (PoC:検証) の実機報告):
-/// - v2.1.280(Desktop): Windows FILETIME(UTC、1601年起点の100ns単位)。
-///   `GetProcessTimes` の値と完全一致する。
-/// - v2.1.150(PATH解決のCLI): .NET の `DateTime.Ticks`(**ローカル時刻**、
-///   0001-01-01起点の100ns単位)とみられる値。
-///
-/// どちらの形式かを事前に判別する手段が無いため、[`process_is_alive`] で
-/// 両方の解釈を順に試す。
-#[derive(Deserialize)]
-struct RunningSessionRecord {
-    pid: u32,
-    #[serde(rename = "sessionId")]
-    session_id: String,
-    #[serde(rename = "procStart")]
-    proc_start: String,
-    /// プロセス開始時刻(Unixミリ秒)。`procStart` がどちらの形式とも一致
-    /// しなかった場合の3番目の照合手段(issue #345再修正)。無ければ `None`。
-    #[serde(rename = "startedAt", default)]
+/// 型付きの読み込み(必須フィールドあり)にすると、こうした揺れで読み込みに失敗して
+/// 台帳ごと捨ててしまい、実行中のセッションを「実行中でない」と誤判定する
+/// (issue #345 の実機検証で発生)。そのため `serde_json::Value` から取れるものだけを
+/// 取り出す。
+#[derive(Debug, Default)]
+struct LedgerEntry {
+    pid: Option<u32>,
+    session_id: Option<String>,
+    /// 文字列でも数値でも受ける(形式の違いは [`process_is_alive`] が吸収する)。
+    proc_start: Option<String>,
+    /// プロセス開始時刻(Unixミリ秒)。
     started_at_ms: Option<i64>,
 }
 
+impl LedgerEntry {
+    /// 台帳ファイル1件から読む。`filename_pid` は `<PID>.json` のファイル名由来のPID
+    /// で、中身から `pid` を読めない(読み込み失敗・書き込み途中・`pid` 欠落)ときの
+    /// 代わりにする。ファイルを読めない・JSONとして読めない場合も、ファイル名の
+    /// PID だけは持った状態で返す(捨てない)。
+    fn read(path: &Path) -> Self {
+        let filename_pid = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .and_then(|s| s.parse::<u32>().ok());
+        let value = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok());
+        let Some(value) = value else {
+            return Self {
+                pid: filename_pid,
+                ..Self::default()
+            };
+        };
+        Self {
+            pid: value
+                .get("pid")
+                .and_then(|v| v.as_u64())
+                .and_then(|v| u32::try_from(v).ok())
+                .or(filename_pid),
+            session_id: value
+                .get("sessionId")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            proc_start: match value.get("procStart") {
+                Some(serde_json::Value::String(s)) => Some(s.clone()),
+                Some(serde_json::Value::Number(n)) => Some(n.to_string()),
+                _ => None,
+            },
+            started_at_ms: value.get("startedAt").and_then(|v| v.as_i64()),
+        }
+    }
+}
+
 /// `~/.claude/sessions/<PID>.json` の読み取りとプロセス生存確認による
-/// `RunningSessionSource` 実装(issue #345)。ファイルの `sessionId` が対象と
-/// 一致し、かつ記録された `pid` のプロセスが現在も生存していれば、作成時刻の
-/// 照合([`process_is_alive`])を経て「実行中」と判定する。
+/// `RunningSessionSource` 実装(issue #345)。
+///
+/// **原則: 「読めない・分からない」は「実行中」(送信を止める)側に倒す。**
+/// 判定の目的は同じ会話ファイルへの並行追記(会話の混線)の防止で、「止め漏れ」
+/// (実際は実行中なのに通す)の害が、「止めすぎ」(誤ってブロックしても、ユーザーは
+/// 待ってやり直せば済む)より大きいため。具体的には台帳1件ごとに次のとおり:
+///
+/// - `sessionId` が**別のセッション**と分かる → 無関係(読み飛ばす)
+/// - `sessionId` が対象と一致 → PID のプロセスが生きていれば実行中
+///   ([`process_is_alive`]。`procStart` が無くても生存だけで実行中とみなす)
+/// - `sessionId` を取り出せない(読めない・JSONでない・書き込み途中・`sessionId` 欠落)
+///   → 対象と照合できないので、**その台帳の PID が生きていれば実行中とみなす**
+/// - PID を特定できない(中身にも `<PID>.json` のファイル名にも無い)→ 生存を確かめる
+///   相手がおらず、ブロックしても永続的に解消できない(ユーザーが台帳を消すまで
+///   全送信が止まる)ため、この台帳は無視する(唯一の「止めない」例外)
+/// - 台帳のディレクトリが「存在しない」以外の理由で読めない、または列挙の途中で
+///   読めなかった項目がある → 実行中の台帳を見落としたかもしれないので、エラー
+///   (送信しない。黙って読み飛ばさない)
+///
+/// 止めた場合は、根拠になった台帳のパスと PID を返す([`RunningSession`])。壊れた
+/// 台帳が残って PID が使い回されると、その台帳が原因で送信が止まり続けうるため、
+/// エラーメッセージにパスを出してユーザーが自分で解消できるようにする。
 pub struct FileRunningSessionSource {
     sessions_dir: PathBuf,
 }
@@ -84,33 +138,66 @@ impl FileRunningSessionSource {
 }
 
 impl RunningSessionSource for FileRunningSessionSource {
-    fn is_running(&self, session_id: &str) -> Result<bool, AppError> {
-        let Ok(entries) = std::fs::read_dir(&self.sessions_dir) else {
+    fn find_running(&self, session_id: &str) -> Result<Option<RunningSession>, AppError> {
+        let entries = match std::fs::read_dir(&self.sessions_dir) {
+            Ok(entries) => entries,
             // ディレクトリが無い(このPCでまだ一度も `claude` が実行中セッション
-            // 台帳を作っていない等)場合、実行中のセッションは無いとみなす。
-            return Ok(false);
+            // 台帳を作っていない等)場合だけ、実行中のセッションは無いと確定できる。
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => {
+                return Err(AppError::Io(format!(
+                    "実行中セッションの台帳({})を読めませんでした: {e}",
+                    self.sessions_dir.display()
+                )))
+            }
         };
-
-        for entry in entries.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
-            let Ok(content) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            let Ok(record) = serde_json::from_str::<RunningSessionRecord>(&content) else {
-                continue;
-            };
-            if record.session_id != session_id {
-                continue;
-            }
-            if process_is_alive(record.pid, &record.proc_start, record.started_at_ms) {
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        find_running_in(
+            session_id,
+            entries.map(|entry| entry.map(|e| e.path())),
+            &self.sessions_dir,
+        )
     }
+}
+
+/// 台帳のパスの列(ディレクトリの列挙結果)から、`session_id` が実行中とみなせる
+/// 台帳を探す。列挙の途中で読めなかった項目(`Err`)があれば、その項目が実行中の
+/// セッションの台帳だったかもしれず見落とすと止め漏れになるため、黙って捨てずに
+/// エラーにする(送信しない)。`dir` はエラーメッセージ用。
+fn find_running_in(
+    session_id: &str,
+    paths: impl Iterator<Item = std::io::Result<PathBuf>>,
+    dir: &Path,
+) -> Result<Option<RunningSession>, AppError> {
+    for path in paths {
+        let path = path.map_err(|e| {
+            AppError::Io(format!(
+                "実行中セッションの台帳の一覧({})を最後まで読めませんでした: {e}",
+                dir.display()
+            ))
+        })?;
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let ledger = LedgerEntry::read(&path);
+        let Some(pid) = ledger.pid else {
+            continue;
+        };
+        let evidence = match ledger.session_id.as_deref() {
+            Some(id) if id != session_id => continue,
+            Some(_) => process_is_alive(pid, ledger.proc_start.as_deref(), ledger.started_at_ms)
+                .then_some(RunningEvidence::SessionMatched),
+            None => (!matches!(probe_process(pid), ProcessProbe::NotFound))
+                .then_some(RunningEvidence::LedgerUnreadable),
+        };
+        if let Some(evidence) = evidence {
+            return Ok(Some(RunningSession {
+                ledger_path: path,
+                pid,
+                evidence,
+            }));
+        }
+    }
+    Ok(None)
 }
 
 /// `pid` のプロセスが現在も生存しており、かつ `proc_start`(`startedAt` が
@@ -122,20 +209,26 @@ impl RunningSessionSource for FileRunningSessionSource {
 ///    一致するか(CLI版実測。タイムゾーン差の換算に現在のローカルタイム
 ///    ゾーンを使う)
 /// 3. `started_at_ms`(Unixミリ秒)と実測値を許容誤差以内で比較する
-/// 4. 上記いずれでも判定できない場合、**プロセスが生存してさえいれば
-///    実行中とみなす**(安全側に倒す。会話の混線防止が目的のため、
-///    「止め漏れ」より「止めすぎ」の実害が小さい。PIDの使い回しで誤って
-///    ブロックしても、ユーザーは送信をやり直せば済む)
+/// 4. 上記いずれでも判定できない(`proc_start` が無い場合を含む)場合、
+///    **プロセスが生存してさえいれば実行中とみなす**(安全側に倒す。会話の混線
+///    防止が目的のため、「止め漏れ」より「止めすぎ」の実害が小さい。PIDの使い回しで
+///    誤ってブロックしても、ユーザーは送信をやり直せば済む)
 ///
-/// プロセスが存在しない(`pid` のプロセス自体が生きていない)場合のみ
-/// `false` を返す。
-fn process_is_alive(pid: u32, proc_start: &str, started_at_ms: Option<i64>) -> bool {
-    let Some(actual_filetime) = process_creation_filetime(pid) else {
-        return false;
+/// プロセスが存在しない(`pid` のプロセス自体が生きていない)と確定できる
+/// 場合のみ `false` を返す。プロセスの作成時刻を取得できない(アクセス拒否等)
+/// 場合も、存在は否定できないので生存とみなす。
+fn process_is_alive(pid: u32, proc_start: Option<&str>, started_at_ms: Option<i64>) -> bool {
+    let actual_filetime = match probe_process(pid) {
+        ProcessProbe::NotFound => return false,
+        ProcessProbe::Alive {
+            creation_filetime: None,
+        } => return true,
+        ProcessProbe::Alive {
+            creation_filetime: Some(filetime),
+        } => filetime as i64,
     };
-    let actual_filetime = actual_filetime as i64;
 
-    if let Ok(reported) = proc_start.parse::<u64>() {
+    if let Some(reported) = proc_start.and_then(|s| s.parse::<u64>().ok()) {
         if reported as i64 == actual_filetime {
             return true;
         }
@@ -158,19 +251,44 @@ fn process_is_alive(pid: u32, proc_start: &str, started_at_ms: Option<i64>) -> b
     true
 }
 
-/// `pid` のプロセスの作成時刻(FILETIME。100ナノ秒単位・1601年起点)を
-/// `u64` として返す。プロセスが存在しない・情報を取得できない場合は `None`。
-fn process_creation_filetime(pid: u32) -> Option<u64> {
+/// [`probe_process`] の結果。
+#[derive(Debug, PartialEq, Eq)]
+enum ProcessProbe {
+    /// そのPIDのプロセスは存在しない(唯一「実行中でない」と確定できる結果)。
+    NotFound,
+    /// プロセスは存在する(またはその可能性を否定できない)。`creation_filetime`
+    /// は作成時刻(FILETIME。100ナノ秒単位・1601年起点)で、取得できなければ `None`。
+    Alive { creation_filetime: Option<u64> },
+}
+
+/// `pid` のプロセスを調べる。`OpenProcess` が「パラメータ不正」(そのPIDが存在
+/// しないときのエラー)で失敗した場合だけ `NotFound` とし、それ以外の失敗
+/// (アクセス拒否など)は存在を否定できないので `Alive` 扱いにする(分からない
+/// ときは止める側に倒す原則)。
+fn probe_process(pid: u32) -> ProcessProbe {
     unsafe {
-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let handle = match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
+            Ok(handle) => handle,
+            Err(e) if e.code() == ERROR_INVALID_PARAMETER.to_hresult() => {
+                return ProcessProbe::NotFound
+            }
+            Err(_) => {
+                return ProcessProbe::Alive {
+                    creation_filetime: None,
+                }
+            }
+        };
         let mut creation = FILETIME::default();
         let mut exit = FILETIME::default();
         let mut kernel = FILETIME::default();
         let mut user = FILETIME::default();
         let result = GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user);
         let _ = CloseHandle(handle);
-        result.ok()?;
-        Some(((creation.dwHighDateTime as u64) << 32) | creation.dwLowDateTime as u64)
+        ProcessProbe::Alive {
+            creation_filetime: result
+                .ok()
+                .map(|_| ((creation.dwHighDateTime as u64) << 32) | creation.dwLowDateTime as u64),
+        }
     }
 }
 
@@ -217,28 +335,109 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn write_record(dir: &std::path::Path, pid: u32, session_id: &str, proc_start: &str) {
-        fs::write(
-            dir.join(format!("{pid}.json")),
-            format!(r#"{{"pid":{pid},"sessionId":"{session_id}","procStart":"{proc_start}"}}"#),
-        )
-        .unwrap();
+    /// 自プロセス(テストを実行中で確実に生きているPID)の作成時刻。
+    fn own_creation_filetime() -> u64 {
+        match probe_process(std::process::id()) {
+            ProcessProbe::Alive {
+                creation_filetime: Some(filetime),
+            } => filetime,
+            other => panic!("should read this test process's own creation time: {other:?}"),
+        }
+    }
+
+    /// 現実的に存在しないであろう大きなPID。
+    const DEAD_PID: u32 = 999_999_999;
+
+    fn write_ledger(dir: &Path, file_name: &str, content: &str) {
+        fs::write(dir.join(file_name), content).unwrap();
+    }
+
+    fn write_record(dir: &Path, pid: u32, session_id: &str, proc_start: &str) {
+        write_ledger(
+            dir,
+            &format!("{pid}.json"),
+            &format!(r#"{{"pid":{pid},"sessionId":"{session_id}","procStart":"{proc_start}"}}"#),
+        );
     }
 
     fn write_record_with_started_at(
-        dir: &std::path::Path,
+        dir: &Path,
         pid: u32,
         session_id: &str,
         proc_start: &str,
         started_at_ms: i64,
     ) {
-        fs::write(
-            dir.join(format!("{pid}.json")),
-            format!(
+        write_ledger(
+            dir,
+            &format!("{pid}.json"),
+            &format!(
                 r#"{{"pid":{pid},"sessionId":"{session_id}","procStart":"{proc_start}","startedAt":{started_at_ms}}}"#
             ),
-        )
-        .unwrap();
+        );
+    }
+
+    fn source(dir: &tempfile::TempDir) -> FileRunningSessionSource {
+        FileRunningSessionSource::new(dir.path().to_path_buf())
+    }
+
+    /// 真偽だけを見るテストが読みやすいように、`find_running` を bool に畳む。
+    trait IsRunning {
+        fn is_running(&self, session_id: &str) -> Result<bool, AppError>;
+    }
+
+    impl IsRunning for FileRunningSessionSource {
+        fn is_running(&self, session_id: &str) -> Result<bool, AppError> {
+            self.find_running(session_id).map(|found| found.is_some())
+        }
+    }
+
+    #[test]
+    fn find_running_reports_the_ledger_path_pid_and_evidence() {
+        let pid = std::process::id();
+
+        // sessionId が一致する台帳
+        let dir = tempfile::tempdir().unwrap();
+        write_record(dir.path(), pid, "s1", "1");
+        let found = source(&dir).find_running("s1").unwrap().expect("running");
+        assert_eq!(found.ledger_path, dir.path().join(format!("{pid}.json")));
+        assert_eq!(found.pid, pid);
+        assert_eq!(found.evidence, RunningEvidence::SessionMatched);
+
+        // sessionId を取り出せない台帳(壊れている)
+        let dir = tempfile::tempdir().unwrap();
+        write_ledger(dir.path(), &format!("{pid}.json"), r#"{"sessionId":"#);
+        let found = source(&dir).find_running("s1").unwrap().expect("running");
+        assert_eq!(found.ledger_path, dir.path().join(format!("{pid}.json")));
+        assert_eq!(found.evidence, RunningEvidence::LedgerUnreadable);
+    }
+
+    #[test]
+    fn find_running_in_fails_when_an_entry_could_not_be_read_instead_of_skipping_it() {
+        // 列挙の途中で読めなかった項目は、実行中の台帳だったかもしれない。黙って
+        // 捨てずにエラー(送信しない)。前後の台帳が無関係でも、それだけで安全と
+        // 判断しない。
+        let dir = tempfile::tempdir().unwrap();
+        let unrelated = dir.path().join("1.json");
+        let entries: Vec<std::io::Result<PathBuf>> = vec![
+            Ok(unrelated),
+            Err(std::io::Error::other("boom")),
+            Ok(dir.path().join("2.json")),
+        ];
+
+        let result = find_running_in("s1", entries.into_iter(), dir.path());
+
+        assert!(matches!(result, Err(AppError::Io(_))), "{result:?}");
+    }
+
+    #[test]
+    fn find_running_in_returns_none_when_every_entry_is_readable_and_unrelated() {
+        let dir = tempfile::tempdir().unwrap();
+        write_record(dir.path(), std::process::id(), "other", "1");
+        let path = dir.path().join(format!("{}.json", std::process::id()));
+
+        let result = find_running_in("s1", vec![Ok(path)].into_iter(), dir.path());
+
+        assert_eq!(result.unwrap(), None);
     }
 
     #[test]
@@ -261,13 +460,24 @@ mod tests {
     }
 
     #[test]
+    fn is_running_errors_when_sessions_dir_exists_but_cannot_be_read() {
+        // 「存在しない」以外の理由で読めないときは、何も分からないので送信を止める
+        // (エラー)。ここではディレクトリではなく通常のファイルを指して再現する。
+        let dir = tempfile::tempdir().unwrap();
+        let not_a_dir = dir.path().join("file.txt");
+        fs::write(&not_a_dir, "x").unwrap();
+
+        let result = FileRunningSessionSource::new(not_a_dir).is_running("s1");
+
+        assert!(matches!(result, Err(AppError::Io(_))), "{result:?}");
+    }
+
+    #[test]
     fn is_running_returns_false_when_no_record_matches_the_session_id() {
         let dir = tempfile::tempdir().unwrap();
         write_record(dir.path(), std::process::id(), "other-session", "1");
 
-        let source = FileRunningSessionSource::new(dir.path().to_path_buf());
-
-        assert!(!source.is_running("s1").unwrap());
+        assert!(!source(&dir).is_running("s1").unwrap());
     }
 
     #[test]
@@ -275,13 +485,26 @@ mod tests {
         // v2.1.280(Desktop)実測の形式。
         let dir = tempfile::tempdir().unwrap();
         let pid = std::process::id();
-        let actual_filetime = process_creation_filetime(pid)
-            .expect("should read this test process's own creation time");
-        write_record(dir.path(), pid, "s1", &actual_filetime.to_string());
+        write_record(dir.path(), pid, "s1", &own_creation_filetime().to_string());
 
-        let source = FileRunningSessionSource::new(dir.path().to_path_buf());
+        assert!(source(&dir).is_running("s1").unwrap());
+    }
 
-        assert!(source.is_running("s1").unwrap());
+    #[test]
+    fn is_running_returns_true_when_proc_start_is_a_json_number() {
+        // procStart が文字列でなく数値で書かれていても読める。
+        let dir = tempfile::tempdir().unwrap();
+        let pid = std::process::id();
+        write_ledger(
+            dir.path(),
+            &format!("{pid}.json"),
+            &format!(
+                r#"{{"pid":{pid},"sessionId":"s1","procStart":{}}}"#,
+                own_creation_filetime()
+            ),
+        );
+
+        assert!(source(&dir).is_running("s1").unwrap());
     }
 
     #[test]
@@ -290,33 +513,29 @@ mod tests {
         // 逆算するため、CI等どのタイムゾーンでも成立する。
         let dir = tempfile::tempdir().unwrap();
         let pid = std::process::id();
-        let actual_filetime = process_creation_filetime(pid)
-            .expect("should read this test process's own creation time")
-            as i64;
         let bias_minutes =
             local_utc_offset_bias_minutes().expect("should read the local timezone bias");
-        let dotnet_local_ticks = actual_filetime + DOTNET_TICKS_AT_FILETIME_EPOCH
+        let dotnet_local_ticks = own_creation_filetime() as i64 + DOTNET_TICKS_AT_FILETIME_EPOCH
             - bias_minutes as i64 * TICKS_PER_MINUTE;
         write_record(dir.path(), pid, "s1", &dotnet_local_ticks.to_string());
 
-        let source = FileRunningSessionSource::new(dir.path().to_path_buf());
-
-        assert!(source.is_running("s1").unwrap());
+        assert!(source(&dir).is_running("s1").unwrap());
     }
 
     #[test]
     fn is_running_returns_true_when_started_at_matches_within_tolerance() {
         let dir = tempfile::tempdir().unwrap();
-        let pid = std::process::id();
-        let actual_filetime = process_creation_filetime(pid)
-            .expect("should read this test process's own creation time");
-        let actual_unix_ms = filetime_to_unix_ms(actual_filetime as i64);
+        let actual_unix_ms = filetime_to_unix_ms(own_creation_filetime() as i64);
         // procStartはどちらの形式にも一致しない値にする。
-        write_record_with_started_at(dir.path(), pid, "s1", "1", actual_unix_ms + 1_000);
+        write_record_with_started_at(
+            dir.path(),
+            std::process::id(),
+            "s1",
+            "1",
+            actual_unix_ms + 1_000,
+        );
 
-        let source = FileRunningSessionSource::new(dir.path().to_path_buf());
-
-        assert!(source.is_running("s1").unwrap());
+        assert!(source(&dir).is_running("s1").unwrap());
     }
 
     #[test]
@@ -325,31 +544,133 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_record(dir.path(), std::process::id(), "s1", "1");
 
-        let source = FileRunningSessionSource::new(dir.path().to_path_buf());
-
-        assert!(source.is_running("s1").unwrap());
+        assert!(source(&dir).is_running("s1").unwrap());
     }
 
     #[test]
     fn is_running_returns_false_when_the_recorded_pid_no_longer_exists() {
         let dir = tempfile::tempdir().unwrap();
-        // 現実的に存在しないであろう大きなPID。プロセス自体が無いため、
-        // 安全側フォールバックの対象にもならない(唯一「実行中でない」と
-        // 確定できるケース)。
-        write_record(dir.path(), 999_999_999, "s1", "123456789");
+        // プロセス自体が無いため、安全側フォールバックの対象にもならない
+        // (「実行中でない」と確定できるケース)。
+        write_record(dir.path(), DEAD_PID, "s1", "123456789");
 
-        let source = FileRunningSessionSource::new(dir.path().to_path_buf());
-
-        assert!(!source.is_running("s1").unwrap());
+        assert!(!source(&dir).is_running("s1").unwrap());
     }
 
     #[test]
     fn is_running_ignores_non_json_files() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("12345.abcdef.key"), "not json").unwrap();
+        write_ledger(dir.path(), "12345.abcdef.key", "not json");
 
-        let source = FileRunningSessionSource::new(dir.path().to_path_buf());
+        assert!(!source(&dir).is_running("s1").unwrap());
+    }
 
-        assert!(!source.is_running("s1").unwrap());
+    // ---- 台帳の揺れ(issue #345 実機検証で判明): 読めない・分からないは止める側 ----
+
+    #[test]
+    fn is_running_returns_true_for_a_ledger_without_proc_start() {
+        // `claude --resume` で開き直した対話セッション(v2.1.150)の台帳の実例
+        // (Lab (PM) の報告。procStart が無い)。pid と startedAt はこのテストの
+        // 自プロセスに差し替えてある。
+        let dir = tempfile::tempdir().unwrap();
+        let pid = std::process::id();
+        write_ledger(
+            dir.path(),
+            &format!("{pid}.json"),
+            &format!(
+                r#"{{"pid":{pid},"sessionId":"s1","cwd":"C:\\Users\\yanqi\\prj\\yaoyorozu","startedAt":1790215440370,"version":"2.1.150","peerProtocol":1,"kind":"interactive","entrypoint":"cli","status":"idle","updatedAt":1790215443082}}"#
+            ),
+        );
+
+        assert!(source(&dir).is_running("s1").unwrap());
+    }
+
+    #[test]
+    fn is_running_ignores_a_ledger_without_proc_start_for_another_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid = std::process::id();
+        write_ledger(
+            dir.path(),
+            &format!("{pid}.json"),
+            &format!(r#"{{"pid":{pid},"sessionId":"other","startedAt":1790215440370}}"#),
+        );
+
+        assert!(!source(&dir).is_running("s1").unwrap());
+    }
+
+    #[test]
+    fn is_running_returns_false_for_a_ledger_without_proc_start_whose_process_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        write_ledger(
+            dir.path(),
+            &format!("{DEAD_PID}.json"),
+            &format!(r#"{{"pid":{DEAD_PID},"sessionId":"s1"}}"#),
+        );
+
+        assert!(!source(&dir).is_running("s1").unwrap());
+    }
+
+    #[test]
+    fn is_running_uses_the_file_name_pid_when_the_ledger_has_no_pid_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid = std::process::id();
+        write_ledger(
+            dir.path(),
+            &format!("{pid}.json"),
+            r#"{"sessionId":"s1","startedAt":1}"#,
+        );
+
+        assert!(source(&dir).is_running("s1").unwrap());
+    }
+
+    #[test]
+    fn is_running_blocks_when_the_ledger_cannot_be_matched_to_the_session_but_its_process_is_alive()
+    {
+        // JSONとして読めない(書き込み途中の切れ端など)・オブジェクトでない・
+        // sessionId が無い台帳は、対象セッションと照合できない。そのPIDが生きて
+        // いるなら、実行中とみなして止める。
+        let pid = std::process::id();
+        let pid_only = format!(r#"{{"pid":{pid}}}"#);
+        for content in [
+            r#"{"pid":19104,"sessionId":"s"#,
+            "",
+            "[]",
+            pid_only.as_str(),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            write_ledger(dir.path(), &format!("{pid}.json"), content);
+
+            assert!(
+                source(&dir).is_running("s1").unwrap(),
+                "content: {content:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn is_running_does_not_block_on_an_unreadable_ledger_whose_process_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        write_ledger(dir.path(), &format!("{DEAD_PID}.json"), r#"{"sessionId":"#);
+
+        assert!(!source(&dir).is_running("s1").unwrap());
+    }
+
+    #[test]
+    fn is_running_ignores_a_ledger_with_no_identifiable_pid() {
+        // 中身にもファイル名にもPIDが無い台帳は、生存を確かめる相手がおらず、
+        // ブロックすると永続的に解消できないため無視する(唯一の例外)。
+        let dir = tempfile::tempdir().unwrap();
+        write_ledger(dir.path(), "garbage.json", r#"{"sessionId":"s1"#);
+        write_ledger(dir.path(), "garbage2.json", "not json at all");
+
+        assert!(!source(&dir).is_running("s1").unwrap());
+    }
+
+    #[test]
+    fn probe_process_treats_a_process_it_may_not_open_as_alive() {
+        // PID 4(System)は権限によって開けたり開けなかったりするが、どちらでも
+        // 「存在しない」とは判定しない(アクセス拒否を NotFound にしない)。
+        assert_ne!(probe_process(4), ProcessProbe::NotFound);
+        assert_eq!(probe_process(DEAD_PID), ProcessProbe::NotFound);
     }
 }

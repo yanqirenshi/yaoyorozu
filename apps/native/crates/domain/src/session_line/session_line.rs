@@ -83,17 +83,4 @@ impl SessionLine {
     pub fn slug(&self) -> Option<&str> {
         self.base().and_then(|b| b.slug.as_deref())
     }
-
-    /// `uuid`。会話チェーン行のみが持つ(セッションメタ行・未知の行は
-    /// `None`)。フォーク系列の根(root_uuid)判定に使う(issue #345)。
-    pub fn uuid(&self) -> Option<&str> {
-        self.base().and_then(|b| b.uuid.as_deref())
-    }
-
-    /// `parentUuid`。会話チェーン行のみが持つ。先頭行(チェーンの起点)は
-    /// 欠損時と同じく `None`(issue #345の根uuid判定では「parentUuidが無い
-    /// 最初の行」を根とみなせば十分で、両者の区別は不要)。
-    pub fn parent_uuid(&self) -> Option<&str> {
-        self.base().and_then(|b| b.parent_uuid.as_deref())
-    }
 }

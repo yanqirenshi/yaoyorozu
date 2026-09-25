@@ -8,7 +8,7 @@ import AddButton from "./AddButton";
 // と同じ: `<dialog>` の showModal()、Esc・×・外側クリックで閉じる。閉じるときは
 // close() を呼ばず、親の状態を戻して(アンマウントして)閉じる。
 export type SessionPickerCandidate = {
-  // 選択の同一性に使う鍵(呼び出し側の「フォルダ|系列の鍵」)。
+  // 選択の同一性に使う鍵(呼び出し側の「フォルダ|セッション ID」)。
   key: string;
   folder: string;
   title: string;

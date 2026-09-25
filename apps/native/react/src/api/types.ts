@@ -20,6 +20,22 @@ export type MessageDto = {
   timestamp: string;
   // 元の jsonl 行の uuid(「データ」表示用。issue #313)。行に無ければ null。
   uuid: string | null;
+  // この行に含まれる画像の枚数(issue #349)。画像本体は載せず、押されたときに
+  // getSessionLineImages で取る。
+  image_count: number;
+  // 送信の失敗に関する見分け(issue #364)。会話ファイルは書き換えず、表示だけで分かるようにする。
+  //  - failed_question: 答えのない質問(直後が送信失敗のエラー行)
+  //  - error_for_question: 送信失敗のエラー行(直前が答えのない質問)
+  //  - error: 送信失敗のエラー行(直前に AI の返答がある=返答の途中で失敗)
+  status: MessageStatusDto;
+};
+
+export type MessageStatusDto = "normal" | "failed_question" | "error_for_question" | "error";
+
+// getSessionLineImages の1枚分(issue #349)。data は base64(data: プレフィックス無し)。
+export type MessageImageDto = {
+  media_type: string;
+  data: string;
 };
 
 // 表示中の会話(issue #197でRust側`Session`→`Conversation`に改名したのに
@@ -30,9 +46,8 @@ export type ConversationDto = {
   agent: AgentKindDto;
 };
 
-// セッション一覧(ビューア左ペイン)の1件分。`listSessions` はフォーク系列
-// (issue #345)ごとに最新ファイルだけへ畳んだ結果を返すため、ここに並ぶのは
-// 常に各系列の先頭(送信対象にできるセッション)。
+// セッション一覧(ビューア左ペイン)の1件分。1件 = 1セッション(セッション ID =
+// 会話ファイル。issue #369)。フォークや圧縮で分かれたファイルも別のセッションとして並ぶ。
 export type SessionSummaryDto = {
   id: string;
   title: string;
@@ -40,15 +55,12 @@ export type SessionSummaryDto = {
   // ハブのグラフ階層(issue #104)。JSONLに記録が無ければ `null`。
   cwd: string | null;
   git_branch: string | null;
-  // フォーク系列の鍵(issue #345)。ビューアのセッションタブが「フォークしても同じ
-  // 会話を指す」キーに使う(issue #353)。null のときは id 自身が系列の鍵。
-  root_uuid: string | null;
 };
 
-// ビューアのセッションタブ1件(issue #353)。キーは「フォルダ + 系列の鍵」。
+// ビューアのセッションタブ1件(issue #353)。キーは「フォルダ + セッション ID」(issue #369)。
 export type ViewerTabDto = {
   project: string;
-  series_key: string;
+  session_id: string;
 };
 
 export type AppErrorDto = {
