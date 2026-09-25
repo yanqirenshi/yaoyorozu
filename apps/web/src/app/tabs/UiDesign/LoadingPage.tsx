@@ -9,6 +9,7 @@ import {
   LOADING_LIBRARY,
   LOADING_RULES,
   LOADING_SIZES,
+  LOADING_SIZING,
   LOADING_TIMING,
   LOADING_VARIANT,
   type LoadingSize,
@@ -140,6 +141,10 @@ const SECTIONS: DocSection[] = [
             usage: s.usage,
           }))}
         />
+        <Note>
+          大きさの与え方は2通りある。{LOADING_SIZING.byProp}{LOADING_SIZING.byCss}
+          {LOADING_SIZING.note}
+        </Note>
         <Sample
           surface="base"
           caption="行の中に置いた small。行内アイコンと同じ大きさなので、行の高さが変わらない。"
