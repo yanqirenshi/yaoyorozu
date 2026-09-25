@@ -16,6 +16,8 @@ import {
   listSessions,
   onSessionChanged,
   onSettingsUpdated,
+  onViewerNavigate,
+  onViewerTabsChanged,
   saveProjectClaudeMd,
   saveProjectSettingsFile,
   saveViewerTabs,
@@ -134,6 +136,10 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const newlyStartedRef = useRef<Set<string>>(new Set());
   // 並びの保存は順序どおりに実行する(連続操作で古い並びが後勝ちしないように)。
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  // 保存待ち(キューに入っていて未完了)の数。ほかのウィンドウの保存の通知(`viewer-tabs:changed`)で
+  // 並びを取り直すとき、自分の保存が残っている間は取り直さない(古い並びで上書きしない。
+  // 自分の保存が終われば、その通知でもう一度取り直す。issue #422)。
+  const pendingSavesRef = useRef(0);
   const [messages, setMessages] = useState<MessageDto[]>([]);
   // `refreshSessionInPlace` が最新の読み込み件数を参照するための ref(issue #314)。
   // state をそのまま依存配列に入れると、追記のたびに購読(`onSessionChanged` 等)の
@@ -378,6 +384,24 @@ function SessionsPage({ nav }: SessionsPageProps) {
       });
   }, [resolvedProfileId]);
 
+  // ほかのウィンドウ(ハブなど)がこのプロファイルのタブの並びを保存したら、取り直す(issue #422)。
+  // 並びの本体は Query で取り直す(通知は ID だけ)。自分の保存の通知でも取り直して壊れない
+  // (保存待ちが残っている間は取り直さず、最後の保存の通知で取り直す)。
+  useEffect(() => {
+    if (!resolvedProfileId) return;
+    const unlistenPromise = onViewerTabsChanged(({ profile_id }) => {
+      if (profile_id !== resolvedProfileId || pendingSavesRef.current > 0) return;
+      getViewerTabs(resolvedProfileId)
+        .then((tabs) => {
+          if (pendingSavesRef.current === 0) setViewerTabs(tabs);
+        })
+        .catch((e) => setError(isAppError(e) ? e.message : String(e)));
+    });
+    return () => {
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, [resolvedProfileId]);
+
   // 設定の変更(設定画面でのプロファイル切り替え等)で対象フォルダ・GitHubプロジェクトが変わった
   // ことの通知。表示中のフォルダが新しいプロファイルの対象から外れた場合は
   // 選択を解除する(issue #72)。
@@ -489,9 +513,13 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const persistViewerTabs = (tabs: ViewerTabDto[]) => {
     setViewerTabs(tabs);
     if (!resolvedProfileId) return;
+    pendingSavesRef.current += 1;
     saveQueueRef.current = saveQueueRef.current
       .then(() => saveViewerTabs(resolvedProfileId, tabs))
-      .catch((e) => setError(isAppError(e) ? e.message : String(e)));
+      .catch((e) => setError(isAppError(e) ? e.message : String(e)))
+      .finally(() => {
+        pendingSavesRef.current -= 1;
+      });
   };
 
   // 「+」のモーダルで選んだセッションを、選んだ順に末尾へ足す。足したうちの最初の
@@ -616,6 +644,25 @@ function SessionsPage({ nav }: SessionsPageProps) {
     if (!confirmDiscardIfDirty()) return;
     nav.setProjectAndSession(project, id);
   };
+
+  // 他のウィンドウ(ハブなど)から、このウィンドウのビューアを指定セッションへ移動する要求
+  // (`focus_window` に session を渡したとき。`viewer:navigate`。issue #422)。会話ビューへ切り替えて、
+  // そのセッションを選択する(編集中の内容があれば、破棄の確認を挟む)。一覧(保存済みタブ)に
+  // 無いセッションでも、選択・表示はできる(タブへの追加は、呼び出し側が事前に保存する)。
+  const navigateRef = useRef((_project: string, _id: string) => {});
+  navigateRef.current = (project, id) => {
+    if (!confirmDiscardIfDirty()) return;
+    nav.setView("chat");
+    nav.setProjectAndSession(project, id);
+  };
+  useEffect(() => {
+    const unlistenPromise = onViewerNavigate(({ project, session_id }) =>
+      navigateRef.current(project, session_id),
+    );
+    return () => {
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
 
   const handleSwitchView = (next: PaneView) => {
     if (next === view) return;
