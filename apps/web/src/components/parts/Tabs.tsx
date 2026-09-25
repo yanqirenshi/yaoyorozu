@@ -148,6 +148,9 @@ export function tabCloseSx(state: "default" | "hover" | "active") {
     width: TAB_CLOSE.targetPx + "px",
     height: TAB_CLOSE.targetPx + "px",
     ml: spacePx(TAB_CLOSE.gap) + "px",
+    // 下線(インジケータ)の帯に重ならないよう、その高さぶん下に余白を取る。
+    // align-items: center の中では、中心がその半分だけ上に寄る(仕様 verticalAlign)。
+    mb: TAB_INDICATOR.heightPx + "px",
     borderRadius: radiusCss(TAB_CLOSE.radius),
     border: "none",
     padding: 0,
