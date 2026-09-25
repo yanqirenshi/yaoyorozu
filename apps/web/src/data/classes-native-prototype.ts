@@ -26,7 +26,7 @@
  * 【対象・ファイル対応】native.md §1 の「1型(クラス)= 1ファイル」(issue #184、
  * PR #185)により、domain クレートは各型が型名 snake_case のファイルに分かれて
  * いる(例: `Settings` → `settings.rs`)。`lib.rs` は `mod` 宣言と `pub use` のみ。
- * 本図の39クラスのうち、`ProjectItemKind` は `ProjectItem` と同じ `project_item.rs`
+ * 本図の40クラスのうち、`ProjectItemKind` は `ProjectItem` と同じ `project_item.rs`
  * に、`ClaudeDirEntryKind` は `ClaudeDirEntry` と同じ `claude_dir_entry.rs` に、
  * `GitRepositoryLedger` は `GitLedger` と同じ `git_ledger.rs` に、`ObservedWorktree`
  * は `ObservedGitState` と同じ `observed_git_state.rs` に、`MessageStatus` は
@@ -34,9 +34,9 @@
  * `ImageAttachmentError` は `ImageAttachment` と同じ `image_attachment.rs` に同居する
  * (native.md 曰く「その型専用の小さな補助enum」だが、補助structも同じ扱いにしている。
  * なお `ImageMediaType` は `ImageAttachment` と `MessageImage` の両方から使われるため、
- * 「専用」には厳密には当たらない。図は実物のファイル対応どおりに描いた)。ほかの32
- * クラスはそれぞれ単独のファイル(型名 snake_case)。掲載対象は `classes-domain.ts`
- * に掲載済みの Pc・User・Profile と、`session_line/`(33型。かつては
+ * 「専用」には厳密には当たらない。図は実物のファイル対応どおりに描いた)。ほかの33
+ * クラス(`MessageKind` は `message_kind.rs`)はそれぞれ単独のファイル(型名 snake_case)。掲載対象は `classes-domain.ts`
+ * に掲載済みの Pc・User・Profile と、`session_line/`(34型。かつては
  * `classes-session-line.ts` で描いていたが、不要になったため図ごと削除した)を
  * 除いたもの。
  *
@@ -64,7 +64,7 @@
  * (`Profile.github_project` からも同じ方針で線を引かない)。
  *
  * 【ScannedLine】`session_line/scanned_line.rs`(issue #302・#308)。`session_line/`
- * の33型は図から外しているが、`ScannedLine` は実装済みの domain の型で、走査
+ * の34型は図から外しているが、`ScannedLine` は実装済みの domain の型で、走査
  * (.jsonl 全行の読み取り)が実際に使うため、この図に1つだけ載せる(「session_line
  * 群の近く」に置く先は無いので、独立した節にした)。
  * - フィールド `line: SessionLine` は private。宣言をそのまま写す方針なので属性として
@@ -142,6 +142,9 @@ const DEFS: ClassDef[] = [
       // 送信の失敗に関する見分け(issue #364)。行から取り出した直後はエラー行だけが
       // Error(それ以外は Normal)。質問との対応は mark_failed_questions が付ける。
       attr("status", "MessageStatus"),
+      // セッション間メッセージ(CLI の SendMessage。PoC #429)の受信・送信・送信の結果を、通常の
+      // 会話と見分ける印(issue #437)。会話ファイルは書き換えず、表示のための見分け。
+      attr("kind", "MessageKind"),
     ],
     position: { x: 2450, y: 150 },
     filePath: "apps/native/crates/domain/src/message.rs",
@@ -154,6 +157,20 @@ const DEFS: ClassDef[] = [
     // 箱に隠れないよう間を空け、GithubProjectSummary(右上)とも離す。
     position: { x: 2850, y: 340 },
     filePath: "apps/native/crates/domain/src/message.rs",
+  },
+  {
+    name: { physical: "MessageKind", logical: "MessageKind", description: "メッセージの種類(表示のための見分け。message_kind.rs。issue #437)。セッション間メッセージ(CLI の SendMessage。PoC #429)の受信・送信・送信の結果を、通常の会話と見分けて出すために使う。Normal: 通常のメッセージ(既定)/ PeerReceived: 他のセッションから届いたメッセージ(origin.kind が peer の user 行。本文は封筒を剥いだもの。from_name は送り元の名前)/ PeerSent: 他のセッションへ送った(SendMessage の tool_use の行。本文は送った文。to は宛先(名前または受信口のアドレス)、tool_use_id は結果の行との突き合わせに使う)/ PeerSendResult: 送信の結果(SendMessage の tool_result の行。本文は結果の説明)。送信の結果は、対応する送信が無いものを keep_peer_send_results_of_sent_messages(message.rs の関数)が取り除く(SendMessage 以外のツールの結果が混ざるため)" },
+    stereotype: "enumeration",
+    attributes: [
+      "Normal",
+      "PeerReceived { from_name: Option<String> }",
+      "PeerSent { to: String, tool_use_id: String }",
+      "PeerSendResult { success: bool, tool_use_id: String }",
+    ].map(label),
+    // Message の右下、MessageStatus の下に置く(Message の右辺 → MessageKind の左辺)。
+    position: { x: 2850, y: 540 },
+    filePath: "apps/native/crates/domain/src/message_kind.rs",
+    size: { w: 520, h: 0 },
   },
   {
     name: { physical: "Role", logical: "Role", description: "メッセージの発言者種別" },
@@ -515,6 +532,7 @@ const RELATIONSHIPS = [
   rel("association", "Conversation", "Message", "messages", "right", "left"),
   rel("composition", "Message", "Role", "role", "bottom", "top"),
   rel("composition", "Message", "MessageStatus", "status", "right", "left"),
+  rel("composition", "Message", "MessageKind", "kind", "right", "left"),
   // 設定・プロファイル(Profile は classes-domain.ts に昇格済み。Settings.profiles の
   // コメントを参照)
   // GitHub連携(Projects v2)
