@@ -80,7 +80,12 @@ function NewSessionDialog({ initialMode, onCreate, onClose }: NewSessionDialogPr
             maxLength={MAX_NAME_CHARS}
             onChange={(e) => setName(e.target.value)}
             placeholder="会話のタイトルになります"
+            aria-describedby="new-session-name-hint"
           />
+          {/* 新規では、表示名がそのまま会話のタイトルになる(意図どおり。注意ではなく説明。issue #426) */}
+          <span id="new-session-name-hint" className="new-session-hint">
+            入れた名前が、この会話のタイトルになります(空のままなら、あとから自動で付きます)
+          </span>
         </label>
         <fieldset className="new-session-field new-session-modes">
           <legend className="new-session-label">権限モード</legend>
