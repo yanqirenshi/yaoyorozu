@@ -46,6 +46,7 @@ import type {
 
 export type {
   AddressedProgressDto,
+  AvailableModelDto,
   PermissionBehaviorDto,
   PermissionRequestDto,
   PermissionRequestKindDto,

@@ -148,7 +148,17 @@ fn spawn_event_loop(
                             &addressed.event,
                             now_ms(),
                         );
-                        let changed = before != watched(&slot.session) || exit_code.is_some();
+                        // 選べるモデルの一覧が届いたら、画面が取り直せるよう知らせる。
+                        let models_listed = match &addressed.event {
+                            RunningSessionEvent::ModelsListed(models) => {
+                                slot.available_models = models.clone();
+                                true
+                            }
+                            _ => false,
+                        };
+                        let changed = before != watched(&slot.session)
+                            || exit_code.is_some()
+                            || models_listed;
                         let subscribers = if addressed.as_progress().is_some() {
                             slot.subscribers.clone()
                         } else {
@@ -341,9 +351,14 @@ pub async fn start_running_session(
             project: resumed_project,
             session: started.session,
             process: started.process,
+            available_models: Vec::new(),
             subscribers: Vec::new(),
         };
-        let dto = RunningSessionDto::from_session(slot.project.as_deref(), slot.session.clone());
+        let dto = RunningSessionDto::from_session(
+            slot.project.as_deref(),
+            slot.session.clone(),
+            slot.available_models.clone(),
+        );
         let payload = changed_event(&slot.session, None);
         guard.running_sessions.push(slot);
         (dto, payload)
@@ -377,8 +392,13 @@ pub async fn get_running_session(
 ) -> Result<Option<RunningSessionDto>, AppErrorDto> {
     let target: RunningSessionRef = target.into();
     let guard = state.lock().await;
-    Ok(find_slot(&guard, &target)
-        .map(|slot| RunningSessionDto::from_session(slot.project.as_deref(), slot.session.clone())))
+    Ok(find_slot(&guard, &target).map(|slot| {
+        RunningSessionDto::from_session(
+            slot.project.as_deref(),
+            slot.session.clone(),
+            slot.available_models.clone(),
+        )
+    }))
 }
 
 /// 実行中セッションの途中経過を、この画面(`on_progress`)へ流し始める。購読 ID を返す。

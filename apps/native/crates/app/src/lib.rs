@@ -21,10 +21,11 @@ pub use running_session::{
     begin_switch_running_session, create_running_session, ensure_can_start, exited_to_forget,
     interrupt_running_session, new_session_id, own_running_pids, respond_permission,
     resume_running_session, send_to_running_session, stop_running_session,
-    write_permission_response, write_switch, write_user_message, CreateRunningSession, NowMs,
-    PermissionDecision, ResumeRunningSession, RunningPermissionMode, RunningProcess,
-    RunningSessionEvent, RunningSessionEventSink, RunningSessionLauncher, RunningSessionSwitch,
-    StartRunningSession, StartedRunningSession, MAX_KEPT_EXITED_SESSIONS, MAX_RUNNING_SESSIONS,
+    write_permission_response, write_switch, write_user_message, AvailableModel,
+    CreateRunningSession, NowMs, PermissionDecision, ResumeRunningSession, RunningPermissionMode,
+    RunningProcess, RunningSessionEvent, RunningSessionEventSink, RunningSessionLauncher,
+    RunningSessionSwitch, StartRunningSession, StartedRunningSession, MAX_KEPT_EXITED_SESSIONS,
+    MAX_RUNNING_SESSIONS,
 };
 pub use running_session_summary::{
     summarize, AddressedProgress, AddressedRunningSessionEvent, RunningSessionRef,

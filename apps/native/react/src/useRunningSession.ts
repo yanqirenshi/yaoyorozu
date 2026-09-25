@@ -13,6 +13,7 @@ import {
   subscribeRunningSessionProgress,
   switchRunningSession,
 } from "./api";
+import { selectableModeOf } from "./runningSessionLabels";
 import type {
   PermissionSuggestionDto,
   ProgressEventDto,
@@ -55,6 +56,9 @@ export type LiveTurn = {
 };
 
 const EMPTY_TURN: LiveTurn = { pendingLine: null, segments: [], tools: [], baselineUuids: [] };
+
+/** 切り替えの結果(現在値の変化)を待つ上限。 */
+const SWITCH_TIMEOUT_MS = 5000;
 
 /** 起動して待機になるまでの上限。 */
 const START_TIMEOUT_MS = 30000;
@@ -112,6 +116,8 @@ export function useRunningSession({
   // 「終了」ボタンで自分から止めたか(意図した終了はエラーとして出さない)。
   const stoppedByUserRef = useRef(false);
   const [busy, setBusy] = useState(false);
+  // 切り替え(モデル・権限モード)の結果を待っている間。
+  const [switching, setSwitching] = useState(false);
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
   // いま途中経過を購読している宛先。
@@ -319,9 +325,12 @@ export function useRunningSession({
   const send = useCallback(
     async (args: {
       profileId: string | null;
-      project: string;
+      /** 会話ファイルのあるプロジェクトフォルダ。新規の会話(まだ会話ファイルが無い)は `null`。 */
+      project: string | null;
       sessionId: string;
       mode: RunningPermissionModeDto;
+      /** 再開に付ける表示名(`--name`。任意)。 */
+      name?: string | null;
       text: string;
       images: string[];
     }): Promise<boolean> => {
@@ -338,12 +347,18 @@ export function useRunningSession({
         const current = runningRef.current;
         const alive = current !== null && current.process_state !== "exited";
         if (!alive) {
+          if (!args.project) {
+            // 新規の会話は会話ファイルができる前に終了すると、開き直す元が無い。
+            throw new Error(
+              "この会話はまだ会話ファイルが無く、実行中のセッションも終わっているため開き直せません。新規セッションを作り直してください",
+            );
+          }
           const started = await startRunningSession(args.profileId, {
             kind: "resume",
             project: args.project,
             session_id: args.sessionId,
             mode: args.mode,
-            name: null,
+            name: args.name?.trim() ? args.name.trim() : null,
           });
           applyRunning(started);
         }
@@ -409,16 +424,46 @@ export function useRunningSession({
     }
   }, []);
 
-  /** 起動中に、モデル・権限モードを切り替える(結果は状態の取り直しで反映される)。 */
-  const switchTo = useCallback(async (request: RunningSessionSwitchDto) => {
-    const target = runningRef.current?.target;
-    if (!target) return;
-    try {
-      await switchRunningSession(target, request);
-    } catch (e) {
-      callbacks.current.onError(messageOf(e));
-    }
-  }, []);
+  /**
+   * 起動中に、モデル・権限モードを切り替える。反映は CLI が受け入れたあと(応答)なので、要求を
+   * 送ったら、現在値が変わるまで取り直しながら待つ(楽観更新しない。上限 5 秒)。待つ間は
+   * `switching` で、画面が選択を止める。いまと同じ値への切り替えは要求しない(値が変わらず
+   * 上限まで待つことになるため)。
+   */
+  const switchTo = useCallback(
+    async (request: RunningSessionSwitchDto) => {
+      const current = runningRef.current;
+      if (!current || switching) return;
+      const same =
+        request.kind === "model"
+          ? current.current_model === request.model
+          : selectableModeOf(current.current_permission_mode) === request.mode;
+      if (same) return;
+      const before = [current.current_model, current.current_permission_mode];
+      setSwitching(true);
+      try {
+        await switchRunningSession(current.target, request);
+        const deadline = Date.now() + SWITCH_TIMEOUT_MS;
+        for (;;) {
+          const next = await refresh();
+          if (
+            !next ||
+            next.current_model !== before[0] ||
+            next.current_permission_mode !== before[1] ||
+            Date.now() > deadline
+          ) {
+            break;
+          }
+          await sleep(200);
+        }
+      } catch (e) {
+        callbacks.current.onError(messageOf(e));
+      } finally {
+        setSwitching(false);
+      }
+    },
+    [refresh, switching],
+  );
 
   const stop = useCallback(async () => {
     const target = runningRef.current?.target;
@@ -434,5 +479,5 @@ export function useRunningSession({
     resetLive();
   }, [refresh, resetLive]);
 
-  return { running, live, busy, send, respond, interrupt, switchTo, stop };
+  return { running, live, busy, switching, send, respond, interrupt, switchTo, stop };
 }
