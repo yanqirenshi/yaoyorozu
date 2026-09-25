@@ -21,10 +21,11 @@ pub use running_session::{
     begin_switch_running_session, create_running_session, ensure_can_start, exited_to_forget,
     interrupt_running_session, new_session_id, own_running_pids, respond_permission,
     resume_running_session, send_to_running_session, stop_running_session,
-    write_permission_response, write_switch, write_user_message, CreateRunningSession, NowMs,
-    PermissionDecision, ResumeRunningSession, RunningPermissionMode, RunningProcess,
-    RunningSessionEvent, RunningSessionEventSink, RunningSessionLauncher, RunningSessionSwitch,
-    StartRunningSession, StartedRunningSession, MAX_KEPT_EXITED_SESSIONS, MAX_RUNNING_SESSIONS,
+    write_permission_response, write_switch, write_user_message, AvailableModel,
+    CreateRunningSession, NowMs, PermissionDecision, ResumeRunningSession, RunningPermissionMode,
+    RunningProcess, RunningSessionEvent, RunningSessionEventSink, RunningSessionLauncher,
+    RunningSessionSwitch, StartRunningSession, StartedRunningSession, MAX_KEPT_EXITED_SESSIONS,
+    MAX_RUNNING_SESSIONS,
 };
 pub use running_session_summary::{
     summarize, AddressedProgress, AddressedRunningSessionEvent, RunningSessionRef,
@@ -919,6 +920,56 @@ pub fn retain_enumerated_parsed_sessions(
 /// `setTitle` で行う。
 pub fn viewer_window_title(profile_name: &str) -> String {
     profile_name.to_string()
+}
+
+/// ビューアで開くセッションの指定(フォルダ名 + セッション ID)を検証する(issue #422)。
+/// フロントから受け取った値は、URL のクエリ・イベントのペイロードに使うだけで、パスにはしないが、
+/// 同じ規則(`domain` の入力検証。native.md §4)で受け取る: パスを渡させず、フォルダ名と検証済みの
+/// ID だけを通す。
+pub fn validate_viewer_session(
+    project: &str,
+    session_id: &str,
+) -> Result<domain::ViewerTab, AppError> {
+    if !is_valid_project_dir_name(project) {
+        return Err(AppError::InvalidInput(
+            "不正なプロジェクト名です".to_string(),
+        ));
+    }
+    if !is_valid_session_id(session_id) {
+        return Err(AppError::InvalidInput("不正なセッションIDです".to_string()));
+    }
+    Ok(domain::ViewerTab {
+        project: project.to_string(),
+        session_id: session_id.to_string(),
+    })
+}
+
+/// URL の成分(パス・クエリの値)として安全にする(RFC 3986 の unreserved 以外を %XX に)。
+fn encode_url_component(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+/// プロファイルのビューアウィンドウの初期 URL(issue #76・#422)。`session` があれば、
+/// 開いたときにそのセッションを選択した状態にするクエリ(`project` / `session`。ビューアの
+/// 画面状態は URL が状態源。native.md §6)を付ける。
+pub fn viewer_window_url(profile_id: &str, session: Option<&domain::ViewerTab>) -> String {
+    let mut url = format!("index.html#/profiles/{}", encode_url_component(profile_id));
+    if let Some(tab) = session {
+        url.push_str(&format!(
+            "?project={}&session={}",
+            encode_url_component(&tab.project),
+            encode_url_component(&tab.session_id)
+        ));
+    }
+    url
 }
 
 /// 削除された会話ファイルの `ParsedSession` を取り除く(ファイル監視による差分
@@ -4579,5 +4630,82 @@ mod tests {
 
         assert!(result.users[0].repositories[0].branches.is_empty());
         assert!(result.users[0].repositories[0].worktrees.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod viewer_window_tests {
+    use super::*;
+
+    #[test]
+    fn a_viewer_session_reference_accepts_a_folder_name_and_a_session_id_only() {
+        let tab =
+            validate_viewer_session("C--Users-me-prj-x", "3a392392-0000-4000-8000-000000000001")
+                .unwrap();
+
+        assert_eq!(tab.project, "C--Users-me-prj-x");
+        assert_eq!(tab.session_id, "3a392392-0000-4000-8000-000000000001");
+    }
+
+    #[test]
+    fn a_viewer_session_reference_rejects_paths_and_unsafe_ids() {
+        for project in ["", ".", "..", "a/b", "a\\b", "C:\\x"] {
+            assert!(
+                matches!(
+                    validate_viewer_session(project, "s1"),
+                    Err(AppError::InvalidInput(_))
+                ),
+                "{project:?}"
+            );
+        }
+        for session_id in ["", "../x", "a b", "a/b", "s1.jsonl"] {
+            assert!(
+                matches!(
+                    validate_viewer_session("proj", session_id),
+                    Err(AppError::InvalidInput(_))
+                ),
+                "{session_id:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_window_url_is_the_profile_route_and_only_adds_the_session_query_when_given() {
+        assert_eq!(
+            viewer_window_url("profile-1", None),
+            "index.html#/profiles/profile-1"
+        );
+        let tab = domain::ViewerTab {
+            project: "proj-a".to_string(),
+            session_id: "s1".to_string(),
+        };
+        assert_eq!(
+            viewer_window_url("profile-1", Some(&tab)),
+            "index.html#/profiles/profile-1?project=proj-a&session=s1"
+        );
+    }
+
+    #[test]
+    fn the_window_url_encodes_characters_that_would_break_the_query() {
+        let tab = domain::ViewerTab {
+            project: "a b&c=d#e?f".to_string(),
+            session_id: "s1".to_string(),
+        };
+
+        let url = viewer_window_url("p", Some(&tab));
+
+        assert_eq!(
+            url,
+            "index.html#/profiles/p?project=a%20b%26c%3Dd%23e%3Ff&session=s1"
+        );
+        // 日本語(マルチバイト)も UTF-8 のバイトごとに %XX になる。
+        let japanese = domain::ViewerTab {
+            project: "会".to_string(),
+            session_id: "s1".to_string(),
+        };
+        assert_eq!(
+            viewer_window_url("p", Some(&japanese)),
+            "index.html#/profiles/p?project=%E4%BC%9A&session=s1"
+        );
     }
 }

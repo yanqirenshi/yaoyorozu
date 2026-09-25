@@ -15,6 +15,19 @@
  * - `running_session.rs`: 実行中セッションの command 群(関数なので図には描かない)と、
  *   `RunningSessionEventSink` の実装 `ChannelSink`(private)。
  * - `session_scan_queue.rs`: 走査キューの `ScanProgressDto`・`RescanOutcome`(どちらも private)。
+ * - `lib.rs` の `WatcherSlot`(private な型エイリアス。`Mutex<Option<infra::SessionWatcher>>`。
+ *   ファイル監視の保持先で、Tauri の管理状態)は、`SessionWatcher`(`classes-infra.ts`)を包むだけの
+ *   別名なので載せない(issue #420)。
+ *
+ * 【実行中セッション(Phase 2。issue #407。PR #413)】`AppState.running_session`(1つ)は
+ * `running_sessions`(複数)になり、`RunningSessionSlot` は購読(`ProgressSubscriber`)を持つ。
+ * DTO は宛先(`RunningSessionRefDto`)を取る command の入出力と、途中経過の包み
+ * (`AddressedProgressDto`)、ハブの一覧項目(`RunningSessionSummaryDto`)、起動・切り替えの
+ * 引数(`StartRunningSessionDto`・`RunningSessionSwitchDto`)が加わった。1回きり送信の
+ * `AgentModeDto` は #392 で撤去された。
+ *
+ * ビューア(issue #409。PR #418)で、選べるモデルの一覧(`AvailableModelDto`。`RunningSessionSlot` と
+ * `RunningSessionDto` が持つ)が加わった。domain は変わっていない。
  *
  * 【実物との突き合わせ】`tauri/src/*.rs` の struct / enum を、この図と名前・フィールド・
  * バリアントで突き合わせた(issue #400)。ViewerTabs は専用の DTO が無く、タブの並びは
@@ -28,9 +41,11 @@
  *   `classes-native-prototype.ts`・`classes-domain.ts` に載っている実在の
  *   クラスだが、別の図の離れた位置にあり線を引くと図をまたいで長く伸びるため、
  *   線は引かない(属性の型名にそのまま `domain::` を残して分かるようにする)。
- *   `AppState.window_states`(`app::WindowRegistry`)・`AppState.git_ledger`
- *   (`domain::GitLedger`)は、この図にも他の図にも無い型なので、同様に線を
- *   引かない。
+ *   `AppState.window_states`(`app::WindowRegistry`)・`AppState.loaded_messages`
+ *   (`app::CachedMessages`)・`AppState.session_rescan`(`app::RescanQueue`)は
+ *   `classes-infra.ts`(app の型)に、`AppState.git_ledger`(`domain::GitLedger`)は
+ *   `classes-native-prototype.ts` に載っているが、別の図の離れた位置にあるため、同様に線を
+ *   引かない(issue #420 で、以前「どの図にも無い」としていたものを infra 図へ載せた)。
  * - `From<domain::X>`/`From<app::X>` の実装(DTOへの変換)がある型は、対応する
  *   クラスをコメントに書いた(`classes-native-prototype.ts`・`classes-infra.ts`
  *   に同名 + `Dto` を外した名前で載っている)。線では結ばない(変換であって
@@ -122,13 +137,6 @@ const DEFS: ClassDef[] = [
     filePath: "apps/native/tauri/src/dto.rs",
   },
   // ============ 送信・設定ファイル種別 ============
-  {
-    name: { physical: "AgentModeDto", logical: "AgentModeDto", description: "送信時のツール実行権限モード。フロント→Rust なので Deserialize。app::AgentMode へ変換(From)" },
-    stereotype: "enumeration",
-    attributes: ["Chat", "Read"].map(label),
-    position: { x: 2100, y: 6350 },
-    filePath: "apps/native/tauri/src/dto.rs",
-  },
   {
     name: { physical: "ProjectSettingsFileDto", logical: "ProjectSettingsFileDto", description: "プロジェクトの .claude/ 配下の設定ファイルの選択。app::ProjectSettingsFile へ変換(From)" },
     stereotype: "enumeration",
@@ -248,6 +256,8 @@ const DEFS: ClassDef[] = [
     attributes: [attr("login", "String")],
     position: { x: 3300, y: 8250 },
     filePath: "apps/native/tauri/src/dto.rs",
+    // 名前が長く枠からはみ出すので広げる(次の GithubAuthFailedEventDto は x = 3700)。
+    size: { w: 350, h: 0 },
   },
   {
     name: { physical: "GithubAuthFailedEventDto", logical: "GithubAuthFailedEventDto", description: "github:auth_failed イベントのペイロード。デバイスフローのタイムアウト・拒否・エラーを通知する" },
@@ -375,11 +385,11 @@ const DEFS: ClassDef[] = [
       attr("settings", "domain::Settings"),
       attr("save_path", "PathBuf"),
       attr("github_login", "Option<String>"),
-      // app::WindowRegistry。この図にも他の図にも無い型なので線は引かない。
+      // app::WindowRegistry(classes-infra.ts。別の図の離れた位置にあるため線は引かない)。
       attr("window_states", "app::WindowRegistry"),
       // domain::Pc(classes-domain.ts の Pc)そのもの。線は引かない(冒頭コメントを参照)。
       attr("pc", "domain::Pc"),
-      // domain::GitLedger。この図にも他の図にも無い型なので線は引かない。
+      // domain::GitLedger(classes-native-prototype.ts。別の図の離れた位置にあるため線は引かない)。
       attr("git_ledger", "domain::GitLedger"),
       attr("git_ledger_path", "PathBuf"),
       // 走査で読んだ、会話ファイル単位の結果(domain::ParsedSession。classes-native-prototype.ts)。
@@ -388,18 +398,20 @@ const DEFS: ClassDef[] = [
       attr("user_sessions", "Vec<domain::ParsedSession>"),
       // 遅延読み込みした LogLine(セッションを開いたときに構築。issue #207)。
       attr("loaded_log_lines", "HashMap<PathBuf, Vec<domain::LogLine>>"),
-      // 読み込んだメッセージのキャッシュ(app::CachedMessages。この図にも他の図にも無い型なので線は引かない)。
+      // 読み込んだメッセージのキャッシュ(app::CachedMessages。classes-infra.ts の離れた位置にあるため線は引かない)。
       attr("loaded_messages", "HashMap<PathBuf, app::CachedMessages>"),
-      // app が起動した実行中セッション(issue #391)。終了しても、次に起動して置き換えるまで
-      // 終了状態のまま残す(画面が終了を知るため)。ランタイム状態で保存しない。
-      attr("running_session", "Option<RunningSessionSlot>"),
-      // 起動している最中か(起動は数秒かかりうるため、その間にもう1つ起動されないようにする)。
-      attr("running_session_starting", "bool"),
-      // 実行中セッションの世代番号(起動のたびに増やす)。
-      attr("running_session_generation", "u64"),
+      // app が起動した実行中セッション(issue #391。#407 で複数を持てるようになった)。終了しても、
+      // 同じ会話を起動し直すか、MAX_KEPT_EXITED_SESSIONS(10)を超えて忘れるまで終了状態のまま残す
+      // (画面が終了を知るため)。ランタイム状態で保存しない。
+      attr("running_sessions", "Vec<RunningSessionSlot>"),
+      // 起動している最中の会話ID(起動は数秒かかりうるため、その間に同じ会話・上限を超える起動が
+      // 来ても止められるよう、印を付ける)。
+      attr("starting_session_ids", "Vec<String>"),
+      // 途中経過の購読 ID の連番。
+      attr("next_progress_subscription_id", "u64"),
       attr("pc_data_loaded", "bool"),
       attr("session_scan_generation", "u64"),
-      // app::RescanQueue(この図にも他の図にも無い型なので線は引かない)。
+      // app::RescanQueue(classes-infra.ts の離れた位置にあるため線は引かない)。
       attr("session_rescan", "app::RescanQueue"),
     ],
     position: { x: 2100, y: 10500 },
@@ -601,6 +613,96 @@ const DEFS: ClassDef[] = [
     filePath: "apps/native/tauri/src/session_scan_queue.rs",
     size: { w: 520, h: 0 },
   },
+  // ============ 実行中セッション(Phase 2。issue #407) ============
+  // command は対象を RunningSessionRefDto(pid_domain + pid + started_at)で指定する
+  // (start_running_session(kind: resume | new)・send_to_running_session・respond_permission・
+  // interrupt_running_session・switch_running_session・stop_running_session・
+  // list_running_sessions・get_running_session・subscribe / unsubscribe_running_session_progress)。
+  // 関数なので、この図にはこれまでどおり描かない。
+  {
+    name: { physical: "RunningSessionRefDto", logical: "RunningSessionRefDto", description: "実行中セッション1つの宛先。app::RunningSessionRef と相互変換(From 両方向)。個体指定子は pid_domain + pid + started_at。画面はこれを持ち回って、送信・応答・購読の対象を指定する(#407)" },
+    attributes: [
+      attr("pid_domain", "String"),
+      attr("pid", "u32"),
+      attr("started_at", "u64"),
+    ],
+    position: { x: 6300, y: 5200 },
+    filePath: "apps/native/tauri/src/dto.rs",
+    size: { w: 300, h: 0 },
+  },
+  {
+    name: { physical: "AvailableModelDto", logical: "AvailableModelDto", description: "選べるモデル1つ(issue #409。PR #418)。app::AvailableModel から変換(From)。RunningSessionDto.available_models の要素。画面は set_model へ渡す value と表示名(display_name)・説明(description)を使う" },
+    attributes: [
+      attr("value", "String"),
+      attr("display_name", "String"),
+      attr("description", "Option<String>"),
+    ],
+    position: { x: 5800, y: 5600 },
+    filePath: "apps/native/tauri/src/dto.rs",
+    size: { w: 400, h: 0 },
+  },
+  {
+    name: { physical: "AddressedProgressDto", logical: "AddressedProgressDto", description: "途中経過の Channel のペイロード(画面ごとの購読。#407)。app::AddressedProgress から変換(From)。Phase 1 の ProgressEventDto そのものを流す形から、宛先(target)を付けた包みになった" },
+    attributes: [
+      attr("target", "RunningSessionRefDto"),
+      // ProgressEventDto は離れた位置にあるため線は引かない。
+      attr("event", "ProgressEventDto"),
+    ],
+    position: { x: 6300, y: 5600 },
+    filePath: "apps/native/tauri/src/dto.rs",
+    size: { w: 340, h: 0 },
+  },
+  {
+    name: { physical: "RunningSessionSummaryDto", logical: "RunningSessionSummaryDto", description: "list_running_sessions の戻り値の1件分(ハブの一覧)。app::RunningSessionSummary から変換(From)。答え待ちの問い合わせは数だけ(中身は get_running_session)。process_state の ProcessStateDto は離れた位置にあるため線は引かない(#407)" },
+    attributes: [
+      attr("target", "RunningSessionRefDto"),
+      attr("session_id", "String"),
+      attr("repository_path", "String"),
+      attr("process_state", "ProcessStateDto"),
+      attr("pending_permission_count", "usize"),
+      attr("current_model", "Option<String>"),
+      attr("current_permission_mode", "Option<String>"),
+      attr("cwd", "Option<String>"),
+      attr("name", "Option<String>"),
+    ],
+    position: { x: 6900, y: 5200 },
+    filePath: "apps/native/tauri/src/dto.rs",
+    size: { w: 460, h: 0 },
+  },
+  {
+    name: { physical: "StartRunningSessionDto", logical: "StartRunningSessionDto", description: "start_running_session の引数(フロント→Rust なので Deserialize)。serde は tag = \"kind\"(resume | new)、snake_case。Resume: 既存の会話を開く(project と session_id を指す。cwd・リポジトリは app が求める)/ New: 新しい会話を始める(ID とリポジトリは app が決める。パスはフロントから受け取らない。native.md §4)。app::ResumeRunningSession / CreateRunningSession へ変換する(#407)。mode の型は RunningPermissionModeDto(離れた位置)" },
+    stereotype: "enumeration",
+    attributes: [
+      "Resume { project: String, session_id: String, mode: RunningPermissionModeDto, name: Option<String> }",
+      "New { mode: RunningPermissionModeDto, name: Option<String> }",
+    ].map(label),
+    position: { x: 6300, y: 6100 },
+    filePath: "apps/native/tauri/src/dto.rs",
+    size: { w: 760, h: 0 },
+  },
+  {
+    name: { physical: "RunningSessionSwitchDto", logical: "RunningSessionSwitchDto", description: "switch_running_session の引数(フロント→Rust なので Deserialize)。app::RunningSessionSwitch へ変換(From)。Model の名前は CLI が検証しない(存在しない名前も成功で返る)ので、app は文字種・長さだけを検証する。画面は知っているモデルから選ばせるのが安全(#407)" },
+    stereotype: "enumeration",
+    attributes: [
+      "Model { model: String }",
+      "PermissionMode { mode: RunningPermissionModeDto }",
+    ].map(label),
+    position: { x: 6300, y: 6500 },
+    filePath: "apps/native/tauri/src/dto.rs",
+    size: { w: 560, h: 0 },
+  },
+  {
+    name: { physical: "ProgressSubscriber", logical: "ProgressSubscriber", description: "途中経過の購読1つ(state.rs。#407)。subscribe_running_session_progress(target, channel)が購読 ID を返し、unsubscribe_running_session_progress で外す。購読が無い間の出来事は捨てる。channel は tauri::ipc::Channel<AddressedProgressDto>(離れた位置にあるため線は引かない)" },
+    attributes: [
+      attr("id", "u64"),
+      attr("channel", "tauri::ipc::Channel<AddressedProgressDto>"),
+    ],
+    position: { x: 4300, y: 7650 },
+    filePath: "apps/native/tauri/src/state.rs",
+    // Tauri の状態管理に属する(フレームワーク側)。
+    layer: "framework",
+    size: { w: 500, h: 0 },
+  },
   // ============ 実行中セッション(Phase 1。issue #391) ============
   // command(start_running_session / get_running_session / send_to_running_session /
   // respond_permission / interrupt_running_session / stop_running_session。running_session.rs)は
@@ -608,8 +710,10 @@ const DEFS: ClassDef[] = [
   // 状態変化・権限の問い合わせの到着/決着は軽量イベント `running-session:changed`
   // (RunningSessionChangedEventDto)+ get_running_session(RunningSessionDto)で取り直す。
   {
-    name: { physical: "RunningSessionChangedEventDto", logical: "RunningSessionChangedEventDto", description: "running-session:changed イベントのペイロード(軽量な通知。本体は get_running_session で取り直す)" },
+    name: { physical: "RunningSessionChangedEventDto", logical: "RunningSessionChangedEventDto", description: "running-session:changed イベントのペイロード(軽量な通知。本体は get_running_session で取り直す)。#407 で宛先(target)が加わり、現在のモデル・権限モードの変化でも通知する" },
     attributes: [
+      // 宛先(#407)。RunningSessionRefDto は離れた位置にあるため線は引かない。
+      attr("target", "RunningSessionRefDto"),
       attr("session_id", "String"),
       attr("process_state", "ProcessStateDto"),
       attr("pending_permission_count", "usize"),
@@ -628,21 +732,26 @@ const DEFS: ClassDef[] = [
     size: { w: 240, h: 0 },
   },
   {
-    name: { physical: "RunningSessionDto", logical: "RunningSessionDto", description: "get_running_session の戻り値。domain::RunningSessionByApp から変換(RunningSessionDto::from_session。project は呼び出し側が渡す)。base(RunningSession)の一部(session_id・pid・started_at・cwd)だけを平らに出す" },
+    name: { physical: "RunningSessionDto", logical: "RunningSessionDto", description: "get_running_session の戻り値。domain::RunningSessionByApp から変換(RunningSessionDto::from_session。project は呼び出し側が渡す)。base(RunningSession)の一部(session_id・cwd)だけを平らに出す。Phase 1 の pid / started_at は target(宛先)に、モード(permission_mode)は current_permission_mode に置き換わった(#407)。project は再開のときだけ(新規は会話ファイルができるまで分からない)" },
     attributes: [
-      attr("project", "String"),
+      attr("target", "RunningSessionRefDto"), // 宛先(pid_domain + pid + started_at)
+      attr("project", "Option<String>"),
       attr("session_id", "String"),
-      attr("pid", "u32"),
-      attr("started_at", "u64"),
+      attr("repository_path", "String"),
       attr("cwd", "Option<String>"),
+      attr("name", "Option<String>"), // 起動時に付けた表示名(--name)
       attr("process_state", "ProcessStateDto"),
       attr("process_state_at", "u64"),
+      attr("current_model", "Option<String>"),
+      attr("current_permission_mode", "Option<String>"),
       attr("permission_requests", "Vec<PermissionRequestDto>"),
+      // CLI が initialize の応答で報告する選べるモデル(#409)。届く前は空
+      attr("available_models", "Vec<AvailableModelDto>"),
     ],
     position: { x: 5300, y: 5200 },
     filePath: "apps/native/tauri/src/dto.rs",
     // 名前と型の列が重なるので広げる(classes-native-prototype.ts の size の説明を参照)。
-    size: { w: 400, h: 0 },
+    size: { w: 440, h: 0 },
   },
   {
     name: { physical: "PermissionRequestKindDto", logical: "PermissionRequestKindDto", description: "domain::PermissionRequestKind から変換(From)。serde は snake_case" },
@@ -682,9 +791,9 @@ const DEFS: ClassDef[] = [
     size: { w: 440, h: 0 },
   },
   {
-    name: { physical: "RunningPermissionModeDto", logical: "RunningPermissionModeDto", description: "start_running_session の引数(フロント→Rust なので Deserialize)。app::RunningPermissionMode へ変換(From)。serde は snake_case" },
+    name: { physical: "RunningPermissionModeDto", logical: "RunningPermissionModeDto", description: "start_running_session / switch_running_session の引数(フロント→Rust なので Deserialize)。app::RunningPermissionMode へ変換(From)。serde は snake_case(accept_edits など)。AcceptEdits と Auto は #407 で加わった" },
     stereotype: "enumeration",
-    attributes: ["Plan", "Default"].map(label),
+    attributes: ["Plan", "Default", "AcceptEdits", "Auto"].map(label),
     position: { x: 4300, y: 6700 },
     filePath: "apps/native/tauri/src/dto.rs",
     size: { w: 240, h: 0 },
@@ -712,20 +821,22 @@ const DEFS: ClassDef[] = [
     size: { w: 470, h: 0 },
   },
   {
-    name: { physical: "RunningSessionSlot", logical: "RunningSessionSlot", description: "app が起動して持っている実行中セッション(state.rs。issue #391)。Phase 1 は同時に1つ。AppState.running_session に入る。session は domain::RunningSessionByApp、process は app::RunningProcess(どちらも別の図の離れた位置にあるため線は引かない)" },
+    name: { physical: "RunningSessionSlot", logical: "RunningSessionSlot", description: "app が起動して持っている実行中セッション1つ(state.rs。issue #391。#407 で複数を持てるようになった)。AppState.running_sessions に入る。session は domain::RunningSessionByApp、process は app::RunningProcess(どちらも別の図の離れた位置にあるため線は引かない)。Phase 1 の generation(何番目に起動したか)と mode は #407 で廃止した(宛先が pid_domain + pid + started_at になったため)。subscribers は途中経過の購読(購読が無い間の出来事は捨てる。状態・答え待ちは Query で取れる。送れなくなった購読は自動で外す)" },
     attributes: [
-      attr("project", "String"), // 会話ファイルのあるプロジェクトフォルダ名
-      // 何番目に起動したか。読み取りの出来事は起動した世代のものだけを反映する(次の起動の状態を、
-      // 前のプロセスの遅れて届いた出来事で動かさない)。
-      attr("generation", "u64"),
+      // 会話ファイルのあるプロジェクトフォルダ名。再開のときだけ(新規は会話ファイルができるまで分からない)。
+      attr("project", "Option<String>"),
       attr("session", "domain::RunningSessionByApp"),
       attr("process", "Arc<dyn app::RunningProcess>"),
+      attr("subscribers", "Vec<ProgressSubscriber>"),
+      // CLI が initialize の応答で報告する選べるモデル(#409。届くと running-session:changed で知らせる)
+      // app::AvailableModel は classes-infra.ts の離れた位置にあるため線は引かない。
+      attr("available_models", "Vec<app::AvailableModel>"),
     ],
     position: { x: 4300, y: 7200 },
     filePath: "apps/native/tauri/src/state.rs",
     // Tauri の状態管理に属する(フレームワーク側)。
     layer: "framework",
-    size: { w: 400, h: 0 },
+    size: { w: 420, h: 0 },
   },
   {
     name: { physical: "ChannelSink", logical: "ChannelSink", description: "RunningSessionEventSink の実装(running_session.rs。private)。読み取りスレッドから、順序を保ったまま tauri 層の処理タスクへ出来事を渡す受け口。受け側が終わっていれば捨てる。port(RunningSessionEventSink)は classes-infra.ts にあり、離れた位置にあるため実現の線は引かない" },
@@ -779,6 +890,12 @@ const RELATIONSHIPS = [
   rel("composition", "RunningSessionChangedEventDto", "ProcessStateDto", "process_state", "right", "left"),
   rel("composition", "RunningSessionDto", "ProcessStateDto", "process_state", "left", "right"),
   rel("association", "RunningSessionDto", "PermissionRequestDto", "permission_requests", "bottom", "top"),
+  // 宛先(#407)。必須・単数 → コンポジション(持つ側 → 型)。
+  rel("composition", "RunningSessionDto", "RunningSessionRefDto", "target", "right", "left"),
+  rel("association", "RunningSessionDto", "AvailableModelDto", "available_models", "right", "top"),
+  rel("composition", "AddressedProgressDto", "RunningSessionRefDto", "target", "top", "bottom"),
+  rel("composition", "RunningSessionSummaryDto", "RunningSessionRefDto", "target", "left", "right"),
+  rel("association", "RunningSessionSlot", "ProgressSubscriber", "subscribers", "bottom", "top"),
   rel("composition", "PermissionRequestDto", "PermissionRequestKindDto", "request_kind", "left", "right"),
   rel("association", "PermissionRequestDto", "PermissionSuggestionDto", "suggestions", "bottom", "top"),
 ];

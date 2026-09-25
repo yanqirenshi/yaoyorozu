@@ -192,6 +192,13 @@ impl From<ViewerTabDto> for domain::ViewerTab {
     }
 }
 
+/// `viewer-tabs:changed` イベントのペイロード(issue #422)。並びを保存したプロファイルの ID
+/// だけを通知し、データ本体はフロントが `get_viewer_tabs` で取り直す(native.md §3.2)。
+#[derive(Serialize, Clone)]
+pub struct ViewerTabsChangedEventDto {
+    pub profile_id: String,
+}
+
 /// `session:changed` イベントのペイロード。変更のあったプロジェクト(フォルダ名)
 /// のみを通知し、データ本体はフロントが Query(get_session 等)で
 /// 取り直す(native.md §3.2)。
@@ -1282,6 +1289,24 @@ impl From<app::AddressedProgress> for AddressedProgressDto {
     }
 }
 
+/// 選べるモデル(`app::AvailableModel` の写し。issue #409)。
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct AvailableModelDto {
+    pub value: String,
+    pub display_name: String,
+    pub description: Option<String>,
+}
+
+impl From<app::AvailableModel> for AvailableModelDto {
+    fn from(model: app::AvailableModel) -> Self {
+        Self {
+            value: model.value,
+            display_name: model.display_name,
+            description: model.description,
+        }
+    }
+}
+
 /// app が起動した実行中セッションの現在の状態(`get_running_session` の戻り値)。
 /// 台帳の秘匿値(`peer_token`)は載せない。
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -1301,12 +1326,20 @@ pub struct RunningSessionDto {
     pub current_model: Option<String>,
     /// いまの権限モード(CLI が返す値のまま。`default` / `manual` など、版で名前が変わる)。
     pub current_permission_mode: Option<String>,
+    /// 選べるモデル(CLI の `initialize` の応答。起動の直後は空)。`set_model` は名前を検証しないので、
+    /// 画面はここから選ばせる。
+    pub available_models: Vec<AvailableModelDto>,
     pub permission_requests: Vec<PermissionRequestDto>,
 }
 
 impl RunningSessionDto {
-    pub fn from_session(project: Option<&str>, session: domain::RunningSessionByApp) -> Self {
+    pub fn from_session(
+        project: Option<&str>,
+        session: domain::RunningSessionByApp,
+        available_models: Vec<app::AvailableModel>,
+    ) -> Self {
         Self {
+            available_models: available_models.into_iter().map(Into::into).collect(),
             target: app::RunningSessionRef::of(&session).into(),
             project: project.map(str::to_string),
             session_id: session.base.session_id,

@@ -2544,7 +2544,7 @@ button.claude-explorer-name {
 }
 
 .message-meta-live {
-  color: var(--color-kusairo-800);
+  color: var(--color-kincha-800);
 }
 
 .live-tools {
@@ -2736,4 +2736,142 @@ button.claude-explorer-name {
   margin-top: var(--space-2);
   max-height: 360px;
   overflow: auto;
+}
+
+/* ====== 状態バーの切り替え・新規セッション(issue #409)====== */
+
+/* 状態バーの、値の表示 + 選択ボタン + 一覧(位置の基準)。 */
+.running-bar-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.running-bar-menu {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  z-index: 20;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-1);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-8);
+  box-shadow: var(--elevation-3);
+}
+
+.running-bar-menu-item {
+  border: none;
+  background: none;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-4);
+  font-family: inherit;
+  font-size: var(--text-ui-14n-100-size);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.running-bar-menu-item:hover {
+  background: var(--state-hover);
+}
+
+.running-bar-menu-item:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.running-bar-menu-item.active {
+  font-weight: var(--text-dns-14b-150-weight);
+  color: var(--color-primary);
+}
+
+/* 再開に付ける表示名の入力欄。 */
+.running-bar-name {
+  min-width: 0;
+  width: 160px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-4);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-ui-14n-100-size);
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--surface-base);
+}
+
+/* 左の一覧の先頭: 「+ セッションを追加」と「+ 新規」を並べる。 */
+.session-list-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.session-list-actions .session-list-add {
+  width: auto;
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+/* 「+ 新規」は文字の幅だけ(「+ セッションを追加」を折り返させない)。 */
+.session-list-actions .session-list-add:last-child {
+  flex: 0 0 auto;
+}
+
+.session-pending-note {
+  margin: 0 0 var(--space-3);
+  color: var(--text-secondary);
+}
+
+/* 新規セッションのモーダル(`settings-dialog` を土台にする)。 */
+.new-session-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 360px;
+}
+
+.new-session-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.new-session-label {
+  padding: 0;
+  font-size: var(--text-dns-14b-150-size);
+  font-weight: var(--text-dns-14b-150-weight);
+  color: var(--text-primary);
+}
+
+.new-session-name {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-4);
+  padding: var(--space-2);
+  font-size: var(--text-ui-14n-100-size);
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--surface-base);
+}
+
+.new-session-mode {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-dns-14n-150-size);
+}
+
+.new-session-note {
+  margin: 0;
+  font-size: var(--text-dns-14n-150-size);
+  color: var(--text-secondary);
 }

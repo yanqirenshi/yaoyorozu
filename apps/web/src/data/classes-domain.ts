@@ -43,9 +43,10 @@
  *   新規作成では、セッションID は起動時に決まる(app が `--session-id` で決めることもある)のに、
  *   会話ファイルは最初の行が書かれた時点で作られるため、「ID は決まったが会話ファイルはまだ
  *   無い」窓がある。これで「ファイル0件のセッション」は型で作れるようになる。その間の状態は、
- *   RunningSessionByApp の process_state(Starting)で表す。**実装(`session.rs`)は未追従**
- *   (`conversation_files: Vec<SessionFile>` は空を許すが、組み立て規則・空のときの扱いは
- *   Phase 2 backend のイシューで扱う)。
+ *   RunningSessionByApp の process_state(Starting / Idle)で表す。**実装済み**(PR #413。
+ *   `Session::without_files` / `has_conversation_file`)。ファイルの走査から組み立てる
+ *   `User::load_sessions` は、ファイルのある会話だけを作るので空にならない(ファイルの無い新規の
+ *   会話は実行中セッションの一覧 = RunningSessionSummary に出る)。
  * - PC とユーザーはコンポジションにしている(PC が全体で User を所有する)。User は
  *   「その PC 上の OS のユーザーアカウント」で、1台の PC にしか属さない。同じ人が2台の
  *   PC を使えば User は2つになる。TM ではユーザーを PC から独立したリソースとし、対照表
@@ -127,52 +128,21 @@
  *   状態が変わったときだけ。(6) PermissionSuggestion に SDK の PermissionUpdate との往復
  *   (from_update_value / to_update_value)、PermissionRequestKind に from_tool_name が加わった。
  *   コンストラクタ(`new` / `allow` / `deny` / `cancelled`)は図に描いていない。
- * - 【Phase 2(複数セッション・モード切替・新規作成。issue #381・#404。TM #403)】
- *   (1) domain の変更は3つ。Session.conversation_files を 0..*(上記)、RunningSessionByApp に
- *   現在のモデル・現在の権限モード(属性)、RunningSessionByApp → GitRepository の関連
- *   (repository_path。0..* : 1。図では離れているため線ではなくフィールドで持つ)。いずれも **実装は未追従**(Phase 2 backend のイシューで扱う)。
- *   (2) 複数の実行中セッションを同時に持つことは、TM の「セッション 1 : 実行中セッション 0..*」
- *   と起動元のサブセットで既に表せていて、同時に持てる数の上限は運用の方針(語彙でも domain の
- *   規則でもない)。domain の型は増やさない。(3) 表示名は TM の語彙(会話タイトル・台帳の name)で
- *   足りるので、domain には足さない。(4) ProgressEvent は変えない(下記の包みで宛先を付ける)。
- * - 【Phase 2 の申し送り(app 側の型)】次の型は app / tauri のもので、この図(domain)にも
- *   as-is の図(classes-infra.ts / classes-tauri.ts)にも描かない(as-is は実装済みの型と1対1に
- *   保つため)。実装後に、Phase 1 と同じ流れで as-is の図へ写す。ここに一覧と理由を残す。
- *   (a) 複数保持: tauri の AppState.running_session(Option<RunningSessionSlot>。同時に1つ)を、
- *   複数を持てる集まり(Vec や Map)にする。キーは RunningSessionByApp の個体指定子
- *   (pid_domain + pid + started_at)。app の start_running_session は、いま持っている1つ
- *   (current)ではなく全部の PID を除外して外部の実行を調べる(own_running_pids はすでに列を
- *   返す形)。同時に持てる数の上限は app の定数(運用の方針)とし、超えたときは session_busy。
- *   「同じ会話を2つ起動しない」規則は、#361 のガード(自分の PID を除いた外部の実行の検知)では
- *   自分の起動を検知できないため、app が持つ集まりの中で session_id の一致を見て止める新しい規則
- *   として app に置く(純粋な規則。I/O は無い)。
- *   (b) 切り替え要求: app の型 `RunningSessionSwitch`(Model(String) / PermissionMode(...))を置く。
- *   実行は port(RunningProcess)に set_model / set_permission_mode を足す(Phase 1 と同じ
- *   「I/O は port」)。要求 ID(CLI の request_id)は infra が付けるので app の型には要らない。
- *   app の RunningPermissionMode(Plan / Default)には、画面が出す値(acceptEdits / auto など)を
- *   足す。domain の current_permission_mode は CLI の版で名前が変わる(default / manual)ため文字列で
- *   持ち、対応づけ(as_cli_value の逆)は app の責務。切り替えの結果(現在値の更新)は
- *   ユースケースが RunningSessionByApp の属性へ反映する。
- *   (c) 起動要求: app の StartRunningSession を、「再開」と「新規」の両方を表せる enum にする
- *   (Resume { session_id, cwd, mode } / New { session_id, cwd, mode })。持つ値が違うので(新規は
- *   ID を app が決める。既存の会話ファイルから cwd を求められない)バリアントにし、平らな型に
- *   Option を並べない(Phase 1 の PermissionBehavior と同じ理由)。新規のセッションID は
- *   **app が決める**(`--session-id` に UUID v4 を渡す)案を推す: 起動時に RunningSession の
- *   session_id が決まり、domain の型を Option にしなくて済み、TM の「ID は起動時に決まる」と
- *   一致する。CLI に任せる案は、system/init が届くまで session_id が無い状態を domain に
- *   持ち込む。どちらも、会話ファイルが作られるまでの窓は Session.conversation_files 0..* と
- *   process_state = Starting で表す。起動要求には、どのリポジトリか(repository_path。
- *   RunningSessionByApp の関連の元)と、表示名(--name。任意。起動引数として持つ。起動後の変更は
- *   Phase 1 と同じく port の責務)も持たせる。
- *   (d) 途中経過の宛先: domain の ProgressEvent は変えず(CLI にも複数セッションにも依存しない
- *   中立の型のまま)、宛先を付けた包み(app の型 `AddressedProgress { target: RunningSessionRef,
- *   event: ProgressEvent }`、RunningSessionRef は pid_domain + pid + started_at)を app に置き、
- *   Channel と running-session:changed のペイロードには包みを使う。RunningSessionEvent(app)も
- *   同じ宛先を持つ。
- *   (e) ハブ用の一覧項目: app の読み取り専用の型 `RunningSessionSummary`
- *   (RunningSessionRef・session_id・repository_path・process_state・答え待ちの数・現在のモデル・
- *   現在の権限モード・cwd)を置き、RunningSessionByApp からの純粋な変換(summarize)で作る。
- *   tauri の DTO はこれの写し(RunningSessionDto を一覧向けに絞った形)。
+ * - 【Phase 2(複数セッション・モード切替・新規作成。issue #381・#404・#407・#414。TM #403)】
+ *   **実装済み(PR #413)。** domain の変更3つ(Session.conversation_files を 0..*、
+ *   RunningSessionByApp に現在のモデル・現在の権限モード、リポジトリパス(R))は、この図に
+ *   実物どおり描いた。複数の実行中セッションを同時に持つことは、TM の「セッション 1 : 実行中
+ *   セッション 0..*」と起動元のサブセットで既に表せていて、同時に持てる数の上限は運用の方針
+ *   (語彙でも domain の規則でもない。app の定数 MAX_RUNNING_SESSIONS = 8)。表示名は TM の
+ *   語彙(会話タイトル・台帳の name)で足りる。domain の ProgressEvent は変えていない。
+ * - 【Phase 2 の申し送り(app 側の型)= 実装済み(PR #413)】#404 で申し送った app / tauri の型
+ *   (複数保持・切り替え要求・再開/新規の起動要求・途中経過の宛先の包み・ハブ用の一覧項目)は
+ *   実装された。as-is は `classes-infra.ts`(app の型・port と infra の実装)と
+ *   `classes-tauri.ts`(DTO・状態)を参照(実装の結果、申し送りと違う所は各図の説明に書いた)。
+ *   実装で加わった主なもの: 起動要求は enum(Resume / New)に加えて、画面から来る値だけの
+ *   ResumeRunningSession / CreateRunningSession、出来事の Configured / SwitchApplied、
+ *   宛先付きの AddressedRunningSessionEvent、一覧項目の name(新規の直後は会話タイトルが
+ *   まだ無いため)。1回きり送信(AgentGateway / --print)は #392 で撤去された。
  */
 import type { DiagramInput } from "@yanqirenshi/d3.classes";
 import {
@@ -282,7 +252,7 @@ const DEFS: ClassDef[] = [
   },
   // ============ 会話 ============
   {
-    name: { physical: "Session", logical: "Session", description: "1つの会話。セッションIDは会話開始時に発番される UUID v4 で、.jsonl のファイル名にもなる(ただしファイルは識別しない)。【Phase 2(#404)】会話ファイルは 0..*(新規作成で「ID は決まったが会話ファイルはまだ無い」窓がある。実装は未追従)。TM: セッション(リソース)" }, // 論理名: セッション
+    name: { physical: "Session", logical: "Session", description: "1つの会話。セッションIDは会話開始時に発番される UUID v4 で、.jsonl のファイル名にもなる(ただしファイルは識別しない)。【Phase 2(#404)】会話ファイルは 0..*(新規作成で「ID は決まったが会話ファイルはまだ無い」窓がある。実装済み: without_files / has_conversation_file。PR #413)。TM: セッション(リソース)" }, // 論理名: セッション
     attributes: [
       attr("session_id", "String"), // 個体指定子。UUID v4
       attr("custom_title", "Option<String>"), // custom-title 行(最後の行が有効)
@@ -291,8 +261,16 @@ const DEFS: ClassDef[] = [
       attr("slug", "Option<String>"), // TM: セッション別名
       attr("/last_prompt", "Option<String>"), // TM: 直近入力テキスト(D)。ログから導出する
     ],
+    methods: [
+      // 【Phase 2(#404・#407)】会話ファイルがまだ無い会話(新規作成で ID だけ決まった状態)を作る。
+      method("without_files", ["session_id: &str"], "Self"),
+      // 会話ファイルができているか(conversation_files が空でないか)。空の間は内容を開けない。
+      method("has_conversation_file", [], "bool"),
+    ],
     position: { x: 55, y: 824 },
     filePath: "apps/native/crates/domain/src/session.rs",
+    // メソッドの引数が長く、戻り値型の列と重なるので広げる(LogLine の size の説明を参照)。
+    size: { w: 340, h: 0 },
   },
   {
     name: { physical: "SessionFile", logical: "SessionFile", description: "セッションログの .jsonl ファイル1件。会話ファイル(<フォルダ名>/<セッションID>.jsonl)とサブエージェントのファイル(<フォルダ名>/<セッションID>/subagents/agent-<エージェントID>.jsonl)がある。TM: セッションファイル(jsonl)(リソース)" }, // 論理名: セッションファイル(jsonl)
@@ -410,7 +388,7 @@ const DEFS: ClassDef[] = [
     size: { w: 340, h: 0 },
   },
   {
-    name: { physical: "RunningSessionByApp", logical: "RunningSessionByApp", description: "app が子プロセスとして起動した claude CLI(PoC #382)。標準入出力(stream-json)で対話し続けるため、このサブクラスだけがプロセスの状態と権限の問い合わせを持つ。台帳は外部起動と同じ形で書かれる(entrypoint は sdk-cli)ので台帳では区別できず、app が自分の子プロセスの PID を知っていることで区分する。#361 のガード(実行中の検知)では app は自分が起動した PID を除外する。【実装との差(#391)】継承ではなく、共通のフィールドの struct RunningSession を base として持つコンポジション(線 base)。permission_requests は「まだ答えていない」問い合わせの列(答えたものは外す)。【Phase 2(#404)】現在のモデル・現在の権限モードの属性と、リポジトリパス(R)による GitRepository との関連(フィールド repository_path で参照する。app は起動時にプロファイル = 登録済みリポジトリを選ぶので、cwd からの推測ではなく記録された事実。外部起動は結ばない)が加わった。新規作成で会話ファイルが無い間は process_state が Starting。実装(running_session_by_app.rs)は未追従。TM: 実行中セッション(app起動)(イベントのサブセット)" }, // 論理名: 実行中セッション(app起動)
+    name: { physical: "RunningSessionByApp", logical: "RunningSessionByApp", description: "app が子プロセスとして起動した claude CLI(PoC #382)。標準入出力(stream-json)で対話し続けるため、このサブクラスだけがプロセスの状態と権限の問い合わせを持つ。台帳は外部起動と同じ形で書かれる(entrypoint は sdk-cli)ので台帳では区別できず、app が自分の子プロセスの PID を知っていることで区分する。#361 のガード(実行中の検知)では app は自分が起動した PID を除外する。【実装との差(#391)】継承ではなく、共通のフィールドの struct RunningSession を base として持つコンポジション(線 base)。permission_requests は「まだ答えていない」問い合わせの列(答えたものは外す)。【Phase 2(#404)】現在のモデル・現在の権限モードの属性と、リポジトリパス(R)による GitRepository との関連(フィールド repository_path で参照する。app は起動時にプロファイル = 登録済みリポジトリを選ぶので、cwd からの推測ではなく記録された事実。外部起動は結ばない)が加わった。新規作成で会話ファイルが無い間は process_state が Starting。実装済み(PR #413。new(base, repository_path, at_time) と observe_configuration が加わった)。TM: 実行中セッション(app起動)(イベントのサブセット)" }, // 論理名: 実行中セッション(app起動)
     attributes: [
       attr("process_state", "ProcessState"), // TM: プロセス状態
       attr("process_state_at", "u64"), // TM: プロセス状態の更新日時
@@ -448,11 +426,14 @@ const DEFS: ClassDef[] = [
       method("receive_permission_request", ["request: PermissionRequest", "at_time: u64"], "()"),
       method("settle_permission_request", ["request_id: &str", "at_time: u64"], "Option<PermissionRequest>"),
       method("exit", ["at_time: u64"], "()"),
+      // 【Phase 2】CLI が報告した現在の設定(system/init の model / permissionMode)を反映する。
+      // 値のあるものだけ更新する(欠けた項目では、分かっている値を消さない)。
+      method("observe_configuration", ["model: Option<String>", "permission_mode: Option<String>"], "()"),
     ],
     position: { x: 400, y: 2350 },
     filePath: "apps/native/crates/domain/src/running_session_by_app.rs",
     // メソッドの引数が長く、戻り値型の列と重なるので広げる(LogLine の size の説明を参照)。
-    size: { w: 580, h: 0 },
+    size: { w: 640, h: 0 },
   },
   {
     name: { physical: "RunningSessionExternal", logical: "RunningSessionExternal", description: "app 以外(ターミナルの claude、Claude Desktop、ほかの SDK 利用)が起動した実行中セッション。app は台帳から存在を知るだけで、標準入出力を持たないため対話できない。右側の語彙は親が持つものだけ。【実装との差(#391)】継承ではなく、RunningSession を base として持つコンポジション(線 base)。TM: 実行中セッション(外部起動)(イベントのサブセット)" }, // 論理名: 実行中セッション(外部起動)
@@ -656,7 +637,7 @@ const RELATIONSHIPS = [
   // の解決規則は図には書かず、実装イシュー側(#217)で扱う。
   // 【Phase 2(#404。TM #403)】新規作成では、セッションID は起動時に決まるが会話ファイルは
   // 最初の行が書かれた時点で作られるので、その窓を表せるよう 0..* に緩めた。その間の状態は
-  // RunningSessionByApp の process_state(Starting)。実装(session.rs)は未追従。
+  // RunningSessionByApp の process_state(Starting / Idle)。実装済み(PR #413)。
   rel("composition", "SessionFile", "Session", "conversation_files", 100, 260, {
     key: "conversation_files",
     fromMultiplicity: "0..*",

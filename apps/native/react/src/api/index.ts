@@ -34,6 +34,7 @@ import type {
   SessionChangedEvent,
   SessionSummaryDto,
   ViewerTabDto,
+  ViewerTabsChangedEvent,
   SettingsCorruptedEvent,
   SettingsDto,
   SettingsInputDto,
@@ -45,7 +46,9 @@ import type {
 } from "./types";
 
 export type {
+  ViewerTabsChangedEvent,
   AddressedProgressDto,
+  AvailableModelDto,
   PermissionBehaviorDto,
   PermissionRequestDto,
   PermissionRequestKindDto,
@@ -311,9 +314,11 @@ export function renameProfile(profileId: string, name: string): Promise<void> {
 }
 
 // 指定プロファイルを対象に新しいウィンドウを開く(マルチウィンドウ Phase 1。
-// issue #76)。ウィンドウ生成はRust側で行う(native.md §4)。
-export function openProfileWindow(profileId: string): Promise<void> {
-  return invoke<void>("open_profile_window", { profileId });
+// issue #76)。ウィンドウ生成はRust側で行う(native.md §4)。`session`(任意。issue #422)を
+// 渡すと、開いたビューアでそのセッションを選択した状態にする(フォルダ名 + セッション ID。
+// パスは渡さない)。
+export function openProfileWindow(profileId: string, session?: ViewerTabDto): Promise<void> {
+  return invoke<void>("open_profile_window", { profileId, session: session ?? null });
 }
 
 // このウィンドウの表示状態(タブの配列+アクティブタブ)をレジストリへ
@@ -330,8 +335,30 @@ export function listWindowStates(): Promise<WindowStateDto[]> {
   return invoke<WindowStateDto[]>("list_window_states");
 }
 
-export function focusWindow(label: string): Promise<void> {
-  return invoke<void>("focus_window", { label });
+// 指定ラベルのウィンドウを前面化する。`session`(任意。issue #422)を渡すと、そのウィンドウの
+// ビューアをそのセッションへ移動させる(`viewer:navigate` で伝える。onViewerNavigate)。
+export function focusWindow(label: string, session?: ViewerTabDto): Promise<void> {
+  return invoke<void>("focus_window", { label, session: session ?? null });
+}
+
+// このウィンドウのビューアを、指定セッションへ移動する要求(focusWindow に session を渡した
+// とき、そのウィンドウだけに届く。issue #422)。
+export function onViewerNavigate(callback: (target: ViewerTabDto) => void): Promise<() => void> {
+  const unlisten = listen<ViewerTabDto>("viewer:navigate", (event) => {
+    callback(event.payload);
+  });
+  return unlisten.then((fn) => fn);
+}
+
+// セッションタブの並びが保存された通知(軽量。並びは getViewerTabs で取り直す。issue #422)。
+// 自分の保存でも届く。
+export function onViewerTabsChanged(
+  callback: (event: ViewerTabsChangedEvent) => void,
+): Promise<() => void> {
+  const unlisten = listen<ViewerTabsChangedEvent>("viewer-tabs:changed", (event) => {
+    callback(event.payload);
+  });
+  return unlisten.then((fn) => fn);
 }
 
 // このPC・ログインユーザー情報を取得する(オブジェクトモデル実装 第1弾。

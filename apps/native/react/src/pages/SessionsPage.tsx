@@ -16,9 +16,12 @@ import {
   listSessions,
   onSessionChanged,
   onSettingsUpdated,
+  onViewerNavigate,
+  onViewerTabsChanged,
   saveProjectClaudeMd,
   saveProjectSettingsFile,
   saveViewerTabs,
+  startRunningSession,
   updateGithubProjectItemStatus,
 } from "../api";
 import type {
@@ -46,11 +49,20 @@ import SessionPickerDialog from "../SessionPickerDialog";
 import type { SessionPickerCandidate } from "../SessionPickerDialog";
 import RawLineDialog from "../RawLineDialog";
 import { SendErrorBody } from "../SendErrorBody";
+import Badge from "../Badge";
 import LiveTurnView from "../LiveTurnView";
+import NewSessionDialog from "../NewSessionDialog";
+import type { NewSessionInput } from "../NewSessionDialog";
 import PermissionRequestCard from "../PermissionRequestCard";
 import RunningSessionBar from "../RunningSessionBar";
-import { PERMISSION_MODE_LABELS, selectableModeOf } from "../runningSessionLabels";
+import {
+  PERMISSION_MODE_LABELS,
+  processStateLabel,
+  processStateTone,
+  selectableModeOf,
+} from "../runningSessionLabels";
 import { useRunningSession } from "../useRunningSession";
+import { useRunningSessionList } from "../useRunningSessionList";
 import ViewerSideMenu from "../ViewerSideMenu";
 import ViewerToolbar from "../ViewerToolbar";
 import { createProjectSettingsDockItems } from "../projectSettingsDockItems";
@@ -116,8 +128,18 @@ function SessionsPage({ nav }: SessionsPageProps) {
   // ここには残す(戻ってきたら復活する。エラーにはしない)。
   const [viewerTabs, setViewerTabs] = useState<ViewerTabDto[] | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // 新規セッションのモーダル(issue #409)。
+  const [newDialogOpen, setNewDialogOpen] = useState(false);
+  // 再開に付ける表示名(`--name`。任意。未起動のときの入力欄。送信で空に戻す)。
+  const [resumeName, setResumeName] = useState("");
+  // このウィンドウで新規に作ったセッションの ID(会話ファイルができたら、一覧(タブ)へ加える)。
+  const newlyStartedRef = useRef<Set<string>>(new Set());
   // 並びの保存は順序どおりに実行する(連続操作で古い並びが後勝ちしないように)。
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  // 保存待ち(キューに入っていて未完了)の数。ほかのウィンドウの保存の通知(`viewer-tabs:changed`)で
+  // 並びを取り直すとき、自分の保存が残っている間は取り直さない(古い並びで上書きしない。
+  // 自分の保存が終われば、その通知でもう一度取り直す。issue #422)。
+  const pendingSavesRef = useRef(0);
   const [messages, setMessages] = useState<MessageDto[]>([]);
   // `refreshSessionInPlace` が最新の読み込み件数を参照するための ref(issue #314)。
   // state をそのまま依存配列に入れると、追記のたびに購読(`onSessionChanged` 等)の
@@ -267,6 +289,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
     running,
     live,
     busy: sending,
+    switching,
     send: sendToSession,
     respond: respondToPermission,
     interrupt: interruptRunning,
@@ -359,6 +382,24 @@ function SessionsPage({ nav }: SessionsPageProps) {
         setViewerTabs([]);
         setError(isAppError(e) ? e.message : String(e));
       });
+  }, [resolvedProfileId]);
+
+  // ほかのウィンドウ(ハブなど)がこのプロファイルのタブの並びを保存したら、取り直す(issue #422)。
+  // 並びの本体は Query で取り直す(通知は ID だけ)。自分の保存の通知でも取り直して壊れない
+  // (保存待ちが残っている間は取り直さず、最後の保存の通知で取り直す)。
+  useEffect(() => {
+    if (!resolvedProfileId) return;
+    const unlistenPromise = onViewerTabsChanged(({ profile_id }) => {
+      if (profile_id !== resolvedProfileId || pendingSavesRef.current > 0) return;
+      getViewerTabs(resolvedProfileId)
+        .then((tabs) => {
+          if (pendingSavesRef.current === 0) setViewerTabs(tabs);
+        })
+        .catch((e) => setError(isAppError(e) ? e.message : String(e)));
+    });
+    return () => {
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
   }, [resolvedProfileId]);
 
   // 設定の変更(設定画面でのプロファイル切り替え等)で対象フォルダ・GitHubプロジェクトが変わった
@@ -472,9 +513,13 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const persistViewerTabs = (tabs: ViewerTabDto[]) => {
     setViewerTabs(tabs);
     if (!resolvedProfileId) return;
+    pendingSavesRef.current += 1;
     saveQueueRef.current = saveQueueRef.current
       .then(() => saveViewerTabs(resolvedProfileId, tabs))
-      .catch((e) => setError(isAppError(e) ? e.message : String(e)));
+      .catch((e) => setError(isAppError(e) ? e.message : String(e)))
+      .finally(() => {
+        pendingSavesRef.current -= 1;
+      });
   };
 
   // 「+」のモーダルで選んだセッションを、選んだ順に末尾へ足す。足したうちの最初の
@@ -519,10 +564,52 @@ function SessionsPage({ nav }: SessionsPageProps) {
     ?.sessions.find((s) => s.id === sessionParam);
   // `--resume <ID>` 化(issue #345)により、一覧に出るセッションはすべて送信対象に
   // できる(表示中のセッション ID へ送る。旧「最新のみ送信可」の制約は撤廃)。
-  const canSend = !!selectedSummary;
   // 表示中の会話の実行中セッションが動いているか(実行中セッションは会話ごとに複数持てる。
   // 別の会話が実行中でも、この会話へ送るときはそのまま新しく起動する。issue #407)。
   const runningAlive = running !== null && running.process_state !== "exited";
+
+  // 会話ファイルがまだ無い新規のセッション(issue #409)。app が起動して持っているセッションのうち、
+  // 一覧(会話ファイルから作る)に無いもの。左の一覧に並べ、選ぶと空の会話として開く
+  // (URL は `session` だけで `project` を持たない)。会話ファイルができたら通常の行になる。
+  const runningList = useRunningSessionList();
+  const knownSessionIds = new Set(allSessions.map(({ session }) => session.id));
+  const pendingSummaries = runningList.filter(
+    (s) => s.process_state !== "exited" && !knownSessionIds.has(s.session_id),
+  );
+  const pendingSelected =
+    !projectParam && sessionParam
+      ? (pendingSummaries.find((s) => s.session_id === sessionParam) ?? null)
+      : null;
+  // 表示中の対象がある(会話ファイルのある会話、または新規のセッション)。
+  const hasTarget = !!sessionParam && (!!projectParam || !!pendingSelected);
+  // `--resume <ID>` 化(issue #345)により、一覧に出るセッションはすべて送信対象にできる。新規の
+  // セッション(会話ファイルがまだ無い)も、実行中なら送れる。
+  const canSend = !!selectedSummary || !!pendingSelected;
+
+  // 権限モードの選択: 起動中なら実行中のセッションを切り替え、未起動なら次の起動の値。
+  const selectMode = (value: RunningPermissionModeDto) => {
+    setMode(value);
+    if (runningAlive) void switchRunning({ kind: "permission_mode", mode: value });
+  };
+  const selectModel = (model: string) => void switchRunning({ kind: "model", model });
+
+  // 会話ファイルができたら、新規のセッションを一覧(タブ)へ加える。表示中(URL が `session` だけ)
+  // なら、通常の会話の表示(`project` 付き)へ移す。
+  useEffect(() => {
+    if (viewerTabs === null) return;
+    const ids = new Set(newlyStartedRef.current);
+    if (!projectParam && sessionParam) ids.add(sessionParam);
+    for (const id of ids) {
+      const hit = allSessions.find(({ session }) => session.id === id);
+      if (!hit) continue;
+      newlyStartedRef.current.delete(id);
+      if (!viewerTabs.some((tab) => tab.project === hit.folder && tab.session_id === id)) {
+        persistViewerTabs([...viewerTabs, { project: hit.folder, session_id: id }]);
+      }
+      if (!projectParam && sessionParam === id) nav.setProjectAndSession(hit.folder, id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionGroups, viewerTabs, projectParam, sessionParam]);
 
   // ウィンドウレジストリ(issue #83)へこのウィンドウの表示状態を報告する。
   // 「1ウィンドウ=1プロファイル」への一本化(issue #91)でタブが無くなった
@@ -557,6 +644,25 @@ function SessionsPage({ nav }: SessionsPageProps) {
     if (!confirmDiscardIfDirty()) return;
     nav.setProjectAndSession(project, id);
   };
+
+  // 他のウィンドウ(ハブなど)から、このウィンドウのビューアを指定セッションへ移動する要求
+  // (`focus_window` に session を渡したとき。`viewer:navigate`。issue #422)。会話ビューへ切り替えて、
+  // そのセッションを選択する(編集中の内容があれば、破棄の確認を挟む)。一覧(保存済みタブ)に
+  // 無いセッションでも、選択・表示はできる(タブへの追加は、呼び出し側が事前に保存する)。
+  const navigateRef = useRef((_project: string, _id: string) => {});
+  navigateRef.current = (project, id) => {
+    if (!confirmDiscardIfDirty()) return;
+    nav.setView("chat");
+    nav.setProjectAndSession(project, id);
+  };
+  useEffect(() => {
+    const unlistenPromise = onViewerNavigate(({ project, session_id }) =>
+      navigateRef.current(project, session_id),
+    );
+    return () => {
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
 
   const handleSwitchView = (next: PaneView) => {
     if (next === view) return;
@@ -616,7 +722,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
   // エラー表示)。
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!projectParam || !sessionParam || !canSend || sending || !canSubmit) return;
+    if (!hasTarget || !sessionParam || !canSend || sending || !canSubmit) return;
 
     setError(null);
     const sent = await sendToSession({
@@ -624,12 +730,34 @@ function SessionsPage({ nav }: SessionsPageProps) {
       project: projectParam,
       sessionId: sessionParam,
       mode,
+      name: resumeName,
       text: draft,
       images: attachments.map((image) => image.base64),
     });
     if (sent) {
       setDraft("");
       setAttachments([]);
+      setResumeName("");
+    }
+  };
+
+  // 新規セッションを作る(issue #409)。app が新しい会話(`--session-id`)を起動し、できたら
+  // 左の一覧に加えて自動で開く(会話ファイルができるまでは空の会話)。失敗(同時数の上限など)は
+  // 既存のバナーで理由を出す。
+  const handleCreateNewSession = async (input: NewSessionInput) => {
+    setNewDialogOpen(false);
+    setError(null);
+    try {
+      const started = await startRunningSession(resolvedProfileId, {
+        kind: "new",
+        mode: input.mode,
+        name: input.name,
+      });
+      newlyStartedRef.current.add(started.session_id);
+      setMode(input.mode);
+      if (confirmDiscardIfDirty()) nav.setProjectAndSession(null, started.session_id);
+    } catch (e) {
+      setError(isAppError(e) ? e.message : String(e));
     }
   };
 
@@ -654,10 +782,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
             label: PERMISSION_MODE_LABELS[value],
             active:
               (runningAlive ? selectableModeOf(running.current_permission_mode) : mode) === value,
-            onSelect: () => {
-              setMode(value);
-              if (runningAlive) void switchRunning({ kind: "permission_mode", mode: value });
-            },
+            onSelect: () => selectMode(value),
           }),
         ),
       },
@@ -724,6 +849,13 @@ function SessionsPage({ nav }: SessionsPageProps) {
           タイトルへ移し(#348・#377)、操作のツールバーは画面下のフッターにあり、
           セッションのタブも無くなって中身が空になったため。サイドメニュー | 選んだ
           セッションの一覧 | コンテンツ を並べる。 */}
+      {newDialogOpen && (
+        <NewSessionDialog
+          initialMode={mode}
+          onCreate={handleCreateNewSession}
+          onClose={() => setNewDialogOpen(false)}
+        />
+      )}
       {pickerOpen && (
         <SessionPickerDialog
           candidates={pickerCandidates}
@@ -747,15 +879,49 @@ function SessionsPage({ nav }: SessionsPageProps) {
         <div className="project-list">
           {/* 「+」(issue #353・#379)。押すとモーダルで追加するセッションを選ぶ。
               0件のときはこれだけが見える。 */}
-          <button
-            type="button"
-            className="session-list-add"
-            title="セッションを追加"
-            aria-label="セッションを追加"
-            onClick={() => setPickerOpen(true)}
-          >
-            + セッションを追加
-          </button>
+          <div className="session-list-actions">
+            <button
+              type="button"
+              className="session-list-add"
+              title="セッションを追加"
+              aria-label="セッションを追加"
+              onClick={() => setPickerOpen(true)}
+            >
+              + セッションを追加
+            </button>
+            <button
+              type="button"
+              className="session-list-add"
+              title="新しい会話を始める"
+              aria-label="新規セッション"
+              onClick={() => setNewDialogOpen(true)}
+            >
+              + 新規
+            </button>
+          </div>
+          {/* 会話ファイルがまだ無い新規のセッション(実行中のもの)。会話ファイルができたら通常の行になる。 */}
+          {pendingSummaries.map((summary) => (
+            <div key={summary.session_id} className="session-list-row">
+              <button
+                type="button"
+                className={`project-item session-list-item ${
+                  pendingSelected?.session_id === summary.session_id ? "selected" : ""
+                }`}
+                onClick={() => {
+                  if (confirmDiscardIfDirty()) nav.setProjectAndSession(null, summary.session_id);
+                }}
+              >
+                <span className="session-item-title">{summary.name ?? "新規セッション"}</span>
+                <span className="session-item-updated">
+                  <Badge
+                    tone={processStateTone(summary.process_state)}
+                    label={processStateLabel(summary.process_state)}
+                    size="small"
+                  />
+                </span>
+              </button>
+            </div>
+          ))}
           {openTabs.map(({ key, folder, session }) => (
             <div key={key} className="session-list-row">
               <button
@@ -809,10 +975,16 @@ function SessionsPage({ nav }: SessionsPageProps) {
       <div className="session-conversation">
         {view === "chat" ? (
           <>
-            {projectParam && sessionParam && (
+            {hasTarget && (
               <RunningSessionBar
                 running={running}
                 selectedMode={mode}
+                onSelectMode={selectMode}
+                onSelectModel={selectModel}
+                switching={switching}
+                resumeName={resumeName}
+                onResumeNameChange={setResumeName}
+                canNameOnResume={!!projectParam && !!selectedSummary}
                 onInterrupt={() => void interruptRunning()}
                 onStop={() => void stopRunning()}
               />
@@ -824,7 +996,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
                 className="message-attach"
                 title="画像を添付"
                 aria-label="画像を添付"
-                disabled={!projectParam || !sessionParam || !canSend || sending}
+                disabled={!hasTarget || !canSend || sending}
                 onClick={() => fileInputRef.current?.click()}
               >
                 画像
@@ -842,7 +1014,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
                 className="message-input"
                 placeholder="AIにメッセージを送る(画像は貼り付けでも添付できます)"
                 value={draft}
-                disabled={!projectParam || !sessionParam || !canSend || sending}
+                disabled={!hasTarget || !canSend || sending}
                 onChange={(e) => setDraft(e.target.value)}
                 onPaste={handlePaste}
               />
@@ -850,7 +1022,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
                 type="submit"
                 className="message-send"
                 disabled={
-                  !projectParam || !sessionParam || !canSend || sending || !canSubmit
+                  !hasTarget || !canSend || sending || !canSubmit
                 }
               >
                 {sending ? "送信中…" : "送信"}
@@ -883,7 +1055,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
             )}
             <div className="conversation-scroll">
               {error && <p className="error">{error}</p>}
-              {!projectParam || !sessionParam ? (
+              {!hasTarget ? (
                 <p>
                   {targetFolders.length === 0
                     ? "設定のClaudeタブで対象フォルダを選択してください。"
@@ -893,7 +1065,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
                 </p>
               ) : (
                 <>
-                  {rawLineUuid && (
+                  {rawLineUuid && projectParam && sessionParam && (
                     <RawLineDialog
                       project={projectParam}
                       sessionId={sessionParam}
@@ -901,13 +1073,18 @@ function SessionsPage({ nav }: SessionsPageProps) {
                       onClose={() => setRawLineUuid(null)}
                     />
                   )}
-                  {imagesUuid && (
+                  {imagesUuid && projectParam && sessionParam && (
                     <MessageImagesDialog
                       project={projectParam}
                       sessionId={sessionParam}
                       uuid={imagesUuid}
                       onClose={() => setImagesUuid(null)}
                     />
+                  )}
+                  {pendingSelected && messages.length === 0 && (
+                    <p className="session-pending-note">
+                      新しい会話です。最初のメッセージを送ると、会話ファイルができて一覧に加わります。
+                    </p>
                   )}
                   <div className="messages">
                     {/* 権限の問い合わせと返答中の表示(issue #392)。新しい順なので先頭に置く。 */}

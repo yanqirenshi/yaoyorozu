@@ -56,9 +56,17 @@ export type SessionSummaryDto = {
 };
 
 // ビューアのセッションタブ1件(issue #353)。キーは「フォルダ + セッション ID」(issue #369)。
+// セッションを指定してビューアを開く/前面化するときの指定(フォルダ名 + セッション ID。パスは
+// 渡さない)と、`viewer:navigate` のペイロードにも使う(issue #422)。
 export type ViewerTabDto = {
   project: string;
   session_id: string;
+};
+
+// viewer-tabs:changed のペイロード(issue #422)。並びを保存したプロファイルの ID だけ。
+// 並びの本体は getViewerTabs で取り直す。
+export type ViewerTabsChangedEvent = {
+  profile_id: string;
 };
 
 export type AppErrorDto = {
@@ -432,7 +440,17 @@ export type RunningSessionDto = {
   current_model: string | null;
   // いまの権限モード。CLI が返す値のまま(default / manual など、版で名前が変わる)。
   current_permission_mode: string | null;
+  // 選べるモデル(CLI の initialize の応答。起動の直後は空)。set_model は名前を検証しないので、
+  // 画面はここから選ばせる。
+  available_models: AvailableModelDto[];
   permission_requests: PermissionRequestDto[];
+};
+
+// 選べるモデル(value を set_model に渡す)。
+export type AvailableModelDto = {
+  value: string;
+  display_name: string;
+  description: string | null;
 };
 
 // 実行中セッションの一覧の1項目(ハブなどが並べる。答え待ちの問い合わせは数だけ)。
