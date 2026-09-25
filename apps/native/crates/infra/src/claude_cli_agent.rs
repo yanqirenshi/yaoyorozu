@@ -24,7 +24,7 @@ fn timeout_for(mode: AgentMode) -> Duration {
 /// 起動元(Claude Desktop等)を示す環境変数。子プロセスがこれを引き継ぐと、
 /// アプリが新規作成したセッションの記録上の起点が実態と異なる値
 /// (`entrypoint: "claude-desktop"`)になってしまう。`claude` 起動前に必ず取り除く。
-const DESKTOP_LINEAGE_ENV_VARS: &[&str] = &[
+pub(crate) const DESKTOP_LINEAGE_ENV_VARS: &[&str] = &[
     "CLAUDE_CODE_ENTRYPOINT",
     "CLAUDECODE",
     "CLAUDE_CODE_SESSION_ID",
@@ -51,7 +51,7 @@ impl ClaudeCliAgent {
 /// 確認中(B-0)。結果次第では絶対パスなど別の解決方法に差し替える可能性が
 /// あるため、呼び出し元は必ずこの関数経由にすること(直接 `"claude"` を
 /// 書かない)。
-fn claude_executable() -> &'static str {
+pub(crate) fn claude_executable() -> &'static str {
     "claude"
 }
 
@@ -237,7 +237,7 @@ fn check_stream_json_result(stdout: &str) -> Result<(), AppError> {
 
 /// プロセス起動時の `io::Error` を分類する。
 /// 実行ファイル自体が見つからない場合と、それ以外の起動失敗を区別する。
-fn map_spawn_error(program: &str, e: std::io::Error) -> AppError {
+pub(crate) fn map_spawn_error(program: &str, e: std::io::Error) -> AppError {
     if e.kind() == std::io::ErrorKind::NotFound {
         AppError::CliNotFound(format!(
             "{program} コマンドが見つかりません。インストールされているか確認してください。"

@@ -1,5 +1,6 @@
 mod dto;
 mod local_api;
+mod running_session;
 mod session_scan_queue;
 mod state;
 
@@ -234,6 +235,9 @@ async fn send_message(
     images: Vec<String>,
     mode: AgentModeDto,
 ) -> Result<(), AppErrorDto> {
+    // app が起動して持っている実行中セッションと同じ会話には、1回きり送信を並行して
+    // 書き込まない(issue #391。同じ会話ファイルへの並行追記による混線の防止)。
+    running_session::ensure_not_running_by_app(&state, &session_id).await?;
     let root = effective_projects_dir_from_state(&state).await?;
     // claude CLI の起動は数秒〜数十秒かかるため、async ランタイムを塞がないよう
     // ブロッキングスレッドで実行する。
@@ -1687,6 +1691,12 @@ pub fn run() {
             get_session,
             list_sessions,
             send_message,
+            running_session::start_running_session,
+            running_session::get_running_session,
+            running_session::send_to_running_session,
+            running_session::respond_permission,
+            running_session::interrupt_running_session,
+            running_session::stop_running_session,
             get_settings,
             update_settings,
             switch_profile,
@@ -1737,6 +1747,13 @@ pub fn run() {
             local_api::start(app)?;
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // app が終了するとき、起動したままの claude(実行中セッション)を残さない
+            // (issue #391)。
+            if matches!(event, tauri::RunEvent::Exit) {
+                running_session::stop_running_session_on_exit(app_handle);
+            }
+        });
 }

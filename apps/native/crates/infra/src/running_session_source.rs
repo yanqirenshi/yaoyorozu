@@ -1,4 +1,4 @@
-use app::{AppError, RunningEvidence, RunningSession, RunningSessionSource};
+use app::{AppError, DetectedRunning, RunningEvidence, RunningSessionSource};
 use std::path::{Path, PathBuf};
 use windows::Win32::Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, FILETIME};
 use windows::Win32::System::Threading::{
@@ -115,7 +115,7 @@ impl LedgerEntry {
 ///   読めなかった項目がある → 実行中の台帳を見落としたかもしれないので、エラー
 ///   (送信しない。黙って読み飛ばさない)
 ///
-/// 止めた場合は、根拠になった台帳のパスと PID を返す([`RunningSession`])。壊れた
+/// 止めた場合は、根拠になった台帳のパスと PID を返す([`DetectedRunning`])。壊れた
 /// 台帳が残って PID が使い回されると、その台帳が原因で送信が止まり続けうるため、
 /// エラーメッセージにパスを出してユーザーが自分で解消できるようにする。
 pub struct FileRunningSessionSource {
@@ -138,7 +138,11 @@ impl FileRunningSessionSource {
 }
 
 impl RunningSessionSource for FileRunningSessionSource {
-    fn find_running(&self, session_id: &str) -> Result<Option<RunningSession>, AppError> {
+    fn find_running(
+        &self,
+        session_id: &str,
+        exclude_pids: &[u32],
+    ) -> Result<Option<DetectedRunning>, AppError> {
         let entries = match std::fs::read_dir(&self.sessions_dir) {
             Ok(entries) => entries,
             // ディレクトリが無い(このPCでまだ一度も `claude` が実行中セッション
@@ -153,6 +157,7 @@ impl RunningSessionSource for FileRunningSessionSource {
         };
         find_running_in(
             session_id,
+            exclude_pids,
             entries.map(|entry| entry.map(|e| e.path())),
             &self.sessions_dir,
         )
@@ -165,9 +170,10 @@ impl RunningSessionSource for FileRunningSessionSource {
 /// エラーにする(送信しない)。`dir` はエラーメッセージ用。
 fn find_running_in(
     session_id: &str,
+    exclude_pids: &[u32],
     paths: impl Iterator<Item = std::io::Result<PathBuf>>,
     dir: &Path,
-) -> Result<Option<RunningSession>, AppError> {
+) -> Result<Option<DetectedRunning>, AppError> {
     for path in paths {
         let path = path.map_err(|e| {
             AppError::Io(format!(
@@ -182,6 +188,11 @@ fn find_running_in(
         let Some(pid) = ledger.pid else {
             continue;
         };
+        // app 自身が起動した `claude`(issue #391)は、外部で実行中とは扱わない。
+        // 台帳の読み取り可否・`sessionId` によらず、PID が自分の子なら読み飛ばす。
+        if exclude_pids.contains(&pid) {
+            continue;
+        }
         let evidence = match ledger.session_id.as_deref() {
             Some(id) if id != session_id => continue,
             Some(_) => process_is_alive(pid, ledger.proc_start.as_deref(), ledger.started_at_ms)
@@ -190,7 +201,7 @@ fn find_running_in(
                 .then_some(RunningEvidence::LedgerUnreadable),
         };
         if let Some(evidence) = evidence {
-            return Ok(Some(RunningSession {
+            return Ok(Some(DetectedRunning {
                 ledger_path: path,
                 pid,
                 evidence,
@@ -387,8 +398,35 @@ mod tests {
 
     impl IsRunning for FileRunningSessionSource {
         fn is_running(&self, session_id: &str) -> Result<bool, AppError> {
-            self.find_running(session_id).map(|found| found.is_some())
+            self.find_running(session_id, &[])
+                .map(|found| found.is_some())
         }
+    }
+
+    #[test]
+    fn find_running_skips_ledgers_of_excluded_pids_such_as_the_apps_own_child() {
+        // issue #391: app 自身が起動した claude も同じ台帳を書くが、外部で実行中とは扱わない。
+        let pid = std::process::id();
+
+        // sessionId が一致する台帳でも、PID が除外対象なら実行中とみなさない
+        let dir = tempfile::tempdir().unwrap();
+        write_record(dir.path(), pid, "s1", "1");
+        assert!(source(&dir).find_running("s1", &[pid]).unwrap().is_none());
+        assert!(source(&dir)
+            .find_running("s1", &[pid + 1])
+            .unwrap()
+            .is_some());
+
+        // 壊れた台帳(sessionId を取り出せない)でも、PID が除外対象なら止めない
+        let dir = tempfile::tempdir().unwrap();
+        write_ledger(dir.path(), &format!("{pid}.json"), r#"{"sessionId":"#);
+        assert!(source(&dir).find_running("s1", &[pid]).unwrap().is_none());
+        assert!(source(&dir).find_running("s1", &[]).unwrap().is_some());
+
+        // 除外していない別のプロセスの台帳は、引き続き実行中と判定する
+        let dir = tempfile::tempdir().unwrap();
+        write_record(dir.path(), pid, "s1", "1");
+        assert!(source(&dir).find_running("s1", &[1]).unwrap().is_some());
     }
 
     #[test]
@@ -398,7 +436,10 @@ mod tests {
         // sessionId が一致する台帳
         let dir = tempfile::tempdir().unwrap();
         write_record(dir.path(), pid, "s1", "1");
-        let found = source(&dir).find_running("s1").unwrap().expect("running");
+        let found = source(&dir)
+            .find_running("s1", &[])
+            .unwrap()
+            .expect("running");
         assert_eq!(found.ledger_path, dir.path().join(format!("{pid}.json")));
         assert_eq!(found.pid, pid);
         assert_eq!(found.evidence, RunningEvidence::SessionMatched);
@@ -406,7 +447,10 @@ mod tests {
         // sessionId を取り出せない台帳(壊れている)
         let dir = tempfile::tempdir().unwrap();
         write_ledger(dir.path(), &format!("{pid}.json"), r#"{"sessionId":"#);
-        let found = source(&dir).find_running("s1").unwrap().expect("running");
+        let found = source(&dir)
+            .find_running("s1", &[])
+            .unwrap()
+            .expect("running");
         assert_eq!(found.ledger_path, dir.path().join(format!("{pid}.json")));
         assert_eq!(found.evidence, RunningEvidence::LedgerUnreadable);
     }
@@ -424,7 +468,7 @@ mod tests {
             Ok(dir.path().join("2.json")),
         ];
 
-        let result = find_running_in("s1", entries.into_iter(), dir.path());
+        let result = find_running_in("s1", &[], entries.into_iter(), dir.path());
 
         assert!(matches!(result, Err(AppError::Io(_))), "{result:?}");
     }
@@ -435,7 +479,7 @@ mod tests {
         write_record(dir.path(), std::process::id(), "other", "1");
         let path = dir.path().join(format!("{}.json", std::process::id()));
 
-        let result = find_running_in("s1", vec![Ok(path)].into_iter(), dir.path());
+        let result = find_running_in("s1", &[], vec![Ok(path)].into_iter(), dir.path());
 
         assert_eq!(result.unwrap(), None);
     }
