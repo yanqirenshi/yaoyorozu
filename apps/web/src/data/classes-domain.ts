@@ -14,7 +14,7 @@
  * (第5弾)、ログ行(第6弾。行種別のサブセット4種と、親子のつながりを含む)、
  * Phase 1(app から claude CLI と対話する。issue #381・#388。実行中セッション・権限の
  * 問い合わせ・途中経過)と、Phase 2 の設計(#404。現在のモデル・権限モード、リポジトリとの関連、
- * 会話ファイル 0..*)。設定ファイル類、セッションまわりの残り(入力キュー)、
+ * 会話ファイル 0..*)、Phase 3 の設計(#434。実行中セッションと worktree の関連)。設定ファイル類、セッションまわりの残り(入力キュー)、
  * システム行・付帯情報行の細分(TM でサブセットに分ける段階)は次段以降。既存のクラスと
  * それらの関係も、相手のクラスを書く段階で足す。
  * 作業ディレクトリは、TM でモノとして立てないことになった(cwd はログ行・実行中セッションの
@@ -143,6 +143,43 @@
  *   ResumeRunningSession / CreateRunningSession、出来事の Configured / SwitchApplied、
  *   宛先付きの AddressedRunningSessionEvent、一覧項目の name(新規の直後は会話タイトルが
  *   まだ無いため)。1回きり送信(AgentGateway / --print)は #392 で撤去された。
+ * - 【Phase 3(worktree の用意。issue #381・#434。TM #430)】**実装未追従**(Phase 3 backend で
+ *   追従する)。app が「このリポジトリの、このブランチの worktree」を用意して、そこを cwd に
+ *   CLI を起動する段。
+ *   - RunningSessionByApp に `worktree_id`(TM: ワーキングツリーID(R))を足し、GitWorktree と
+ *     結んだ(GitWorktree 1 : RunningSessionByApp 0..*)。app が起動時に worktree を選ぶので、
+ *     cwd からの推測ではなく記録された事実になる。GitWorktree の個体指定子は
+ *     ワーキングツリーID + リポジトリパス(R)の組で、リポジトリパス(R)は GitWorktree を
+ *     所有する GitRepository(線 worktrees)の個体指定子と同じ。RunningSessionByApp の
+ *     `repository_path` は、その組の片方(worktree を指す鍵の一部)として残る。
+ *   - **Phase 2 で張っていた GitRepository との関係は、関連としては外した**(worktree が決まれば
+ *     リポジトリも決まるので、導出できる関係を重ねて張らない。リポジトリへは GitWorktree
+ *     経由でたどる)。ただし Phase 2 では `repository_path` のフィールドで表していたので、
+ *     図の上で外れるのは説明(関連であること)だけで、フィールドは残る。git ではリポジトリ本体の
+ *     ディレクトリも1つ目の worktree なので、worktree を作らずに本体で起動する場合も同じ関係で
+ *     表せる。
+ *   - **線で描かず、フィールド(worktree_id と repository_path)で持つ**。#404 と同じ規則
+ *     (交差を避ける優先)で、GitWorktree(図の上部)と RunningSessionByApp(図の下部)が
+ *     離れていて、線を引くと Profile・SessionFile・LogLine 系の箱と継承線を横切るため。
+ *     図の配置を見直せるなら、線に改める(未決)。
+ *   - ブランチの指定は既存の語彙で足りる(新しい属性・クラスは無い)。GitWorktree と GitBranch は
+ *     関連(GitWorktree → GitBranch の checked_out_branch)で結んであり、「このブランチの
+ *     worktree」はそれをたどれば決まる(detached HEAD は checked_out_branch が None)。
+ *     worktree の作成・最新化の記録(作成日時・削除日時は GitWorktree の created_at_time /
+ *     deleted_at_time が持つ。最終 merge の時刻などは Git 自身の履歴から分かる)も足さない。
+ *   - **役割(セッションの雛形。名前・固定ブランチ・表示名・権限モード・モデル)は立てない**
+ *     (TM の判断。ユーザー決定)。CLAUDE.md に書かれた運用の方針であって、app が管理する
+ *     対象ではないため。起動時に決まった値は、RunningSessionByApp の既存の属性
+ *     (worktree_id・現在の権限モード・現在のモデル)と、台帳の名前に記録される。不採用の案は
+ *     tm.ts の【Phase 3】を参照。
+ * - 【Phase 3 の申し送り(app 側の型)】classes-infra.ts の app の型 `ResumeRunningSession` /
+ *   `CreateRunningSession`(画面から来る値だけの起動要求。#407)に、「どの worktree で起動するか」
+ *   を足す(**実装未追従**)。worktree_id で指すか、無ければブランチ名を指定して app が用意する
+ *   (どちらか一方)。用意した worktree の絶対パスが cwd になる(パスはフロントから受け取らない。
+ *   native.md §4)。app が worktree を用意する操作(`git worktree add`、着手前の
+ *   `git merge origin/main`)は I/O なので port の責務(port の名前・形は Phase 3 backend で
+ *   決める。既存の GitWorktreeLister は一覧を取るだけ)。用意した結果は、既存の GitWorktree
+ *   (作成・削除の記録)と RunningSessionByApp.worktree_id に残る。
  */
 import type { DiagramInput } from "@yanqirenshi/d3.classes";
 import {
@@ -217,7 +254,7 @@ const DEFS: ClassDef[] = [
     filePath: "apps/native/crates/domain/src/git_branch.rs",
   },
   {
-    name: { physical: "GitWorktree", logical: "GitWorktree", description: "ワーキングツリーの作成・削除。git の識別子は台帳のディレクトリ名(パス由来)だけなので、ID を新設する。TM: ワーキングツリー(イベント)" }, // 論理名: ワーキングツリー
+    name: { physical: "GitWorktree", logical: "GitWorktree", description: "ワーキングツリーの作成・削除。git の識別子は台帳のディレクトリ名(パス由来)だけなので、ID を新設する。【Phase 3(#434。実装未追従)】app が起動する実行中セッション(RunningSessionByApp)から、ワーキングツリーID(worktree_id)+ リポジトリパス(R)の組で参照される(フィールドで持つ。線は引かない)。TM: ワーキングツリー(イベント)" }, // 論理名: ワーキングツリー
     attributes: [
       attr("worktree_id", "String"), // 個体指定子。アプリが新設する ワーキングツリーID
       attr("worktree_name", "String"),
@@ -388,7 +425,7 @@ const DEFS: ClassDef[] = [
     size: { w: 340, h: 0 },
   },
   {
-    name: { physical: "RunningSessionByApp", logical: "RunningSessionByApp", description: "app が子プロセスとして起動した claude CLI(PoC #382)。標準入出力(stream-json)で対話し続けるため、このサブクラスだけがプロセスの状態と権限の問い合わせを持つ。台帳は外部起動と同じ形で書かれる(entrypoint は sdk-cli)ので台帳では区別できず、app が自分の子プロセスの PID を知っていることで区分する。#361 のガード(実行中の検知)では app は自分が起動した PID を除外する。【実装との差(#391)】継承ではなく、共通のフィールドの struct RunningSession を base として持つコンポジション(線 base)。permission_requests は「まだ答えていない」問い合わせの列(答えたものは外す)。【Phase 2(#404)】現在のモデル・現在の権限モードの属性と、リポジトリパス(R)による GitRepository との関連(フィールド repository_path で参照する。app は起動時にプロファイル = 登録済みリポジトリを選ぶので、cwd からの推測ではなく記録された事実。外部起動は結ばない)が加わった。新規作成で会話ファイルが無い間は process_state が Starting。実装済み(PR #413。new(base, repository_path, at_time) と observe_configuration が加わった)。TM: 実行中セッション(app起動)(イベントのサブセット)" }, // 論理名: 実行中セッション(app起動)
+    name: { physical: "RunningSessionByApp", logical: "RunningSessionByApp", description: "app が子プロセスとして起動した claude CLI(PoC #382)。標準入出力(stream-json)で対話し続けるため、このサブクラスだけがプロセスの状態と権限の問い合わせを持つ。台帳は外部起動と同じ形で書かれる(entrypoint は sdk-cli)ので台帳では区別できず、app が自分の子プロセスの PID を知っていることで区分する。#361 のガード(実行中の検知)では app は自分が起動した PID を除外する。【実装との差(#391)】継承ではなく、共通のフィールドの struct RunningSession を base として持つコンポジション(線 base)。permission_requests は「まだ答えていない」問い合わせの列(答えたものは外す)。【Phase 2(#404)】現在のモデル・現在の権限モードの属性と、リポジトリパス(R)による GitRepository との関連(フィールド repository_path で参照する。app は起動時にプロファイル = 登録済みリポジトリを選ぶので、cwd からの推測ではなく記録された事実。外部起動は結ばない)が加わった。新規作成で会話ファイルが無い間は process_state が Starting。実装済み(PR #413。new(base, repository_path, at_time) と observe_configuration が加わった)。【Phase 3(#434。TM #430)。実装未追従】ワーキングツリーID(R)による GitWorktree との関連(フィールド worktree_id で参照する。repository_path は worktree を指す鍵の一部として残り、Phase 2 の GitRepository との関連は worktree から導出できるため外した)が加わる。TM: 実行中セッション(app起動)(イベントのサブセット)" }, // 論理名: 実行中セッション(app起動)
     attributes: [
       attr("process_state", "ProcessState"), // TM: プロセス状態
       attr("process_state_at", "u64"), // TM: プロセス状態の更新日時
@@ -401,6 +438,8 @@ const DEFS: ClassDef[] = [
       attr("current_model", "Option<String>"), // TM: 現在のモデル
       attr("current_permission_mode", "Option<String>"), // TM: 現在の権限モード
       // 【Phase 2】TM: リポジトリパス(R)。Gitリポジトリ 1 : 実行中セッション(app起動)0..*(E-R)。
+      // (【Phase 3(#434)】worktree_id の追加で、GitRepository との関連は外れ、この属性は worktree を
+      // 指す鍵の一部になる。実装未追従。下の worktree_id を参照。)
       // app は起動時にプロファイル(登録済みリポジトリ)を選ぶので、cwd からの推測ではなく記録された
       // 事実。GitRepository は User が所有しているので(持ち主は1つだけ)、コンポジションにせず
       // ID(GitRepository.repository_path)で参照する。TM の規則では (R) は線にしてフィールドに
@@ -408,6 +447,17 @@ const DEFS: ClassDef[] = [
       // 系の箱と継承線を横切るため、線は引かず、参照であることを示すフィールドとして持つ(未決:
       // 図の配置を見直せるなら、線に改める)。外部起動(RunningSessionExternal)は結ばない。
       attr("repository_path", "PathBuf"),
+      // 【Phase 3(#434。TM #430)。実装未追従】TM: ワーキングツリーID(R)。GitWorktree 1 :
+      // 実行中セッション(app起動)0..*(E-R)。app が起動時に「このリポジトリの、このブランチの
+      // worktree」を用意して選ぶので、どの worktree で起動したかは記録された事実になる。
+      // GitWorktree の個体指定子は worktree_id + リポジトリパス(R)の組なので、上の repository_path は
+      // worktree を指す鍵の一部として残る(Phase 2 で張っていた GitRepository との関連は、worktree
+      // から導出できるため外した。リポジトリへは worktree 経由でたどる)。線にせず、参照である
+      // ことを示すフィールドとして持つ理由は repository_path と同じ(GitWorktree と離れていて、
+      // 線を引くと Profile・SessionFile・LogLine 系の箱と継承線を横切る。未決: 配置を見直せるなら
+      // 線に改める)。worktree を作らずリポジトリ本体で起動する場合も、本体のディレクトリを
+      // 1つ目の worktree として同じ関係で表す。外部起動(RunningSessionExternal)は結ばない。
+      attr("worktree_id", "String"),
     ],
     methods: [
       // 状態遷移は純粋な関数(I/O は port の責務。「メソッドを書く基準」を参照)。
