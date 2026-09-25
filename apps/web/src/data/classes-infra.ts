@@ -33,16 +33,21 @@
  * `claude_dir_store.rs`、`SessionWatcher`/`FileSystemRepository` は
  * `session_source.rs` に同居(`SessionFileRef`・`SessionFsChange` も同じ)、`ClaudeCliProcess`・
  * `ExitSignal` は `ClaudeCliProcessLauncher` と同じ `claude_cli_process.rs` に同居)。
- * infra の型 28個(port を実装するもの22 + port を実装しない補助の型6: `SessionWatcher`・
+ * infra の型 29個(port を実装するもの23 + port を実装しない補助の型6: `SessionWatcher`・
  * `SessionFileRef`・`SessionFsChange`・`GithubAuthLog`・`ExitSignal`・`PendingSwitches`)と、
- * app の port 23個を載せた(1回きり送信の `AgentGateway`・`ClaudeCliAgent` は #392 で撤去。
- * `ViewerTabsStore`・`FileViewerTabsStore` は #420 で追加)。
+ * app の port 24個を載せた(1回きり送信の `AgentGateway`・`ClaudeCliAgent` は #392 で撤去。
+ * `ViewerTabsStore`・`FileViewerTabsStore` は #420、`GitWorktreeManager`・`SystemGitWorktreeManager` は
+ * #441(Phase 3。PR #440)で追加)。
  *
  * 【app の port の入出力の型(issue #420)】方針: app の非 port の型は、port のシグネチャ(引数・
  * 戻り値・エラー)に出てくるものだけを載せる(層はアプリケーションのビジネスルール)。
  * 載せたもの: `AppError`(ほぼすべての port のエラー)・`FileFingerprint`・`SessionContent`
  * (`SessionSource`)・`LoadedSettings`(`SettingsStore`)・`ProjectSettingsFile`
  * (`ProjectSettingsStore`)・`DeviceAuthorization`・`PollResult`・`GithubViewer`(`GithubGateway`)。
+ * Phase 3(worktree の用意。PR #440)の `worktree.rs` の型 `WorktreeSpec`・`WorktreeEntry`・
+ * `MergeOutcome`・`PreparedWorktree`・`ResolvedWorktree`・`WorktreeIndex` は、port
+ * (`GitWorktreeManager`)と起動要求の入出力なので載せた。`cli_version.rs`(`MIN_PEER_MESSAGING_VERSION`
+ * と版の判定の関数)は型を持たず、定数と関数だけなので描かない。
  * これに加えて、tauri 層の `AppState` が持つ `CachedMessages`・`RescanQueue`・`WindowRegistry`
  * (tauri 図から参照される型)も載せた。
  * **載せないもの(理由)**:
@@ -54,9 +59,10 @@
  *   `ProcessProbe`(実行中セッションの台帳の読み取り・生存確認)・`SessionCwdSelector`・
  *   `CachedSessionSummary`(セッション走査の内部)・`LegacySettingsRaw`・`SettingsV4Raw`・
  *   `SettingsV5Raw`(設定ファイルの旧版の読み取り = マイグレーション用)・`ViewerTabsV1`・
- *   `ViewerTabV1`(タブの旧版の読み取り用)。wire / ファイル形式の写し(serde)で、外から見える
+ *   `ViewerTabV1`(タブの旧版の読み取り用)・`GitOutput`(git コマンドの出力の入れ物。
+ *   `git_worktree_manager.rs` の内部)。wire / ファイル形式の写し(serde)で、外から見える
  *   構造ではない。`ExitSignal` は複数の型が共有するため例外として載せている。
- * - domain クレートの `session_line/`(33型。JSONL 行の読み取り用。`classes-native-prototype.ts` の
+ * - domain クレートの `session_line/`(34型。JSONL 行の読み取り用。`classes-native-prototype.ts` の
  *   説明を参照)と、`LogLineBase`(`LogLine` の共通属性を Rust では埋め込み struct にしたもの。
  *   `classes-domain.ts` の `LogLine` の属性として描いている)・`LogLineConversionError`
  *   (JSONL 行 → `LogLine` の変換関数のエラー)。
@@ -85,6 +91,15 @@
  * (`RunningSessionRef` / `AddressedProgress` / `AddressedRunningSessionEvent`)、ハブ用の
  * 一覧項目 `RunningSessionSummary`(`summarize` で作る)も app の型。定数(`MAX_RUNNING_SESSIONS`
  * = 8 / `MAX_KEPT_EXITED_SESSIONS` = 10)は型ではないので描かない。
+ * Phase 3(worktree の用意・セッション間メッセージ対応。issue #437。PR #440)で、起動要求に
+ * `worktree_id`(Resume / New の値)と、画面から来る値だけの `ResumeRunningSession` /
+ * `CreateRunningSession` に用意済みの worktree(`ResolvedWorktree`)が加わり、worktree を用意する
+ * port `GitWorktreeManager`(実装 `SystemGitWorktreeManager`。`git worktree add` / `git fetch` /
+ * `git merge`。用意のユースケース `prepare_worktree` は関数なので描かない)、`RunningSessionLauncher`
+ * の `cli_version`(起動する claude の版)、`RunningSessionSource` の `taken_names`(台帳の名前。
+ * 表示名の一意化 `unique_session_name` は関数)、`RunningSessionSummary` の版の項目、`AppError` の
+ * `WorktreeSyncFailed` が加わった。起動時の `--settings`(`PEER_SETTINGS`。セッション間メッセージ
+ * の受信を受け入れる)は定数なので描かない。
  * ビューア(issue #409。PR #418)で、CLI が `initialize` の応答で報告する選べるモデル
  * `AvailableModel` と、出来事 `ModelsListed` が加わった(状態は動かさない)。
  *
@@ -481,7 +496,7 @@ const DEFS: ClassDef[] = [
   // port のシグネチャに出てくる app の型(層はアプリケーションのビジネスルール)。線は、この図の中で
   // 型が別の型を持つところだけ引く(Message・LogLine・Settings は別の図の離れた位置にあるため引かない)。
   {
-    name: { physical: "AppError", logical: "AppError", description: "app の port・ユースケースが返すエラー(app::lib.rs。ほぼすべての port の Result のエラー型。thiserror。表示は中身の文字列そのまま)。NotFound / Io / InvalidInput / SessionBusy(送信先が他のプロセスで実行中。issue #345)/ CliNotFound / CliFailed / Timeout / CwdMissing / GithubUnauthenticated / GithubAuthExpired(認証のタイムアウト・拒否・トークンの確定的な失効 401。#54)/ GithubApiFailed / ClaudeMdConflict / GithubScopeInsufficient(#50)/ FileConflict(汎用の保存競合。#53)。多くの port に出てくるので、各 port への線は引かない" },
+    name: { physical: "AppError", logical: "AppError", description: "app の port・ユースケースが返すエラー(app::lib.rs。ほぼすべての port の Result のエラー型。thiserror。表示は中身の文字列そのまま)。NotFound / Io / InvalidInput / SessionBusy(送信先が他のプロセスで実行中。issue #345)/ CliNotFound / CliFailed / Timeout / CwdMissing / GithubUnauthenticated / GithubAuthExpired(認証のタイムアウト・拒否・トークンの確定的な失効 401。#54)/ GithubApiFailed / ClaudeMdConflict / GithubScopeInsufficient(#50)/ FileConflict(汎用の保存競合。#53)/ WorktreeSyncFailed(起動前の worktree の最新化 git fetch + git merge origin/main で競合などにより取り込めなかった。取り込みは取り消してあり、起動は止める。#437)。多くの port に出てくるので、各 port への線は引かない" },
     stereotype: "enumeration",
     attributes: [
       "NotFound(String)",
@@ -498,6 +513,7 @@ const DEFS: ClassDef[] = [
       "ClaudeMdConflict(String)",
       "GithubScopeInsufficient(String)",
       "FileConflict(String)",
+      "WorktreeSyncFailed(String)",
     ].map(label),
     position: { x: 7700, y: 4400 },
     filePath: "apps/native/crates/app/src/lib.rs",
@@ -608,12 +624,123 @@ const DEFS: ClassDef[] = [
     layer: "application",
     size: { w: 300, h: 0 },
   },
+  // ============ worktree の用意(Phase 3。issue #437。PR #440) ============
+  {
+    name: { physical: "GitWorktreeManager", logical: "GitWorktreeManager", description: "worktree の作成・最新化の port(app/src/worktree.rs。issue #437。Send + Sync)。実装は infra(SystemGitWorktreeManager。git コマンドの実行)。app が「このリポジトリの、このブランチの worktree」を用意して、そこを cwd に claude を起動する。git worktree add / git fetch / git merge は I/O なので port の責務で、app には「どこに作るか・どの順で行うか・失敗したらどうするか」の規則(ユースケース prepare_worktree。関数なので描かない)だけを置く。WorktreeEntry・MergeOutcome はこの図の離れた位置にあるため線は引かない" },
+    stereotype: "interface",
+    methods: [
+      // repo の worktree の一覧(リポジトリ本体を含む。先頭が本体)
+      method("list", ["repo: &Path"], "Result<Vec<WorktreeEntry>, AppError>"),
+      method("branch_exists", ["repo: &Path", "branch: &str"], "Result<bool, AppError>"),
+      // create_from があれば、そのリビジョンからブランチ branch を新しく作ってチェックアウトする
+      // (git worktree add -b <branch> <path> <create_from>)。無ければ既存のブランチをチェックアウトする。
+      method("add_worktree", ["repo: &Path", "path: &Path", "branch: &str", "create_from: Option<&str>"], "Result<(), AppError>"),
+      // git fetch origin(dir は worktree)
+      method("fetch_origin", ["dir: &Path"], "Result<(), AppError>"),
+      // git merge <rev>(dir は worktree)。競合などで取り込めなければ MergeOutcome::Conflict
+      method("merge", ["dir: &Path", "rev: &str"], "Result<MergeOutcome, AppError>"),
+      // 途中の merge を取り消す(git merge --abort)。merge が進行中でなくても呼んでよい
+      method("abort_merge", ["dir: &Path"], "()"),
+    ],
+    position: { x: 4900, y: 4300 },
+    filePath: "apps/native/crates/app/src/worktree.rs",
+    // add_worktree の引数が長く、戻り値型の列と重なるので広げる(GitLedgerStore と同じ理由)。
+    size: { w: 1000, h: 0 },
+  },
+  {
+    name: { physical: "SystemGitWorktreeManager", logical: "SystemGitWorktreeManager", description: "git コマンドで worktree を作成・最新化する GitWorktreeManager 実装(git_worktree_manager.rs。issue #437)。フィールドを持たない(ユニット構造体)。ネットワークを使う git fetch には待ち時間の上限(120秒)がある。Windows ではコンソール窓を出さない(CREATE_NO_WINDOW)" },
+    attributes: [],
+    position: { x: 4900, y: 4650 },
+    filePath: "apps/native/crates/infra/src/git_worktree_manager.rs",
+  },
+  {
+    name: { physical: "WorktreeSpec", logical: "WorktreeSpec", description: "どの worktree で起動するかの指定(app/src/worktree.rs。画面から来る値。パスは含まない。issue #437)。パスはフロントから受け取らず app が決める(native.md §4)。tauri の WorktreeSpecDto から変換される。Main: リポジトリ本体で起動する(1つ目の worktree。worktree は作らない)/ Existing: 既存の worktree(台帳の GitWorktree.worktree_id)/ Branch: このブランチの worktree で起動する(あればそれを使い、無ければ app が用意する。ブランチも無ければ origin/main から作る)" },
+    stereotype: "enumeration",
+    attributes: [
+      "Main",
+      "Existing { worktree_id: String }",
+      "Branch { branch_name: String }",
+    ].map(label),
+    position: { x: 9000, y: 3350 },
+    filePath: "apps/native/crates/app/src/worktree.rs",
+    layer: "application",
+    size: { w: 460, h: 0 },
+  },
+  {
+    name: { physical: "ResolvedWorktree", logical: "ResolvedWorktree", description: "起動に使える形で用意した worktree に、台帳の ID を添えたもの(app/src/worktree.rs。issue #437)。prepare_worktree のあと、新しい worktree を Git 台帳へ反映してから WorktreeIndex::id_of で引く。起動要求(ResumeRunningSession / CreateRunningSession)が持つ。path が cwd になる。リポジトリ本体は予約 ID main-worktree、リポジトリの worktree のどれでもない場所は outside-repository" },
+    attributes: [
+      attr("path", "PathBuf"),
+      attr("worktree_id", "String"),
+    ],
+    position: { x: 9600, y: 3350 },
+    filePath: "apps/native/crates/app/src/worktree.rs",
+    layer: "application",
+    size: { w: 340, h: 0 },
+  },
+  {
+    name: { physical: "WorktreeIndex", logical: "WorktreeIndex", description: "台帳から作る、パス → worktree_id の対応(リポジトリ1つぶん。app/src/worktree.rs。issue #437)。再開のように会話ファイルの cwd で起動するとき、その cwd がどの worktree かを記録するために使う。フィールドは private(操作はメソッド経由)。from_ledger は GitLedger の repository_path のリポジトリの、削除されていない worktree から作る。id_of はリポジトリ本体なら MAIN_WORKTREE_ID、台帳の worktree ならその ID、どれでもなければ OUTSIDE_WORKTREE_ID。path_of は台帳の worktree_id の worktree のパス(本体の予約 ID は本体のパス)。knows は path が台帳の worktree(本体を除く)として引けるか。GitLedger は classes-native-prototype.ts の離れた位置にあるため線は引かない" },
+    attributes: [
+      { ...attr("repository_path", "PathBuf"), visibility: "private" },
+      { ...attr("entries", "Vec<(PathBuf, String)>"), visibility: "private" }, // (worktree のフォルダパス, worktree_id)
+    ],
+    methods: [
+      method("from_ledger", ["ledger: &GitLedger", "repository_path: &Path"], "Self"),
+      method("id_of", ["path: &Path"], "String"),
+      method("path_of", ["worktree_id: &str"], "Option<PathBuf>"),
+      method("knows", ["path: &Path"], "bool"),
+    ],
+    position: { x: 10100, y: 3350 },
+    filePath: "apps/native/crates/app/src/worktree.rs",
+    layer: "application",
+    size: { w: 620, h: 0 },
+  },
+  {
+    name: { physical: "PreparedWorktree", logical: "PreparedWorktree", description: "用意した worktree(起動の cwd になる。app/src/worktree.rs。issue #437)。prepare_worktree の戻り値。path は worktree の絶対パス、branch_name はチェックアウト中のブランチ名(分かれば)、is_main はリポジトリ本体か、created はこのとき新しく作ったか、synced は起動前の最新化(fetch + merge)を行ったか" },
+    attributes: [
+      attr("path", "PathBuf"),
+      attr("branch_name", "Option<String>"),
+      attr("is_main", "bool"),
+      attr("created", "bool"),
+      attr("synced", "bool"),
+    ],
+    position: { x: 9000, y: 3700 },
+    filePath: "apps/native/crates/app/src/worktree.rs",
+    layer: "application",
+    size: { w: 340, h: 0 },
+  },
+  {
+    name: { physical: "WorktreeEntry", logical: "WorktreeEntry", description: "git worktree list の1件(リポジトリ本体を含む。app/src/worktree.rs。issue #437)。GitWorktreeManager::list の要素。branch_name は detached HEAD なら None、is_main はリポジトリ本体の作業ツリーか(git worktree list の先頭)" },
+    attributes: [
+      attr("path", "PathBuf"),
+      attr("branch_name", "Option<String>"),
+      attr("is_main", "bool"),
+    ],
+    position: { x: 9500, y: 3700 },
+    filePath: "apps/native/crates/app/src/worktree.rs",
+    layer: "application",
+    size: { w: 340, h: 0 },
+  },
+  {
+    name: { physical: "MergeOutcome", logical: "MergeOutcome", description: "git merge の結果(GitWorktreeManager::merge の戻り値。app/src/worktree.rs。issue #437)。UpToDate: すでに最新 / Merged: 取り込んだ / Conflict: 競合・その他の理由で取り込めなかった(呼び出し側が abort_merge して、AppError::WorktreeSyncFailed で起動を止める)" },
+    stereotype: "enumeration",
+    attributes: ["UpToDate", "Merged", "Conflict { detail: String }"].map(label),
+    position: { x: 9900, y: 3700 },
+    filePath: "apps/native/crates/app/src/worktree.rs",
+    layer: "application",
+    size: { w: 360, h: 0 },
+  },
   // ============ 実行中セッション(Phase 1。issue #391) ============
   // 実行中の検知(#361 のガード)。#391 で find_running に除外する PID(exclude_pids)が加わった。
   {
     name: { physical: "RunningSessionSource", logical: "RunningSessionSource", description: "実行中セッションの検出(port)。app::lib.rs。~/.claude/sessions/<PID>.json の読み取りとプロセス生存確認は infra に閉じ込める。app が起動した claude(RunningSessionByApp)も同じ台帳を書くので、exclude_pids で自分の PID を除外して、外部で実行中かを調べる(issue #345・#391)" },
     stereotype: "interface",
-    methods: [method("find_running", ["session_id: &str", "exclude_pids: &[u32]"], "Result<Option<DetectedRunning>, AppError>")],
+    methods: [
+      method("find_running", ["session_id: &str", "exclude_pids: &[u32]"], "Result<Option<DetectedRunning>, AppError>"),
+      // 台帳にある実行中セッションの名前(name。--name / Desktop のタブ名。#437)。セッション間メッセージは
+      // 名前で宛先を指定するので、起動する CLI の名前をこれと重ならないようにするために使う
+      // (終了済みの台帳の名前も含みうる)。
+      method("taken_names", [], "Result<Vec<String>, AppError>"),
+    ],
     position: { x: 6300, y: 2050 },
     filePath: "apps/native/crates/app/src/lib.rs",
     size: { w: 640, h: 0 },
@@ -627,7 +754,11 @@ const DEFS: ClassDef[] = [
   {
     name: { physical: "RunningSessionLauncher", logical: "RunningSessionLauncher", description: "子プロセス(claude)を起動する(port)。app/src/running_session.rs。起動後の出来事は sink へ流す" },
     stereotype: "interface",
-    methods: [method("start", ["request: &StartRunningSession", "sink: Arc<dyn RunningSessionEventSink>"], "Result<Arc<dyn RunningProcess>, AppError>")],
+    methods: [
+      // 起動する claude の版(claude --version の出力。読めなければ None。起動は止めない。#437)
+      method("cli_version", [], "Option<String>"),
+      method("start", ["request: &StartRunningSession", "sink: Arc<dyn RunningSessionEventSink>"], "Result<Arc<dyn RunningProcess>, AppError>"),
+    ],
     position: { x: 6300, y: 2900 },
     filePath: "apps/native/crates/app/src/running_session.rs",
     size: { w: 1000, h: 0 },
@@ -701,8 +832,9 @@ const DEFS: ClassDef[] = [
     name: { physical: "StartRunningSession", logical: "StartRunningSession", description: "起動の要求(app/src/running_session.rs)。値は app が解決済みで、フロントから受け取ったパスは含まない(cwd は会話ファイル・プロファイルから求める。native.md §4)。再開と新規で持つ値が違う(新規は ID を app が決め、既存の会話ファイルから cwd を求められない)ので、平らな型に Option を並べずバリアントで表す(Phase 1 は struct。#407 で enum に)。Resume: 既存の会話を --resume で開く / New: 新しい会話を --session-id で始める(ID は app が UUID v4 で決める。cwd はリポジトリ)。repository_path はプロファイルのリポジトリ(RunningSessionByApp.repository_path の元)、name は表示名(--name。任意)" },
     stereotype: "enumeration",
     attributes: [
-      "Resume { session_id: String, cwd: PathBuf, mode: RunningPermissionMode, repository_path: PathBuf, name: Option<String> }",
-      "New { session_id: String, cwd: PathBuf, mode: RunningPermissionMode, repository_path: PathBuf, name: Option<String> }",
+      // worktree_id は起動する worktree の ID(記録用。#437)。cwd は用意した worktree のパス。
+      "Resume { session_id: String, cwd: PathBuf, mode: RunningPermissionMode, repository_path: PathBuf, worktree_id: String, name: Option<String> }",
+      "New { session_id: String, cwd: PathBuf, mode: RunningPermissionMode, repository_path: PathBuf, worktree_id: String, name: Option<String> }",
     ].map(label),
     methods: [
       // どちらのバリアントにも同じ名前で取り出せる(値はバリアントごとに持つ)。
@@ -710,13 +842,14 @@ const DEFS: ClassDef[] = [
       method("cwd", [], "&Path"),
       method("mode", [], "RunningPermissionMode"),
       method("repository_path", [], "&Path"),
+      method("worktree_id", [], "&str"),
       method("name", [], "Option<&str>"),
       method("is_new", [], "bool"),
     ],
     position: { x: 7700, y: 1450 },
     filePath: "apps/native/crates/app/src/running_session.rs",
     layer: "application",
-    size: { w: 1050, h: 0 },
+    size: { w: 1250, h: 0 },
   },
   {
     name: { physical: "RunningPermissionMode", logical: "RunningPermissionMode", description: "画面で選べる権限モード(app/src/running_session.rs)。Plan(計画だけ)/ Default(すべてのツール使用が権限の問い合わせとして届く)/ AcceptEdits(編集は問い合わせない)/ Auto(#407 で AcceptEdits と Auto が加わった)。CLI の版で名前が変わる(2.1.280 では default が manual に改名)ので、as_cli_value(CLI へ渡す値)と、その逆写像 from_cli_value(manual も Default に対応づける。画面が扱わない値 = bypassPermissions / dontAsk などは None で、画面は文字列のまま出す)を持つ。domain の RunningSessionByApp.current_permission_mode は文字列で、対応づけは app の責務" },
@@ -824,11 +957,17 @@ const DEFS: ClassDef[] = [
       attr("mode", "RunningPermissionMode"),
       attr("repository_path", "Option<PathBuf>"), // 未設定なら会話の cwd をリポジトリとみなす
       attr("name", "Option<String>"), // 表示名(--name)。任意
+      // 指定された worktree(用意済み。#437)。あればそこが cwd(その worktree のプロジェクトフォルダに
+      // 会話ファイルがあること)。無ければ従来どおり、会話ファイルに記録された cwd で起動する。
+      // ResolvedWorktree・WorktreeIndex はこの図の離れた位置にあるため線は引かない。
+      attr("worktree", "Option<ResolvedWorktree>"),
+      // 台帳から作った worktree の対応(worktree が無いとき、会話の cwd がどの worktree かを記録するため)
+      attr("worktree_index", "WorktreeIndex"),
     ],
     position: { x: 8300, y: 2050 },
     filePath: "apps/native/crates/app/src/running_session.rs",
     layer: "application",
-    size: { w: 420, h: 0 },
+    size: { w: 480, h: 0 },
   },
   {
     name: { physical: "CreateRunningSession", logical: "CreateRunningSession", description: "新規作成する会話の指定(app/src/running_session.rs。issue #407)。create_running_session の入力。新しい会話の ID は app が決める(new_session_id = UUID v4 を --session-id に渡す)。repository_path が新規の cwd になる(パスはフロントから受け取らない。native.md §4)" },
@@ -836,11 +975,14 @@ const DEFS: ClassDef[] = [
       attr("repository_path", "PathBuf"),
       attr("mode", "RunningPermissionMode"),
       attr("name", "Option<String>"), // 表示名(--name)。任意
+      // 起動する worktree(用意済み。#437)。そのパスが cwd になる(リポジトリ本体で起動するときは、
+      // 本体のパスと予約 ID)。ResolvedWorktree はこの図の離れた位置にあるため線は引かない。
+      attr("worktree", "ResolvedWorktree"),
     ],
     position: { x: 8300, y: 2450 },
     filePath: "apps/native/crates/app/src/running_session.rs",
     layer: "application",
-    size: { w: 420, h: 0 },
+    size: { w: 480, h: 0 },
   },
   {
     name: { physical: "RunningSessionRef", logical: "RunningSessionRef", description: "実行中セッション(app が起動した子プロセス)1つの宛先(app/src/running_session_summary.rs。issue #407)。個体指定子は pid_domain + pid + started_at(pid は OS が使い回すので単独では個体を指定できない。domain の RunningSession と同じ)。画面はこれを持ち回って、送信・応答・購読の対象を指定する" },
@@ -892,6 +1034,10 @@ const DEFS: ClassDef[] = [
       attr("current_model", "Option<String>"),
       attr("current_permission_mode", "Option<String>"),
       attr("cwd", "Option<PathBuf>"),
+      // 起動した claude の版(claude --version の出力)と、セッション間メッセージに使える版か
+      // (None は版が分からない。使えない版なら状態バー・一覧に警告を出す。起動は止めない。#437)
+      attr("cli_version", "Option<String>"),
+      attr("peer_messaging", "Option<bool>"),
       attr("name", "Option<String>"),
     ],
     position: { x: 9700, y: 2850 },
@@ -925,6 +1071,7 @@ const RELATIONSHIPS = [
   rel("realization", "FileHubLayoutStore", "HubLayoutStore", undefined, "top", "bottom"),
   rel("realization", "FileHubTuningStore", "HubTuningStore", undefined, "top", "bottom"),
   rel("realization", "FileViewerTabsStore", "ViewerTabsStore", undefined, "top", "bottom"),
+  rel("realization", "SystemGitWorktreeManager", "GitWorktreeManager", undefined, "top", "bottom"),
   rel("realization", "WindowsExecutionEnvironmentSource", "ExecutionEnvironmentSource", undefined, "top", "bottom"),
   rel("realization", "GithubApiClient", "GithubGateway", undefined, "top", "bottom"),
   rel("realization", "KeyringTokenStore", "TokenStore", undefined, "top", "bottom"),

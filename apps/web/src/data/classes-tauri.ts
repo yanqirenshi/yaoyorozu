@@ -29,6 +29,14 @@
  * ビューア(issue #409。PR #418)で、選べるモデルの一覧(`AvailableModelDto`。`RunningSessionSlot` と
  * `RunningSessionDto` が持つ)が加わった。domain は変わっていない。
  *
+ * 【実行中セッション(Phase 3。issue #437。PR #440)】起動の引数(`StartRunningSessionDto`)に、
+ * どの worktree で起動するか(`WorktreeSpecDto`。パスは含まない)と、起動前の最新化の有無が加わった。
+ * 実行中セッションの DTO に、起動した worktree の ID と、CLI の版・セッション間メッセージに
+ * 使える版か(警告文を含む)が加わった(`RunningSessionDto` / `RunningSessionSummaryDto`)。
+ * 会話の表示用の `MessageDto` に、セッション間メッセージの見分け(`MessageKindDto`)と相手の名前・
+ * 送信の成否が加わった。エラーコード `worktree_sync_failed` は `AppError` の変換(関数)なので
+ * 描かない。
+ *
  * 【実物との突き合わせ】`tauri/src/*.rs` の struct / enum を、この図と名前・フィールド・
  * バリアントで突き合わせた(issue #400)。ViewerTabs は専用の DTO が無く、タブの並びは
  * `Vec<ViewerTabDto>` で受け渡す(command の引数・戻り値は関数なので描かない)。
@@ -101,6 +109,12 @@ const DEFS: ClassDef[] = [
       attr("uuid", "Option<String>"), // 元の jsonl 行の uuid(ビューアの「データ」表示用。issue #313)
       attr("image_count", "usize"), // 行に含まれる画像の枚数(issue #349)
       attr("status", "MessageStatusDto"), // 送信の失敗に関する見分け(issue #364)
+      // セッション間メッセージの見分け(issue #437)。フロントは見出しと見た目の切り替えにだけ使う。
+      attr("kind", "MessageKindDto"),
+      // 相手の名前: 受信(peer_received)は送り元、送信(peer_sent)は宛先。それ以外は null。
+      attr("peer_name", "Option<String>"),
+      // 送信の結果(peer_send_result)の成否。それ以外は null。
+      attr("peer_success", "Option<bool>"),
     ],
     position: { x: 2900, y: 5900 },
     filePath: "apps/native/tauri/src/dto.rs",
@@ -126,6 +140,13 @@ const DEFS: ClassDef[] = [
     ],
     position: { x: 2100, y: 5900 },
     filePath: "apps/native/tauri/src/dto.rs",
+  },
+  {
+    name: { physical: "ViewerTabsChangedEventDto", logical: "ViewerTabsChangedEventDto", description: "viewer-tabs:changed イベントのペイロード(issue #422)。タブの並びを保存したプロファイルの ID だけを通知し、データ本体はフロントが get_viewer_tabs で取り直す(native.md §3.2)" },
+    attributes: [attr("profile_id", "String")],
+    position: { x: 3700, y: 5550 },
+    filePath: "apps/native/tauri/src/dto.rs",
+    size: { w: 340, h: 0 },
   },
   {
     name: { physical: "SessionChangedEventDto", logical: "SessionChangedEventDto", description: "session:changed イベントのペイロード。変更のあったプロジェクト名のみ通知し、本体はフロントが取り直す" },
@@ -543,6 +564,14 @@ const DEFS: ClassDef[] = [
   },
   // ============ #313 以降に増えた型(ビューア・ハブ・走査) ============
   {
+    name: { physical: "MessageKindDto", logical: "MessageKindDto", description: "domain::MessageKind から変換(From。MessageDto の組み立て時)。セッション間メッセージ(CLI の SendMessage)の受信・送信・送信の結果を、通常の会話と見分ける(issue #437)。serde は snake_case(peer_received など)。domain の MessageKind の中身(from_name / to / success)は、MessageDto の peer_name / peer_success に分けて出す(tool_use_id は出さない)" },
+    stereotype: "enumeration",
+    attributes: ["Normal", "PeerReceived", "PeerSent", "PeerSendResult"].map(label),
+    position: { x: 3700, y: 6150 },
+    filePath: "apps/native/tauri/src/dto.rs",
+    size: { w: 280, h: 0 },
+  },
+  {
     name: { physical: "MessageStatusDto", logical: "MessageStatusDto", description: "domain::MessageStatus から変換(From)。送信に失敗したメッセージの見分け(issue #364)" },
     stereotype: "enumeration",
     attributes: ["Normal", "FailedQuestion", "ErrorForQuestion", "Error"].map(label),
@@ -663,6 +692,9 @@ const DEFS: ClassDef[] = [
       attr("current_model", "Option<String>"),
       attr("current_permission_mode", "Option<String>"),
       attr("cwd", "Option<String>"),
+      // 起動した claude の版と、セッション間メッセージに使える版か(#437)
+      attr("cli_version", "Option<String>"),
+      attr("peer_messaging", "Option<bool>"),
       attr("name", "Option<String>"),
     ],
     position: { x: 6900, y: 5200 },
@@ -673,12 +705,14 @@ const DEFS: ClassDef[] = [
     name: { physical: "StartRunningSessionDto", logical: "StartRunningSessionDto", description: "start_running_session の引数(フロント→Rust なので Deserialize)。serde は tag = \"kind\"(resume | new)、snake_case。Resume: 既存の会話を開く(project と session_id を指す。cwd・リポジトリは app が求める)/ New: 新しい会話を始める(ID とリポジトリは app が決める。パスはフロントから受け取らない。native.md §4)。app::ResumeRunningSession / CreateRunningSession へ変換する(#407)。mode の型は RunningPermissionModeDto(離れた位置)" },
     stereotype: "enumeration",
     attributes: [
-      "Resume { project: String, session_id: String, mode: RunningPermissionModeDto, name: Option<String> }",
-      "New { mode: RunningPermissionModeDto, name: Option<String> }",
+      // worktree を省くと、Resume は会話ファイルに記録された cwd で開き、New はリポジトリ本体で始める。
+      // sync_origin_main は起動前の最新化(git fetch + git merge origin/main)を行うか(省略で行う。#437)。
+      "Resume { project: String, session_id: String, mode: RunningPermissionModeDto, name: Option<String>, worktree: Option<WorktreeSpecDto>, sync_origin_main: Option<bool> }",
+      "New { mode: RunningPermissionModeDto, name: Option<String>, worktree: Option<WorktreeSpecDto>, sync_origin_main: Option<bool> }",
     ].map(label),
     position: { x: 6300, y: 6100 },
     filePath: "apps/native/tauri/src/dto.rs",
-    size: { w: 760, h: 0 },
+    size: { w: 1120, h: 0 },
   },
   {
     name: { physical: "RunningSessionSwitchDto", logical: "RunningSessionSwitchDto", description: "switch_running_session の引数(フロント→Rust なので Deserialize)。app::RunningSessionSwitch へ変換(From)。Model の名前は CLI が検証しない(存在しない名前も成功で返る)ので、app は文字種・長さだけを検証する。画面は知っているモデルから選ばせるのが安全(#407)" },
@@ -690,6 +724,18 @@ const DEFS: ClassDef[] = [
     position: { x: 6300, y: 6500 },
     filePath: "apps/native/tauri/src/dto.rs",
     size: { w: 560, h: 0 },
+  },
+  {
+    name: { physical: "WorktreeSpecDto", logical: "WorktreeSpecDto", description: "どの worktree で起動するかの指定(StartRunningSessionDto の worktree。フロント→Rust なので Deserialize。issue #437)。app::WorktreeSpec へ変換(From)。パスは含まない: パスは app が決める(native.md §4)。serde は tag = \"kind\"(main | existing | branch)、snake_case。Main: リポジトリ本体(worktree は作らない)/ Existing: 既存の worktree(台帳の worktree_id)/ Branch: このブランチの worktree(無ければ app が用意する。ブランチも無ければ origin/main から作る)" },
+    stereotype: "enumeration",
+    attributes: [
+      "Main",
+      "Existing { worktree_id: String }",
+      "Branch { branch_name: String }",
+    ].map(label),
+    position: { x: 7000, y: 6500 },
+    filePath: "apps/native/tauri/src/dto.rs",
+    size: { w: 520, h: 0 },
   },
   {
     name: { physical: "ProgressSubscriber", logical: "ProgressSubscriber", description: "途中経過の購読1つ(state.rs。#407)。subscribe_running_session_progress(target, channel)が購読 ID を返し、unsubscribe_running_session_progress で外す。購読が無い間の出来事は捨てる。channel は tauri::ipc::Channel<AddressedProgressDto>(離れた位置にあるため線は引かない)" },
@@ -738,15 +784,23 @@ const DEFS: ClassDef[] = [
       attr("project", "Option<String>"),
       attr("session_id", "String"),
       attr("repository_path", "String"),
+      // 起動した worktree の ID(リポジトリ本体は main-worktree。#437)
+      attr("worktree_id", "String"),
       attr("cwd", "Option<String>"),
       attr("name", "Option<String>"), // 起動時に付けた表示名(--name)
       attr("process_state", "ProcessStateDto"),
       attr("process_state_at", "u64"),
       attr("current_model", "Option<String>"),
       attr("current_permission_mode", "Option<String>"),
-      attr("permission_requests", "Vec<PermissionRequestDto>"),
       // CLI が initialize の応答で報告する選べるモデル(#409)。届く前は空
       attr("available_models", "Vec<AvailableModelDto>"),
+      // 起動した claude の版(claude --version の出力。読めなければ null。#437)
+      attr("cli_version", "Option<String>"),
+      // セッション間メッセージに使える版か(null は版が分からない)
+      attr("peer_messaging", "Option<bool>"),
+      // 使えない版のときの説明(状態バーに出す。使える・分からないときは null。起動は止めない)
+      attr("peer_messaging_warning", "Option<String>"),
+      attr("permission_requests", "Vec<PermissionRequestDto>"),
     ],
     position: { x: 5300, y: 5200 },
     filePath: "apps/native/tauri/src/dto.rs",
@@ -861,6 +915,7 @@ const RELATIONSHIPS = [
   rel("association", "ConversationDto", "MessageDto", "messages", "bottom", "top"),
   rel("composition", "MessageDto", "RoleDto", "role", "right", "left"),
   rel("composition", "MessageDto", "MessageStatusDto", "status", "bottom", "top"),
+  rel("composition", "MessageDto", "MessageKindDto", "kind", "right", "left"),
   // 設定・プロファイル(2x2 に並べ、3本とも縦横だけで結ぶ)
   rel("association", "SettingsDto", "GithubProjectDto", "github_project", "top", "bottom"),
   rel("association", "SettingsDto", "ProfileSummaryDto", "profiles", "right", "left"),
