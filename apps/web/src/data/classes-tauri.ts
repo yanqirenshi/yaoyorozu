@@ -23,6 +23,9 @@
  * 引数(`StartRunningSessionDto`・`RunningSessionSwitchDto`)が加わった。1回きり送信の
  * `AgentModeDto` は #392 で撤去された。
  *
+ * ビューア(issue #409。PR #418)で、選べるモデルの一覧(`AvailableModelDto`。`RunningSessionSlot` と
+ * `RunningSessionDto` が持つ)が加わった。domain は変わっていない。
+ *
  * 【実物との突き合わせ】`tauri/src/*.rs` の struct / enum を、この図と名前・フィールド・
  * バリアントで突き合わせた(issue #400)。ViewerTabs は専用の DTO が無く、タブの並びは
  * `Vec<ViewerTabDto>` で受け渡す(command の引数・戻り値は関数なので描かない)。
@@ -621,6 +624,17 @@ const DEFS: ClassDef[] = [
     size: { w: 300, h: 0 },
   },
   {
+    name: { physical: "AvailableModelDto", logical: "AvailableModelDto", description: "選べるモデル1つ(issue #409。PR #418)。app::AvailableModel から変換(From)。RunningSessionDto.available_models の要素。画面は set_model へ渡す value と表示名(display_name)・説明(description)を使う" },
+    attributes: [
+      attr("value", "String"),
+      attr("display_name", "String"),
+      attr("description", "Option<String>"),
+    ],
+    position: { x: 5800, y: 5600 },
+    filePath: "apps/native/tauri/src/dto.rs",
+    size: { w: 400, h: 0 },
+  },
+  {
     name: { physical: "AddressedProgressDto", logical: "AddressedProgressDto", description: "途中経過の Channel のペイロード(画面ごとの購読。#407)。app::AddressedProgress から変換(From)。Phase 1 の ProgressEventDto そのものを流す形から、宛先(target)を付けた包みになった" },
     attributes: [
       attr("target", "RunningSessionRefDto"),
@@ -724,6 +738,8 @@ const DEFS: ClassDef[] = [
       attr("current_model", "Option<String>"),
       attr("current_permission_mode", "Option<String>"),
       attr("permission_requests", "Vec<PermissionRequestDto>"),
+      // CLI が initialize の応答で報告する選べるモデル(#409)。届く前は空
+      attr("available_models", "Vec<AvailableModelDto>"),
     ],
     position: { x: 5300, y: 5200 },
     filePath: "apps/native/tauri/src/dto.rs",
@@ -805,6 +821,9 @@ const DEFS: ClassDef[] = [
       attr("session", "domain::RunningSessionByApp"),
       attr("process", "Arc<dyn app::RunningProcess>"),
       attr("subscribers", "Vec<ProgressSubscriber>"),
+      // CLI が initialize の応答で報告する選べるモデル(#409。届くと running-session:changed で知らせる)
+      // app::AvailableModel は classes-infra.ts の離れた位置にあるため線は引かない。
+      attr("available_models", "Vec<app::AvailableModel>"),
     ],
     position: { x: 4300, y: 7200 },
     filePath: "apps/native/tauri/src/state.rs",
@@ -866,6 +885,7 @@ const RELATIONSHIPS = [
   rel("association", "RunningSessionDto", "PermissionRequestDto", "permission_requests", "bottom", "top"),
   // 宛先(#407)。必須・単数 → コンポジション(持つ側 → 型)。
   rel("composition", "RunningSessionDto", "RunningSessionRefDto", "target", "right", "left"),
+  rel("association", "RunningSessionDto", "AvailableModelDto", "available_models", "right", "top"),
   rel("composition", "AddressedProgressDto", "RunningSessionRefDto", "target", "top", "bottom"),
   rel("composition", "RunningSessionSummaryDto", "RunningSessionRefDto", "target", "left", "right"),
   rel("association", "RunningSessionSlot", "ProgressSubscriber", "subscribers", "bottom", "top"),

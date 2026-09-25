@@ -59,6 +59,8 @@
  * (`RunningSessionRef` / `AddressedProgress` / `AddressedRunningSessionEvent`)、ハブ用の
  * 一覧項目 `RunningSessionSummary`(`summarize` で作る)も app の型。定数(`MAX_RUNNING_SESSIONS`
  * = 8 / `MAX_KEPT_EXITED_SESSIONS` = 10)は型ではないので描かない。
+ * ビューア(issue #409。PR #418)で、CLI が `initialize` の応答で報告する選べるモデル
+ * `AvailableModel` と、出来事 `ModelsListed` が加わった(状態は動かさない)。
  *
  * 【GitLedgerStore・GitStateSource への参照】メソッドの戻り値・引数に出てくる
  * `domain::GitLedger`・`domain::ObservedGitState` は、`classes-native-prototype.ts`
@@ -533,10 +535,12 @@ const DEFS: ClassDef[] = [
     size: { w: 400, h: 0 },
   },
   {
-    name: { physical: "RunningSessionEvent", logical: "RunningSessionEvent", description: "実行中セッション(子プロセス)からの出来事(app/src/running_session.rs)。infra の読み取りスレッドが、CLI の wire 形式を domain の型に写したうえで RunningSessionEventSink へ流す。子プロセスごとの受け口は宛先(pid)を起動後にしか知らないので宛先を持たず、tauri の処理タスクが宛先を付ける(AddressedRunningSessionEvent)。apply_running_session_event(純粋な規則)が状態へ反映する: Initialized → Initialized / Configured → 現在のモデル・権限モードを反映(値のあるものだけ)/ SwitchApplied → 受け入れられた切り替えを現在値へ反映 / Progress(TurnFinished) → TurnFinished / Progress(それ以外) → 状態は動かさない / PermissionRequested → 答え待ちに足して PermissionAsked / PermissionCancelled → 答え待ちから外す / Exited → 答え待ちを捨てて Exited(Configured と SwitchApplied は #407 で加わった)" },
+    name: { physical: "RunningSessionEvent", logical: "RunningSessionEvent", description: "実行中セッション(子プロセス)からの出来事(app/src/running_session.rs)。infra の読み取りスレッドが、CLI の wire 形式を domain の型に写したうえで RunningSessionEventSink へ流す。子プロセスごとの受け口は宛先(pid)を起動後にしか知らないので宛先を持たず、tauri の処理タスクが宛先を付ける(AddressedRunningSessionEvent)。apply_running_session_event(純粋な規則)が状態へ反映する: Initialized → Initialized / Configured → 現在のモデル・権限モードを反映(値のあるものだけ)/ SwitchApplied → 受け入れられた切り替えを現在値へ反映 / Progress(TurnFinished) → TurnFinished / Progress(それ以外) → 状態は動かさない / ModelsListed → 状態は動かさない(tauri が slot に保持して画面へ知らせる) / PermissionRequested → 答え待ちに足して PermissionAsked / PermissionCancelled → 答え待ちから外す / Exited → 答え待ちを捨てて Exited(Configured と SwitchApplied は #407、ModelsListed は #409 で加わった)" },
     stereotype: "enumeration",
     attributes: [
       "Initialized",
+      // 選べるモデルの一覧(#409。PR #418)。AvailableModel はこの図の、離れた位置。
+      "ModelsListed(Vec<AvailableModel>)",
       "Configured { model: Option<String>, permission_mode: Option<String> }",
       "SwitchApplied(RunningSessionSwitch)",
       "Progress(domain::ProgressEvent)",
@@ -583,6 +587,18 @@ const DEFS: ClassDef[] = [
     size: { w: 300, h: 0 },
   },
   // ---- Phase 2(複数セッション・モード切替・新規作成。issue #407) ----
+  {
+    name: { physical: "AvailableModel", logical: "AvailableModel", description: "画面で選べるモデル1つ(app/src/running_session.rs。issue #409。PR #418)。CLI が initialize の応答の response.models で報告する値だけを読む(欠けた項目・形の違う要素は捨てる。account などほかの項目は読まない)。set_model は CLI がモデル名を検証しないので、画面はこの一覧から選ばせる。value が set_model に渡す名前、display_name が表示名、description は説明(無いこともある)。RunningSessionEvent の ModelsListed で届く" },
+    attributes: [
+      attr("value", "String"),
+      attr("display_name", "String"),
+      attr("description", "Option<String>"),
+    ],
+    position: { x: 8500, y: 3350 },
+    filePath: "apps/native/crates/app/src/running_session.rs",
+    layer: "application",
+    size: { w: 400, h: 0 },
+  },
   {
     name: { physical: "RunningSessionSwitch", logical: "RunningSessionSwitch", description: "起動中に切り替える設定(app/src/running_session.rs。issue #407)。CLI の set_model / set_permission_mode(PoC #382 レポート §6.2)に対応する。CLI へ渡す要求の ID は infra が付けるので、ここには無い。Model の名前は CLI が検証しない(存在しない名前も成功で返る)ので、app は文字種・長さだけを検証する" },
     stereotype: "enumeration",
