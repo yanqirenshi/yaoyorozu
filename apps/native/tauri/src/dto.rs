@@ -192,6 +192,13 @@ impl From<ViewerTabDto> for domain::ViewerTab {
     }
 }
 
+/// `viewer-tabs:changed` イベントのペイロード(issue #422)。並びを保存したプロファイルの ID
+/// だけを通知し、データ本体はフロントが `get_viewer_tabs` で取り直す(native.md §3.2)。
+#[derive(Serialize, Clone)]
+pub struct ViewerTabsChangedEventDto {
+    pub profile_id: String,
+}
+
 /// `session:changed` イベントのペイロード。変更のあったプロジェクト(フォルダ名)
 /// のみを通知し、データ本体はフロントが Query(get_session 等)で
 /// 取り直す(native.md §3.2)。

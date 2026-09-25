@@ -56,9 +56,17 @@ export type SessionSummaryDto = {
 };
 
 // ビューアのセッションタブ1件(issue #353)。キーは「フォルダ + セッション ID」(issue #369)。
+// セッションを指定してビューアを開く/前面化するときの指定(フォルダ名 + セッション ID。パスは
+// 渡さない)と、`viewer:navigate` のペイロードにも使う(issue #422)。
 export type ViewerTabDto = {
   project: string;
   session_id: string;
+};
+
+// viewer-tabs:changed のペイロード(issue #422)。並びを保存したプロファイルの ID だけ。
+// 並びの本体は getViewerTabs で取り直す。
+export type ViewerTabsChangedEvent = {
+  profile_id: string;
 };
 
 export type AppErrorDto = {

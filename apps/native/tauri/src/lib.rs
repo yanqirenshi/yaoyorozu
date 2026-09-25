@@ -12,7 +12,7 @@ use dto::{
     HubTuningDto, MessageImageDto, NodePositionDto, PcDto, ProfileSummaryDto, ProjectDto,
     ProjectItemsPageDto, ProjectSettingsFileDto, RuleDto, RuleSummaryDto, SessionChangedEventDto,
     SessionSummaryDto, SettingsCorruptedEventDto, SettingsDto, SettingsInputDto, SkillDto,
-    SkillSummaryDto, ViewerTabDto, WindowStateDto, WindowTabDto,
+    SkillSummaryDto, ViewerTabDto, ViewerTabsChangedEventDto, WindowStateDto, WindowTabDto,
 };
 use infra::{
     FileClaudeDirStore, FileClaudeMdStore, FileClaudeSettingsStore, FileHubLayoutStore,
@@ -394,12 +394,22 @@ async fn rename_profile(
 /// §4)。同じプロファイルを複数ウィンドウで開けるよう、ラベルは毎回一意に
 /// 生成する。URLのパスパラメータ `/profiles/<id>` がそのウィンドウの対象
 /// プロファイルを表す(フロントは `useWindowProfileId` で読む。issue #88)。
+///
+/// `session`(任意。issue #422)があれば、初期 URL に `project` / `session` のクエリを付けて、
+/// 開いたビューアでそのセッションを選択した状態にする。パスは受け取らず、フォルダ名と
+/// セッション ID だけを検証して使う(native.md §4)。判断: 新しい command は作らず、既存の
+/// command に任意の引数を足した(呼び出し側の互換を保てる。既存のウィンドウを前面化する
+/// `focus_window` にも同じ `session` を足した)。
 #[tauri::command]
 async fn open_profile_window(
     app: tauri::AppHandle,
     state: tauri::State<'_, Mutex<AppState>>,
     profile_id: String,
+    session: Option<ViewerTabDto>,
 ) -> Result<(), AppErrorDto> {
+    let session = session
+        .map(|s| app::validate_viewer_session(&s.project, &s.session_id))
+        .transpose()?;
     // ウィンドウの初期タイトル(issue #348)。設定変更への追従はフロントが行う。
     let title = {
         let guard = state.lock().await;
@@ -408,7 +418,7 @@ async fn open_profile_window(
     };
 
     let label = format!("profile-{}", uuid::Uuid::new_v4());
-    let url = tauri::WebviewUrl::App(format!("index.html#/profiles/{profile_id}").into());
+    let url = tauri::WebviewUrl::App(app::viewer_window_url(&profile_id, session.as_ref()).into());
     tauri::WebviewWindowBuilder::new(&app, label, url)
         .title(title)
         .inner_size(800.0, 600.0)
@@ -567,8 +577,20 @@ async fn reconcile_git_state(app: tauri::AppHandle) -> Result<(), AppErrorDto> {
 
 /// 指定ラベルのウィンドウを前面化する(最小化されていれば復元してから)。
 /// 存在しないラベルは `not_found`(ハブ化 その1。issue #83)。
+///
+/// `session`(任意。issue #422)があれば、前面化したうえで、そのウィンドウのビューアを
+/// そのセッションへ移動させる。移動は Rust → フロントの軽量イベント `viewer:navigate`
+/// (そのウィンドウだけへ。ペイロードはフォルダ名とセッション ID)で伝え、フロントが URL を
+/// 更新する(native.md §3.2)。パスは受け取らない(検証は `open_profile_window` と同じ)。
 #[tauri::command]
-async fn focus_window(app: tauri::AppHandle, label: String) -> Result<(), AppErrorDto> {
+async fn focus_window(
+    app: tauri::AppHandle,
+    label: String,
+    session: Option<ViewerTabDto>,
+) -> Result<(), AppErrorDto> {
+    let session = session
+        .map(|s| app::validate_viewer_session(&s.project, &s.session_id))
+        .transpose()?;
     let window = app.get_webview_window(&label).ok_or_else(|| {
         AppErrorDto::from(app::AppError::NotFound(
             "指定されたウィンドウが見つかりません".to_string(),
@@ -578,6 +600,9 @@ async fn focus_window(app: tauri::AppHandle, label: String) -> Result<(), AppErr
         let _ = window.unminimize();
     }
     let _ = window.set_focus();
+    if let Some(tab) = session {
+        let _ = app.emit_to(label.as_str(), "viewer:navigate", ViewerTabDto::from(tab));
+    }
     Ok(())
 }
 
@@ -633,7 +658,9 @@ async fn get_viewer_tabs(
     .map_err(Into::into)
 }
 
-/// プロファイルのセッションタブの並びを丸ごと保存する(issue #353)。
+/// プロファイルのセッションタブの並びを丸ごと保存する(issue #353)。保存できたら、軽量イベント
+/// `viewer-tabs:changed`(そのプロファイルの ID)で知らせ、開いているビューアが並びを
+/// 取り直せるようにする(issue #422。ロックは持たないので、保存 → emit の順)。
 #[tauri::command]
 async fn save_viewer_tabs(
     app: tauri::AppHandle,
@@ -641,6 +668,7 @@ async fn save_viewer_tabs(
     tabs: Vec<ViewerTabDto>,
 ) -> Result<(), AppErrorDto> {
     let dir = viewer_tabs_dir(&app)?;
+    let saved_profile_id = profile_id.clone();
     tauri::async_runtime::spawn_blocking(move || -> Result<(), app::AppError> {
         let store = FileViewerTabsStore::new(dir);
         app::save_viewer_tabs(
@@ -654,8 +682,14 @@ async fn save_viewer_tabs(
         Err(app::AppError::Io(
             "バックグラウンド処理に失敗しました".to_string(),
         ))
-    })
-    .map_err(Into::into)
+    })?;
+    let _ = app.emit(
+        "viewer-tabs:changed",
+        ViewerTabsChangedEventDto {
+            profile_id: saved_profile_id,
+        },
+    );
+    Ok(())
 }
 
 /// ハブグラフの調整値を返す(issue #249)。ファイルが無い/壊れている場合は
