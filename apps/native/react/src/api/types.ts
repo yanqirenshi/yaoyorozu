@@ -477,7 +477,7 @@ export type RunningSessionDto = {
   available_models: AvailableModelDto[];
   // 起動した claude の版(claude --version の出力。読めなければ null。issue #437)。
   cli_version: string | null;
-  // セッション間メッセージに使える版か(2.1.280 以上。null は版が分からない)。
+  // セッション間メッセージに使える版か(2.1.268 以上。null は版が分からない)。
   peer_messaging: boolean | null;
   // 使えない版のときの説明(状態バーに出す。使える・分からないときは null)。起動は止めない。
   peer_messaging_warning: string | null;
