@@ -2386,6 +2386,54 @@ button.claude-explorer-name {
   --ld-size: var(--icon-32) !important;
 }
 
+/* ====== バッジ(部品。issue #411)======
+   仕様の正は apps/web の uiBadge.ts(/ui?item=part-badge)。値はトークンだけで書く。
+   境界は持たない(境界を持つボタンと形で区別する)。文字の太さはトーン・サイズで変えない。 */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  padding: 0 var(--space-2);
+  border: none;
+  border-radius: var(--radius-4);
+  white-space: nowrap;
+  font-size: var(--text-ui-14n-100-size);
+  font-weight: var(--text-ui-14n-100-weight);
+  line-height: var(--text-ui-14n-100-line-height);
+  letter-spacing: var(--text-ui-14n-100-tracking);
+}
+
+/* 高さは仕様の値(small = 20px / medium = 24px)。 */
+.badge-small {
+  height: 20px;
+}
+
+.badge-medium {
+  height: 24px;
+}
+
+.badge-idle {
+  background: var(--color-sumi-100);
+  color: var(--text-secondary);
+}
+
+.badge-running {
+  background: var(--color-kincha-100);
+  color: var(--color-kincha-800);
+}
+
+.badge-done {
+  background: var(--color-kusairo-100);
+  color: var(--color-kusairo-800);
+}
+
+.badge-error {
+  background: var(--color-suou-100);
+  color: var(--color-suou-700);
+}
+
 /* ====== 実行中セッション(issue #392。Phase 1)====== */
 
 /* 会話ビューの上部の状態表示(プロセスの状態・権限モード・中断/終了)。 */
@@ -2400,15 +2448,10 @@ button.claude-explorer-name {
   color: var(--text-secondary);
 }
 
-.running-bar-state {
-  font-weight: var(--text-dns-14b-150-weight);
-  color: var(--text-primary);
-}
-
-/* 実行中・権限待ちは草色の文字色で目立たせる(既存のアクセント。機能カラーは使わない)。 */
-.running-bar-state[data-state="running"],
-.running-bar-state[data-state="awaiting_permission"] {
-  color: var(--color-kusairo-800);
+/* 状態表示(バッジ)を包む領域。状態が変わったことを支援技術に伝える(role="status")。 */
+.running-bar-status {
+  display: inline-flex;
+  align-items: center;
 }
 
 .running-bar-mode {

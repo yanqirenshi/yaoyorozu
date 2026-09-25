@@ -1,9 +1,11 @@
+import Badge from "./Badge";
 import LoadingIcon from "./LoadingIcon";
 import type { RunningPermissionModeDto, RunningSessionDto } from "./api/types";
 import {
   PERMISSION_MODE_LABELS,
   currentPermissionModeLabel,
   processStateLabel,
+  processStateTone,
 } from "./runningSessionLabels";
 
 // 会話ビューの上部に出す、実行中セッション(app が起動したままの claude)の状態表示
@@ -33,8 +35,10 @@ export default function RunningSessionBar({ running, selectedMode, onInterrupt, 
           label={state === "starting" ? "セッションを起動中" : "AI が応答中"}
         />
       )}
-      <span className="running-bar-state" data-state={state ?? "none"}>
-        {processStateLabel(state)}
+      {/* 状態の変化を支援技術に伝える領域(色が変わっただけでは何も伝わらない。issue #411)。
+          LoadingIcon は自分で role="status" を持つので、包まずバッジだけを包む。 */}
+      <span className="running-bar-status" role="status">
+        <Badge tone={processStateTone(state)} label={processStateLabel(state)} size="small" />
       </span>
       <span className="running-bar-mode">
         {alive
