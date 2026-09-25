@@ -8,18 +8,24 @@ import {
   getHubTuning,
   getPc,
   getSettings,
+  getViewerTabs,
   isAppError,
+  listRunningSessions,
   listWindowStates,
   onPcDataLoaded,
   onPcDataLoading,
   onPcDataProgress,
   onPcSessionsUpdated,
+  onRunningSessionChanged,
   onSettingsUpdated,
   onWindowsChanged,
   openProfileWindow,
   reconcileGitState,
   saveHubLayout,
   saveHubTuning,
+  saveViewerTabs,
+  startRunningSession,
+  stopRunningSession,
 } from "../api";
 import type {
   CameraDto,
@@ -29,6 +35,9 @@ import type {
   HubLayoutDto,
   NodePositionDto,
   PcDto,
+  RunningPermissionModeDto,
+  RunningSessionRefDto,
+  RunningSessionSummaryDto,
   SessionDto,
 } from "../api";
 import { usePageDockItems } from "../DockItemsContext";
@@ -37,7 +46,12 @@ import HubTuningPopover, { DEFAULT_HUB_TUNING } from "../HubTuningPopover";
 import type { HubTuning } from "../HubTuningPopover";
 import { HUB_NODE_ICON_URIS } from "../hubNodeIcons";
 import HubInspector from "../HubInspector";
-import type { InspectorContent } from "../HubInspector";
+import type { InspectorAction, InspectorContent, InspectorField } from "../HubInspector";
+import {
+  PERMISSION_MODE_LABELS,
+  currentPermissionModeLabel,
+  processStateLabel,
+} from "../runningSessionLabels";
 
 // 伝統色パレット(App.css の :root/tokens.css と同じ値。issue #84・#93)。
 const COLOR_PEARL = "#fbfbf8"; // 真珠
@@ -58,6 +72,44 @@ const INVISIBLE_NODE_CIRCLE = {
   fill: "transparent",
   stroke: { color: "none", width: 0 },
 };
+
+// 実行中セッション(issue #408)の状態を表すセッションノードの円の枠。
+// セッションノードは既定では枠を描かない(上の `INVISIBLE_NODE_CIRCLE`)ため、
+// app が起動しているセッションだけが枠を持ち、一目で見分けられる。色は
+// tokens.css の伝統色から採り、意味の決め方は Badge(部品)のトーン
+// (`runningSessionLabels` の `processStateTone`)に合わせる: いま動いて
+// いる・人の操作を待っている(起動中・実行中・権限待ち)は金茶、落ち着いて
+// いる(待機)は墨。権限待ちは人が答えるまで進まないので、枠を太くして
+// 目立たせる。終了したものは枠を描かない(未起動と同じ見え方へ戻す)。
+// 色だけに頼らないよう、状態の文言はインスペクタに必ず出す
+// (`buildSessionInspectorContent`)。
+const COLOR_KINCHA_500 = "#e58b25"; // 金茶(動いている)
+const COLOR_KINCHA_700 = "#a46114"; // 金茶の濃い方(権限待ち)
+const COLOR_SUMI_400 = "#a3a3a3"; // 墨(待機)
+const RUNNING_STROKE_WIDTH = 3;
+const AWAITING_PERMISSION_STROKE_WIDTH = 6;
+function sessionNodeCircleStyle(running: RunningSessionSummaryDto | null) {
+  switch (running?.process_state) {
+    case "starting":
+    case "running":
+      return {
+        fill: "transparent",
+        stroke: { color: COLOR_KINCHA_500, width: RUNNING_STROKE_WIDTH },
+      };
+    case "awaiting_permission":
+      return {
+        fill: "transparent",
+        stroke: { color: COLOR_KINCHA_700, width: AWAITING_PERMISSION_STROKE_WIDTH },
+      };
+    case "idle":
+      return {
+        fill: "transparent",
+        stroke: { color: COLOR_SUMI_400, width: RUNNING_STROKE_WIDTH },
+      };
+    default:
+      return INVISIBLE_NODE_CIRCLE;
+  }
+}
 
 // Pc/User/プロファイル/GitRepository/GitBranch ノードの配置(ハブ再構築
 // 第2〜4段。issue #224・#229・#283)。左から Pc 列・User 列・プロファイル列・
@@ -214,6 +266,21 @@ type HubNodeCore = {
   profileFolders?: string[];
   // このプロファイルを開いているウィンドウのラベル(無ければ未オープン)。
   windowLabel?: string;
+  // 実行中セッションの起動・ビューア表示(issue #408)に使う値。backend は
+  // cwd やパスを受け取らず、プロファイルと会話ファイルから解決する
+  // (native.md §4)ため、画面側は「どのプロファイルで、どのフォルダの、どの
+  // 会話か」だけを持つ。
+  //  - project: 会話ファイルの置かれているフォルダ名
+  //    (`~/.claude/projects/<project>/<session_id>.jsonl` の <project>)。
+  //  - ownerProfileId/Name: このセッションの cwd を含むリポジトリを対象に
+  //    しているプロファイル(見つからなければ未設定。起動できない)。
+  project?: string | null;
+  ownerProfileId?: string;
+  ownerProfileName?: string;
+  // リポジトリノードから新規セッションを作るときに使うプロファイル
+  // (このリポジトリを対象にしているもの。issue #408)。
+  repositoryProfileId?: string;
+  repositoryProfileName?: string;
 };
 
 // ハブに描くプロファイル1件分(issue #229)。`get_settings` のプロファイル
@@ -303,6 +370,36 @@ function gitBranchNodeId(branchId: string): string {
   return `git-branch:${branchId}`;
 }
 
+// 会話ファイルのパスから、それが置かれているフォルダ名(`project`)を取り出す
+// (issue #408)。`~/.claude/projects/<project>/<session_id>.jsonl` の <project>
+// で、再開(`start_running_session` の resume)とビューアのタブ(`ViewerTabDto`)
+// のキーに使う。同じ session_id の会話ファイルが複数ある(worktree 移動。
+// issue #217)ときは、並びが更新時刻の古い順なので最後の(最も新しい)ものを使う。
+function projectFolderOf(session: SessionDto): string | null {
+  const files = session.conversation_files;
+  const filePath = files.length > 0 ? files[files.length - 1].file_path : null;
+  if (!filePath) return null;
+  const segments = filePath.replace(/\\/g, "/").split("/");
+  return segments.length >= 2 ? segments[segments.length - 2] : null;
+}
+
+// リポジトリを対象にしているプロファイルを1つ選ぶ(issue #408)。実行中
+// セッションの起動は必ずプロファイルを起点にする(cwd は backend が
+// プロファイルから解決する。native.md §4)ため、リポジトリ・セッションの
+// ノードから起動するときもプロファイルを1つ決める必要がある。複数あるときは
+// 先頭(settings の並び順)を使う。
+function findProfileForRepository(
+  repositoryPath: string,
+  profiles: HubProfile[],
+): HubProfile | undefined {
+  return profiles.find(
+    (profile) =>
+      profile.repositoryPath !== null &&
+      normalizePathForComparison(profile.repositoryPath) ===
+        normalizePathForComparison(repositoryPath),
+  );
+}
+
 // `pc`(`get_pc`)と settings のプロファイルから、Pc/User ノード(ハブ再構築
 // 第4段。issue #283)、プロファイルノード(第3段。issue #229)、GitRepository/
 // GitBranch ノード(第2段。issue #224)、セッションノード(第1段。issue #214)を
@@ -316,6 +413,8 @@ function gitBranchNodeId(branchId: string): string {
 function buildGraphData(
   pc: PcDto | null,
   profiles: HubProfile[],
+  // session_id → app が起動している実行中セッション(issue #408)。
+  runningBySessionId: Map<string, RunningSessionSummaryDto>,
   savedPositions: Record<string, NodePositionDto>,
   currentPositions: Map<string, NodePositionDto>,
 ) {
@@ -379,6 +478,7 @@ function buildGraphData(
     if (repo.branches.length === 0) row += 1;
 
     const repositoryNodeId = `git-repository:${repo.repository_path}`;
+    const profileForRepository = findProfileForRepository(repo.repository_path, profiles);
     positionKeys.add(repositoryNodeId);
     const repositoryPosition = resolvePosition(
       repositoryNodeId,
@@ -409,6 +509,9 @@ function buildGraphData(
       repositoryDescription: repo.description,
       repositoryBranchCount: repo.branches.length,
       repositoryWorktreeCount: repo.worktrees.length,
+      // 新規セッション(issue #408)の起点にするプロファイル。
+      repositoryProfileId: profileForRepository?.id,
+      repositoryProfileName: profileForRepository?.name,
     });
 
     // GitRepository → GitBranch(所有。台帳どおり。issue #224)。
@@ -572,6 +675,17 @@ function buildGraphData(
     // 1..*)ようになったため、session_id は再び一意になり、本来のIDへ戻した。
     const sessionNodeId = `session:${session.session_id}`;
     const title = resolveSessionTitle(session);
+    // app が起動している実行中セッション(issue #408)。終了したものは
+    // 呼び出し側で除いてあるので、ここに来るのは動いているものだけ。
+    const running = runningBySessionId.get(session.session_id) ?? null;
+    // 起動(再開)に使うプロファイル(issue #408)。セッションの cwd を含む
+    // 登録済みリポジトリを対象にしているプロファイルを使う。
+    const owningRepository = session.cwd
+      ? findOwningRepository(session.cwd, repositories)
+      : undefined;
+    const owningProfile = owningRepository
+      ? findProfileForRepository(owningRepository.repository_path, profiles)
+      : undefined;
     // 既に描画中のノードは、シミュレーションで動いた現在位置から続ける
     // (issue #226)。d3.network は `.data()` のたびに同じIDのノードも新しい
     // データの x/y で置き換えるため、引き継がないと再読み込みやブランチの
@@ -591,7 +705,8 @@ function buildGraphData(
         font: { size: 12 },
         y: labelYBelowCircle(20),
       },
-      circle: { r: 20, ...INVISIBLE_NODE_CIRCLE },
+      // 実行中セッション(issue #408)だけ枠を描く。
+      circle: { r: 20, ...sessionNodeCircleStyle(running) },
       icon: { url: HUB_NODE_ICON_URIS.session },
       kind: "session",
       sessionId: session.session_id,
@@ -609,6 +724,10 @@ function buildGraphData(
       subagentFileCount: session.subagent_files.length,
       cwd: session.cwd,
       gitBranch: session.git_branch,
+      // 起動(再開)・ビューア表示(issue #408)に使う値。
+      project: projectFolderOf(session),
+      ownerProfileId: owningProfile?.id,
+      ownerProfileName: owningProfile?.name,
     });
 
     // セッション → GitBranch(issue #224。クラス図に無い導出関係。ログ行の
@@ -629,21 +748,77 @@ function buildGraphData(
   return { nodes, edges, positionKeys };
 }
 
+// インスペクタから行える操作(issue #229・#408)。実処理は呼び出し側
+// (`HubGraphPage`)が持ち、ここではボタン・入力欄に配るだけにする。
+// `startMode`/`startName` は起動(再開・新規)の入力で、ノードを選び直すと
+// 初期値へ戻す(`HubGraphPage` 側)。`busy` は backend への操作の最中で、
+// 二重に押させないためにボタンを無効にする。
+type InspectorHandlers = {
+  onOpenProfile: (core: HubNodeCore) => void;
+  onOpenInViewer: (core: HubNodeCore) => void;
+  onStartResume: (core: HubNodeCore) => void;
+  onStop: (target: RunningSessionRefDto) => void;
+  onStartNew: (core: HubNodeCore) => void;
+  startMode: RunningPermissionModeDto;
+  onStartModeChange: (mode: RunningPermissionModeDto) => void;
+  startName: string;
+  onStartNameChange: (name: string) => void;
+  busy: boolean;
+};
+
+// 起動(再開・新規)の入力欄(issue #408)。権限モードは画面で選べるモード
+// (`PERMISSION_MODE_LABELS`)から選び、表示名(claude の `--name`)は任意。
+// 値は呼び出し側が持ち、ここは表示だけ。
+function HubStartSessionForm({ handlers }: { handlers: InspectorHandlers }) {
+  return (
+    <>
+      <label className="hub-inspector-form-row">
+        <span>権限モード</span>
+        <select
+          value={handlers.startMode}
+          disabled={handlers.busy}
+          onChange={(e) =>
+            handlers.onStartModeChange(e.target.value as RunningPermissionModeDto)
+          }
+        >
+          {(Object.keys(PERMISSION_MODE_LABELS) as RunningPermissionModeDto[]).map((mode) => (
+            <option key={mode} value={mode}>
+              {PERMISSION_MODE_LABELS[mode]}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="hub-inspector-form-row">
+        <span>表示名</span>
+        <input
+          type="text"
+          value={handlers.startName}
+          disabled={handlers.busy}
+          placeholder="(任意)"
+          onChange={(e) => handlers.onStartNameChange(e.target.value)}
+        />
+      </label>
+    </>
+  );
+}
+
 // ノードの `_core`(issue #109)からインスペクタの表示内容を組み立てる。
-// 追加のbackend呼び出しはせず、グラフ構築時に `_core` へ埋め込んだ値のみを
-// 使う。アクションはプロファイルノードの「前面化/ウィンドウで開く」だけで
-// (issue #229)、他のノードは持たない(issue #214)。ノード種別(issue #224・
-// #229でセッション以外も追加)ごとに表示内容を分ける。
+// グラフ構築時に `_core` へ埋め込んだ値と、実行中セッションの一覧
+// (`running`。issue #408)だけを使い、ここから backend を呼ぶことはしない
+// (押されたときの処理は `handlers`)。ノード種別(issue #224・#229で
+// セッション以外も追加)ごとに表示内容を分ける。
 function buildInspectorContent(
   core: HubNodeCore,
-  onOpenProfile: (core: HubNodeCore) => void,
+  handlers: InspectorHandlers,
+  // セッションノードのとき、app が起動している実行中セッション(無ければ null)。
+  running: RunningSessionSummaryDto | null,
 ): InspectorContent {
   if (core.kind === "pc") return buildPcInspectorContent(core);
   if (core.kind === "user") return buildUserInspectorContent(core);
-  if (core.kind === "profile") return buildProfileInspectorContent(core, onOpenProfile);
-  if (core.kind === "git-repository") return buildRepositoryInspectorContent(core);
+  if (core.kind === "profile") return buildProfileInspectorContent(core, handlers);
+  if (core.kind === "git-repository") return buildRepositoryInspectorContent(core, handlers);
   if (core.kind === "git-branch") return buildBranchInspectorContent(core);
-  return buildSessionInspectorContent(core);
+  return buildSessionInspectorContent(core, handlers, running);
 }
 
 // Pc(issue #283)。`domain::Pc` のモデル属性(#182 当時の表示と同じ)。
@@ -674,9 +849,11 @@ function buildUserInspectorContent(core: HubNodeCore): InspectorContent {
 
 // プロファイル(issue #229)。settings の内容とウィンドウの開閉状態を表示し、
 // 左クリックと同じ操作(前面化/ウィンドウで開く)をボタンでも出す。
+// 新規セッション(issue #408)もここから作る(claude の cwd はプロファイルの
+// リポジトリになるため、リポジトリ未設定のプロファイルからは作れない)。
 function buildProfileInspectorContent(
   core: HubNodeCore,
-  onOpenProfile: (core: HubNodeCore) => void,
+  handlers: InspectorHandlers,
 ): InspectorContent {
   const project = core.profileGithubProject;
   return {
@@ -697,16 +874,80 @@ function buildProfileInspectorContent(
     ],
     action: {
       label: core.windowLabel ? "前面化" : "ウィンドウで開く",
-      onClick: () => onOpenProfile(core),
+      onClick: () => handlers.onOpenProfile(core),
     },
+    body: core.profileRepositoryPath ? <HubStartSessionForm handlers={handlers} /> : undefined,
+    actions: [
+      {
+        label: "新規セッション",
+        onClick: () => handlers.onStartNew(core),
+        disabled: handlers.busy || !core.profileRepositoryPath,
+      },
+    ],
   };
 }
 
-function buildSessionInspectorContent(core: HubNodeCore): InspectorContent {
+// セッション(issue #214)。モデル属性に加えて、app が起動している実行中
+// セッション(issue #408)の状態と、起動(再開)・停止・ビューア表示の操作を
+// 出す。状態は Query(`listRunningSessions`)で取り直した値だけを使い、操作の
+// 結果を先読みして書き換えることはしない。
+function buildSessionInspectorContent(
+  core: HubNodeCore,
+  handlers: InspectorHandlers,
+  running: RunningSessionSummaryDto | null,
+): InspectorContent {
   const conversationFiles = core.conversationFiles ?? [];
+  // 起動・ビューア表示は「プロファイル + フォルダ名 + session_id」で指定する
+  // (backend は cwd を受け取らない。native.md §4)。どれかが欠けていると
+  // 実行できないため、ボタンを押せなくする。
+  const canAddress = Boolean(core.project && core.sessionId && core.ownerProfileId);
+  // 実行中のときだけ出す項目(状態の詳細)。
+  const runningFields: InspectorField[] = running
+    ? [
+        { label: "現在のモデル", value: running.current_model ?? "(最初の応答まで不明)" },
+        {
+          label: "権限モード",
+          value: currentPermissionModeLabel(running.current_permission_mode),
+        },
+        { label: "答え待ち", value: `${running.pending_permission_count}件` },
+        { label: "リポジトリ", value: running.repository_path },
+        { label: "表示名", value: running.name ?? "(未設定)" },
+      ]
+    : [];
+  const actions: InspectorAction[] = [
+    {
+      label: "ビューアで開く",
+      onClick: () => handlers.onOpenInViewer(core),
+      disabled: handlers.busy || !canAddress,
+    },
+  ];
+  if (running) {
+    actions.push({
+      label: "停止",
+      onClick: () => handlers.onStop(running.target),
+      disabled: handlers.busy,
+    });
+  } else {
+    actions.push({
+      label: "起動(再開)",
+      onClick: () => handlers.onStartResume(core),
+      disabled: handlers.busy || !canAddress,
+    });
+  }
   return {
     title: truncate(core.sessionTitle ?? "セッション", SESSION_TITLE_MAX_CHARS),
     fields: [
+      // 実行中セッション(issue #408)。ノードの枠(色・太さ)だけに頼らず、
+      // 状態は必ず文字でも出す。
+      { label: "実行状態", value: processStateLabel(running?.process_state ?? null) },
+      ...runningFields,
+      {
+        label: "起動に使うプロファイル",
+        value:
+          core.ownerProfileName ??
+          "(このセッションのリポジトリを対象にしたプロファイルがありません)",
+      },
+      { label: "フォルダ(project)", value: core.project ?? "(不明)" },
       // モデル属性(`domain::Session`。issue #197)。
       { label: "セッションID", value: core.sessionId ?? "" },
       { label: "custom_title", value: core.customTitle ?? "(未設定)" },
@@ -740,13 +981,20 @@ function buildSessionInspectorContent(core: HubNodeCore): InspectorContent {
       { label: "cwd(表示補助)", value: core.cwd ?? "(未記録)" },
       { label: "git_branch(表示補助)", value: core.gitBranch ?? "(未記録)" },
     ],
+    // 起動していないときだけ、起動の入力欄を出す。
+    body: running ? undefined : <HubStartSessionForm handlers={handlers} />,
     action: null,
+    actions,
   };
 }
 
 // GitRepository(issue #224)。`domain::GitRepository`のモデル属性のみを表示
-// する(worktree一覧の詳細は次段のスコープ)。
-function buildRepositoryInspectorContent(core: HubNodeCore): InspectorContent {
+// する(worktree一覧の詳細は次段のスコープ)。新規セッション(issue #408)は
+// このリポジトリを対象にしているプロファイルを起点に作る(無ければ作れない)。
+function buildRepositoryInspectorContent(
+  core: HubNodeCore,
+  handlers: InspectorHandlers,
+): InspectorContent {
   return {
     title: truncate(core.repositoryName ?? "リポジトリ", SESSION_TITLE_MAX_CHARS),
     fields: [
@@ -754,8 +1002,22 @@ function buildRepositoryInspectorContent(core: HubNodeCore): InspectorContent {
       { label: "description", value: core.repositoryDescription || "(未設定)" },
       { label: "ブランチ数", value: String(core.repositoryBranchCount ?? 0) },
       { label: "worktree数", value: String(core.repositoryWorktreeCount ?? 0) },
+      {
+        label: "新規セッションのプロファイル",
+        value:
+          core.repositoryProfileName ??
+          "(このリポジトリを対象にしたプロファイルがありません)",
+      },
     ],
+    body: core.repositoryProfileId ? <HubStartSessionForm handlers={handlers} /> : undefined,
     action: null,
+    actions: [
+      {
+        label: "新規セッション",
+        onClick: () => handlers.onStartNew(core),
+        disabled: handlers.busy || !core.repositoryProfileId,
+      },
+    ],
   };
 }
 
@@ -846,6 +1108,38 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
     loadPc();
   }, [loadPc]);
 
+  // app が起動している実行中セッション(issue #407・#408)。状態の唯一の情報源は
+  // `list_running_sessions` の応答で、`running-session:changed`(状態が変わった・
+  // 権限の問い合わせが来た/決着した)が届くたびに取り直す。イベントの中身は
+  // 反映せず、必ず一覧を引き直す(楽観更新はしない)。
+  const [runningSessions, setRunningSessions] = useState<RunningSessionSummaryDto[]>([]);
+  const loadRunningSessions = useCallback((): Promise<void> => {
+    return listRunningSessions()
+      .then(setRunningSessions)
+      .catch((e) => setError(isAppError(e) ? e.message : String(e)));
+  }, []);
+
+  useEffect(() => {
+    loadRunningSessions();
+    const unlistenPromise = onRunningSessionChanged(() => {
+      loadRunningSessions();
+    });
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, [loadRunningSessions]);
+
+  // session_id → 実行中セッション。終了したもの(一覧には残る)は載せず、
+  // 未起動と同じ扱いにする。同じ会話の二重起動は backend が止める
+  // (`app::ensure_can_start`)ので、実行中のものは session_id で一意になる。
+  const runningBySessionId = useMemo(() => {
+    const map = new Map<string, RunningSessionSummaryDto>();
+    runningSessions.forEach((summary) => {
+      if (summary.process_state !== "exited") map.set(summary.session_id, summary);
+    });
+    return map;
+  }, [runningSessions]);
+
   // 起動後のバックグラウンド読み込み(Git台帳の観測・全プロジェクトの
   // jsonl走査。issue #212)が完了したら`pc`を取り直す(成否によらず発火
   // する。issue #218)。
@@ -866,6 +1160,9 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
         progressReloadTimer.current = window.setTimeout(() => {
           progressReloadTimer.current = null;
           loadPc();
+          // 新規に作った会話が一覧へ現れた直後に枠(実行中の印)が付くよう、
+          // 実行中セッションも一緒に取り直す(issue #408)。
+          loadRunningSessions();
         }, 300);
       }
     };
@@ -885,7 +1182,7 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
         progressReloadTimer.current = null;
       }
     };
-  }, [loadPc]);
+  }, [loadPc, loadRunningSessions]);
 
   // プロファイル(issue #229)。`get_settings` の一覧(id・名前)に、プロファイル
   // ごとの `get_settings(profileId)` の内容(対象リポジトリ等)と、
@@ -966,6 +1263,133 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
       openOrFocusProfile(core);
     },
     [openOrFocusProfile],
+  );
+
+  // インスペクタからの実行中セッションの操作(issue #408)。押した結果は
+  // Query(`listRunningSessions`)で取り直して反映する(先読みで状態を書き
+  // 換えない)。`busy` の間はボタンを押せなくして二重の起動・停止を防ぐ
+  // (backend も `ensure_can_start` で止めるが、応答を待っている間の見た目の
+  // ため)。起動の入力(権限モード・表示名)はインスペクタで選んだノードに
+  // 対する一時的な値で、ノードを選び直すと初期値へ戻す。
+  const [busy, setBusy] = useState(false);
+  const [startMode, setStartMode] = useState<RunningPermissionModeDto>("default");
+  const [startName, setStartName] = useState("");
+
+  const runInspectorAction = useCallback(
+    (action: () => Promise<unknown>) => {
+      setBusy(true);
+      action()
+        .then(() => setError(null))
+        .catch((e) => setError(isAppError(e) ? e.message : String(e)))
+        .finally(() => {
+          setBusy(false);
+          loadRunningSessions();
+        });
+    },
+    [loadRunningSessions],
+  );
+
+  // 既存の会話を再開する(`--resume`)。cwd は渡さず、プロファイルとフォルダ名
+  // ・session_id だけで指定する(native.md §4)。
+  const handleStartResume = useCallback(
+    (core: HubNodeCore) => {
+      const { project, sessionId, ownerProfileId } = core;
+      if (!project || !sessionId || !ownerProfileId) return;
+      runInspectorAction(() =>
+        startRunningSession(ownerProfileId, {
+          kind: "resume",
+          project,
+          session_id: sessionId,
+          mode: startMode,
+          name: startName.trim() || null,
+        }),
+      );
+    },
+    [runInspectorAction, startMode, startName],
+  );
+
+  // 新しい会話を作る。プロファイルノードは自身を、リポジトリノードはその
+  // リポジトリを対象にしているプロファイルを起点にする(cwd はそのプロファイル
+  // のリポジトリになる)。会話 ID は backend が決める。
+  const handleStartNew = useCallback(
+    (core: HubNodeCore) => {
+      const profileId = core.profileId ?? core.repositoryProfileId;
+      if (!profileId) return;
+      runInspectorAction(() =>
+        startRunningSession(profileId, {
+          kind: "new",
+          mode: startMode,
+          name: startName.trim() || null,
+        }),
+      );
+    },
+    [runInspectorAction, startMode, startName],
+  );
+
+  const handleStopRunningSession = useCallback(
+    (target: RunningSessionRefDto) => {
+      runInspectorAction(() => stopRunningSession(target));
+    },
+    [runInspectorAction],
+  );
+
+  // セッションをビューア(プロファイルのウィンドウ)で開く(issue #408)。
+  // ビューアが表示するのは「プロファイルごとのセッションタブの並び」
+  // (`save_viewer_tabs`。issue #353)なので、まだ無ければそこへ足してから
+  // ウィンドウを開く(既に開いていれば前面化する)。
+  // 制約(この画面だけでは解けないため、共有層を持つ 実装:APP(共通)へ相談する):
+  //  - `open_profile_window` はプロファイルしか受け取らず、開いたビューアで
+  //    そのセッションを選択させられない(選択はビューアの URL クエリ)。
+  //  - ビューアはタブの並びを起動時にしか読まないため、既に開いているウィンドウ
+  //    には足したタブがすぐには現れない(開き直すと現れる)。
+  const handleOpenInViewer = useCallback(
+    (core: HubNodeCore) => {
+      const { project, sessionId, ownerProfileId } = core;
+      if (!project || !sessionId || !ownerProfileId) return;
+      const profile = profiles.find((p) => p.id === ownerProfileId);
+      runInspectorAction(() =>
+        getViewerTabs(ownerProfileId)
+          .then((tabs) =>
+            tabs.some((tab) => tab.project === project && tab.session_id === sessionId)
+              ? undefined
+              : saveViewerTabs(ownerProfileId, [
+                  ...tabs,
+                  { project, session_id: sessionId },
+                ]),
+          )
+          .then(() =>
+            profile?.windowLabel
+              ? focusWindow(profile.windowLabel)
+              : openProfileWindow(ownerProfileId),
+          ),
+      );
+    },
+    [profiles, runInspectorAction],
+  );
+
+  const inspectorHandlers: InspectorHandlers = useMemo(
+    () => ({
+      onOpenProfile: openOrFocusProfile,
+      onOpenInViewer: handleOpenInViewer,
+      onStartResume: handleStartResume,
+      onStop: handleStopRunningSession,
+      onStartNew: handleStartNew,
+      startMode,
+      onStartModeChange: setStartMode,
+      startName,
+      onStartNameChange: setStartName,
+      busy,
+    }),
+    [
+      openOrFocusProfile,
+      handleOpenInViewer,
+      handleStartResume,
+      handleStopRunningSession,
+      handleStartNew,
+      startMode,
+      startName,
+      busy,
+    ],
   );
 
   // ノードのドラッグ固定位置(issue #121)。起動時に読み込んだ値(`HubPage` が
@@ -1087,7 +1511,9 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
   // するだけなので、後から selector が設定された時点で自動的に初回描画される。
   // `savedPositions` はGitRepository/GitBranchノードの位置(issue #224)に
   // 反映するため依存に含める。
-  const dataKey = JSON.stringify({ pc, profiles, savedPositions });
+  // 実行中セッションの状態(issue #408)はセッションノードの枠に出るため、
+  // 変わったら描き直す。
+  const dataKey = JSON.stringify({ pc, profiles, runningSessions, savedPositions });
   useEffect(() => {
     // NOTE: `@yanqirenshi/d3.network` の `Edges.js`(`draw()`)には、IDが
     // 一致した既存の辺要素(本来は「更新」として残すべきもの)まで無条件に
@@ -1109,6 +1535,7 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
     const { nodes, edges, positionKeys } = buildGraphData(
       pc,
       profiles,
+      runningBySessionId,
       savedPositions,
       currentPositions,
     );
@@ -1144,6 +1571,13 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
     container.addEventListener("contextmenu", handleContextMenu);
     return () => container.removeEventListener("contextmenu", handleContextMenu);
   }, []);
+
+  // 別のノードを選んだら、起動の入力(権限モード・表示名)を初期値へ戻す
+  // (前のノードで入れた表示名が残らないようにする。issue #408)。
+  useEffect(() => {
+    setStartMode("default");
+    setStartName("");
+  }, [inspectorCore]);
 
   // グラフの調整メニュー(issue #246・#249)。値は `hub-tuning.json` に保存し
   // (スライダー変更後に `HUB_TUNING_SAVE_DEBOUNCE_MS` でまとめて保存)、
@@ -1246,8 +1680,15 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [inspectorCore]);
 
+  // インスペクタが持つノードの値(`_core`)は右クリックした時点のもの。実行中
+  // セッションの状態はその後も変わるので、表示の直前に Query で取り直した一覧
+  // (`runningBySessionId`)から引き直す(issue #408)。
+  const inspectorRunning =
+    inspectorCore?.kind === "session" && inspectorCore.sessionId
+      ? (runningBySessionId.get(inspectorCore.sessionId) ?? null)
+      : null;
   const inspectorContent = inspectorCore
-    ? buildInspectorContent(inspectorCore, openOrFocusProfile)
+    ? buildInspectorContent(inspectorCore, inspectorHandlers, inspectorRunning)
     : null;
 
   // インスペクタの幅をマウスドラッグで変更できるようにする(初期444px・

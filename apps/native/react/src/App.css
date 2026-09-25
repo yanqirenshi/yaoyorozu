@@ -259,6 +259,47 @@ body,
   background: var(--state-hover);
 }
 
+/* 押せないアクション(起動に必要な値が揃っていない・backend への操作の最中。
+   issue #408)。 */
+.hub-inspector-action:disabled {
+  color: var(--text-disabled);
+  border-color: var(--border-default);
+  cursor: not-allowed;
+}
+
+.hub-inspector-action:disabled:hover {
+  background: none;
+}
+
+/* インスペクタの入力欄(実行中セッションの起動。issue #408)。項目一覧と
+   アクションボタンの間に置く。 */
+.hub-inspector-body {
+  flex-shrink: 0;
+  margin: 0 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hub-inspector-form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.hub-inspector-form-row select,
+.hub-inspector-form-row input {
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 0.9rem;
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--surface-raised);
+}
+
 /* 画面左の一覧ペイン(固定幅+縦スクロール)。ビューアのセッション一覧と
    設定のプロファイル一覧(issue #74)で骨格を共有する。ビューアのセッション一覧は
    #348 でヘッダのタブに移したが、#379 で左ペインの縦一覧へ戻した。 */
