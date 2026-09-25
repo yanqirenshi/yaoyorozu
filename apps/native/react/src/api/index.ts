@@ -17,18 +17,20 @@ import type {
   MessageImageDto,
   NodePositionDto,
   PcDto,
+  AddressedProgressDto,
   PermissionBehaviorDto,
   PermissionSuggestionDto,
   ProfileSummaryDto,
-  ProgressEventDto,
   ProjectDto,
   ProjectItemsPageDto,
   ProjectSettingsFileDto,
   RuleDto,
   RuleSummaryDto,
-  RunningPermissionModeDto,
   RunningSessionChangedEvent,
   RunningSessionDto,
+  RunningSessionRefDto,
+  RunningSessionSummaryDto,
+  RunningSessionSwitchDto,
   SessionChangedEvent,
   SessionSummaryDto,
   ViewerTabDto,
@@ -37,11 +39,13 @@ import type {
   SettingsInputDto,
   SkillDto,
   SkillSummaryDto,
+  StartRunningSessionDto,
   WindowStateDto,
   WindowTabDto,
 } from "./types";
 
 export type {
+  AddressedProgressDto,
   PermissionBehaviorDto,
   PermissionRequestDto,
   PermissionRequestKindDto,
@@ -51,6 +55,10 @@ export type {
   RunningPermissionModeDto,
   RunningSessionChangedEvent,
   RunningSessionDto,
+  RunningSessionRefDto,
+  RunningSessionSummaryDto,
+  RunningSessionSwitchDto,
+  StartRunningSessionDto,
   AgentKindDto,
   AppErrorDto,
   ClaudeDirEntryDto,
@@ -150,42 +158,62 @@ export function getSessionLineImages(
   return invoke<MessageImageDto[]>("get_session_line_images", { project, sessionId, uuid });
 }
 
-// ---- 実行中セッション(issue #391)。app が claude CLI を起動したまま持ち、対話する。 ----
-// cwd やパスは渡さない(backend が会話ファイルから解決する。native.md §4)。
+// ---- 実行中セッション(issue #391。#407 で複数・新規作成・モード切替・画面ごとの購読)。 ----
+// app が claude CLI を起動したまま持ち、対話する。cwd やパスは渡さない(backend が会話ファイル・
+// プロファイルから解決する。native.md §4)。対象は RunningSessionRefDto(started_at 込みの宛先)で指定する。
 
-// 会話 sessionId を子プロセスの claude として起動する(--resume)。Phase 1 は同時に1つ。
-// 途中経過は onProgress へ、順序どおりに届く(Channel)。
+// 実行中セッションを起動する。resume は既存の会話を --resume で、new は新しい会話を --session-id
+// (backend が UUID v4 を決める)で開く。同じ会話の二重起動と同時数の上限は session_busy。
+// 途中経過は起動後に subscribeRunningSessionProgress で購読する。
 export function startRunningSession(
   profileId: string | null,
-  project: string,
-  sessionId: string,
-  mode: RunningPermissionModeDto,
-  onProgress: (event: ProgressEventDto) => void,
+  request: StartRunningSessionDto,
 ): Promise<RunningSessionDto> {
-  const channel = new Channel<ProgressEventDto>();
-  channel.onmessage = onProgress;
-  return invoke<RunningSessionDto>("start_running_session", {
-    profileId,
-    project,
-    sessionId,
-    mode,
-    onProgress: channel,
-  });
+  return invoke<RunningSessionDto>("start_running_session", { profileId, request });
 }
 
-// 起動済みの実行中セッションの現在の状態(答え待ちの問い合わせを含む)。無ければ null。
-export function getRunningSession(): Promise<RunningSessionDto | null> {
-  return invoke<RunningSessionDto | null>("get_running_session");
+// app が起動している実行中セッションの一覧(終了済みで残っているものを含む。起動が古い順)。
+export function listRunningSessions(): Promise<RunningSessionSummaryDto[]> {
+  return invoke<RunningSessionSummaryDto[]>("list_running_sessions");
+}
+
+// 実行中セッション1つの現在の状態(答え待ちの問い合わせを含む)。無ければ null。
+export function getRunningSession(target: RunningSessionRefDto): Promise<RunningSessionDto | null> {
+  return invoke<RunningSessionDto | null>("get_running_session", { target });
+}
+
+// 実行中セッションの途中経過を、この画面へ流し始める(Channel。画面ごとに購読する)。返る関数で
+// 購読をやめる。再読み込み・別ウィンドウ・別の会話への切り替えでも、購読し直せば届く。購読が無い間の
+// 出来事は捨てられる(状態・答え待ちは getRunningSession で取れる)。
+export async function subscribeRunningSessionProgress(
+  target: RunningSessionRefDto,
+  onProgress: (progress: AddressedProgressDto) => void,
+): Promise<() => void> {
+  const channel = new Channel<AddressedProgressDto>();
+  channel.onmessage = onProgress;
+  const subscriptionId = await invoke<number>("subscribe_running_session_progress", {
+    target,
+    onProgress: channel,
+  });
+  return () => {
+    // 画面を閉じる途中で失敗しても、backend は送れなくなった購読を自分で外す。
+    void invoke<void>("unsubscribe_running_session_progress", { subscriptionId }).catch(() => {});
+  };
 }
 
 // 実行中セッションへ user メッセージ(本文と画像 base64)を送る。
-export function sendToRunningSession(text: string, images: string[]): Promise<void> {
-  return invoke<void>("send_to_running_session", { text, images });
+export function sendToRunningSession(
+  target: RunningSessionRefDto,
+  text: string,
+  images: string[],
+): Promise<void> {
+  return invoke<void>("send_to_running_session", { target, text, images });
 }
 
 // 権限の問い合わせに答える。allow は updatedInput(書き換えた入力。省略で問い合わせの
 // 入力のまま)と updatedPermissions(「今後も許可」にする提案)を、deny は message を添えられる。
 export function respondPermission(
+  target: RunningSessionRefDto,
   requestId: string,
   behavior: PermissionBehaviorDto,
   options: {
@@ -195,6 +223,7 @@ export function respondPermission(
   } = {},
 ): Promise<void> {
   return invoke<void>("respond_permission", {
+    target,
     requestId,
     behavior,
     updatedInput: options.updatedInput ?? null,
@@ -204,13 +233,22 @@ export function respondPermission(
 }
 
 // 生成中(権限待ちを含む)の中断。プロセスは生きたまま、次の入力を送れる。
-export function interruptRunningSession(): Promise<void> {
-  return invoke<void>("interrupt_running_session");
+export function interruptRunningSession(target: RunningSessionRefDto): Promise<void> {
+  return invoke<void>("interrupt_running_session", { target });
+}
+
+// 起動中に、モデル・権限モードを切り替える。結果(現在のモデル・権限モード)は CLI が受け入れたとき
+// に反映され、running-session:changed で知らせる(要求しただけでは変わらない)。
+export function switchRunningSession(
+  target: RunningSessionRefDto,
+  switchTo: RunningSessionSwitchDto,
+): Promise<void> {
+  return invoke<void>("switch_running_session", { target, switch: switchTo });
 }
 
 // 実行中セッションを止める(標準入力を閉じて終了を待つ。約1秒)。
-export function stopRunningSession(): Promise<void> {
-  return invoke<void>("stop_running_session");
+export function stopRunningSession(target: RunningSessionRefDto): Promise<void> {
+  return invoke<void>("stop_running_session", { target });
 }
 
 // 状態変化・権限の問い合わせの到着/決着の通知(軽量)。詳細は getRunningSession で取り直す。

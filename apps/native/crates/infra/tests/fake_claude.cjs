@@ -7,9 +7,12 @@
 //   PLAN  → ExitPlanMode(計画の承認)の問い合わせを出す
 //   SLOW  → 100ms ごとに text_delta を出し続け、interrupt で止まる
 //   HANG  → 標準入力を閉じても終了しない(kill されるまで生きている)
+//   ARGS  → 起動引数(argv)を text_delta で返す(--session-id / --name / --permission-mode の確認用)
 //   DIE   → 標準エラーに 1 行出して exit 3(--resume の ID が無いときの実出力に合わせた文言)
 //   それ以外 → text_delta を1つ出して result(success)
 // 標準入力が閉じたら exit 0(HANG のあとを除く)。
+// 制御メッセージ: initialize / interrupt / set_model / set_permission_mode(成功を返す。以降の
+// system/init の model / permissionMode に反映する。issue #407)。
 const readline = require("readline");
 const fs = require("fs");
 
@@ -26,6 +29,20 @@ const append = (obj) => {
 };
 let lastEcho = null;
 
+// 起動引数(--resume=<ID> / --session-id=<UUID> / --name=<名前> / --permission-mode <モード>)。
+const ARGV = process.argv.slice(2);
+const argValue = (name) => {
+  const eq = ARGV.find((a) => a.startsWith(name + "="));
+  if (eq) return eq.slice(name.length + 1);
+  const i = ARGV.indexOf(name);
+  return i >= 0 ? ARGV[i + 1] : undefined;
+};
+const SESSION_ID = argValue("--session-id") || argValue("--resume") || "fake-session";
+let model = "fake";
+let permissionMode = argValue("--permission-mode") || "default";
+// 実物はエイリアス(haiku など)を解決済みのモデル名にして system/init で返す。
+const MODEL_ALIASES = { haiku: "claude-haiku-4-5-20251001", opus: "claude-opus-4-7" };
+
 let uuidCounter = 0;
 const out = (obj) => process.stdout.write(JSON.stringify(obj) + "\n");
 const textOf = (message) =>
@@ -39,7 +56,7 @@ let slowTimer = null;
 let hang = false;
 
 const init = () =>
-  out({ type: "system", subtype: "init", session_id: "fake-session", model: "fake", permissionMode: "default" });
+  out({ type: "system", subtype: "init", session_id: SESSION_ID, model, permissionMode });
 const delta = (text) =>
   out({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } }, parent_tool_use_id: null });
 const result = (isError, subtype = "success") => {
@@ -108,6 +125,9 @@ rl.on("line", (line) => {
           permission_suggestions: [{ destination: "session", mode: "acceptEdits", type: "setMode" }],
         },
       });
+    } else if (text.includes("ARGS")) {
+      delta(`args: ${JSON.stringify(ARGV)}`);
+      result(false);
     } else if (text.includes("SLOW")) {
       let n = 0;
       slowTimer = setInterval(() => delta(String(++n)), 100);
@@ -138,6 +158,18 @@ rl.on("line", (line) => {
   if (msg.type === "control_request" && msg.request && msg.request.subtype === "initialize") {
     // 実物の応答にはアカウント情報(メールアドレスを含む)が入る。app は中身を読まない。
     out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: { account: { email: "secret@example.com" }, models: [], commands: [], pid: process.pid } } });
+    return;
+  }
+
+  if (msg.type === "control_request" && msg.request && msg.request.subtype === "set_model") {
+    model = MODEL_ALIASES[msg.request.model] || msg.request.model;
+    out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id } });
+    return;
+  }
+
+  if (msg.type === "control_request" && msg.request && msg.request.subtype === "set_permission_mode") {
+    permissionMode = msg.request.mode;
+    out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: { mode: msg.request.mode } } });
     return;
   }
 

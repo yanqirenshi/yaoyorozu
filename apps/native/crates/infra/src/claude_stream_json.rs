@@ -6,17 +6,21 @@
 //! 280 で実際に増えていた)。未知の `type` / `subtype` は捨て、必須の項目が欠けた行も
 //! 捨てる(1行のせいで対話を止めない)。
 
-use app::{RunningPermissionMode, RunningSessionEvent, StartRunningSession};
+use app::{RunningPermissionMode, RunningSessionEvent, RunningSessionSwitch, StartRunningSession};
 use domain::{
     ImageAttachment, PermissionBehavior, PermissionRequest, PermissionResponse,
     PermissionSuggestion, ProgressEvent,
 };
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 /// 子プロセスの起動引数(PoC #382 レポート §0.3)。`--print` は付けない(付けると対話が
 /// 1回で終わる)。`--verbose` は必須(無いと exit 1。#345)。
-/// `--permission-mode` は Phase 1 では `plan` と `default` だけを渡す。
+/// 再開は `--resume=<ID>`、新規は `--session-id=<UUID>`(app が決めた ID。issue #407)。
+/// 表示名は `--name=<名前>`(任意。先頭が `-` でもオプションと取り違えないよう `=` で1引数に
+/// する)。`--permission-mode` には起動時に選んだモードを渡す。
 pub(crate) fn build_args(request: &StartRunningSession) -> Vec<String> {
     let mut args: Vec<String> = [
         "--output-format",
@@ -32,9 +36,19 @@ pub(crate) fn build_args(request: &StartRunningSession) -> Vec<String> {
     .iter()
     .map(|s| s.to_string())
     .collect();
-    args.push(format!("--resume={}", request.session_id));
+    match request {
+        StartRunningSession::Resume { session_id, .. } => {
+            args.push(format!("--resume={session_id}"))
+        }
+        StartRunningSession::New { session_id, .. } => {
+            args.push(format!("--session-id={session_id}"))
+        }
+    }
+    if let Some(name) = request.name() {
+        args.push(format!("--name={name}"));
+    }
     args.push("--permission-mode".to_string());
-    args.push(mode_value(request.mode).to_string());
+    args.push(mode_value(request.mode()).to_string());
     args
 }
 
@@ -101,6 +115,57 @@ pub(crate) fn build_interrupt_line(request_id: &str) -> String {
     )
 }
 
+/// モデルの切り替え(`control_request` の `set_model`。PoC #382 レポート §6.2)。
+pub(crate) fn build_set_model_line(request_id: &str, model: &str) -> String {
+    format!(
+        "{}\n",
+        json!({
+            "type": "control_request",
+            "request_id": request_id,
+            "request": { "subtype": "set_model", "model": model },
+        })
+    )
+}
+
+/// 権限モードの切り替え(`control_request` の `set_permission_mode`。レポート §6.2)。
+pub(crate) fn build_set_permission_mode_line(request_id: &str, mode: &str) -> String {
+    format!(
+        "{}\n",
+        json!({
+            "type": "control_request",
+            "request_id": request_id,
+            "request": { "subtype": "set_permission_mode", "mode": mode },
+        })
+    )
+}
+
+/// 送った切り替えの要求(`request_id` → 内容)。CLI の `control_response` は要求 ID しか
+/// 持たないので、受け入れられたときに何を切り替えたかを引く。要求 ID は infra が付ける
+/// (app の型には無い)。書き込みスレッドと読み取りスレッドで共有する。
+#[derive(Default)]
+pub(crate) struct PendingSwitches(Mutex<HashMap<String, RunningSessionSwitch>>);
+
+impl PendingSwitches {
+    pub(crate) fn register(&self, request_id: &str, switch: RunningSessionSwitch) {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(request_id.to_string(), switch);
+    }
+
+    fn take(&self, request_id: &str) -> Option<RunningSessionSwitch> {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(request_id)
+    }
+
+    /// 要求を取り消す(書き込みに失敗したとき)。
+    pub(crate) fn forget(&self, request_id: &str) {
+        self.take(request_id);
+    }
+}
+
 /// 権限の応答(`control_response`)。`Cancelled` は CLI が問い合わせを取り下げた
 /// 決着で、返す応答が無い(`None`)。
 pub(crate) fn build_permission_response_line(response: &PermissionResponse) -> Option<String> {
@@ -134,13 +199,30 @@ pub(crate) fn build_permission_response_line(response: &PermissionResponse) -> O
 }
 
 /// 標準出力の1行を、domain の出来事に写す(1行から 0 件以上)。
-pub(crate) fn map_wire_line(line: &str, now_ms: u64) -> Vec<RunningSessionEvent> {
+///
+/// `system/init` は起動の合図(`Initialized`)に加えて、CLI が報告する現在の設定
+/// (`model` / `permissionMode`)を `Configured` として流す(ターンごとに届く)。
+/// `pending` は送った切り替えの要求で、その `control_response` が成功なら `SwitchApplied` に写す。
+pub(crate) fn map_wire_line(
+    line: &str,
+    now_ms: u64,
+    pending: &PendingSwitches,
+) -> Vec<RunningSessionEvent> {
     let Ok(value) = serde_json::from_str::<Value>(line) else {
         return Vec::new();
     };
     match value.get("type").and_then(Value::as_str) {
         Some("system") => match value.get("subtype").and_then(Value::as_str) {
-            Some("init") => vec![RunningSessionEvent::Initialized],
+            Some("init") => {
+                let text = |key: &str| value.get(key).and_then(Value::as_str).map(str::to_string);
+                vec![
+                    RunningSessionEvent::Initialized,
+                    RunningSessionEvent::Configured {
+                        model: text("model"),
+                        permission_mode: text("permissionMode"),
+                    },
+                ]
+            }
             _ => Vec::new(),
         },
         Some("stream_event") => map_stream_event(&value).into_iter().collect(),
@@ -153,9 +235,24 @@ pub(crate) fn map_wire_line(line: &str, now_ms: u64) -> Vec<RunningSessionEvent>
         }
         Some("control_request") => map_control_request(&value, now_ms).into_iter().collect(),
         // `initialize` の応答は、起動できたことの合図としてだけ使う(中身は読まない)。
+        // 切り替えの応答は、成功なら `SwitchApplied`(失敗は捨てる。現在値は変わらない)。
         // ほかの `control_response`(中断の応答・許可応答のエコー)は捨てる。
         Some("control_response") => {
             let response = value.get("response");
+            let request_id = response
+                .and_then(|r| r.get("request_id"))
+                .and_then(Value::as_str);
+            if let Some(switch) = request_id.and_then(|id| pending.take(id)) {
+                let succeeded = response
+                    .and_then(|r| r.get("subtype"))
+                    .and_then(Value::as_str)
+                    == Some("success");
+                return if succeeded {
+                    vec![RunningSessionEvent::SwitchApplied(switch)]
+                } else {
+                    Vec::new()
+                };
+            }
             let is_initialize_reply = response
                 .and_then(|r| r.get("request_id"))
                 .and_then(Value::as_str)
@@ -298,6 +395,11 @@ mod tests {
         RunningSessionEvent::Progress(event)
     }
 
+    /// 切り替えの要求が無い状態で読む(読み取りの検証の大半はこれで足りる)。
+    fn map_wire_line(line: &str, now_ms: u64) -> Vec<RunningSessionEvent> {
+        super::map_wire_line(line, now_ms, &PendingSwitches::default())
+    }
+
     fn only(line: &str) -> RunningSessionEvent {
         let mut events = map_wire_line(line, 7);
         assert_eq!(events.len(), 1, "{line}");
@@ -397,11 +499,35 @@ mod tests {
     }
 
     #[test]
-    fn maps_system_init_to_initialized_and_drops_other_system_lines() {
+    fn maps_system_init_to_initialized_and_the_reported_configuration() {
         assert_eq!(
-            only(r#"{"type":"system","subtype":"init","session_id":"s","model":"m"}"#),
-            RunningSessionEvent::Initialized
+            map_wire_line(
+                r#"{"type":"system","subtype":"init","session_id":"s","model":"claude-opus-4-7","permissionMode":"default","cwd":"C:\\w"}"#,
+                1
+            ),
+            [
+                RunningSessionEvent::Initialized,
+                RunningSessionEvent::Configured {
+                    model: Some("claude-opus-4-7".to_string()),
+                    permission_mode: Some("default".to_string()),
+                }
+            ]
         );
+        // 項目が欠けた init でも、起動の合図は届く(設定は None)。
+        assert_eq!(
+            map_wire_line(r#"{"type":"system","subtype":"init"}"#, 1),
+            [
+                RunningSessionEvent::Initialized,
+                RunningSessionEvent::Configured {
+                    model: None,
+                    permission_mode: None,
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn drops_other_system_lines() {
         for line in [
             r#"{"type":"system","subtype":"status","status":"requesting"}"#,
             r#"{"type":"system","subtype":"commands_changed"}"#,
@@ -656,12 +782,73 @@ mod tests {
     }
 
     #[test]
-    fn args_follow_the_report_and_never_include_print() {
-        let args = build_args(&StartRunningSession {
+    fn set_model_and_set_permission_mode_lines_match_the_wire_shape_in_the_report() {
+        assert_eq!(
+            serde_json::from_str::<Value>(build_set_model_line("m-1", "haiku").trim_end()).unwrap(),
+            json!({"type":"control_request","request_id":"m-1","request":{"subtype":"set_model","model":"haiku"}})
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(
+                build_set_permission_mode_line("p-1", "acceptEdits").trim_end()
+            )
+            .unwrap(),
+            json!({"type":"control_request","request_id":"p-1","request":{"subtype":"set_permission_mode","mode":"acceptEdits"}})
+        );
+    }
+
+    #[test]
+    fn a_successful_switch_response_becomes_switch_applied_once() {
+        let pending = PendingSwitches::default();
+        pending.register("m-1", RunningSessionSwitch::Model("haiku".to_string()));
+        pending.register(
+            "p-1",
+            RunningSessionSwitch::PermissionMode(RunningPermissionMode::Plan),
+        );
+        let ok_model =
+            r#"{"type":"control_response","response":{"subtype":"success","request_id":"m-1"}}"#;
+        let ok_mode = r#"{"type":"control_response","response":{"subtype":"success","request_id":"p-1","response":{"mode":"plan"}}}"#;
+
+        assert_eq!(
+            super::map_wire_line(ok_model, 1, &pending),
+            [RunningSessionEvent::SwitchApplied(
+                RunningSessionSwitch::Model("haiku".to_string())
+            )]
+        );
+        assert_eq!(
+            super::map_wire_line(ok_mode, 1, &pending),
+            [RunningSessionEvent::SwitchApplied(
+                RunningSessionSwitch::PermissionMode(RunningPermissionMode::Plan)
+            )]
+        );
+        // 同じ応答が2度届いても、2度は反映しない。
+        assert!(super::map_wire_line(ok_model, 1, &pending).is_empty());
+    }
+
+    #[test]
+    fn a_failed_switch_response_and_an_unknown_request_id_change_nothing() {
+        let pending = PendingSwitches::default();
+        pending.register("m-1", RunningSessionSwitch::Model("nope".to_string()));
+        let failed = r#"{"type":"control_response","response":{"subtype":"error","request_id":"m-1","error":"unknown model"}}"#;
+        let unknown =
+            r#"{"type":"control_response","response":{"subtype":"success","request_id":"other"}}"#;
+
+        assert!(super::map_wire_line(failed, 1, &pending).is_empty());
+        assert!(super::map_wire_line(unknown, 1, &pending).is_empty());
+    }
+
+    fn resume_request(name: Option<&str>, mode: RunningPermissionMode) -> StartRunningSession {
+        StartRunningSession::Resume {
             session_id: "abc-123".to_string(),
             cwd: PathBuf::from("/w"),
-            mode: RunningPermissionMode::Plan,
-        });
+            mode,
+            repository_path: PathBuf::from("/r"),
+            name: name.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn args_follow_the_report_and_never_include_print() {
+        let args = build_args(&resume_request(None, RunningPermissionMode::Plan));
 
         assert_eq!(
             args,
@@ -681,11 +868,40 @@ mod tests {
             ]
         );
         assert!(!args.iter().any(|a| a == "--print"));
-        let default_args = build_args(&StartRunningSession {
-            session_id: "x".to_string(),
-            cwd: PathBuf::from("/w"),
-            mode: RunningPermissionMode::Default,
-        });
+        let default_args = build_args(&resume_request(None, RunningPermissionMode::Default));
         assert_eq!(default_args.last().map(String::as_str), Some("default"));
+    }
+
+    #[test]
+    fn a_new_conversation_passes_session_id_instead_of_resume() {
+        let args = build_args(&StartRunningSession::New {
+            session_id: "3a392392-0000-4000-8000-000000000001".to_string(),
+            cwd: PathBuf::from("/r"),
+            mode: RunningPermissionMode::AcceptEdits,
+            repository_path: PathBuf::from("/r"),
+            name: None,
+        });
+
+        assert!(args.contains(&"--session-id=3a392392-0000-4000-8000-000000000001".to_string()));
+        assert!(!args.iter().any(|a| a.starts_with("--resume")));
+        assert!(!args.iter().any(|a| a.starts_with("--name")));
+        assert_eq!(
+            &args[args.len() - 2..],
+            ["--permission-mode", "acceptEdits"]
+        );
+    }
+
+    #[test]
+    fn the_name_is_one_equals_joined_argument_so_a_leading_dash_is_not_an_option() {
+        let resumed = build_args(&resume_request(Some("調査 A"), RunningPermissionMode::Auto));
+        let dashed = build_args(&resume_request(
+            Some("--dangerous"),
+            RunningPermissionMode::Auto,
+        ));
+
+        assert!(resumed.contains(&"--name=調査 A".to_string()));
+        assert!(dashed.contains(&"--name=--dangerous".to_string()));
+        assert!(!dashed.iter().any(|a| a == "--dangerous"));
+        assert_eq!(resumed.last().map(String::as_str), Some("auto"));
     }
 }

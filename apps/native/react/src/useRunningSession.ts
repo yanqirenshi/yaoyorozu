@@ -1,27 +1,37 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+
 import {
   getRunningSession,
   interruptRunningSession,
   isAppError,
+  listRunningSessions,
   onRunningSessionChanged,
   respondPermission,
   sendToRunningSession,
   startRunningSession,
   stopRunningSession,
+  subscribeRunningSessionProgress,
+  switchRunningSession,
 } from "./api";
 import type {
   PermissionSuggestionDto,
   ProgressEventDto,
   RunningPermissionModeDto,
   RunningSessionDto,
+  RunningSessionRefDto,
+  RunningSessionSwitchDto,
 } from "./api/types";
 
 // ビューアの会話ビューから、app が起動したまま持つ claude CLI と対話するための状態
-// (issue #392。Phase 1)。業務状態は Rust 側(`RunningSessionByApp`)にあり、ここには
-// 「サーバから取得した表示用のスナップショット」(`running`。イベント → Query で取り直す。
-// 楽観更新しない)と、返答中の画面表示(作成中の吹き出し・ツール・送信中の行)だけを持つ。
-// 途中経過(Channel)は表示の材料で、確定した内容は会話ファイルの行(ファイル監視で届く。#314)が
-// 正になる。
+// (issue #392。Phase 1。#407 で複数の実行中セッション・画面ごとの購読に対応)。業務状態は
+// Rust 側(`RunningSessionByApp`)にあり、ここには「サーバから取得した表示用のスナップショット」
+// (`running`。表示中の会話の実行中セッション。イベント → Query で取り直す。楽観更新しない)と、
+// 返答中の画面表示(作成中の吹き出し・ツール・送信中の行)だけを持つ。途中経過(Channel)は表示の
+// 材料で、確定した内容は会話ファイルの行(ファイル監視で届く。#314)が正になる。
+//
+// 実行中セッションは複数あり、宛先は `RunningSessionRefDto`(pid_domain + pid + started_at)。
+// 途中経過は**画面ごとに購読する**(`subscribeRunningSessionProgress`)ので、画面の再読み込み・
+// 別の画面でも、実行中のセッションを見つけたら購読し直して途中経過が届く。
 
 /** 作成中の AI の吹き出しの1区間(テキストブロック1つ分)。ツールの開始で区切られる。 */
 export type LiveSegment = { id: number; text: string };
@@ -56,6 +66,8 @@ function messageOf(e: unknown): string {
 }
 
 type Options = {
+  /** 表示中の会話の ID(その会話の実行中セッションを扱う。無ければ `null`)。 */
+  sessionId: string | null;
   /**
    * ターンが終わった(`TurnFinished`)・プロセスが終了した。確定した行を取り直す(差分反映。
    * #314)。`target` はそのときの実行中セッション(会話の特定に使う。無ければ `null`)。
@@ -67,7 +79,29 @@ type Options = {
   getMessageUuids: () => string[];
 };
 
-export function useRunningSession({ onTurnFinished, onError, getMessageUuids }: Options) {
+/** 宛先を文字列にする(購読の張り替えの判定に使う)。 */
+function refKey(target: RunningSessionRefDto): string {
+  return `${target.pid_domain}|${target.pid}|${target.started_at}`;
+}
+
+/** 表示中の会話の実行中セッションを選ぶ: 終了していないもの(あれば)、なければ最後に起動したもの。 */
+function pickForSession(
+  list: { target: RunningSessionRefDto; session_id: string; process_state: string }[],
+  sessionId: string,
+): RunningSessionRefDto | null {
+  const mine = list.filter((s) => s.session_id === sessionId);
+  const alive = mine.filter((s) => s.process_state !== "exited");
+  const pool = alive.length > 0 ? alive : mine;
+  if (pool.length === 0) return null;
+  return pool.reduce((a, b) => (b.target.started_at >= a.target.started_at ? b : a)).target;
+}
+
+export function useRunningSession({
+  sessionId,
+  onTurnFinished,
+  onError,
+  getMessageUuids,
+}: Options) {
   const [running, setRunning] = useState<RunningSessionDto | null>(null);
   const runningRef = useRef<RunningSessionDto | null>(null);
   const [live, setLive] = useState<LiveTurn>(EMPTY_TURN);
@@ -78,6 +112,12 @@ export function useRunningSession({ onTurnFinished, onError, getMessageUuids }: 
   // 「終了」ボタンで自分から止めたか(意図した終了はエラーとして出さない)。
   const stoppedByUserRef = useRef(false);
   const [busy, setBusy] = useState(false);
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
+  // いま途中経過を購読している宛先。
+  const subscriptionRef = useRef<{ key: string; unsubscribe: () => void } | null>(null);
+  // 購読の張り替えを直列にする(同じ宛先の二重購読を避ける)。
+  const subscribingRef = useRef<Promise<void>>(Promise.resolve());
 
   const callbacks = useRef({ onTurnFinished, onError, getMessageUuids });
   useEffect(() => {
@@ -99,53 +139,7 @@ export function useRunningSession({ onTurnFinished, onError, getMessageUuids }: 
     updateLive(() => EMPTY_TURN);
   }, [updateLive]);
 
-  const refresh = useCallback(async (): Promise<RunningSessionDto | null> => {
-    try {
-      const next = await getRunningSession();
-      applyRunning(next);
-      return next;
-    } catch (e) {
-      callbacks.current.onError(messageOf(e));
-      return runningRef.current;
-    }
-  }, [applyRunning]);
-
-  // 起動時の状態(別のウィンドウで起動済みのものを含む)と、状態変化の通知(軽量。
-  // 中身は Query で取り直す)。
-  useEffect(() => {
-    void refresh();
-    const unlistenPromise = onRunningSessionChanged((event) => {
-      const before = runningRef.current?.process_state;
-      void refresh().then((next) => {
-        // 返答中(実行中・権限待ち)から待機に戻ったら、ターンは終わっている。途中経過の通知
-        // (Channel)は起動した画面にしか届かないため、画面の再読み込みなどで受け損ねても
-        // 表示が残らないよう、状態の変化でも片付ける(通常は `turn_finished` が先に片付ける)。
-        if (
-          (before === "running" || before === "awaiting_permission") &&
-          next?.process_state === "idle" &&
-          liveRef.current !== EMPTY_TURN
-        ) {
-          Promise.resolve(callbacks.current.onTurnFinished(next)).finally(resetLive);
-        }
-      });
-      if (event.process_state === "exited" && event.exit_code !== null) {
-        const byUser = stoppedByUserRef.current;
-        stoppedByUserRef.current = false;
-        if (!byUser && event.exit_code !== 0) {
-          callbacks.current.onError(
-            `実行中のセッション(claude)が終了しました(終了コード ${event.exit_code})`,
-          );
-        }
-        // 終了したら、返答の途中の表示は残さない(確定した行は会話ファイルにある)。
-        Promise.resolve(callbacks.current.onTurnFinished(runningRef.current)).finally(resetLive);
-      }
-    });
-    return () => {
-      void unlistenPromise.then((unlisten) => unlisten());
-    };
-  }, [refresh, resetLive]);
-
-  // Channel で届く途中経過。表示の材料にするだけで、状態は持たない。
+  // Channel で届く途中経過(宛先付き)。表示の材料にするだけで、状態は持たない。
   const handleProgress = useCallback(
     (event: ProgressEventDto) => {
       switch (event.kind) {
@@ -203,6 +197,107 @@ export function useRunningSession({ onTurnFinished, onError, getMessageUuids }: 
     [updateLive, resetLive],
   );
 
+  /** 途中経過の購読を `target` に合わせる(`null` なら購読をやめる)。 */
+  const ensureSubscribed = useCallback(
+    (target: RunningSessionRefDto | null): Promise<void> => {
+      const run = async () => {
+        const key = target ? refKey(target) : null;
+        const current = subscriptionRef.current;
+        if (current && current.key === key) return;
+        if (current) {
+          current.unsubscribe();
+          subscriptionRef.current = null;
+        }
+        if (!target || !key) return;
+        try {
+          const unsubscribe = await subscribeRunningSessionProgress(target, (progress) => {
+            // 購読の宛先の出来事だけを扱う(張り替えの途中で遅れて届いたものは捨てる)。
+            if (subscriptionRef.current?.key === refKey(progress.target)) {
+              handleProgress(progress.event);
+            }
+          });
+          subscriptionRef.current = { key, unsubscribe };
+        } catch {
+          // 購読できなくても、状態(Query)と確定した行は取れるので、表示は劣化するだけ。
+        }
+      };
+      subscribingRef.current = subscribingRef.current.then(run, run);
+      return subscribingRef.current;
+    },
+    [handleProgress],
+  );
+
+  /** 表示中の会話の実行中セッションを取り直す(無ければ `null`)。 */
+  const refresh = useCallback(async (): Promise<RunningSessionDto | null> => {
+    const id = sessionIdRef.current;
+    try {
+      const target = id ? pickForSession(await listRunningSessions(), id) : null;
+      const next = target ? await getRunningSession(target) : null;
+      // 取得の間に会話が切り替わっていたら、古い結果は使わない。
+      if (sessionIdRef.current !== id) return runningRef.current;
+      applyRunning(next);
+      return next;
+    } catch (e) {
+      callbacks.current.onError(messageOf(e));
+      return runningRef.current;
+    }
+  }, [applyRunning]);
+
+  // 表示中の会話が変わったら、その会話の実行中セッションを探し直す(返答中の表示は会話ごと)。
+  useEffect(() => {
+    resetLive();
+    applyRunning(null);
+    void refresh();
+  }, [sessionId, refresh, resetLive, applyRunning]);
+
+  // 生きている実行中セッションが見つかったら、途中経過を購読する(再読み込み・別の画面でも
+  // 購読し直せる)。終了・なしなら購読をやめる。
+  const aliveKey =
+    running && running.process_state !== "exited" ? refKey(running.target) : null;
+  useEffect(() => {
+    void ensureSubscribed(runningRef.current && aliveKey ? runningRef.current.target : null);
+  }, [aliveKey, ensureSubscribed]);
+  useEffect(
+    () => () => {
+      void ensureSubscribed(null);
+    },
+    [ensureSubscribed],
+  );
+
+  // 状態変化の通知(軽量。中身は Query で取り直す)。表示中の会話のものだけ扱う。
+  useEffect(() => {
+    const unlistenPromise = onRunningSessionChanged((event) => {
+      if (event.session_id !== sessionIdRef.current) return;
+      const before = runningRef.current?.process_state;
+      void refresh().then((next) => {
+        // 返答中(実行中・権限待ち)から待機に戻ったら、ターンは終わっている。途中経過の通知
+        // (Channel)を受け損ねても表示が残らないよう、状態の変化でも片付ける(通常は
+        // `turn_finished` が先に片付ける)。
+        if (
+          (before === "running" || before === "awaiting_permission") &&
+          next?.process_state === "idle" &&
+          liveRef.current !== EMPTY_TURN
+        ) {
+          Promise.resolve(callbacks.current.onTurnFinished(next)).finally(resetLive);
+        }
+      });
+      if (event.process_state === "exited" && event.exit_code !== null) {
+        const byUser = stoppedByUserRef.current;
+        stoppedByUserRef.current = false;
+        if (!byUser && event.exit_code !== 0) {
+          callbacks.current.onError(
+            `実行中のセッション(claude)が終了しました(終了コード ${event.exit_code})`,
+          );
+        }
+        // 終了したら、返答の途中の表示は残さない(確定した行は会話ファイルにある)。
+        Promise.resolve(callbacks.current.onTurnFinished(runningRef.current)).finally(resetLive);
+      }
+    });
+    return () => {
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, [refresh, resetLive]);
+
   /** 状態が条件を満たすまで、Query で取り直しながら待つ(楽観更新しない)。 */
   const waitUntil = useCallback(
     async (predicate: (s: RunningSessionDto | null) => boolean, timeoutMs: number) => {
@@ -243,15 +338,21 @@ export function useRunningSession({ onTurnFinished, onError, getMessageUuids }: 
         const current = runningRef.current;
         const alive = current !== null && current.process_state !== "exited";
         if (!alive) {
-          const started = await startRunningSession(
-            args.profileId,
-            args.project,
-            args.sessionId,
-            args.mode,
-            handleProgress,
-          );
+          const started = await startRunningSession(args.profileId, {
+            kind: "resume",
+            project: args.project,
+            session_id: args.sessionId,
+            mode: args.mode,
+            name: null,
+          });
           applyRunning(started);
         }
+        const target = runningRef.current?.target;
+        if (!target) {
+          throw new Error("実行中のセッションが見つかりません");
+        }
+        // 送る前に購読しておく(送信直後の途中経過を取りこぼさない)。
+        await ensureSubscribed(target);
         const ready = await waitUntil(
           (s) => s === null || s.process_state !== "starting",
           START_TIMEOUT_MS,
@@ -262,7 +363,7 @@ export function useRunningSession({ onTurnFinished, onError, getMessageUuids }: 
         if (ready.process_state === "exited") {
           throw new Error("実行中のセッションが起動できませんでした(起動直後に終了しました)");
         }
-        await sendToRunningSession(args.text, args.images);
+        await sendToRunningSession(ready.target, args.text, args.images);
         return true;
       } catch (e) {
         resetLive();
@@ -273,7 +374,7 @@ export function useRunningSession({ onTurnFinished, onError, getMessageUuids }: 
         setBusy(false);
       }
     },
-    [applyRunning, handleProgress, refresh, resetLive, updateLive, waitUntil],
+    [applyRunning, ensureSubscribed, refresh, resetLive, updateLive, waitUntil],
   );
 
   const respond = useCallback(
@@ -286,8 +387,10 @@ export function useRunningSession({ onTurnFinished, onError, getMessageUuids }: 
         message?: string;
       } = {},
     ) => {
+      const target = runningRef.current?.target;
+      if (!target) return;
       try {
-        await respondPermission(requestId, behavior, options);
+        await respondPermission(target, requestId, behavior, options);
       } catch (e) {
         callbacks.current.onError(messageOf(e));
       }
@@ -297,17 +400,32 @@ export function useRunningSession({ onTurnFinished, onError, getMessageUuids }: 
   );
 
   const interrupt = useCallback(async () => {
+    const target = runningRef.current?.target;
+    if (!target) return;
     try {
-      await interruptRunningSession();
+      await interruptRunningSession(target);
+    } catch (e) {
+      callbacks.current.onError(messageOf(e));
+    }
+  }, []);
+
+  /** 起動中に、モデル・権限モードを切り替える(結果は状態の取り直しで反映される)。 */
+  const switchTo = useCallback(async (request: RunningSessionSwitchDto) => {
+    const target = runningRef.current?.target;
+    if (!target) return;
+    try {
+      await switchRunningSession(target, request);
     } catch (e) {
       callbacks.current.onError(messageOf(e));
     }
   }, []);
 
   const stop = useCallback(async () => {
+    const target = runningRef.current?.target;
+    if (!target) return;
     stoppedByUserRef.current = true;
     try {
-      await stopRunningSession();
+      await stopRunningSession(target);
     } catch (e) {
       stoppedByUserRef.current = false;
       callbacks.current.onError(messageOf(e));
@@ -316,5 +434,5 @@ export function useRunningSession({ onTurnFinished, onError, getMessageUuids }: 
     resetLive();
   }, [refresh, resetLive]);
 
-  return { running, live, busy, send, respond, interrupt, stop };
+  return { running, live, busy, send, respond, interrupt, switchTo, stop };
 }

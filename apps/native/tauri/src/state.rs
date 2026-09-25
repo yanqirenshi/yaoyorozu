@@ -21,18 +21,24 @@ pub fn resolve_effective_projects_dir(settings: &Settings) -> Result<PathBuf, Ap
     ))
 }
 
-/// app が起動して持っている実行中セッション(issue #391)。Phase 1 は同時に1つ。
+/// 途中経過(Channel)の購読1件(issue #407)。画面ごとに購読し、画面の再読み込み・別ウィンドウでも
+/// 購読し直せる。送れなくなった(画面が閉じた等)購読は、送信の失敗で取り除く。
+#[derive(Clone)]
+pub struct ProgressSubscriber {
+    pub id: u64,
+    pub channel: tauri::ipc::Channel<crate::dto::AddressedProgressDto>,
+}
+
+/// app が起動して持っている実行中セッション1つ(issue #391。Phase 2 の #407 で複数を持つ)。
 pub struct RunningSessionSlot {
-    /// 会話ファイルのあるプロジェクトフォルダ名。
-    pub project: String,
-    /// 何番目に起動したか。読み取りの出来事は起動した世代のものだけを反映する(次の起動の
-    /// 状態を、前のプロセスの遅れて届いた出来事で動かさない)。
-    pub generation: u64,
-    /// 起動時に選んだ権限モード(画面の状態表示用。Phase 1 は途中で切り替えない)。
-    pub mode: app::RunningPermissionMode,
+    /// 会話ファイルのあるプロジェクトフォルダ名。再開のときだけ(新規は会話ファイルができるまで
+    /// 分からない)。
+    pub project: Option<String>,
     pub session: domain::RunningSessionByApp,
     /// 子プロセスの操作口(標準入力への書き込み・中断・停止)。
     pub process: Arc<dyn app::RunningProcess>,
+    /// 途中経過の購読(購読が無い間の出来事は捨てる。状態・答え待ちは Query で取れる)。
+    pub subscribers: Vec<ProgressSubscriber>,
 }
 
 /// アプリの唯一の真実(SSoT)。`tauri::State<tokio::sync::Mutex<AppState>>` として
@@ -98,14 +104,15 @@ pub struct AppState {
     /// ファイルの状態(更新時刻 + サイズ)とセットで持ち、`get_session`(ページ送り)は
     /// 状態が変わっていなければファイルを読み直さずここから切り出す。
     pub loaded_messages: HashMap<PathBuf, app::CachedMessages>,
-    /// app が起動した実行中セッション(issue #391)。終了しても、次に起動して置き換えるまで
-    /// 終了状態のまま残す(画面が終了を知るため)。ランタイム状態で保存しない。
-    pub running_session: Option<RunningSessionSlot>,
-    /// 実行中セッションを起動している最中か(起動は数秒かかりうるため、その間にもう1つ
-    /// 起動されないようにする。Phase 1 は同時に1つ)。
-    pub running_session_starting: bool,
-    /// 実行中セッションの世代番号(起動のたびに増やす)。
-    pub running_session_generation: u64,
+    /// app が起動した実行中セッション(issue #391。#407 で複数)。個体指定子は pid_domain + pid +
+    /// started_at。終了しても、同じ会話を起動し直して置き換えるか、上限(`app::MAX_KEPT_EXITED_SESSIONS`)
+    /// を超えて忘れるまで終了状態のまま残す(画面が終了を知るため)。ランタイム状態で保存しない。
+    pub running_sessions: Vec<RunningSessionSlot>,
+    /// 起動している最中の会話の ID(起動は数秒かかりうるため、その間に同じ会話・上限超えの
+    /// 起動が来ても止められるよう、印を付ける)。
+    pub starting_session_ids: Vec<String>,
+    /// 途中経過の購読 ID の連番。
+    pub next_progress_subscription_id: u64,
     /// `git_ledger`/`user_sessions` の読み込みが完了したかどうか
     /// (issue #218)。起動時は`false`で、起動後のバックグラウンドタスク・
     /// ハブの「再読み込み」操作のいずれかが一度でも完了すれば(成否に
@@ -223,9 +230,9 @@ impl AppState {
                 user_sessions: Vec::new(),
                 loaded_log_lines: HashMap::new(),
                 loaded_messages: HashMap::new(),
-                running_session: None,
-                running_session_starting: false,
-                running_session_generation: 0,
+                running_sessions: Vec::new(),
+                starting_session_ids: Vec::new(),
+                next_progress_subscription_id: 1,
                 pc_data_loaded: false,
                 session_scan_generation: 0,
                 session_rescan: app::RescanQueue::default(),

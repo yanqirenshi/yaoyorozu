@@ -8,11 +8,12 @@
 use crate::claude_cli::{claude_executable, map_spawn_error, DESKTOP_LINEAGE_ENV_VARS};
 use crate::claude_stream_json::{
     build_args, build_initialize_line, build_interrupt_line, build_permission_response_line,
-    build_user_message_line, map_wire_line,
+    build_set_model_line, build_set_permission_mode_line, build_user_message_line, map_wire_line,
+    PendingSwitches,
 };
 use app::{
-    AppError, RunningProcess, RunningSessionEvent, RunningSessionEventSink, RunningSessionLauncher,
-    StartRunningSession,
+    AppError, RunningPermissionMode, RunningProcess, RunningSessionEvent, RunningSessionEventSink,
+    RunningSessionLauncher, RunningSessionSwitch, StartRunningSession,
 };
 use domain::{ImageAttachment, PermissionResponse};
 use std::collections::VecDeque;
@@ -75,17 +76,17 @@ impl RunningSessionLauncher for ClaudeCliProcessLauncher {
         request: &StartRunningSession,
         sink: Arc<dyn RunningSessionEventSink>,
     ) -> Result<Arc<dyn RunningProcess>, AppError> {
-        if !request.cwd.is_dir() {
+        if !request.cwd().is_dir() {
             return Err(AppError::CwdMissing(format!(
                 "作業ディレクトリが見つかりません: {}",
-                request.cwd.display()
+                request.cwd().display()
             )));
         }
 
         let mut command = Command::new(&self.program);
         command.args(&self.leading_args);
         command.args(build_args(request));
-        command.current_dir(&request.cwd);
+        command.current_dir(request.cwd());
         // 親(Claude Desktop 等)由来の起動元の印は引き継がない(既存の1回きり送信と同じ)。
         for var in DESKTOP_LINEAGE_ENV_VARS {
             command.env_remove(var);
@@ -116,7 +117,15 @@ impl RunningSessionLauncher for ClaudeCliProcessLauncher {
 
         let child = Arc::new(Mutex::new(child));
         let exit = Arc::new(ExitSignal::default());
-        spawn_reader(child.clone(), stdout, stderr, sink, exit.clone());
+        let pending = Arc::new(PendingSwitches::default());
+        spawn_reader(
+            child.clone(),
+            stdout,
+            stderr,
+            sink,
+            exit.clone(),
+            pending.clone(),
+        );
 
         let process = ClaudeCliProcess {
             pid,
@@ -124,6 +133,7 @@ impl RunningSessionLauncher for ClaudeCliProcessLauncher {
             child,
             exit,
             next_request: AtomicU64::new(1),
+            pending,
         };
         // `initialize` を送って、その応答を「起動できた」の合図にする(CLI は最初のターンまで
         // `system/init` を出さないため)。書けなければプロセスがすでに終わりかけており、
@@ -177,6 +187,7 @@ fn spawn_reader(
     stderr: ChildStderr,
     sink: Arc<dyn RunningSessionEventSink>,
     exit: Arc<ExitSignal>,
+    pending: Arc<PendingSwitches>,
 ) {
     let stderr_tail: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
     let stderr_thread: JoinHandle<()> = {
@@ -197,7 +208,7 @@ fn spawn_reader(
             if line.trim().is_empty() {
                 continue;
             }
-            for event in map_wire_line(&line, now_ms()) {
+            for event in map_wire_line(&line, now_ms(), &pending) {
                 sink.emit(event);
             }
         }
@@ -274,8 +285,10 @@ struct ClaudeCliProcess {
     stdin: Mutex<Option<ChildStdin>>,
     child: Arc<Mutex<Child>>,
     exit: Arc<ExitSignal>,
-    /// 中断の要求の `request_id` の連番。
+    /// 中断・切り替えの要求の `request_id` の連番。
     next_request: AtomicU64,
+    /// 送った切り替えの要求(応答が成功なら `SwitchApplied` にする。読み取りスレッドと共有)。
+    pending: Arc<PendingSwitches>,
 }
 
 impl ClaudeCliProcess {
@@ -293,6 +306,24 @@ impl ClaudeCliProcess {
                     "実行中のセッションへ書き込めませんでした(終了した可能性があります): {e}"
                 ))
             })
+    }
+}
+
+impl ClaudeCliProcess {
+    /// 切り替えの要求を書く。応答の対応づけのため、書く前に要求 ID を控える(応答が書き込みの
+    /// 直後に届いても引ける)。書けなければ控えを捨てる。
+    fn write_switch(
+        &self,
+        switch: RunningSessionSwitch,
+        build: impl FnOnce(&str) -> String,
+    ) -> Result<(), AppError> {
+        let id = format!(
+            "app-switch-{}",
+            self.next_request.fetch_add(1, Ordering::Relaxed)
+        );
+        self.pending.register(&id, switch);
+        self.write_line(&build(&id))
+            .inspect_err(|_| self.pending.forget(&id))
     }
 }
 
@@ -319,6 +350,18 @@ impl RunningProcess for ClaudeCliProcess {
     fn interrupt(&self) -> Result<(), AppError> {
         let id = self.next_request.fetch_add(1, Ordering::Relaxed);
         self.write_line(&build_interrupt_line(&format!("app-interrupt-{id}")))
+    }
+
+    fn set_model(&self, model: &str) -> Result<(), AppError> {
+        self.write_switch(RunningSessionSwitch::Model(model.to_string()), |id| {
+            build_set_model_line(id, model)
+        })
+    }
+
+    fn set_permission_mode(&self, mode: RunningPermissionMode) -> Result<(), AppError> {
+        self.write_switch(RunningSessionSwitch::PermissionMode(mode), |id| {
+            build_set_permission_mode_line(id, mode.as_cli_value())
+        })
     }
 
     fn stop(&self) {
@@ -370,10 +413,12 @@ mod tests {
     }
 
     fn request(cwd: &std::path::Path) -> StartRunningSession {
-        StartRunningSession {
+        StartRunningSession::Resume {
             session_id: "s1".to_string(),
             cwd: cwd.to_path_buf(),
             mode: RunningPermissionMode::Default,
+            repository_path: cwd.to_path_buf(),
+            name: None,
         }
     }
 
@@ -696,6 +741,89 @@ mod tests {
         );
     }
 
+    #[test]
+    #[ignore]
+    fn fake_claude_new_conversation_gets_session_id_name_and_mode_and_reports_the_configuration() {
+        let dir = tempfile::tempdir().unwrap();
+        let (sink, rx) = sink();
+        let request = StartRunningSession::New {
+            session_id: "3a392392-0000-4000-8000-000000000001".to_string(),
+            cwd: dir.path().to_path_buf(),
+            mode: RunningPermissionMode::Plan,
+            repository_path: dir.path().to_path_buf(),
+            name: Some("調査 A".to_string()),
+        };
+        let process = fake_launcher().start(&request, sink).unwrap();
+        let mut seen = Vec::new();
+
+        process.send_user_message("ARGS", &[]).unwrap();
+        wait_for(&rx, &mut seen, |e| {
+            matches!(
+                e,
+                RunningSessionEvent::Progress(ProgressEvent::TurnFinished { .. })
+            )
+        });
+
+        let args = seen
+            .iter()
+            .find_map(|e| match e {
+                RunningSessionEvent::Progress(ProgressEvent::TextDelta { text })
+                    if text.starts_with("args: ") =>
+                {
+                    Some(text.clone())
+                }
+                _ => None,
+            })
+            .expect("the fake CLI echoes its argv");
+        assert!(
+            args.contains("--session-id=3a392392-0000-4000-8000-000000000001"),
+            "{args}"
+        );
+        assert!(args.contains("--name=調査 A"), "{args}");
+        assert!(args.contains(r#""--permission-mode","plan""#), "{args}");
+        assert!(!args.contains("--resume"), "{args}");
+        // system/init の model / permissionMode が Configured として届く。
+        assert!(seen.contains(&RunningSessionEvent::Configured {
+            model: Some("fake".to_string()),
+            permission_mode: Some("plan".to_string()),
+        }));
+        process.stop();
+    }
+
+    #[test]
+    #[ignore]
+    fn fake_claude_set_model_and_set_permission_mode_roundtrip_and_show_in_the_next_init() {
+        let dir = tempfile::tempdir().unwrap();
+        let (sink, rx) = sink();
+        let process = fake_launcher().start(&request(dir.path()), sink).unwrap();
+        let mut seen = Vec::new();
+
+        process.set_model("haiku").unwrap();
+        wait_for(&rx, &mut seen, |e| {
+            *e == RunningSessionEvent::SwitchApplied(RunningSessionSwitch::Model(
+                "haiku".to_string(),
+            ))
+        });
+        process
+            .set_permission_mode(RunningPermissionMode::AcceptEdits)
+            .unwrap();
+        wait_for(&rx, &mut seen, |e| {
+            *e == RunningSessionEvent::SwitchApplied(RunningSessionSwitch::PermissionMode(
+                RunningPermissionMode::AcceptEdits,
+            ))
+        });
+
+        // 次のターンの system/init が、解決済みのモデル名と切り替えた権限モードを報告する。
+        process.send_user_message("こんにちは", &[]).unwrap();
+        wait_for(&rx, &mut seen, |e| {
+            *e == RunningSessionEvent::Configured {
+                model: Some("claude-haiku-4-5-20251001".to_string()),
+                permission_mode: Some("acceptEdits".to_string()),
+            }
+        });
+        process.stop();
+    }
+
     /// 実物の `claude` を、隔離した設定フォルダ(未ログイン)で起動して往復する。実アカウント・
     /// 実際の会話ファイルには触れない(未ログインなので、AI の応答は "Not logged in" の
     /// エラー行になる)。環境変数で対象を渡す:
@@ -717,10 +845,12 @@ mod tests {
         let launcher = ClaudeCliProcessLauncher::new();
         let process = launcher
             .start(
-                &StartRunningSession {
+                &StartRunningSession::Resume {
                     session_id,
-                    cwd: PathBuf::from(cwd),
+                    cwd: PathBuf::from(&cwd),
                     mode: RunningPermissionMode::Default,
+                    repository_path: PathBuf::from(cwd),
+                    name: None,
                 },
                 sink,
             )
