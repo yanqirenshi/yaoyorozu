@@ -44,6 +44,10 @@ const GIT_REPOSITORY_ICON_SVG = `<svg viewBox="0 0 24 24" xmlns="http://www.w3.o
 // 1.7/20(viewBox 0 0 20 20)とほぼ同じ太さになる。
 const GIT_BRANCH_ICON_SVG = `<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="${ICON_STROKE_COLOR}" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"><circle cx="150" cy="105" r="42"/><circle cx="350" cy="105" r="42"/><circle cx="150" cy="405" r="42"/><line x1="150" y1="147" x2="150" y2="363"/><path d="M150 300C150 258 184 235 228 235H268C310 235 340 205 340 150"/></svg>`;
 
+// GitWorktree(フォルダ)。worktree は「リポジトリを別のフォルダに展開したもの」
+// なので、フォルダの線画にした(issue #438)。pc/user/session と同じ線画スタイル。
+const GIT_WORKTREE_ICON_SVG = `${SVG_OPEN}<path d="M3 15.5V5.5a1 1 0 011-1h3.6l1.6 2H16a1 1 0 011 1v8a1 1 0 01-1 1H4a1 1 0 01-1-1z"/><line x1="3" y1="9.5" x2="17" y2="9.5"/>${SVG_CLOSE}`;
+
 export const HUB_NODE_ICON_URIS = {
   pc: toDataUri(PC_ICON_SVG),
   user: toDataUri(USER_ICON_SVG),
@@ -51,4 +55,5 @@ export const HUB_NODE_ICON_URIS = {
   profile: toDataUri(PROFILE_ICON_SVG),
   gitRepository: toDataUri(GIT_REPOSITORY_ICON_SVG),
   gitBranch: toDataUri(GIT_BRANCH_ICON_SVG),
+  gitWorktree: toDataUri(GIT_WORKTREE_ICON_SVG),
 } as const;
