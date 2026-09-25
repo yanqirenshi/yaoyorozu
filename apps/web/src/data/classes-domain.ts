@@ -13,7 +13,8 @@
  * Gitブランチ・ワーキングツリー(第3弾)と、セッション(第4弾)、セッションファイル
  * (第5弾)、ログ行(第6弾。行種別のサブセット4種と、親子のつながりを含む)、
  * Phase 1(app から claude CLI と対話する。issue #381・#388。実行中セッション・権限の
- * 問い合わせ・途中経過)。設定ファイル類、セッションまわりの残り(入力キュー)、
+ * 問い合わせ・途中経過)と、Phase 2 の設計(#404。現在のモデル・権限モード、リポジトリとの関連、
+ * 会話ファイル 0..*)。設定ファイル類、セッションまわりの残り(入力キュー)、
  * システム行・付帯情報行の細分(TM でサブセットに分ける段階)は次段以降。既存のクラスと
  * それらの関係も、相手のクラスを書く段階で足す。
  * 作業ディレクトリは、TM でモノとして立てないことになった(cwd はログ行・実行中セッションの
@@ -31,13 +32,20 @@
  *   1つだけ)。サブエージェントのファイルの行も、親のセッションが所有するファイルに属する
  *   ので、行に記録される sessionId(親と同じ値)と食い違わない。
  * - TM の `fileKind`(ファイル種別)は SessionFile のフィールドにしない。Session が
- *   会話ファイル(`conversation_files`、1..*)とサブエージェントのファイル(`subagent_files`、
+ *   会話ファイル(`conversation_files`、0..*)とサブエージェントのファイル(`subagent_files`、
  *   0..*)を別の役割で持ち、どちらに入っているかで種別が決まるため。
  * - 会話ファイルは当初 1件固定(`conversation_file`)にしていたが、実機確認でセッション途中に
  *   worktree へ移動すると、同じセッションIDの jsonl が複数のプロジェクトフォルダに分かれて
  *   できることが判明した(#214)。TM どおり `conversation_files` を 1..* に直した(#216)。
- *   1..* なので「ファイル0件のセッション」は引き続き型で作れない。複数ファイルにまたがる
- *   属性(custom_title 等)の解決規則は図には書かず、実装イシュー側(#217)で扱う。
+ *   複数ファイルにまたがる属性(custom_title 等)の解決規則は図には書かず、実装イシュー側
+ *   (#217)で扱う。
+ * - 【Phase 2 の設計変更(#404。TM #403)】`conversation_files` を 1..* から 0..* に緩めた。
+ *   新規作成では、セッションID は起動時に決まる(app が `--session-id` で決めることもある)のに、
+ *   会話ファイルは最初の行が書かれた時点で作られるため、「ID は決まったが会話ファイルはまだ
+ *   無い」窓がある。これで「ファイル0件のセッション」は型で作れるようになる。その間の状態は、
+ *   RunningSessionByApp の process_state(Starting)で表す。**実装(`session.rs`)は未追従**
+ *   (`conversation_files: Vec<SessionFile>` は空を許すが、組み立て規則・空のときの扱いは
+ *   Phase 2 backend のイシューで扱う)。
  * - PC とユーザーはコンポジションにしている(PC が全体で User を所有する)。User は
  *   「その PC 上の OS のユーザーアカウント」で、1台の PC にしか属さない。同じ人が2台の
  *   PC を使えば User は2つになる。TM ではユーザーを PC から独立したリソースとし、対照表
@@ -119,6 +127,52 @@
  *   状態が変わったときだけ。(6) PermissionSuggestion に SDK の PermissionUpdate との往復
  *   (from_update_value / to_update_value)、PermissionRequestKind に from_tool_name が加わった。
  *   コンストラクタ(`new` / `allow` / `deny` / `cancelled`)は図に描いていない。
+ * - 【Phase 2(複数セッション・モード切替・新規作成。issue #381・#404。TM #403)】
+ *   (1) domain の変更は3つ。Session.conversation_files を 0..*(上記)、RunningSessionByApp に
+ *   現在のモデル・現在の権限モード(属性)、RunningSessionByApp → GitRepository の関連
+ *   (repository_path。0..* : 1。図では離れているため線ではなくフィールドで持つ)。いずれも **実装は未追従**(Phase 2 backend のイシューで扱う)。
+ *   (2) 複数の実行中セッションを同時に持つことは、TM の「セッション 1 : 実行中セッション 0..*」
+ *   と起動元のサブセットで既に表せていて、同時に持てる数の上限は運用の方針(語彙でも domain の
+ *   規則でもない)。domain の型は増やさない。(3) 表示名は TM の語彙(会話タイトル・台帳の name)で
+ *   足りるので、domain には足さない。(4) ProgressEvent は変えない(下記の包みで宛先を付ける)。
+ * - 【Phase 2 の申し送り(app 側の型)】次の型は app / tauri のもので、この図(domain)にも
+ *   as-is の図(classes-infra.ts / classes-tauri.ts)にも描かない(as-is は実装済みの型と1対1に
+ *   保つため)。実装後に、Phase 1 と同じ流れで as-is の図へ写す。ここに一覧と理由を残す。
+ *   (a) 複数保持: tauri の AppState.running_session(Option<RunningSessionSlot>。同時に1つ)を、
+ *   複数を持てる集まり(Vec や Map)にする。キーは RunningSessionByApp の個体指定子
+ *   (pid_domain + pid + started_at)。app の start_running_session は、いま持っている1つ
+ *   (current)ではなく全部の PID を除外して外部の実行を調べる(own_running_pids はすでに列を
+ *   返す形)。同時に持てる数の上限は app の定数(運用の方針)とし、超えたときは session_busy。
+ *   「同じ会話を2つ起動しない」規則は、#361 のガード(自分の PID を除いた外部の実行の検知)では
+ *   自分の起動を検知できないため、app が持つ集まりの中で session_id の一致を見て止める新しい規則
+ *   として app に置く(純粋な規則。I/O は無い)。
+ *   (b) 切り替え要求: app の型 `RunningSessionSwitch`(Model(String) / PermissionMode(...))を置く。
+ *   実行は port(RunningProcess)に set_model / set_permission_mode を足す(Phase 1 と同じ
+ *   「I/O は port」)。要求 ID(CLI の request_id)は infra が付けるので app の型には要らない。
+ *   app の RunningPermissionMode(Plan / Default)には、画面が出す値(acceptEdits / auto など)を
+ *   足す。domain の current_permission_mode は CLI の版で名前が変わる(default / manual)ため文字列で
+ *   持ち、対応づけ(as_cli_value の逆)は app の責務。切り替えの結果(現在値の更新)は
+ *   ユースケースが RunningSessionByApp の属性へ反映する。
+ *   (c) 起動要求: app の StartRunningSession を、「再開」と「新規」の両方を表せる enum にする
+ *   (Resume { session_id, cwd, mode } / New { session_id, cwd, mode })。持つ値が違うので(新規は
+ *   ID を app が決める。既存の会話ファイルから cwd を求められない)バリアントにし、平らな型に
+ *   Option を並べない(Phase 1 の PermissionBehavior と同じ理由)。新規のセッションID は
+ *   **app が決める**(`--session-id` に UUID v4 を渡す)案を推す: 起動時に RunningSession の
+ *   session_id が決まり、domain の型を Option にしなくて済み、TM の「ID は起動時に決まる」と
+ *   一致する。CLI に任せる案は、system/init が届くまで session_id が無い状態を domain に
+ *   持ち込む。どちらも、会話ファイルが作られるまでの窓は Session.conversation_files 0..* と
+ *   process_state = Starting で表す。起動要求には、どのリポジトリか(repository_path。
+ *   RunningSessionByApp の関連の元)と、表示名(--name。任意。起動引数として持つ。起動後の変更は
+ *   Phase 1 と同じく port の責務)も持たせる。
+ *   (d) 途中経過の宛先: domain の ProgressEvent は変えず(CLI にも複数セッションにも依存しない
+ *   中立の型のまま)、宛先を付けた包み(app の型 `AddressedProgress { target: RunningSessionRef,
+ *   event: ProgressEvent }`、RunningSessionRef は pid_domain + pid + started_at)を app に置き、
+ *   Channel と running-session:changed のペイロードには包みを使う。RunningSessionEvent(app)も
+ *   同じ宛先を持つ。
+ *   (e) ハブ用の一覧項目: app の読み取り専用の型 `RunningSessionSummary`
+ *   (RunningSessionRef・session_id・repository_path・process_state・答え待ちの数・現在のモデル・
+ *   現在の権限モード・cwd)を置き、RunningSessionByApp からの純粋な変換(summarize)で作る。
+ *   tauri の DTO はこれの写し(RunningSessionDto を一覧向けに絞った形)。
  */
 import type { DiagramInput } from "@yanqirenshi/d3.classes";
 import {
@@ -228,7 +282,7 @@ const DEFS: ClassDef[] = [
   },
   // ============ 会話 ============
   {
-    name: { physical: "Session", logical: "Session", description: "1つの会話。セッションIDは会話開始時に発番される UUID v4 で、.jsonl のファイル名にもなる(ただしファイルは識別しない)。TM: セッション(リソース)" }, // 論理名: セッション
+    name: { physical: "Session", logical: "Session", description: "1つの会話。セッションIDは会話開始時に発番される UUID v4 で、.jsonl のファイル名にもなる(ただしファイルは識別しない)。【Phase 2(#404)】会話ファイルは 0..*(新規作成で「ID は決まったが会話ファイルはまだ無い」窓がある。実装は未追従)。TM: セッション(リソース)" }, // 論理名: セッション
     attributes: [
       attr("session_id", "String"), // 個体指定子。UUID v4
       attr("custom_title", "Option<String>"), // custom-title 行(最後の行が有効)
@@ -356,10 +410,26 @@ const DEFS: ClassDef[] = [
     size: { w: 340, h: 0 },
   },
   {
-    name: { physical: "RunningSessionByApp", logical: "RunningSessionByApp", description: "app が子プロセスとして起動した claude CLI(PoC #382)。標準入出力(stream-json)で対話し続けるため、このサブクラスだけがプロセスの状態と権限の問い合わせを持つ。台帳は外部起動と同じ形で書かれる(entrypoint は sdk-cli)ので台帳では区別できず、app が自分の子プロセスの PID を知っていることで区分する。#361 のガード(実行中の検知)では app は自分が起動した PID を除外する。【実装との差(#391)】継承ではなく、共通のフィールドの struct RunningSession を base として持つコンポジション(線 base)。permission_requests は「まだ答えていない」問い合わせの列(答えたものは外す)。TM: 実行中セッション(app起動)(イベントのサブセット)" }, // 論理名: 実行中セッション(app起動)
+    name: { physical: "RunningSessionByApp", logical: "RunningSessionByApp", description: "app が子プロセスとして起動した claude CLI(PoC #382)。標準入出力(stream-json)で対話し続けるため、このサブクラスだけがプロセスの状態と権限の問い合わせを持つ。台帳は外部起動と同じ形で書かれる(entrypoint は sdk-cli)ので台帳では区別できず、app が自分の子プロセスの PID を知っていることで区分する。#361 のガード(実行中の検知)では app は自分が起動した PID を除外する。【実装との差(#391)】継承ではなく、共通のフィールドの struct RunningSession を base として持つコンポジション(線 base)。permission_requests は「まだ答えていない」問い合わせの列(答えたものは外す)。【Phase 2(#404)】現在のモデル・現在の権限モードの属性と、リポジトリパス(R)による GitRepository との関連(フィールド repository_path で参照する。app は起動時にプロファイル = 登録済みリポジトリを選ぶので、cwd からの推測ではなく記録された事実。外部起動は結ばない)が加わった。新規作成で会話ファイルが無い間は process_state が Starting。実装(running_session_by_app.rs)は未追従。TM: 実行中セッション(app起動)(イベントのサブセット)" }, // 論理名: 実行中セッション(app起動)
     attributes: [
       attr("process_state", "ProcessState"), // TM: プロセス状態
       attr("process_state_at", "u64"), // TM: プロセス状態の更新日時
+      // 【Phase 2(#404。TM #403)】set_model / set_permission_mode で途中から変わる、いま送る
+      // ときに使われる値(レポート §6.2)。ログ側の モデルID(AI応答行)・権限モード(ユーザー行)は
+      // 記録された当時の値で意味が違うので別の属性。更新日時は持たない(履歴は model_changed 行と
+      // ユーザー行に残る)。起動してから system/init などで分かるまで None。権限モードは CLI の版で
+      // 名前が変わる(default / manual)ので文字列で持つ(app の RunningPermissionMode との
+      // 対応づけは app の責務。domain は app に依存しない)。
+      attr("current_model", "Option<String>"), // TM: 現在のモデル
+      attr("current_permission_mode", "Option<String>"), // TM: 現在の権限モード
+      // 【Phase 2】TM: リポジトリパス(R)。Gitリポジトリ 1 : 実行中セッション(app起動)0..*(E-R)。
+      // app は起動時にプロファイル(登録済みリポジトリ)を選ぶので、cwd からの推測ではなく記録された
+      // 事実。GitRepository は User が所有しているので(持ち主は1つだけ)、コンポジションにせず
+      // ID(GitRepository.repository_path)で参照する。TM の規則では (R) は線にしてフィールドに
+      // しないが、この図では GitRepository と離れていて、線を引くと Profile・SessionFile・LogLine
+      // 系の箱と継承線を横切るため、線は引かず、参照であることを示すフィールドとして持つ(未決:
+      // 図の配置を見直せるなら、線に改める)。外部起動(RunningSessionExternal)は結ばない。
+      attr("repository_path", "PathBuf"),
     ],
     methods: [
       // 状態遷移は純粋な関数(I/O は port の責務。「メソッドを書く基準」を参照)。
@@ -427,7 +497,7 @@ const DEFS: ClassDef[] = [
       attr("requested_at", "u64"), // TM: 問い合わせ日時
       attr("/request_kind", "PermissionRequestKind"), // TM: 問い合わせ種別(D)。tool_name から求める
     ],
-    position: { x: 400, y: 2650 },
+    position: { x: 400, y: 2800 },
     filePath: "apps/native/crates/domain/src/permission_request.rs",
     // tool_input と型の列が重なるので広げる(LogLine の size の説明を参照)。
     size: { w: 330, h: 0 },
@@ -438,7 +508,7 @@ const DEFS: ClassDef[] = [
     attributes: ["ToolUse", "AskUserQuestion", "ExitPlanMode"].map(label),
     // tool_name から種別を求める純粋な導出(AskUserQuestion / ExitPlanMode 以外は ToolUse)。
     methods: [method("from_tool_name", ["tool_name: &str"], "Self")],
-    position: { x: 980, y: 3050 },
+    position: { x: 980, y: 3200 },
     filePath: "apps/native/crates/domain/src/permission_request_kind.rs",
     size: { w: 300, h: 0 },
   },
@@ -453,7 +523,7 @@ const DEFS: ClassDef[] = [
       attr("behavior", "PermissionBehavior"), // TM: 決着種別
       attr("responded_at", "u64"), // TM: 応答日時
     ],
-    position: { x: 830, y: 2650 },
+    position: { x: 830, y: 2800 },
     filePath: "apps/native/crates/domain/src/permission_response.rs",
     size: { w: 260, h: 0 },
   },
@@ -465,7 +535,7 @@ const DEFS: ClassDef[] = [
       "Deny { message: String }",
       "Cancelled",
     ].map(label),
-    position: { x: 1250, y: 2650 },
+    position: { x: 1250, y: 2800 },
     filePath: "apps/native/crates/domain/src/permission_behavior.rs",
     // データを持つバリアントの表記が長いので広げる(LogLine の size の説明を参照)。
     size: { w: 600, h: 0 },
@@ -485,7 +555,7 @@ const DEFS: ClassDef[] = [
       method("from_update_value", ["value: &serde_json::Value"], "Option<Self>"),
       method("to_update_value", [], "serde_json::Value"),
     ],
-    position: { x: 400, y: 3050 },
+    position: { x: 400, y: 3200 },
     filePath: "apps/native/crates/domain/src/permission_suggestion.rs",
     size: { w: 500, h: 0 },
   },
@@ -572,7 +642,8 @@ const RELATIONSHIPS = [
     fromMultiplicity: "0..*",
   }),
   // TM: セッション．セッションファイル(対照表、属性なし)。1つの会話にファイルは
-  // 会話ファイル1..* + サブエージェント0件以上、ファイルは必ず1つの会話に属する。
+  // 会話ファイル0..* + サブエージェント0件以上、ファイルは必ず1つの会話に属する
+  // (Phase 2 で会話ファイルを 1..* から 0..* に緩めた。下記)。
   // Session が SessionFile を所有するのでコンポジションにし、役割(会話ファイル /
   // サブエージェントのファイル)ごとに線を分ける。1つのファイルはどちらか一方にだけ入る。
   // 線は「部分 → 全体」の向き(◆が Session 側に付く)。SessionFile を Session の右に置き、
@@ -583,9 +654,12 @@ const RELATIONSHIPS = [
   // 移動すると同じセッションIDの jsonl が複数のプロジェクトフォルダにできることが判明し
   // (#214)、TM どおりの 1..* に直した(#216)。複数ファイルにまたがる属性(custom_title 等)
   // の解決規則は図には書かず、実装イシュー側(#217)で扱う。
+  // 【Phase 2(#404。TM #403)】新規作成では、セッションID は起動時に決まるが会話ファイルは
+  // 最初の行が書かれた時点で作られるので、その窓を表せるよう 0..* に緩めた。その間の状態は
+  // RunningSessionByApp の process_state(Starting)。実装(session.rs)は未追従。
   rel("composition", "SessionFile", "Session", "conversation_files", 100, 260, {
     key: "conversation_files",
-    fromMultiplicity: "1..*",
+    fromMultiplicity: "0..*",
   }),
   rel("composition", "SessionFile", "Session", "subagent_files", 80, 280, {
     key: "subagent_files",
