@@ -37,6 +37,8 @@ pub struct RunningSessionSlot {
     pub session: domain::RunningSessionByApp,
     /// 子プロセスの操作口(標準入力への書き込み・中断・停止)。
     pub process: Arc<dyn app::RunningProcess>,
+    /// CLI が報告した、選べるモデル(`initialize` の応答。画面の選択肢。issue #409)。
+    pub available_models: Vec<app::AvailableModel>,
     /// 途中経過の購読(購読が無い間の出来事は捨てる。状態・答え待ちは Query で取れる)。
     pub subscribers: Vec<ProgressSubscriber>,
 }

@@ -141,6 +141,18 @@ impl StartRunningSession {
     }
 }
 
+/// CLI が報告した、選べるモデル(`initialize` の応答の `models`。issue #409)。`set_model` は CLI が
+/// モデル名を検証しない(存在しない名前も成功で返る)ので、画面はこの一覧から選ばせる。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AvailableModel {
+    /// `set_model` に渡す値(`default` / `sonnet` / `haiku` など)。
+    pub value: String,
+    /// 画面に出す名前。
+    pub display_name: String,
+    /// 説明(任意)。
+    pub description: Option<String>,
+}
+
 /// 起動中に切り替える設定(issue #407。Phase 2)。CLI の `set_model` / `set_permission_mode`
 /// (PoC #382 レポート §6.2)に対応する。CLI へ渡す要求の ID は infra が付けるので、ここには無い。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -163,6 +175,9 @@ pub enum RunningSessionEvent {
     },
     /// 切り替え(`set_model` / `set_permission_mode`)が CLI に受け入れられた。
     SwitchApplied(RunningSessionSwitch),
+    /// 選べるモデルの一覧(`initialize` の応答から。`account` など、ほかの項目は読まない)。
+    /// 状態は動かさない(画面の選択肢にするだけ)。
+    ModelsListed(Vec<AvailableModel>),
     /// 画面へ流す途中経過。
     Progress(ProgressEvent),
     /// ツール使用の問い合わせが届いた。
@@ -690,6 +705,7 @@ pub fn apply_running_session_event(
         RunningSessionEvent::Progress(ProgressEvent::TurnFinished { .. }) => {
             session.apply(ProcessTrigger::TurnFinished, now)
         }
+        RunningSessionEvent::ModelsListed(_) => {}
         RunningSessionEvent::Progress(_) => {}
         RunningSessionEvent::PermissionRequested(request) => {
             session.receive_permission_request(request.clone(), now)

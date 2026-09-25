@@ -157,7 +157,7 @@ rl.on("line", (line) => {
 
   if (msg.type === "control_request" && msg.request && msg.request.subtype === "initialize") {
     // 実物の応答にはアカウント情報(メールアドレスを含む)が入る。app は中身を読まない。
-    out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: { account: { email: "secret@example.com" }, models: [], commands: [], pid: process.pid } } });
+    out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: { account: { email: "secret@example.com" }, models: [{ value: "default", displayName: "Default (recommended)", description: "Fake default" }, { value: "sonnet", displayName: "Sonnet" }, { value: "haiku", displayName: "Haiku" }], commands: [], pid: process.pid } } });
     return;
   }
 

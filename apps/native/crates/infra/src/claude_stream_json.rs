@@ -6,7 +6,10 @@
 //! 280 で実際に増えていた)。未知の `type` / `subtype` は捨て、必須の項目が欠けた行も
 //! 捨てる(1行のせいで対話を止めない)。
 
-use app::{RunningPermissionMode, RunningSessionEvent, RunningSessionSwitch, StartRunningSession};
+use app::{
+    AvailableModel, RunningPermissionMode, RunningSessionEvent, RunningSessionSwitch,
+    StartRunningSession,
+};
 use domain::{
     ImageAttachment, PermissionBehavior, PermissionRequest, PermissionResponse,
     PermissionSuggestion, ProgressEvent,
@@ -262,7 +265,13 @@ pub(crate) fn map_wire_line(
                     .and_then(Value::as_str)
                     == Some("success");
             if is_initialize_reply {
-                vec![RunningSessionEvent::Initialized]
+                // 起動の合図に加えて、選べるモデルの一覧だけを読む(`account` などは読まない)。
+                let mut events = vec![RunningSessionEvent::Initialized];
+                let models = available_models(response);
+                if !models.is_empty() {
+                    events.push(RunningSessionEvent::ModelsListed(models));
+                }
+                events
             } else {
                 Vec::new()
             }
@@ -277,6 +286,38 @@ pub(crate) fn map_wire_line(
             .collect(),
         _ => Vec::new(),
     }
+}
+
+/// `initialize` の応答の `response.models`(`value` / `displayName` / `description`)。欠けた項目・
+/// 形の違う要素は捨てる(版で項目が増える)。`response` のほかの項目には触れない。
+fn available_models(response: Option<&Value>) -> Vec<AvailableModel> {
+    response
+        .and_then(|r| r.get("response"))
+        .and_then(|r| r.get("models"))
+        .and_then(Value::as_array)
+        .map(|models| {
+            models
+                .iter()
+                .filter_map(|model| {
+                    let value = model.get("value")?.as_str()?.to_string();
+                    let display_name = model
+                        .get("displayName")
+                        .and_then(Value::as_str)
+                        .unwrap_or(&value)
+                        .to_string();
+                    let description = model
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    Some(AvailableModel {
+                        value,
+                        display_name,
+                        description,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn map_stream_event(value: &Value) -> Option<RunningSessionEvent> {
@@ -466,6 +507,33 @@ mod tests {
             !format!("{events:?}").contains("someone@example.com"),
             "メールアドレスを出来事に含めない"
         );
+    }
+
+    #[test]
+    fn the_initialize_reply_also_lists_the_available_models_but_still_not_the_account() {
+        let reply = r#"{"type":"control_response","response":{"subtype":"success","request_id":"app-initialize","response":{"account":{"email":"someone@example.com"},"models":[{"value":"default","displayName":"Default (recommended)","description":"Opus 4.7","supportsEffort":true},{"value":"haiku","displayName":"Haiku"},{"displayName":"no value"},"junk"],"pid":1}}}"#;
+
+        let events = map_wire_line(reply, 1);
+
+        assert_eq!(
+            events,
+            vec![
+                RunningSessionEvent::Initialized,
+                RunningSessionEvent::ModelsListed(vec![
+                    AvailableModel {
+                        value: "default".to_string(),
+                        display_name: "Default (recommended)".to_string(),
+                        description: Some("Opus 4.7".to_string()),
+                    },
+                    AvailableModel {
+                        value: "haiku".to_string(),
+                        display_name: "Haiku".to_string(),
+                        description: None,
+                    },
+                ])
+            ]
+        );
+        assert!(!format!("{events:?}").contains("someone@example.com"));
     }
 
     #[test]
