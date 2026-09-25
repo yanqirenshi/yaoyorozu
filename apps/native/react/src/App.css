@@ -2396,12 +2396,12 @@ button.claude-explorer-name {
   gap: var(--space-3);
   padding: var(--space-2) var(--space-6);
   border-bottom: 1px solid var(--border-default);
-  font-size: 0.85rem;
+  font-size: var(--text-dns-14n-150-size);
   color: var(--text-secondary);
 }
 
 .running-bar-state {
-  font-weight: 600;
+  font-weight: var(--text-dns-14b-150-weight);
   color: var(--text-primary);
 }
 
@@ -2430,7 +2430,7 @@ button.claude-explorer-name {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-4);
   padding: var(--space-1) var(--space-3);
-  font-size: 0.85rem;
+  font-size: var(--text-ui-14n-100-size);
   font-family: inherit;
   color: var(--text-primary);
   background: var(--surface-base);
@@ -2465,7 +2465,7 @@ button.claude-explorer-name {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
-  font-size: 0.8rem;
+  font-size: var(--text-dns-14n-150-size);
 }
 
 .live-tool {
@@ -2504,29 +2504,29 @@ button.claude-explorer-name {
 
 .permission-title {
   margin: 0;
-  font-weight: 600;
+  font-weight: var(--text-dns-14b-150-weight);
   color: var(--text-primary);
 }
 
 .permission-tool {
   margin-left: var(--space-2);
-  padding: 1px var(--space-2);
+  padding: 0 var(--space-2);
   border-radius: var(--radius-4);
   background: var(--surface-sunken);
-  font-weight: 400;
+  font-weight: var(--text-dns-14n-150-weight);
   font-family: monospace;
 }
 
 .permission-description {
   margin: var(--space-1) 0 0;
-  font-size: 0.9rem;
+  font-size: var(--text-dns-14n-150-size);
   color: var(--text-secondary);
   overflow-wrap: anywhere;
 }
 
 .permission-details {
   margin-top: var(--space-2);
-  font-size: 0.85rem;
+  font-size: var(--text-dns-14n-150-size);
   color: var(--text-secondary);
 }
 
@@ -2541,7 +2541,7 @@ button.claude-explorer-name {
   overflow: auto;
   border-radius: var(--radius-4);
   background: var(--surface-sunken);
-  font-size: 0.8rem;
+  font-size: var(--text-mono-14n-150-size);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -2569,9 +2569,12 @@ button.claude-explorer-name {
   opacity: 0.9;
 }
 
+/* 無効は色だけ(不透明度)で表さない。部品「ボタン」の無効の状態と同じ値(/ui?item=part-button)。 */
 .permission-button:disabled {
-  opacity: 0.5;
-  cursor: default;
+  background: var(--state-disabled);
+  color: var(--text-disabled);
+  border-color: var(--border-default);
+  cursor: not-allowed;
 }
 
 .permission-question {
@@ -2582,22 +2585,22 @@ button.claude-explorer-name {
 
 .permission-question-text {
   padding: 0;
-  font-weight: 600;
+  font-weight: var(--text-dns-14b-150-weight);
 }
 
 .permission-question-header {
   margin-right: var(--space-2);
-  padding: 1px var(--space-2);
+  padding: 0 var(--space-2);
   border-radius: var(--radius-4);
   background: var(--surface-sunken);
-  font-weight: 400;
-  font-size: 0.8rem;
+  font-weight: var(--text-dns-14n-150-weight);
+  font-size: var(--text-dns-14n-150-size);
 }
 
 .permission-question-note {
   margin-left: var(--space-2);
-  font-weight: 400;
-  font-size: 0.8rem;
+  font-weight: var(--text-dns-14n-150-weight);
+  font-size: var(--text-dns-14n-150-size);
   color: var(--text-secondary);
 }
 
@@ -2607,7 +2610,7 @@ button.claude-explorer-name {
   align-items: baseline;
   gap: var(--space-2);
   margin-top: var(--space-2);
-  font-size: 0.9rem;
+  font-size: var(--text-dns-14n-150-size);
 }
 
 .permission-option-label {
@@ -2617,7 +2620,7 @@ button.claude-explorer-name {
 .permission-option-description {
   flex-basis: 100%;
   padding-left: var(--space-6);
-  font-size: 0.8rem;
+  font-size: var(--text-dns-14n-150-size);
   color: var(--text-secondary);
 }
 
@@ -2628,7 +2631,7 @@ button.claude-explorer-name {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-4);
   padding: var(--space-1) var(--space-2);
-  font-size: 0.9rem;
+  font-size: var(--text-ui-14n-100-size);
   font-family: inherit;
   color: var(--text-primary);
   background: var(--surface-base);
