@@ -60,6 +60,8 @@
  *   ユーザー指示により、実装(`profile.rs`。issue #72)を元に直接追加した。以前は
  *   `classes-native-prototype.ts` に as-is で載っていたが、こちらへ昇格したので削除した
  *   (Pc・User と同じ扱い)。TM 側への反映は デザイン(ドメイン:Data) セッションの今後の課題。
+ * - (以下の【Phase 1】の各項は、#388 での設計の記録。実装した結果の差は、最後の
+ *   【Phase 1: 実装との差】を参照。)
  * - 【Phase 1】実行中セッション(RunningSession。TM の物理名のまま)は、起動元で分け尽くされる
  *   ので抽象クラスにし、TM の相違のサブセット(app起動 / 外部起動)を継承で描いた。Session
  *   との線は、TM の E-R(セッション 1 : 実行中セッション 0..*)を、コンポジションではなく
@@ -70,8 +72,8 @@
  *   所有する部分のクラス(PermissionSuggestion。0..*)にした。
  *   名前の重なり: native の app クレートには、#345 の実行中ガードが使う型 `RunningSession`
  *   (台帳のパスと PID と根拠。`app/src/lib.rs`)が既にあり、TM の `RunningSession` と別の
- *   もの(こちらは domain の型)。app 側の型はまだどの図にも載せていない。実装のときに、
- *   どちらかを改名して名前をそろえる必要がある(domain 側は TM の物理名のまま残した)。
+ *   もの(こちらは domain の型)だった。実装(#391)で app 側を `DetectedRunning` に改名して
+ *   解消した(domain 側は TM の物理名のまま。app 側の型は `classes-infra.ts` にある)。
  * - 【Phase 1: domain と infra の境界】claude CLI の wire 形式(stream-json の各行:
  *   stream_event / system / result / control_request / control_response など)は infra が読む
  *   DTO であり、domain には置かない(版で項目が増えるため。未知の type / subtype は捨てる)。
@@ -101,6 +103,22 @@
  *   `tool_use_id`(AI応答行の tool_use ブロックを指す)は、ブロックが TM の第2弾でモノになる
  *   まで線を引かない。台帳のうち app が使わない語彙(ピア関連。peer_token は秘匿)も TM に
  *   あるため写したが、Debug やログに値を出さないこと(native.md §4)。
+ * - 【Phase 1: 実装との差(#391。PR #395)】設計を実装した結果、次の点が設計と違う。図は
+ *   実物(`crates/domain/src/`。1型 = 1ファイル)に合わせて描き直し、該当クラスの説明に
+ *   「実装との差」として理由を残した(11点の判断の全文は PR #395)。
+ *   (1) RunningSession は抽象クラスではなく共通フィールドの struct で、RunningSessionByApp /
+ *   RunningSessionExternal は継承ではなく `base` で持つコンポジション(Rust に継承が無く、
+ *   trait だと台帳の語彙の読み出しが全部メソッドになるため)。session_id(R)は実装ではフィールド。
+ *   (2) PermissionBehavior は3値ではなく値を持つバリアント(Allow { updated_input,
+ *   updated_permissions } / Deny { message } / Cancelled)で、PermissionResponse は
+ *   request_id・behavior・responded_at だけを持つ(「Deny なのに更新後の入力がある」矛盾を
+ *   型で作れなくするため)。(3) PermissionResponse は問い合わせに所有されず、応答の側が
+ *   request_id で問い合わせを指す(関連)。(4) `/request_kind` はフィールドではなくメソッド。
+ *   (5) RunningSessionByApp に、答え待ちの列を動かす receive_permission_request /
+ *   settle_permission_request / exit が加わった。`apply` が process_state_at を記録するのは
+ *   状態が変わったときだけ。(6) PermissionSuggestion に SDK の PermissionUpdate との往復
+ *   (from_update_value / to_update_value)、PermissionRequestKind に from_tool_name が加わった。
+ *   コンストラクタ(`new` / `allow` / `deny` / `cancelled`)は図に描いていない。
  */
 import type { DiagramInput } from "@yanqirenshi/d3.classes";
 import {
@@ -303,8 +321,7 @@ const DEFS: ClassDef[] = [
   },
   // ============ 実行中セッション・権限の問い合わせ・途中経過(Phase 1。issue #381・#388) ============
   {
-    name: { physical: "RunningSession", logical: "RunningSession", description: "いま動いている Claude Code のプロセス1つ。~/.claude/sessions/<pid>.json(と .key)が台帳。起動元(app 自身 / 外部)で分け尽くされるので抽象クラスにする。会話(Session)はこのプロセスの中で動き、終わった会話は動いていない(0件)。同じ会話を後で再開すると別のプロセスになる。TM: 実行中セッション(イベント)" }, // 論理名: 実行中セッション
-    stereotype: "abstract",
+    name: { physical: "RunningSession", logical: "RunningSession", description: "いま動いている Claude Code のプロセス1つ。~/.claude/sessions/<pid>.json(と .key)が台帳。起動元(app 自身 / 外部)で分け尽くされる。会話(Session)はこのプロセスの中で動き、終わった会話は動いていない(0件)。同じ会話を後で再開すると別のプロセスになる。【実装との差(#391)】設計では抽象クラスだったが、Rust には継承が無いため、共通のフィールドを持つ struct にし、サブクラスにあたる RunningSessionByApp / RunningSessionExternal がこれを base として持つ(コンポジション)。trait にすると台帳の語彙(20超のフィールド)の読み出しが全部メソッドになるため。session_id(R)は実装ではフィールド(String)で持つ(図では関連 session)。peer_token は Debug を手書きして値を出さない。TM: 実行中セッション(イベント)" }, // 論理名: 実行中セッション
     attributes: [
       // 個体指定子は pidDomain + pid + startedAt。pid は OS が使い回すので単独では個体を指定できない。
       // sessionId(R)は関係線(session)で表す。
@@ -334,11 +351,12 @@ const DEFS: ClassDef[] = [
       attr("peer_features", "Vec<String>"),
     ],
     position: { x: 55, y: 1650 },
+    filePath: "apps/native/crates/domain/src/running_session.rs",
     // messaging_socket_path と型の列が重なるので広げる(LogLine の size の説明を参照)。
     size: { w: 340, h: 0 },
   },
   {
-    name: { physical: "RunningSessionByApp", logical: "RunningSessionByApp", description: "app が子プロセスとして起動した claude CLI(PoC #382)。標準入出力(stream-json)で対話し続けるため、このサブクラスだけがプロセスの状態と権限の問い合わせを持つ。台帳は外部起動と同じ形で書かれる(entrypoint は sdk-cli)ので台帳では区別できず、app が自分の子プロセスの PID を知っていることで区分する。#361 のガード(実行中の検知)では app は自分が起動した PID を除外する。TM: 実行中セッション(app起動)(イベントのサブセット)" }, // 論理名: 実行中セッション(app起動)
+    name: { physical: "RunningSessionByApp", logical: "RunningSessionByApp", description: "app が子プロセスとして起動した claude CLI(PoC #382)。標準入出力(stream-json)で対話し続けるため、このサブクラスだけがプロセスの状態と権限の問い合わせを持つ。台帳は外部起動と同じ形で書かれる(entrypoint は sdk-cli)ので台帳では区別できず、app が自分の子プロセスの PID を知っていることで区分する。#361 のガード(実行中の検知)では app は自分が起動した PID を除外する。【実装との差(#391)】継承ではなく、共通のフィールドの struct RunningSession を base として持つコンポジション(線 base)。permission_requests は「まだ答えていない」問い合わせの列(答えたものは外す)。TM: 実行中セッション(app起動)(イベントのサブセット)" }, // 論理名: 実行中セッション(app起動)
     attributes: [
       attr("process_state", "ProcessState"), // TM: プロセス状態
       attr("process_state_at", "u64"), // TM: プロセス状態の更新日時
@@ -349,17 +367,28 @@ const DEFS: ClassDef[] = [
       //   Initialized: 起動中 → 待機 / MessageSent: 待機 → 実行中 / PermissionAsked: 実行中 → 権限待ち
       //   PermissionSettled: 権限待ち → 実行中 / TurnFinished: 実行中 → 待機 / Exited: どの状態からでも → 終了
       // 表にない組み合わせは状態を変えない(実行中に次の入力を送っても実行中のまま。キューは CLI 側)。
-      // 終了は戻らない。いずれの場合も at_time を process_state_at に記録する。
+      // 終了は戻らない。【実装との差(#391)】at_time を process_state_at に記録するのは、状態が
+      // 変わったときだけ(設計は「いずれの場合も」。変わらない契機や終了後の契機で「状態を最後に
+      // 変えた日時」が動くと意味を失うため)。
       method("apply", ["trigger: ProcessTrigger", "at_time: u64"], "()"),
+      // 【実装での追加(#391)】答え待ちの列(permission_requests)を動かすメソッド。
+      // receive: 列に足し(同じ request_id は足さない)、PermissionAsked で状態を動かす。
+      // settle: 列から外し、答え待ちが無くなったら PermissionSettled で状態を動かす(列に無ければ何もしない)。
+      // exit: 答え待ちを捨てて Exited で状態を動かす。
+      method("receive_permission_request", ["request: PermissionRequest", "at_time: u64"], "()"),
+      method("settle_permission_request", ["request_id: &str", "at_time: u64"], "Option<PermissionRequest>"),
+      method("exit", ["at_time: u64"], "()"),
     ],
     position: { x: 400, y: 2350 },
-    // apply の引数が長く、戻り値型の列と重なるので広げる(LogLine の size の説明を参照)。
-    size: { w: 330, h: 0 },
+    filePath: "apps/native/crates/domain/src/running_session_by_app.rs",
+    // メソッドの引数が長く、戻り値型の列と重なるので広げる(LogLine の size の説明を参照)。
+    size: { w: 580, h: 0 },
   },
   {
-    name: { physical: "RunningSessionExternal", logical: "RunningSessionExternal", description: "app 以外(ターミナルの claude、Claude Desktop、ほかの SDK 利用)が起動した実行中セッション。app は台帳から存在を知るだけで、標準入出力を持たないため対話できない。右側の語彙は親が持つものだけ。TM: 実行中セッション(外部起動)(イベントのサブセット)" }, // 論理名: 実行中セッション(外部起動)
+    name: { physical: "RunningSessionExternal", logical: "RunningSessionExternal", description: "app 以外(ターミナルの claude、Claude Desktop、ほかの SDK 利用)が起動した実行中セッション。app は台帳から存在を知るだけで、標準入出力を持たないため対話できない。右側の語彙は親が持つものだけ。【実装との差(#391)】継承ではなく、RunningSession を base として持つコンポジション(線 base)。TM: 実行中セッション(外部起動)(イベントのサブセット)" }, // 論理名: 実行中セッション(外部起動)
     attributes: [],
     position: { x: 55, y: 2350 },
+    filePath: "apps/native/crates/domain/src/running_session_external.rs",
     size: { w: 260, h: 0 },
   },
   {
@@ -367,7 +396,8 @@ const DEFS: ClassDef[] = [
     stereotype: "enumeration",
     // 起動中 / 待機 / 実行中 / 権限待ち / 終了。
     attributes: ["Starting", "Idle", "Running", "AwaitingPermission", "Exited"].map(label),
-    position: { x: 900, y: 2350 },
+    position: { x: 1200, y: 2350 },
+    filePath: "apps/native/crates/domain/src/process_state.rs",
   },
   {
     name: { physical: "ProcessTrigger", logical: "ProcessTrigger", description: "ProcessState を動かす出来事(RunningSessionByApp.apply の入力)。app が子プロセスとのやり取りから決める。TM には無い(状態遷移の入力であり、保存しない)" }, // 論理名: プロセス状態の遷移契機
@@ -380,10 +410,11 @@ const DEFS: ClassDef[] = [
       "TurnFinished",
       "Exited",
     ].map(label),
-    position: { x: 1200, y: 2350 },
+    position: { x: 1500, y: 2350 },
+    filePath: "apps/native/crates/domain/src/process_trigger.rs",
   },
   {
-    name: { physical: "PermissionRequest", logical: "PermissionRequest", description: "CLI から届く control_request(subtype: can_use_tool)。ツールを使ってよいかを app に尋ねる(PoC #382 レポート §2.1)。AskUserQuestion(選択肢)と ExitPlanMode(計画の承認)も同じ形で届く(§2.4)ので、tool_name から求まる問い合わせ種別(/request_kind)で区別して画面を出し分ける。tool_use_id は AI応答行の tool_use ブロックを指すが、ブロックは TM の第2弾でモノにするため今は結ばない。TM: 権限の問い合わせ(イベント)" }, // 論理名: 権限の問い合わせ
+    name: { physical: "PermissionRequest", logical: "PermissionRequest", description: "CLI から届く control_request(subtype: can_use_tool)。ツールを使ってよいかを app に尋ねる(PoC #382 レポート §2.1)。AskUserQuestion(選択肢)と ExitPlanMode(計画の承認)も同じ形で届く(§2.4)ので、tool_name から求まる問い合わせ種別(/request_kind)で区別して画面を出し分ける。tool_use_id は AI応答行の tool_use ブロックを指すが、ブロックは TM の第2弾でモノにするため今は結ばない。【実装との差(#391)】導出値 /request_kind はフィールドにせず、メソッド request_kind()(tool_name から PermissionRequestKind::from_tool_name で求める)にした(ガイドの「導出できる値」の許す形)。提案(suggestions)は問い合わせが持つ列。応答(PermissionResponse)は問い合わせが所有せず、response 側が request_id で指す(線 request_id)。TM: 権限の問い合わせ(イベント)" }, // 論理名: 権限の問い合わせ
     attributes: [
       // 個体指定子は request_id と、尋ねてきた実行中セッションの値(R。関係線 permission_requests)。
       attr("request_id", "String"), // 個体指定子
@@ -397,6 +428,7 @@ const DEFS: ClassDef[] = [
       attr("/request_kind", "PermissionRequestKind"), // TM: 問い合わせ種別(D)。tool_name から求める
     ],
     position: { x: 400, y: 2650 },
+    filePath: "apps/native/crates/domain/src/permission_request.rs",
     // tool_input と型の列が重なるので広げる(LogLine の size の説明を参照)。
     size: { w: 330, h: 0 },
   },
@@ -404,30 +436,39 @@ const DEFS: ClassDef[] = [
     name: { physical: "PermissionRequestKind", logical: "PermissionRequestKind", description: "権限の問い合わせの種別。tool_name から求まる(導出)。ToolUse: 通常のツール使用の許可 / AskUserQuestion: 選択肢の質問(許可・拒否ではなく、ユーザーの選択を更新後の入力に入れて返す。レポート §2.4)/ ExitPlanMode: 計画の承認。TM: 問い合わせ種別(D)" }, // 論理名: 問い合わせ種別
     stereotype: "enumeration",
     attributes: ["ToolUse", "AskUserQuestion", "ExitPlanMode"].map(label),
-    position: { x: 830, y: 3050 },
-    size: { w: 230, h: 0 },
+    // tool_name から種別を求める純粋な導出(AskUserQuestion / ExitPlanMode 以外は ToolUse)。
+    methods: [method("from_tool_name", ["tool_name: &str"], "Self")],
+    position: { x: 980, y: 3050 },
+    filePath: "apps/native/crates/domain/src/permission_request_kind.rs",
+    size: { w: 300, h: 0 },
   },
   {
     name: { physical: "PermissionResponse", logical: "PermissionResponse", description: "app が返す control_response(レポート §2.1)。許可なら更新後の入力(そのまま、または書き換えた引数)を返し、拒否なら拒否メッセージがそのままモデルへの tool_result になる。「今後も許可」は更新後の権限に入れて返す。中断すると CLI から control_cancel_request が来て、app は応答せずに終わるため、決着種別に取り消しを含める(取り消しのときは更新後の入力・拒否メッセージ・更新後の権限は持たない)。問い合わせとは別の行為(日時が別)なので別のクラスにし、問い合わせが 0..1 を持つ。TM: 権限の応答(イベント)" }, // 論理名: 権限の応答
     attributes: [
-      // 個体指定子は request_id(R)だけ。関係線 response で表す。
+      // 個体指定子は request_id(R)だけ。TM では関係線で表すが、実装は問い合わせを所有せず、
+      // ID で指すフィールドとして持つ(線 request_id。設計の「問い合わせが response を所有」との差。#391)。
+      attr("request_id", "String"),
+      // 更新後の入力・拒否メッセージ・更新後の権限は、決着種別ごとに持つ値が違うので、
+      // 平らなフィールドにせず PermissionBehavior のバリアントが持つ(#391。設計との差)。
       attr("behavior", "PermissionBehavior"), // TM: 決着種別
-      attr("updated_input", "Option<serde_json::Value>"), // 許可のとき。TM: 更新後の入力
-      attr("deny_message", "Option<String>"), // 拒否のとき
-      // PermissionSuggestion と同じ形(SDK の PermissionUpdate 型)の列。TM: 更新後の権限
-      attr("updated_permissions", "Option<serde_json::Value>"),
       attr("responded_at", "u64"), // TM: 応答日時
     ],
     position: { x: 830, y: 2650 },
-    // updated_permissions と型の列が重なるので広げる(LogLine の size の説明を参照)。
-    size: { w: 400, h: 0 },
+    filePath: "apps/native/crates/domain/src/permission_response.rs",
+    size: { w: 260, h: 0 },
   },
   {
-    name: { physical: "PermissionBehavior", logical: "PermissionBehavior", description: "権限の問い合わせの決着種別。Allow: 許可 / Deny: 拒否 / Cancelled: 取り消し(中断による control_cancel_request)。TM: 決着種別" }, // 論理名: 決着種別
+    name: { physical: "PermissionBehavior", logical: "PermissionBehavior", description: "権限の問い合わせの決着種別。Allow: 許可(updated_input はツールへ渡す入力。updated_permissions は「今後も許可」にする更新の列 = PermissionSuggestion::to_update_value の JSON の配列)/ Deny: 拒否(message がそのままモデルへの tool_result になる)/ Cancelled: 取り消し(中断による control_cancel_request。app は応答せずに終わる)。【実装との差(#391)】設計では Allow / Deny / Cancelled の3値と平らなフィールドだったが、決着種別ごとに持つ値が違う(Cancelled はどれも持たない)ので、値を持つバリアントにした。「Deny なのに更新後の入力がある」ような矛盾を型で作れなくするため。TM: 決着種別" }, // 論理名: 決着種別
     stereotype: "enumeration",
-    attributes: ["Allow", "Deny", "Cancelled"].map(label),
-    position: { x: 1330, y: 2650 },
-    size: { w: 200, h: 0 },
+    attributes: [
+      "Allow { updated_input: serde_json::Value, updated_permissions: Option<serde_json::Value> }",
+      "Deny { message: String }",
+      "Cancelled",
+    ].map(label),
+    position: { x: 1250, y: 2650 },
+    filePath: "apps/native/crates/domain/src/permission_behavior.rs",
+    // データを持つバリアントの表記が長いので広げる(LogLine の size の説明を参照)。
+    size: { w: 600, h: 0 },
   },
   {
     name: { physical: "PermissionSuggestion", logical: "PermissionSuggestion", description: "permission_suggestions の1件(レポート §2.1)。setMode / addRules / addDirectories などの種別と、適用先(session / localSettings など)を持つ。SDK の PermissionUpdate 型そのもので、許可応答の更新後の権限に入れ返すと「今後も許可」になる。TM: 権限の問い合わせ．提案(多値)" }, // 論理名: 権限の問い合わせ．提案
@@ -435,10 +476,18 @@ const DEFS: ClassDef[] = [
       // 個体指定子は request_id(R)だけで、1件ごとには一意でない。関係線 suggestions で表す。
       attr("suggestion_type", "String"), // 提案種別
       attr("suggestion_destination", "String"), // 適用先
-      attr("suggestion_content", "serde_json::Value"), // 内容(種別ごとに形が違う)
+      // 内容(種別ごとに形が違う)。実装は type と destination を除いた残りの項目(JSON オブジェクト)。
+      attr("suggestion_content", "serde_json::Value"),
+    ],
+    methods: [
+      // SDK の PermissionUpdate の JSON との往復(純粋な変換)。許可応答の更新後の権限に
+      // 入れ返すときに to_update_value を使う。type か destination が文字列でなければ None(読み飛ばす)。
+      method("from_update_value", ["value: &serde_json::Value"], "Option<Self>"),
+      method("to_update_value", [], "serde_json::Value"),
     ],
     position: { x: 400, y: 3050 },
-    size: { w: 350, h: 0 },
+    filePath: "apps/native/crates/domain/src/permission_suggestion.rs",
+    size: { w: 500, h: 0 },
   },
   {
     name: { physical: "ProgressEvent", logical: "ProgressEvent", description: "画面へ流す途中経過の型。CLI の wire 形式(stream_event / system / result / control_request などの JSON 行)は infra が読む DTO であり、domain には置かない。domain にはこの CLI に依存しない中立の型だけを置き、infra が wire → domain に写す(この境界の判断は冒頭の【TM との違い・未決】を参照)。保存しない(画面へ流すだけ。確定した応答は AI応答行が受ける)ので TM にモノは無い。TextDelta: 文章の断片が届いた / ToolStarted: ツール実行が始まった / ToolResultArrived: ツール結果が届いた / TurnFinished: ターンが終わった(成功・失敗。失敗のときは、送信した行を会話に残さない判断に使う。#352 で残った件)/ SentLineConfirmed: 送信した行の uuid が確定した(--replay-user-messages。画面上の「送信中」の行と jsonl の行を結ぶ)" }, // 論理名: 途中経過
@@ -451,6 +500,7 @@ const DEFS: ClassDef[] = [
       "SentLineConfirmed { uuid: String }",
     ].map(label),
     position: { x: 900, y: 1650 },
+    filePath: "apps/native/crates/domain/src/progress_event.rs",
     // 画面へ流す出力で、ユースケース(app)の入出力にあたる。TM のモノではない。
     layer: "application",
     // データを持つバリアントの表記が長いので広げる(LogLine の size の説明を参照)。
@@ -574,11 +624,13 @@ const RELATIONSHIPS = [
     fromMultiplicity: "0..*",
     toMultiplicity: "1",
   }),
-  // TM: 実行中セッションのサブセット(×起動元。属性構成が異なる相違のサブセット)。継承で描く。
-  // 線は「サブクラス → 親」の向き。RunningSession の下辺を左右に分けて受ける
-  // (外部起動が左 = 20、app 起動が右 = 340。線どうしが交差しない順)。
-  rel("inheritance", "RunningSessionExternal", "RunningSession", undefined, "top", 20),
-  rel("inheritance", "RunningSessionByApp", "RunningSession", undefined, "top", 340),
+  // TM: 実行中セッションのサブセット(×起動元。属性構成が異なる相違のサブセット)。設計は継承だったが、
+  // 実装(#391)は Rust に継承が無いため、共通のフィールドの struct RunningSession を、サブセットの
+  // 型が `base` として持つコンポジションにした(RunningSession の説明を参照)。線は「部分 → 全体」の
+  // 向き。RunningSession の下辺を左右に分けて出す(外部起動が左 = 20、app 起動が右 = 340。
+  // 線どうしが交差しない順)。
+  rel("composition", "RunningSession", "RunningSessionExternal", "base", 20, "top"),
+  rel("composition", "RunningSession", "RunningSessionByApp", "base", 340, "top"),
   // プロセス状態(TM: RunningSessionByApp の属性の区分コード)。値として持つ enum なのでコンポジション。
   rel("composition", "ProcessState", "RunningSessionByApp", "process_state", "left", "right"),
   // TM: app が起動した実行中セッション 1 : 権限の問い合わせ 0..*(E-E。問い合わせが実行中セッションの
@@ -588,10 +640,14 @@ const RELATIONSHIPS = [
     fromMultiplicity: "0..*",
   }),
   // TM: 権限の問い合わせ 1 : 権限の応答 0..1(E-E。中断で取り消されると応答が無い。request_id(R))。
-  // 問い合わせが所有するのでコンポジション。応答は問い合わせの右に置き、問い合わせの右辺の
-  // 上寄り(250°)で受ける(下寄り 290° は問い合わせ種別の線に使う)。
-  rel("composition", "PermissionResponse", "PermissionRequest", "response", "left", 250, {
+  // 設計は問い合わせが応答を所有するコンポジションだったが、実装(#391)は問い合わせが応答を
+  // 持たず、応答の側が request_id で問い合わせを指す(応答は組み立てて CLI へ書く値で、答えた
+  // 問い合わせは答え待ちの列から外れる)ので、関連にした。問い合わせの側からはたどらない
+  // (起点の × の意味どおり)。応答は問い合わせの右に置き、問い合わせの右辺の上寄り(250°)で
+  // 受ける(下寄り 290° は問い合わせ種別の線に使う)。
+  rel("association", "PermissionResponse", "PermissionRequest", "request_id", "left", 250, {
     fromMultiplicity: "0..1",
+    toMultiplicity: "1",
   }),
   // 決着種別(TM: 権限の応答の属性の区分コード)。値として持つ enum なのでコンポジション。
   rel("composition", "PermissionBehavior", "PermissionResponse", "behavior", "left", "right"),
@@ -610,12 +666,10 @@ export const DOMAIN_CLASS_DATA: DiagramInput = {
   relationships: RELATIONSHIPS,
 };
 
-// 実装済みなのは 13クラス(Pc・User(第1弾)・GitRepository・GitBranch・GitWorktree(第2〜3弾)・
+// 全24クラスが実装済み(Pc・User(第1弾)・GitRepository・GitBranch・GitWorktree(第2〜3弾)・
 // Session(第4弾)・SessionFile(第5弾)・LogLine・UserLogLine・AssistantLogLine・
-// SystemLogLine・AttachmentLogLine(第6弾)・Profile(classes-native-prototype.ts から昇格))で、
-// filePath を持つ。Phase 1 の11クラス(RunningSession・RunningSessionByApp・
-// RunningSessionExternal・ProcessState・ProcessTrigger・PermissionRequest・
-// PermissionRequestKind・PermissionResponse・PermissionBehavior・PermissionSuggestion・
-// ProgressEvent。issue #388)は設計のみで、まだ実装されていないため filePath を持たない。
+// SystemLogLine・AttachmentLogLine(第6弾)・Profile(classes-native-prototype.ts から昇格)・
+// Phase 1 の11クラス(issue #388 で設計、#391 で実装))。すべて filePath を持つ。
+// Phase 1 の型は、実装の結果、設計と形が違う所がある(冒頭の【Phase 1: 実装との差】)。
 export const DOMAIN_CLASS_FILE_PATHS: ClassFilePaths = filePaths;
 export const DOMAIN_CLASS_LAYERS: ClassLayers = layers;

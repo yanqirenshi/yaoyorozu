@@ -31,8 +31,22 @@
  * 【対象・ファイル対応】infra クレートは domain と違い、まだ1型=1ファイルに
  * 揃っている(型名 snake_case のファイル。例外: `FileClaudeDirStore` は
  * `claude_dir_store.rs`、`SessionWatcher`/`FileSystemRepository` は
- * `session_source.rs` に同居)。全20型(実装19 + SessionWatcher)と、
- * app の port 19個を載せた。
+ * `session_source.rs` に同居、`ClaudeCliProcess`・`ExitSignal` は `ClaudeCliProcessLauncher` と
+ * 同じ `claude_cli_process.rs` に同居)。全24型(実装23 + SessionWatcher)と、
+ * app の port 23個を載せた。
+ *
+ * 【実行中セッション(Phase 1。issue #391)】`RunningSessionSource`(#361 のガード。
+ * `exclude_pids` が加わった)・`RunningSessionLauncher`・`RunningProcess`・
+ * `RunningSessionEventSink` の4 port と、その実装を載せた。`ExitSignal`(private)は
+ * `ClaudeCliProcess` が共有する終了の合図で、port を実装しない補助の型。port の入出力の
+ * app の型(`StartRunningSession`・`RunningPermissionMode`・`StartedRunningSession`・
+ * `RunningSessionEvent`・`PermissionDecision`・`DetectedRunning`・`RunningEvidence`)は、
+ * app の非 port の型は基本的に載せない方針だが、port のシグネチャに出てくるので例外として
+ * 載せた(層はアプリケーションのビジネスルール)。`RunningSessionEventSink` の実装
+ * (`ChannelSink`)は tauri 層(`classes-tauri.ts`)で、実現の線は引かない。
+ * `claude_stream_json.rs`(起動引数・標準入出力の JSON 行・wire → domain の写し)は、型
+ * (struct / enum)を持たず関数だけ(wire は `serde_json::Value` から取れるものだけを取り出す。
+ * 未知の type / subtype と必須項目の欠けた行は捨てる)なので、クラスとしては描かない。
  *
  * 【GitLedgerStore・GitStateSource への参照】メソッドの戻り値・引数に出てくる
  * `domain::GitLedger`・`domain::ObservedGitState` は、`classes-native-prototype.ts`
@@ -43,6 +57,7 @@ import type { DiagramInput } from "@yanqirenshi/d3.classes";
 import {
   attr,
   defineDiagram,
+  label,
   method,
   type ClassDef,
   type ClassFilePaths,
@@ -386,6 +401,170 @@ const DEFS: ClassDef[] = [
     position: { x: 5600, y: 2400 },
     filePath: "apps/native/crates/infra/src/git_state_source.rs",
   },
+  // ============ 実行中セッション(Phase 1。issue #391) ============
+  // 実行中の検知(#361 のガード)。#391 で find_running に除外する PID(exclude_pids)が加わった。
+  {
+    name: { physical: "RunningSessionSource", logical: "RunningSessionSource", description: "実行中セッションの検出(port)。app::lib.rs。~/.claude/sessions/<PID>.json の読み取りとプロセス生存確認は infra に閉じ込める。app が起動した claude(RunningSessionByApp)も同じ台帳を書くので、exclude_pids で自分の PID を除外して、外部で実行中かを調べる(issue #345・#391)" },
+    stereotype: "interface",
+    methods: [method("find_running", ["session_id: &str", "exclude_pids: &[u32]"], "Result<Option<DetectedRunning>, AppError>")],
+    position: { x: 6300, y: 2050 },
+    filePath: "apps/native/crates/app/src/lib.rs",
+    size: { w: 640, h: 0 },
+  },
+  {
+    name: { physical: "FileRunningSessionSource", logical: "FileRunningSessionSource", description: "~/.claude/sessions/ の台帳を読み、PID の生存で実行中かを判定する RunningSessionSource 実装(running_session_source.rs)。読めない・分からないときは実行中とみなす側に倒す。台帳を読む型(LedgerEntry。private)は図に描かない" },
+    attributes: [attr("sessions_dir", "PathBuf")],
+    position: { x: 6300, y: 2400 },
+    filePath: "apps/native/crates/infra/src/running_session_source.rs",
+  },
+  {
+    name: { physical: "RunningSessionLauncher", logical: "RunningSessionLauncher", description: "子プロセス(claude)を起動する(port)。app/src/running_session.rs。起動後の出来事は sink へ流す" },
+    stereotype: "interface",
+    methods: [method("start", ["request: &StartRunningSession", "sink: Arc<dyn RunningSessionEventSink>"], "Result<Arc<dyn RunningProcess>, AppError>")],
+    position: { x: 6300, y: 2900 },
+    filePath: "apps/native/crates/app/src/running_session.rs",
+    size: { w: 1000, h: 0 },
+  },
+  {
+    name: { physical: "ClaudeCliProcessLauncher", logical: "ClaudeCliProcessLauncher", description: "claude を起動する RunningSessionLauncher の実装(claude_cli_process.rs)。spawn は Stdio::piped()(Windows は CREATE_NO_WINDOW)。起動引数・標準入出力の JSON 行(wire 形式)を組み立てる・読む関数は claude_stream_json.rs にあり、CLI の wire 形式は infra に閉じ込める(domain に置かない)。leading_args はテストで実行ファイルを差し替えるため" },
+    attributes: [
+      attr("program", "String"), // private
+      attr("leading_args", "Vec<String>"), // private。program の直後に置く引数(テスト用)
+    ],
+    position: { x: 6300, y: 3250 },
+    filePath: "apps/native/crates/infra/src/claude_cli_process.rs",
+    size: { w: 300, h: 0 },
+  },
+  {
+    name: { physical: "RunningProcess", logical: "RunningProcess", description: "起動済みの子プロセス(port)。app/src/running_session.rs。標準入力への書き込み(user メッセージ・権限の応答・中断)と、停止" },
+    stereotype: "interface",
+    methods: [
+      method("pid", [], "u32"),
+      method("pid_domain", [], "String"),
+      method("send_user_message", ["text: &str", "images: &[ImageAttachment]"], "Result<(), AppError>"),
+      method("respond_permission", ["response: &PermissionResponse"], "Result<(), AppError>"),
+      method("interrupt", [], "Result<(), AppError>"),
+      // 標準入力を閉じて終了を待つ(約1秒)。応答が無ければ強制終了する。終了済みなら何もしない。
+      method("stop", [], "()"),
+    ],
+    position: { x: 6300, y: 3750 },
+    filePath: "apps/native/crates/app/src/running_session.rs",
+    size: { w: 700, h: 0 },
+  },
+  {
+    name: { physical: "ClaudeCliProcess", logical: "ClaudeCliProcess", description: "起動済みの claude 子プロセス(RunningProcess の実装。claude_cli_process.rs。private)。書き込みは行の途中で混ざらないよう stdin のロックの中で1行ずつ。stop は stdin を閉じて最大3秒待ち、応答が無ければプロセスツリーごと強制終了する(Windows: taskkill /T /F → Child::kill)。Drop でも止める" },
+    attributes: [
+      attr("pid", "u32"),
+      attr("stdin", "Mutex<Option<ChildStdin>>"), // stop で閉じる(None)
+      attr("child", "Arc<Mutex<Child>>"),
+      attr("exit", "Arc<ExitSignal>"), // 共有される(線 exit は関連)
+      attr("next_request", "AtomicU64"), // 中断の要求の request_id の連番
+    ],
+    position: { x: 6300, y: 4200 },
+    filePath: "apps/native/crates/infra/src/claude_cli_process.rs",
+    size: { w: 380, h: 0 },
+  },
+  {
+    name: { physical: "ExitSignal", logical: "ExitSignal", description: "プロセスの終了を待つための合図(claude_cli_process.rs。private)。読み取りスレッドが終了を見届けて立てる" },
+    attributes: [
+      attr("exited", "Mutex<bool>"),
+      attr("changed", "Condvar"),
+    ],
+    position: { x: 6950, y: 4200 },
+    filePath: "apps/native/crates/infra/src/claude_cli_process.rs",
+    size: { w: 260, h: 0 },
+  },
+  {
+    name: { physical: "RunningSessionEventSink", logical: "RunningSessionEventSink", description: "実行中セッションからの出来事の受け口(port)。app/src/running_session.rs。実装は tauri 層(ChannelSink。classes-tauri.ts)で、別の図の離れた位置にあるため、ほかの port の実装と違い実現の線は引かない。読み取りスレッドから呼ばれるので、呼び出しは順序どおりに届く前提で、ブロックしないこと(Send + Sync)" },
+    stereotype: "interface",
+    methods: [method("emit", ["event: RunningSessionEvent"], "()")],
+    position: { x: 6300, y: 4650 },
+    filePath: "apps/native/crates/app/src/running_session.rs",
+    size: { w: 420, h: 0 },
+  },
+  // app クレートの型(port の入出力)。app の非 port の型は基本的にこの図に載せていないが、
+  // 上の port のシグネチャに出てくるものはここに載せた(層はアプリケーションのビジネスルール)。
+  {
+    name: { physical: "StartRunningSession", logical: "StartRunningSession", description: "起動の要求(app/src/running_session.rs)。値は app が解決済みで、フロントから受け取ったパスは含まない(cwd は会話ファイルから求める。native.md §4)" },
+    attributes: [
+      attr("session_id", "String"),
+      attr("cwd", "PathBuf"),
+      attr("mode", "RunningPermissionMode"),
+    ],
+    position: { x: 7700, y: 2050 },
+    filePath: "apps/native/crates/app/src/running_session.rs",
+    layer: "application",
+    size: { w: 320, h: 0 },
+  },
+  {
+    name: { physical: "RunningPermissionMode", logical: "RunningPermissionMode", description: "Phase 1 で選べる権限モード。plan(計画だけ)と default(すべてのツール使用が権限の問い合わせとして届く)。auto など他のモードは Phase 2。CLI 2.1.280 では default が manual に改名されているが、判定には使わず CLI へそのまま渡す(as_cli_value)" },
+    stereotype: "enumeration",
+    attributes: ["Plan", "Default"].map(label),
+    methods: [method("as_cli_value", [], "&'static str")],
+    position: { x: 7700, y: 2400 },
+    filePath: "apps/native/crates/app/src/running_session.rs",
+    layer: "application",
+    size: { w: 300, h: 0 },
+  },
+  {
+    name: { physical: "StartedRunningSession", logical: "StartedRunningSession", description: "start_running_session の結果(app/src/running_session.rs)。session は domain::RunningSessionByApp(classes-domain.ts)、process は RunningProcess(この図の port)で、いずれも離れた位置にあるため線は引かない" },
+    attributes: [
+      attr("session", "domain::RunningSessionByApp"),
+      attr("process", "Arc<dyn RunningProcess>"),
+    ],
+    position: { x: 8250, y: 2050 },
+    filePath: "apps/native/crates/app/src/running_session.rs",
+    layer: "application",
+    size: { w: 400, h: 0 },
+  },
+  {
+    name: { physical: "RunningSessionEvent", logical: "RunningSessionEvent", description: "実行中セッション(子プロセス)からの出来事(app/src/running_session.rs)。infra の読み取りスレッドが、CLI の wire 形式を domain の型に写したうえで RunningSessionEventSink へ流す。apply_running_session_event(純粋な規則)が状態へ反映する: Initialized → Initialized / Progress(TurnFinished) → TurnFinished / Progress(それ以外) → 状態は動かさない / PermissionRequested → 答え待ちに足して PermissionAsked / PermissionCancelled → 答え待ちから外す / Exited → 答え待ちを捨てて Exited" },
+    stereotype: "enumeration",
+    attributes: [
+      "Initialized",
+      "Progress(domain::ProgressEvent)",
+      "PermissionRequested(domain::PermissionRequest)",
+      "PermissionCancelled { request_id: String }",
+      "Exited { exit_code: Option<i32>, stderr_tail: String }",
+    ].map(label),
+    position: { x: 7700, y: 3350 },
+    filePath: "apps/native/crates/app/src/running_session.rs",
+    layer: "application",
+    size: { w: 560, h: 0 },
+  },
+  {
+    name: { physical: "PermissionDecision", logical: "PermissionDecision", description: "画面から受け取る、権限の問い合わせへの答え(app/src/running_session.rs)。取り消し(Cancelled)は CLI 側が決めるもので画面からは選べない。拒否メッセージを省略したときは「ユーザーが拒否しました」がそのままモデルへの tool_result になる" },
+    stereotype: "enumeration",
+    attributes: [
+      "Allow { updated_input: Option<serde_json::Value>, updated_permissions: Option<serde_json::Value> }",
+      "Deny { message: Option<String> }",
+    ].map(label),
+    position: { x: 7700, y: 3800 },
+    filePath: "apps/native/crates/app/src/running_session.rs",
+    layer: "application",
+    size: { w: 700, h: 0 },
+  },
+  {
+    name: { physical: "DetectedRunning", logical: "DetectedRunning", description: "送信先が外部で実行中とみなされた根拠(app::lib.rs。issue #345)。エラーメッセージに含め、誤って止められたときにユーザーが原因(台帳ファイル・PID)を見つけて自分で解消できるようにする。#391 で `RunningSession` から改名した(domain に、クラス図の実行中セッション domain::RunningSession が入ったため)" },
+    attributes: [
+      attr("ledger_path", "PathBuf"), // 根拠になった台帳(~/.claude/sessions/<PID>.json)のパス
+      attr("pid", "u32"),
+      attr("evidence", "RunningEvidence"),
+    ],
+    position: { x: 8250, y: 2400 },
+    filePath: "apps/native/crates/app/src/lib.rs",
+    layer: "application",
+    size: { w: 400, h: 0 },
+  },
+  {
+    name: { physical: "RunningEvidence", logical: "RunningEvidence", description: "DetectedRunning の根拠の強さ(app::lib.rs)。SessionMatched: 台帳の sessionId が送信先と一致し、そのプロセスが生きている / LedgerUnreadable: 台帳から sessionId を取り出せず照合できないが、そのプロセスが生きているため、安全側で実行中とみなした" },
+    stereotype: "enumeration",
+    attributes: ["SessionMatched", "LedgerUnreadable"].map(label),
+    position: { x: 8250, y: 2750 },
+    filePath: "apps/native/crates/app/src/lib.rs",
+    layer: "application",
+    size: { w: 300, h: 0 },
+  },
 ];
 
 // port(interface)は app クレートが定義するのでアプリケーションのビジネスルール、
@@ -415,6 +594,15 @@ const RELATIONSHIPS = [
   // Git台帳・観測(第3弾)
   rel("realization", "FileGitLedgerStore", "GitLedgerStore", undefined, "top", "bottom"),
   rel("realization", "SystemGitStateSource", "GitStateSource", undefined, "top", "bottom"),
+  // 実行中セッション(Phase 1)
+  rel("realization", "FileRunningSessionSource", "RunningSessionSource", undefined, "top", "bottom"),
+  rel("realization", "ClaudeCliProcessLauncher", "RunningSessionLauncher", undefined, "top", "bottom"),
+  rel("realization", "ClaudeCliProcess", "RunningProcess", undefined, "top", "bottom"),
+  // exit は Arc で共有される(所有ではないので関連)。
+  rel("association", "ClaudeCliProcess", "ExitSignal", "exit", "right", "left"),
+  // 値として持つ enum なので、コンポジション(この図の書き方どおり、持つ側 → enum)。
+  rel("composition", "StartRunningSession", "RunningPermissionMode", "mode", "bottom", "top"),
+  rel("composition", "DetectedRunning", "RunningEvidence", "evidence", "bottom", "top"),
 ];
 
 export const INFRA_CLASS_DATA: DiagramInput = {

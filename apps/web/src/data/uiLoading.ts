@@ -48,6 +48,25 @@ export type LoadingSizeSpec = {
   usage: string;
 };
 
+/**
+ * 大きさの与え方。値そのものより、実装で引っかかる点を残しておく。
+ *
+ * loading-dev の Ring は、size を省いても SVG の style 属性に
+ * `--ld-size: 20px`(既定値)を**必ず**書く(0.3.4 の spinnerRoot。
+ * `size = DEFAULT_SIZE` を既定引数にして、常に style へ入れている)。
+ * そのため、CSS 側からトークンで大きさを決めたい場合は、
+ * `--ld-size` を `!important` で上書きするしかない(スタイルシートの
+ * !important は style 属性に勝つ)。
+ */
+export const LOADING_SIZING = {
+  /** props で渡す方法。トークンの px を JS で引ける実装ではこちらが簡単。 */
+  byProp: "Ring の size に、アイコンのサイズトークンから引いた px を渡す(apps/web)。",
+  /** CSS で決める方法。px を JS で持てない実装ではこちら。 */
+  byCss:
+    "包む要素の中で `.ld-ring { --ld-size: var(--icon-20) !important; }` のように上書きする(apps/native)。Ring が inline style に --ld-size を必ず書くため、!important が要る。",
+  note: "どちらで与えても結果は同じ。CSS で上書きする場合、ライブラリの class 名(ld-ring)に依存するので、loading-dev の版を上げたときは class 名と、size を省いても inline style に --ld-size が入るかを確かめること。",
+};
+
 export const LOADING_SIZES: LoadingSizeSpec[] = [
   {
     key: "small",
