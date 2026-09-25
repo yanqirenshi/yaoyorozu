@@ -498,6 +498,7 @@ export const COMPONENT_NAV: NavItem[] = [
           { key: "part-button", label: "ボタン" },
           { key: "part-tab", label: "タブ" },
           { key: "part-loading", label: "ローディング" },
+          { key: "part-badge", label: "バッジ" },
         ],
       },
     ],

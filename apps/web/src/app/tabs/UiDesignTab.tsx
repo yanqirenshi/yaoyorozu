@@ -19,6 +19,7 @@ import PagePage from "./UiDesign/PagePage";
 import ButtonPage from "./UiDesign/ButtonPage";
 import TabPage from "./UiDesign/TabPage";
 import LoadingPage from "./UiDesign/LoadingPage";
+import BadgePage from "./UiDesign/BadgePage";
 import PartIndexPage from "./UiDesign/PartIndexPage";
 import PartsIndexPage from "./UiDesign/PartsIndexPage";
 import IconPage from "./UiDesign/IconPage";
@@ -105,6 +106,8 @@ function Content({
       return <TabPage />;
     case "part-loading":
       return <LoadingPage />;
+    case "part-badge":
+      return <BadgePage />;
     case "parts":
       return <PartsIndexPage onSelect={onSelect} />;
     case "basic":
