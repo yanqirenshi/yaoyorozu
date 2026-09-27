@@ -2872,7 +2872,8 @@ button.claude-explorer-name {
   color: var(--text-primary);
 }
 
-.new-session-name {
+.new-session-name,
+.new-session-select {
   box-sizing: border-box;
   width: 100%;
   border: 1px solid var(--border-default);

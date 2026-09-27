@@ -2,9 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import Badge from "./Badge";
 import LoadingIcon from "./LoadingIcon";
 import SelectButton from "./SelectButton";
-import type { RunningPermissionModeDto, RunningSessionDto } from "./api/types";
+import type { RunningPermissionModeDto, RunningSessionDto, StartModelDto } from "./api/types";
 import {
   PERMISSION_MODE_LABELS,
+  START_MODELS,
+  START_MODEL_DEFAULT_LABEL,
+  START_MODEL_LABELS,
+  startModelLabel,
   currentPermissionModeLabel,
   processStateLabel,
   processStateTone,
@@ -20,9 +24,11 @@ import {
 //   (`switching`)と、起動中は操作できない。結果(現在値)は CLI が受け入れたあとの取り直しで
 //   表示に反映される(要求しただけでは変わらない)。
 // - モデルは CLI が報告した一覧(`available_models`)から選ばせる(`set_model` は名前を検証しない)。
-// - 未起動のときは「次の起動」の権限モードを選べ、再開に付ける表示名(任意)を入れられる。
+// - 未起動のときは「次の起動」の権限モードとモデル(issue #445)を選べ、再開に付ける表示名
+//   (任意)を入れられる。起動前は CLI が動いていないので一覧が無く、モデルは別名の固定の選択肢
+//   (既定 / opus / sonnet / haiku)から選ばせる(自由入力にしない)。
 
-type MenuKey = "mode" | "model";
+type MenuKey = "mode" | "model" | "start-model";
 
 const MODES: RunningPermissionModeDto[] = ["default", "plan", "accept_edits", "auto"];
 
@@ -35,13 +41,16 @@ type Props = {
   onSelectMode: (mode: RunningPermissionModeDto) => void;
   /** モデルを選んだ(起動中だけ)。 */
   onSelectModel: (model: string) => void;
+  /** 次に起動するときのモデル(未起動のとき。`null` は既定)。 */
+  selectedStartModel: StartModelDto | null;
+  onSelectStartModel: (model: StartModelDto | null) => void;
   /** 切り替えの結果を待っている間(選択を止める)。 */
   switching: boolean;
   /** 再開に付ける表示名(任意。未起動のときだけ入力欄を出す)。 */
   resumeName: string;
   onResumeNameChange: (name: string) => void;
-  /** 表示名の入力欄を出すか(会話ファイルのある会話の再開のとき)。 */
-  canNameOnResume: boolean;
+  /** 再開に付ける表示名の入力欄とモデルの選択を出すか(会話ファイルのある会話の再開のとき)。 */
+  canConfigureResume: boolean;
   onInterrupt: () => void;
   onStop: () => void;
 };
@@ -51,10 +60,12 @@ export default function RunningSessionBar({
   selectedMode,
   onSelectMode,
   onSelectModel,
+  selectedStartModel,
+  onSelectStartModel,
   switching,
   resumeName,
   onResumeNameChange,
-  canNameOnResume,
+  canConfigureResume,
   onInterrupt,
   onStop,
 }: Props) {
@@ -168,6 +179,37 @@ export default function RunningSessionBar({
         </span>
       )}
 
+      {/* 未起動: 次の起動のモデル(別名の固定の選択肢。issue #445)。 */}
+      {!alive && canConfigureResume && (
+        <span className="running-bar-switch">
+          <span className="running-bar-mode">次の起動のモデル: {startModelLabel(selectedStartModel)}</span>
+          <SelectButton
+            size="small"
+            label="モデル"
+            onClick={() => setOpenMenu((m) => (m === "start-model" ? null : "start-model"))}
+          />
+          {openMenu === "start-model" && (
+            <div className="running-bar-menu" role="menu" aria-label="次の起動のモデル">
+              {[null, ...START_MODELS].map((value) => (
+                <button
+                  key={value ?? "default"}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={selectedStartModel === value}
+                  className={`running-bar-menu-item${selectedStartModel === value ? " active" : ""}`}
+                  onClick={() => {
+                    setOpenMenu(null);
+                    onSelectStartModel(value);
+                  }}
+                >
+                  {value === null ? START_MODEL_DEFAULT_LABEL : START_MODEL_LABELS[value]}
+                </button>
+              ))}
+            </div>
+          )}
+        </span>
+      )}
+
       {switching && <LoadingIcon size="small" label="設定を切り替え中" />}
 
       {/* 起動した claude がセッション間メッセージに対応していない版のときの説明(起動は止めない。
@@ -178,7 +220,7 @@ export default function RunningSessionBar({
         </span>
       )}
 
-      {!alive && canNameOnResume && (
+      {!alive && canConfigureResume && (
         <span className="running-bar-name-field">
           <input
             type="text"

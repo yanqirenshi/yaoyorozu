@@ -1,9 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import AddButton from "./AddButton";
-import type { RunningPermissionModeDto } from "./api/types";
-import { PERMISSION_MODE_LABELS } from "./runningSessionLabels";
+import type { RunningPermissionModeDto, StartModelDto } from "./api/types";
+import {
+  PERMISSION_MODE_LABELS,
+  START_MODELS,
+  START_MODEL_DEFAULT_LABEL,
+  START_MODEL_LABELS,
+} from "./runningSessionLabels";
 
-// 新規セッションを作るモーダル(issue #409)。表示名(任意)と権限モードを入れて「作成」で、
+// 新規セッションを作るモーダル(issue #409)。表示名(任意)・権限モード・モデル(issue #445。
+// 別名の選択だけで、自由入力はさせない)を入れて「作成」で、
 // app が新しい会話(`--session-id`)を起動する。開き方・閉じ方は既存のモーダル
 // (`SessionPickerDialog` など)と同じ: `<dialog>` の showModal()、Esc・×・外側クリックで
 // 閉じる。閉じるときは close() を呼ばず、親の状態を戻して(アンマウントして)閉じる。
@@ -13,6 +19,8 @@ export type NewSessionInput = {
   /** 表示名(`--name`)。空なら `null`。 */
   name: string | null;
   mode: RunningPermissionModeDto;
+  /** 起動時のモデル(`--model`)。`null` は既定。 */
+  model: StartModelDto | null;
 };
 
 type NewSessionDialogProps = {
@@ -31,6 +39,7 @@ function NewSessionDialog({ initialMode, onCreate, onClose }: NewSessionDialogPr
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [name, setName] = useState("");
   const [mode, setMode] = useState<RunningPermissionModeDto>(initialMode);
+  const [model, setModel] = useState<StartModelDto | null>(null);
 
   useEffect(() => {
     // 開発時の StrictMode では effect が2回走るため、開いていなければ開く。
@@ -56,7 +65,7 @@ function NewSessionDialog({ initialMode, onCreate, onClose }: NewSessionDialogPr
         className="settings-dialog-body new-session-body"
         onSubmit={(e) => {
           e.preventDefault();
-          onCreate({ name: name.trim() === "" ? null : name.trim(), mode });
+          onCreate({ name: name.trim() === "" ? null : name.trim(), mode, model });
         }}
       >
         <div className="session-picker-head">
@@ -101,6 +110,22 @@ function NewSessionDialog({ initialMode, onCreate, onClose }: NewSessionDialogPr
             </label>
           ))}
         </fieldset>
+        <label className="new-session-field">
+          <span className="new-session-label">モデル</span>
+          {/* 一覧が縦に長くならないよう選択欄にする。選択肢は別名の固定(自由入力にしない) */}
+          <select
+            className="new-session-select"
+            value={model ?? ""}
+            onChange={(e) => setModel(e.target.value === "" ? null : (e.target.value as StartModelDto))}
+          >
+            <option value="">{START_MODEL_DEFAULT_LABEL}</option>
+            {START_MODELS.map((value) => (
+              <option key={value} value={value}>
+                {START_MODEL_LABELS[value]}
+              </option>
+            ))}
+          </select>
+        </label>
         <p className="new-session-note">
           プロファイルのリポジトリで新しい会話を始めます。会話ファイルは、最初のメッセージを送ると
           できます。

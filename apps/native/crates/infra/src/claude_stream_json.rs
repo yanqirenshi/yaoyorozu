@@ -30,7 +30,8 @@ pub(crate) const PEER_SETTINGS: &str = r#"{"crossSessionInbound":"accept"}"#;
 
 /// 再開は `--resume=<ID>`、新規は `--session-id=<UUID>`(app が決めた ID。issue #407)。
 /// 表示名は `--name=<名前>`(任意。先頭が `-` でもオプションと取り違えないよう `=` で1引数に
-/// する)。`--permission-mode` には起動時に選んだモードを渡す。
+/// する)。`--model` は起動時にモデルを選んだときだけ(別名。無ければ付けない = CLI の既定。
+/// issue #445)。`--permission-mode` には起動時に選んだモードを渡す。
 pub(crate) fn build_args(request: &StartRunningSession) -> Vec<String> {
     let mut args: Vec<String> = [
         "--output-format",
@@ -56,6 +57,10 @@ pub(crate) fn build_args(request: &StartRunningSession) -> Vec<String> {
     }
     if let Some(name) = request.name() {
         args.push(format!("--name={name}"));
+    }
+    if let Some(model) = request.model() {
+        args.push("--model".to_string());
+        args.push(model.as_cli_value().to_string());
     }
     args.push("--settings".to_string());
     args.push(PEER_SETTINGS.to_string());
@@ -921,6 +926,7 @@ mod tests {
             repository_path: PathBuf::from("/r"),
             worktree_id: "wt-test".to_string(),
             name: name.map(str::to_string),
+            model: None,
         }
     }
 
@@ -961,6 +967,7 @@ mod tests {
             repository_path: PathBuf::from("/r"),
             worktree_id: "wt-test".to_string(),
             name: None,
+            model: None,
         });
 
         assert!(args.contains(&"--session-id=3a392392-0000-4000-8000-000000000001".to_string()));
@@ -975,6 +982,31 @@ mod tests {
                 "acceptEdits"
             ]
         );
+    }
+
+    #[test]
+    fn a_model_is_passed_as_an_alias_only_when_chosen() {
+        let with_model = |model| StartRunningSession::New {
+            session_id: "3a392392-0000-4000-8000-000000000001".to_string(),
+            cwd: PathBuf::from("/r"),
+            mode: RunningPermissionMode::Default,
+            repository_path: PathBuf::from("/r"),
+            worktree_id: "wt-test".to_string(),
+            name: None,
+            model,
+        };
+
+        for (model, alias) in [
+            (app::StartModel::Opus, "opus"),
+            (app::StartModel::Sonnet, "sonnet"),
+            (app::StartModel::Haiku, "haiku"),
+        ] {
+            let args = build_args(&with_model(Some(model)));
+            let at = args.iter().position(|a| a == "--model").expect("--model");
+            assert_eq!(args[at + 1], alias);
+        }
+        // 既定(未指定)なら --model を付けない(従来どおり CLI の既定)。
+        assert!(!build_args(&with_model(None)).iter().any(|a| a == "--model"));
     }
 
     #[test]

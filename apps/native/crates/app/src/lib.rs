@@ -34,8 +34,8 @@ pub use running_session::{
     write_permission_response, write_switch, write_user_message, AvailableModel,
     CreateRunningSession, NowMs, PermissionDecision, ResumeRunningSession, RunningPermissionMode,
     RunningProcess, RunningSessionEvent, RunningSessionEventSink, RunningSessionLauncher,
-    RunningSessionSwitch, StartRunningSession, StartedRunningSession, MAX_KEPT_EXITED_SESSIONS,
-    MAX_RUNNING_SESSIONS,
+    RunningSessionSwitch, StartModel, StartRunningSession, StartedRunningSession,
+    MAX_KEPT_EXITED_SESSIONS, MAX_RUNNING_SESSIONS,
 };
 pub use running_session_summary::{
     summarize, AddressedProgress, AddressedRunningSessionEvent, RunningSessionRef,

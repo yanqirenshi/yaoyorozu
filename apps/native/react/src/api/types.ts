@@ -368,6 +368,10 @@ export type RunningSessionRefDto = {
   started_at: number;
 };
 
+// 起動のときに選べるモデル(別名。issue #445)。自由入力にしない(CLI は --model の名前を検証しない)。
+// 「既定」は指定なし(null / 省略 = --model を付けない = CLI の既定)。
+export type StartModelDto = "opus" | "sonnet" | "haiku";
+
 // 起動の要求。再開(既存の会話を --resume)と新規(新しい会話。ID は backend が決める)で値が違う。
 // パス(cwd・リポジトリ)は渡さない(backend が会話ファイル・プロファイルから解決する)。
 export type StartRunningSessionDto =
@@ -377,6 +381,8 @@ export type StartRunningSessionDto =
       session_id: string;
       mode: RunningPermissionModeDto;
       name: string | null;
+      // 起動時のモデル。省略・null は CLI の既定(従来どおり)。issue #445。
+      model?: StartModelDto | null;
       // 省略すると、会話ファイルに記録された cwd で開く(従来どおり)。issue #437。
       worktree?: WorktreeSpecDto | null;
       // 起動前の最新化(git fetch + git merge origin/main)。省略で行う。
@@ -386,6 +392,8 @@ export type StartRunningSessionDto =
       kind: "new";
       mode: RunningPermissionModeDto;
       name: string | null;
+      // 起動時のモデル。省略・null は CLI の既定(従来どおり)。issue #445。
+      model?: StartModelDto | null;
       // 省略すると、リポジトリ本体で始める。issue #437。
       worktree?: WorktreeSpecDto | null;
       sync_origin_main?: boolean | null;

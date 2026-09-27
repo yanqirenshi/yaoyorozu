@@ -26,6 +26,7 @@ import {
 } from "../api";
 import type {
   RunningPermissionModeDto,
+  StartModelDto,
   MessageDto,
   ProjectItemDto,
   ProjectStatusOptionDto,
@@ -151,6 +152,12 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const [newDialogOpen, setNewDialogOpen] = useState(false);
   // 再開に付ける表示名(`--name`。任意。未起動のときの入力欄。送信で空に戻す)。
   const [resumeName, setResumeName] = useState("");
+  // 次に起動する(再開する)ときのモデル(issue #445。`null` は既定 = --model を付けない)。
+  // 別の会話へ移ったら、意図せず持ち越さないよう既定に戻す。
+  const [startModel, setStartModel] = useState<StartModelDto | null>(null);
+  useEffect(() => {
+    setStartModel(null);
+  }, [nav.session]);
   // このウィンドウで新規に作ったセッションの ID(会話ファイルができたら、一覧(タブ)へ加える)。
   const newlyStartedRef = useRef<Set<string>>(new Set());
   // 並びの保存は順序どおりに実行する(連続操作で古い並びが後勝ちしないように)。
@@ -750,6 +757,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
       sessionId: sessionParam,
       mode,
       name: resumeName,
+      model: startModel,
       text: draft,
       images: attachments.map((image) => image.base64),
     });
@@ -757,6 +765,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
       setDraft("");
       setAttachments([]);
       setResumeName("");
+      setStartModel(null);
     }
   };
 
@@ -771,6 +780,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
         kind: "new",
         mode: input.mode,
         name: input.name,
+        model: input.model,
       });
       newlyStartedRef.current.add(started.session_id);
       setMode(input.mode);
@@ -1000,10 +1010,12 @@ function SessionsPage({ nav }: SessionsPageProps) {
                 selectedMode={mode}
                 onSelectMode={selectMode}
                 onSelectModel={selectModel}
+                selectedStartModel={startModel}
+                onSelectStartModel={setStartModel}
                 switching={switching}
                 resumeName={resumeName}
                 onResumeNameChange={setResumeName}
-                canNameOnResume={!!projectParam && !!selectedSummary}
+                canConfigureResume={!!projectParam && !!selectedSummary}
                 onInterrupt={() => void interruptRunning()}
                 onStop={() => void stopRunning()}
               />

@@ -373,6 +373,7 @@ pub async fn start_running_session(
                     session_id,
                     mode,
                     name,
+                    model,
                     ..
                 } => {
                     let source = FileSystemRepository::new(root);
@@ -391,6 +392,7 @@ pub async fn start_running_session(
                             mode: mode.into(),
                             repository_path: repository,
                             name,
+                            model: model.map(Into::into),
                             worktree,
                             worktree_index,
                         },
@@ -398,7 +400,9 @@ pub async fn start_running_session(
                         now_ms(),
                     )
                 }
-                StartRunningSessionDto::New { mode, name, .. } => {
+                StartRunningSessionDto::New {
+                    mode, name, model, ..
+                } => {
                     let repository_path = repository.ok_or_else(|| {
                         AppError::InvalidInput(
                             "プロファイルにリポジトリが設定されていません".to_string(),
@@ -416,6 +420,7 @@ pub async fn start_running_session(
                             repository_path,
                             mode: mode.into(),
                             name,
+                            model: model.map(Into::into),
                             worktree: worktree.ok_or_else(|| {
                                 AppError::InvalidInput(
                                     "起動する worktree が決まりません".to_string(),

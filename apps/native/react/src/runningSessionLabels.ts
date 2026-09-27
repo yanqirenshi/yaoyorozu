@@ -3,6 +3,7 @@ import type {
   PermissionSuggestionDto,
   ProcessStateDto,
   RunningPermissionModeDto,
+  StartModelDto,
 } from "./api/types";
 
 // 実行中セッション(issue #392)の表示用の文言。値の意味(状態・モード)は backend が持ち、
@@ -41,6 +42,23 @@ export function processStateTone(state: ProcessStateDto | null): BadgeTone {
     default:
       return "idle";
   }
+}
+
+/**
+ * 起動のときに選べるモデルの表示名(issue #445)。選択肢は CLI の別名で固定(自由入力にしない)。
+ * 「既定」(`null`。--model を付けない)は選択肢の先頭に別に持つ。
+ */
+export const START_MODEL_LABELS: Record<StartModelDto, string> = {
+  opus: "Opus(opus)",
+  sonnet: "Sonnet(sonnet)",
+  haiku: "Haiku(haiku)",
+};
+export const START_MODEL_DEFAULT_LABEL = "既定(CLI の既定のモデル)";
+export const START_MODELS: StartModelDto[] = ["opus", "sonnet", "haiku"];
+
+/** 選んだ起動時のモデルの表示名(`null` は既定)。 */
+export function startModelLabel(model: StartModelDto | null): string {
+  return model === null ? START_MODEL_DEFAULT_LABEL : START_MODEL_LABELS[model];
 }
 
 /** 権限モードの表示名(選べるモード。issue #407 で acceptEdits・auto を足した)。 */
