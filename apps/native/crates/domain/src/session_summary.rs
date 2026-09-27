@@ -11,6 +11,10 @@
 pub struct SessionSummary {
     pub id: String,
     pub title: String,
+    /// 会話に付いている表示名(最後の `custom-title`。前後の空白を除き、空なら `None`)。
+    /// `title` は表示用に解決済みの値(先頭のメッセージなどへ落ちる)で、こちらは実際に付いている
+    /// 名前だけ。再開の表示名(`--name`)の初期値に使う(issue #445)。
+    pub custom_title: Option<String>,
     pub modified_at_ms: u64,
     pub cwd: Option<String>,
     pub git_branch: Option<String>,
@@ -29,6 +33,7 @@ mod tests {
         SessionSummary {
             id: id.to_string(),
             title: "title".to_string(),
+            custom_title: None,
             modified_at_ms,
             cwd: None,
             git_branch: None,

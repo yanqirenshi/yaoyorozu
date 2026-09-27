@@ -542,6 +542,10 @@ impl SessionSource for FileSystemRepository {
                 Ok(SessionSummary {
                     id: scanned.id,
                     title: scanned.title,
+                    custom_title: scanned
+                        .custom_title
+                        .map(|t| t.trim().to_string())
+                        .filter(|t| !t.is_empty()),
                     modified_at_ms,
                     cwd: scanned.cwd,
                     git_branch: scanned.git_branch,
@@ -1238,6 +1242,38 @@ mod tests {
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].id, "s1");
         assert_eq!(sessions[0].title, "最後のタイトル");
+        assert_eq!(sessions[0].custom_title.as_deref(), Some("最後のタイトル"));
+    }
+
+    #[test]
+    fn list_sessions_has_no_custom_title_when_none_is_set_or_it_is_blank() {
+        // 表示用の title は先頭のメッセージへ落ちるが、custom_title(実際に付いた名前)は None のまま。
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        fs::write(
+            project_dir.join("plain.jsonl"),
+            r#"{"type":"user","sessionId":"plain","message":{"content":"hello"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            project_dir.join("blank.jsonl"),
+            [
+                r#"{"type":"user","sessionId":"blank","message":{"content":"hi"}}"#,
+                r#"{"type":"custom-title","customTitle":"  ","sessionId":"blank"}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let sessions = repo.list_sessions("proj").expect("should list sessions");
+
+        assert_eq!(sessions.len(), 2);
+        for session in &sessions {
+            assert_eq!(session.custom_title, None, "{}", session.id);
+        }
+        assert!(sessions.iter().any(|s| s.title == "hello"));
     }
 
     #[test]

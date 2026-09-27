@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import AddButton from "./AddButton";
 import type { RunningPermissionModeDto, StartModelDto } from "./api/types";
 import {
+  MAX_SESSION_NAME_CHARS,
   PERMISSION_MODE_LABELS,
   START_MODELS,
   START_MODEL_DEFAULT_LABEL,
@@ -31,9 +32,6 @@ type NewSessionDialogProps = {
 };
 
 const MODES: RunningPermissionModeDto[] = ["default", "plan", "accept_edits", "auto"];
-
-/** 表示名の長さの上限(backend の `MAX_NAME_CHARS` と同じ。超過は backend が断る)。 */
-const MAX_NAME_CHARS = 100;
 
 function NewSessionDialog({ initialMode, onCreate, onClose }: NewSessionDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -86,7 +84,7 @@ function NewSessionDialog({ initialMode, onCreate, onClose }: NewSessionDialogPr
             type="text"
             className="new-session-name"
             value={name}
-            maxLength={MAX_NAME_CHARS}
+            maxLength={MAX_SESSION_NAME_CHARS}
             onChange={(e) => setName(e.target.value)}
             placeholder="会話のタイトルになります"
             aria-describedby="new-session-name-hint"

@@ -56,6 +56,9 @@ export const START_MODEL_LABELS: Record<StartModelDto, string> = {
 export const START_MODEL_DEFAULT_LABEL = "既定(CLI の既定のモデル)";
 export const START_MODELS: StartModelDto[] = ["opus", "sonnet", "haiku"];
 
+/** 表示名(`--name`)の長さの上限(文字数)。backend の `MAX_NAME_CHARS` と同じ(超過は backend が断る)。 */
+export const MAX_SESSION_NAME_CHARS = 100;
+
 /** 選んだ起動時のモデルの表示名(`null` は既定)。 */
 export function startModelLabel(model: StartModelDto | null): string {
   return model === null ? START_MODEL_DEFAULT_LABEL : START_MODEL_LABELS[model];

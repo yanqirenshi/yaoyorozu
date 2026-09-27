@@ -56,6 +56,7 @@ import NewSessionDialog from "../NewSessionDialog";
 import type { NewSessionInput } from "../NewSessionDialog";
 import PermissionRequestCard from "../PermissionRequestCard";
 import RunningSessionBar from "../RunningSessionBar";
+import { MAX_SESSION_NAME_CHARS } from "../runningSessionLabels";
 import {
   PERMISSION_MODE_LABELS,
   processStateLabel,
@@ -150,13 +151,16 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const [pickerOpen, setPickerOpen] = useState(false);
   // 新規セッションのモーダル(issue #409)。
   const [newDialogOpen, setNewDialogOpen] = useState(false);
-  // 再開に付ける表示名(`--name`。任意。未起動のときの入力欄。送信で空に戻す)。
-  const [resumeName, setResumeName] = useState("");
+  // 再開に付ける表示名(`--name`)の、ユーザーが入力欄を編集した値。編集していなければ `null`
+  // で、入力欄にはその会話の現在の表示名(`custom_title`)を初期値として出す(issue #445。
+  // 同じ値なら会話のタイトルは変わらず、CLI が既定の名前を付けない)。送信・会話の切り替えで戻す。
+  const [resumeNameEdit, setResumeNameEdit] = useState<string | null>(null);
   // 次に起動する(再開する)ときのモデル(issue #445。`null` は既定 = --model を付けない)。
   // 別の会話へ移ったら、意図せず持ち越さないよう既定に戻す。
   const [startModel, setStartModel] = useState<StartModelDto | null>(null);
   useEffect(() => {
     setStartModel(null);
+    setResumeNameEdit(null);
   }, [nav.session]);
   // このウィンドウで新規に作ったセッションの ID(会話ファイルができたら、一覧(タブ)へ加える)。
   const newlyStartedRef = useRef<Set<string>>(new Set());
@@ -611,6 +615,12 @@ function SessionsPage({ nav }: SessionsPageProps) {
   // `--resume <ID>` 化(issue #345)により、一覧に出るセッションはすべて送信対象にできる。新規の
   // セッション(会話ファイルがまだ無い)も、実行中なら送れる。
   const canSend = !!selectedSummary || !!pendingSelected;
+  // 再開の表示名の入力欄の値(編集していなければ、その会話の現在の表示名)。
+  // 表示名の上限(backend の `MAX_NAME_CHARS`)を超える表示名は、切り詰めるとタイトルが変わるので
+  // 初期値にしない(空で始める)。
+  const currentTitleAsName = selectedSummary?.custom_title ?? "";
+  const resumeName =
+    resumeNameEdit ?? ([...currentTitleAsName].length <= MAX_SESSION_NAME_CHARS ? currentTitleAsName : "");
 
   // 権限モードの選択: 起動中なら実行中のセッションを切り替え、未起動なら次の起動の値。
   const selectMode = (value: RunningPermissionModeDto) => {
@@ -764,7 +774,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
     if (sent) {
       setDraft("");
       setAttachments([]);
-      setResumeName("");
+      setResumeNameEdit(null);
       setStartModel(null);
     }
   };
@@ -1014,7 +1024,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
                 onSelectStartModel={setStartModel}
                 switching={switching}
                 resumeName={resumeName}
-                onResumeNameChange={setResumeName}
+                onResumeNameChange={setResumeNameEdit}
                 canConfigureResume={!!projectParam && !!selectedSummary}
                 onInterrupt={() => void interruptRunning()}
                 onStop={() => void stopRunning()}

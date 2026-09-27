@@ -59,6 +59,9 @@ export type ConversationDto = {
 export type SessionSummaryDto = {
   id: string;
   title: string;
+  // 会話に付いている表示名(なければ null。title は先頭のメッセージなどへ落ちる)。
+  // 再開の表示名の初期値に使う(issue #445)。
+  custom_title: string | null;
   modified_at: number;
   // ハブのグラフ階層(issue #104)。JSONLに記録が無ければ `null`。
   cwd: string | null;

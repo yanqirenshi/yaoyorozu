@@ -5,6 +5,7 @@ import SelectButton from "./SelectButton";
 import type { RunningPermissionModeDto, RunningSessionDto, StartModelDto } from "./api/types";
 import {
   PERMISSION_MODE_LABELS,
+  MAX_SESSION_NAME_CHARS,
   START_MODELS,
   START_MODEL_DEFAULT_LABEL,
   START_MODEL_LABELS,
@@ -226,17 +227,19 @@ export default function RunningSessionBar({
             type="text"
             className="running-bar-name"
             value={resumeName}
-            maxLength={100}
+            maxLength={MAX_SESSION_NAME_CHARS}
             onChange={(e) => onResumeNameChange(e.target.value)}
             placeholder="表示名(任意)"
             aria-label="表示名(任意。次に開くときに付ける)"
             aria-describedby="running-bar-name-note"
           />
-          {/* 表示名を付けて再開すると、CLI が会話ファイルにタイトルの行を足して、この会話の
-              タイトルが変わる(最後のタイトルの行が採用される。CLI の挙動。issue #426)。
-              意図せず変えないよう、空のまま(既定)なら何も変わらないことも添える。 */}
+          {/* 入力欄には、会話の現在の表示名を初期値として入れてある(issue #445)。同じ値で再開すれば
+              タイトルは変わらず、CLI が既定の名前(フォルダ名 + 連番)を付けない(セッション間
+              メッセージの宛先に、役割名を使い続けられる)。変えると、CLI が会話ファイルにタイトルの行を
+              足して、この会話のタイトルも変わる(最後のタイトルの行が採用される。CLI の挙動。#426)。
+              空にもできる(その場合は CLI が既定の名前を付ける)。 */}
           <span id="running-bar-name-note" className="running-bar-name-note">
-            付けるとタイトルが変わります
+            変えると、この会話のタイトルも変わります
           </span>
         </span>
       )}
