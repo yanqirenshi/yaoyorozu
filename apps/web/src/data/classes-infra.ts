@@ -100,6 +100,11 @@
  * 表示名の一意化 `unique_session_name` は関数)、`RunningSessionSummary` の版の項目、`AppError` の
  * `WorktreeSyncFailed` が加わった。起動時の `--settings`(`PEER_SETTINGS`。セッション間メッセージ
  * の受信を受け入れる)は定数なので描かない。
+ * 起動時のモデルの指定(issue #445。PR #446)で、起動要求(Resume / New の値、`ResumeRunningSession` /
+ * `CreateRunningSession`)に `model`(`StartModel`。別名 opus / sonnet / haiku。「既定」は None)が
+ * 加わった。CLI への `--model` の引数の組み立ては関数なので描かない。再開時の表示名の初期値
+ * (issue #447。PR #450)のための `SessionSummary.custom_title` は `classes-native-prototype.ts` にあり、
+ * infra の `session_source.rs` がそれを読み取る(関数。型は増えていない)。
  * ビューア(issue #409。PR #418)で、CLI が `initialize` の応答で報告する選べるモデル
  * `AvailableModel` と、出来事 `ModelsListed` が加わった(状態は動かさない)。
  *
@@ -833,8 +838,9 @@ const DEFS: ClassDef[] = [
     stereotype: "enumeration",
     attributes: [
       // worktree_id は起動する worktree の ID(記録用。#437)。cwd は用意した worktree のパス。
-      "Resume { session_id: String, cwd: PathBuf, mode: RunningPermissionMode, repository_path: PathBuf, worktree_id: String, name: Option<String> }",
-      "New { session_id: String, cwd: PathBuf, mode: RunningPermissionMode, repository_path: PathBuf, worktree_id: String, name: Option<String> }",
+      // model は起動時のモデル(--model。None は CLI の既定。#445)。StartModel は離れた位置にあるため線は引かない。
+      "Resume { session_id: String, cwd: PathBuf, mode: RunningPermissionMode, repository_path: PathBuf, worktree_id: String, name: Option<String>, model: Option<StartModel> }",
+      "New { session_id: String, cwd: PathBuf, mode: RunningPermissionMode, repository_path: PathBuf, worktree_id: String, name: Option<String>, model: Option<StartModel> }",
     ].map(label),
     methods: [
       // どちらのバリアントにも同じ名前で取り出せる(値はバリアントごとに持つ)。
@@ -844,12 +850,13 @@ const DEFS: ClassDef[] = [
       method("repository_path", [], "&Path"),
       method("worktree_id", [], "&str"),
       method("name", [], "Option<&str>"),
+      method("model", [], "Option<StartModel>"),
       method("is_new", [], "bool"),
     ],
     position: { x: 7700, y: 1450 },
     filePath: "apps/native/crates/app/src/running_session.rs",
     layer: "application",
-    size: { w: 1250, h: 0 },
+    size: { w: 1450, h: 0 },
   },
   {
     name: { physical: "RunningPermissionMode", logical: "RunningPermissionMode", description: "画面で選べる権限モード(app/src/running_session.rs)。Plan(計画だけ)/ Default(すべてのツール使用が権限の問い合わせとして届く)/ AcceptEdits(編集は問い合わせない)/ Auto(#407 で AcceptEdits と Auto が加わった)。CLI の版で名前が変わる(2.1.280 では default が manual に改名)ので、as_cli_value(CLI へ渡す値)と、その逆写像 from_cli_value(manual も Default に対応づける。画面が扱わない値 = bypassPermissions / dontAsk などは None で、画面は文字列のまま出す)を持つ。domain の RunningSessionByApp.current_permission_mode は文字列で、対応づけは app の責務" },
@@ -874,6 +881,19 @@ const DEFS: ClassDef[] = [
     filePath: "apps/native/crates/app/src/running_session.rs",
     layer: "application",
     size: { w: 400, h: 0 },
+  },
+  {
+    name: { physical: "StartModel", logical: "StartModel", description: "起動のときに選べるモデル(別名。app/src/running_session.rs。issue #445)。CLI の --model に渡す値(as_cli_value: opus / sonnet / haiku)。自由入力にしない: set_model と同じく CLI は --model の名前を検証しない(存在しない名前でも起動し、最初の返答で失敗する)ので、app が知っている別名だけを型で表す。「既定」は型に持たず None(--model を付けない = CLI の既定)。選択肢を「直近に報告された一覧」ではなく固定の別名にした理由: 起動前は CLI が動いておらず一覧(initialize の models)は起動後にしか取れない。覚えた一覧を使うと、app を再起動した直後・初回は一覧が無く選べないし、一覧は CLI の版で変わり(150: 4件、280: 5件)、古い一覧の名前を別の版に渡す危険がある。別名(系列名)は版をまたいで CLI が最新の該当モデルへ解決するので、固定でも古くならない。起動後はこれまでどおり CLI の一覧(AvailableModel)から切り替えられる。tauri の StartModelDto から変換される" },
+    stereotype: "enumeration",
+    attributes: ["Opus", "Sonnet", "Haiku"].map(label),
+    methods: [
+      // CLI の --model に渡す別名
+      method("as_cli_value", [], "&'static str"),
+    ],
+    position: { x: 7700, y: 2750 },
+    filePath: "apps/native/crates/app/src/running_session.rs",
+    layer: "application",
+    size: { w: 360, h: 0 },
   },
   {
     name: { physical: "RunningSessionEvent", logical: "RunningSessionEvent", description: "実行中セッション(子プロセス)からの出来事(app/src/running_session.rs)。infra の読み取りスレッドが、CLI の wire 形式を domain の型に写したうえで RunningSessionEventSink へ流す。子プロセスごとの受け口は宛先(pid)を起動後にしか知らないので宛先を持たず、tauri の処理タスクが宛先を付ける(AddressedRunningSessionEvent)。apply_running_session_event(純粋な規則)が状態へ反映する: Initialized → Initialized / Configured → 現在のモデル・権限モードを反映(値のあるものだけ)/ SwitchApplied → 受け入れられた切り替えを現在値へ反映 / Progress(TurnFinished) → TurnFinished / Progress(それ以外) → 状態は動かさない / ModelsListed → 状態は動かさない(tauri が slot に保持して画面へ知らせる) / PermissionRequested → 答え待ちに足して PermissionAsked / PermissionCancelled → 答え待ちから外す / Exited → 答え待ちを捨てて Exited(Configured と SwitchApplied は #407、ModelsListed は #409 で加わった)" },
@@ -959,6 +979,8 @@ const DEFS: ClassDef[] = [
       attr("name", "Option<String>"), // 表示名(--name)。任意
       // 指定された worktree(用意済み。#437)。あればそこが cwd(その worktree のプロジェクトフォルダに
       // 会話ファイルがあること)。無ければ従来どおり、会話ファイルに記録された cwd で起動する。
+      // 起動時のモデル(--model。None は CLI の既定で、再開する会話に記録されたモデルではなく CLI がその時に選ぶもの。#445)。
+      attr("model", "Option<StartModel>"),
       // ResolvedWorktree・WorktreeIndex はこの図の離れた位置にあるため線は引かない。
       attr("worktree", "Option<ResolvedWorktree>"),
       // 台帳から作った worktree の対応(worktree が無いとき、会話の cwd がどの worktree かを記録するため)
@@ -975,6 +997,8 @@ const DEFS: ClassDef[] = [
       attr("repository_path", "PathBuf"),
       attr("mode", "RunningPermissionMode"),
       attr("name", "Option<String>"), // 表示名(--name)。任意
+      // 起動時のモデル(--model。None は CLI の既定。#445)
+      attr("model", "Option<StartModel>"),
       // 起動する worktree(用意済み。#437)。そのパスが cwd になる(リポジトリ本体で起動するときは、
       // 本体のパスと予約 ID)。ResolvedWorktree はこの図の離れた位置にあるため線は引かない。
       attr("worktree", "ResolvedWorktree"),

@@ -37,6 +37,9 @@
  * 送信の成否が加わった。エラーコード `worktree_sync_failed` は `AppError` の変換(関数)なので
  * 描かない。
  *
+ * 起動時のモデルの指定(issue #445。PR #446)で `StartModelDto` が、再開時の表示名の初期値(issue #447。
+ * PR #450)で `SessionSummaryDto.custom_title` が加わった。
+ *
  * 【実物との突き合わせ】`tauri/src/*.rs` の struct / enum を、この図と名前・フィールド・
  * バリアントで突き合わせた(issue #400)。ViewerTabs は専用の DTO が無く、タブの並びは
  * `Vec<ViewerTabDto>` で受け渡す(command の引数・戻り値は関数なので描かない)。
@@ -134,6 +137,9 @@ const DEFS: ClassDef[] = [
     attributes: [
       attr("id", "String"),
       attr("title", "String"),
+      // 会話に付いている表示名(なければ null。title は先頭のメッセージなどへ落ちる)。
+      // 再開の表示名の初期値に使う(issue #447)。
+      attr("custom_title", "Option<String>"),
       attr("modified_at", "u64"),
       attr("cwd", "Option<String>"),
       attr("git_branch", "Option<String>"),
@@ -706,13 +712,14 @@ const DEFS: ClassDef[] = [
     stereotype: "enumeration",
     attributes: [
       // worktree を省くと、Resume は会話ファイルに記録された cwd で開き、New はリポジトリ本体で始める。
+      // model は起動時のモデル(--model。省略は CLI の既定。#445)。
       // sync_origin_main は起動前の最新化(git fetch + git merge origin/main)を行うか(省略で行う。#437)。
-      "Resume { project: String, session_id: String, mode: RunningPermissionModeDto, name: Option<String>, worktree: Option<WorktreeSpecDto>, sync_origin_main: Option<bool> }",
-      "New { mode: RunningPermissionModeDto, name: Option<String>, worktree: Option<WorktreeSpecDto>, sync_origin_main: Option<bool> }",
+      "Resume { project: String, session_id: String, mode: RunningPermissionModeDto, name: Option<String>, model: Option<StartModelDto>, worktree: Option<WorktreeSpecDto>, sync_origin_main: Option<bool> }",
+      "New { mode: RunningPermissionModeDto, name: Option<String>, model: Option<StartModelDto>, worktree: Option<WorktreeSpecDto>, sync_origin_main: Option<bool> }",
     ].map(label),
     position: { x: 6300, y: 6100 },
     filePath: "apps/native/tauri/src/dto.rs",
-    size: { w: 1120, h: 0 },
+    size: { w: 1350, h: 0 },
   },
   {
     name: { physical: "RunningSessionSwitchDto", logical: "RunningSessionSwitchDto", description: "switch_running_session の引数(フロント→Rust なので Deserialize)。app::RunningSessionSwitch へ変換(From)。Model の名前は CLI が検証しない(存在しない名前も成功で返る)ので、app は文字種・長さだけを検証する。画面は知っているモデルから選ばせるのが安全(#407)" },
@@ -724,6 +731,14 @@ const DEFS: ClassDef[] = [
     position: { x: 6300, y: 6500 },
     filePath: "apps/native/tauri/src/dto.rs",
     size: { w: 560, h: 0 },
+  },
+  {
+    name: { physical: "StartModelDto", logical: "StartModelDto", description: "起動のときに選べるモデル(StartRunningSessionDto の model。フロント→Rust なので Deserialize。issue #445)。app::StartModel へ変換(From)。自由入力にしない: 文字列の名前は受け取らず、この別名だけを受け付ける(それ以外は逆シリアライズで断る)。「既定」は指定なし(null)。serde は snake_case(opus / sonnet / haiku)" },
+    stereotype: "enumeration",
+    attributes: ["Opus", "Sonnet", "Haiku"].map(label),
+    position: { x: 7600, y: 6500 },
+    filePath: "apps/native/tauri/src/dto.rs",
+    size: { w: 240, h: 0 },
   },
   {
     name: { physical: "WorktreeSpecDto", logical: "WorktreeSpecDto", description: "どの worktree で起動するかの指定(StartRunningSessionDto の worktree。フロント→Rust なので Deserialize。issue #437)。app::WorktreeSpec へ変換(From)。パスは含まない: パスは app が決める(native.md §4)。serde は tag = \"kind\"(main | existing | branch)、snake_case。Main: リポジトリ本体(worktree は作らない)/ Existing: 既存の worktree(台帳の worktree_id)/ Branch: このブランチの worktree(無ければ app が用意する。ブランチも無ければ origin/main から作る)" },
