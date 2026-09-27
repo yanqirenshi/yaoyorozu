@@ -2088,6 +2088,7 @@ mod tests {
         SessionSummary {
             id: id.to_string(),
             title: id.to_string(),
+            custom_title: None,
             modified_at_ms,
             cwd: None,
             git_branch: None,

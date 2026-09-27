@@ -176,6 +176,9 @@ impl From<domain::Conversation> for ConversationDto {
 pub struct SessionSummaryDto {
     pub id: String,
     pub title: String,
+    /// 会話に付いている表示名(なければ `null`。`title` は先頭のメッセージなどへ落ちる)。
+    /// 再開の表示名の初期値に使う(issue #445)。
+    pub custom_title: Option<String>,
     pub modified_at: u64,
     /// セッションの作業ディレクトリ。JSONLに記録が無ければ `null`
     /// (ハブのグラフ階層用。issue #104)。
@@ -190,6 +193,7 @@ impl From<domain::SessionSummary> for SessionSummaryDto {
         Self {
             id: summary.id,
             title: summary.title,
+            custom_title: summary.custom_title,
             modified_at: summary.modified_at_ms,
             cwd: summary.cwd,
             git_branch: summary.git_branch,
