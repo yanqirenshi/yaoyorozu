@@ -18,6 +18,7 @@ import type {
   PermissionSuggestionDto,
   ProgressEventDto,
   RunningPermissionModeDto,
+  StartModelDto,
   RunningSessionDto,
   RunningSessionRefDto,
   RunningSessionSwitchDto,
@@ -331,6 +332,8 @@ export function useRunningSession({
       mode: RunningPermissionModeDto;
       /** 再開に付ける表示名(`--name`。任意)。 */
       name?: string | null;
+      /** 再開時に選ぶモデル(`--model`。省略・null は CLI の既定。issue #445)。 */
+      model?: StartModelDto | null;
       text: string;
       images: string[];
     }): Promise<boolean> => {
@@ -359,6 +362,7 @@ export function useRunningSession({
             session_id: args.sessionId,
             mode: args.mode,
             name: args.name?.trim() ? args.name.trim() : null,
+            model: args.model ?? null,
           });
           applyRunning(started);
         }

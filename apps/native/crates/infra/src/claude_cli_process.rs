@@ -443,6 +443,7 @@ mod tests {
             repository_path: cwd.to_path_buf(),
             worktree_id: "wt-test".to_string(),
             name: None,
+            model: None,
         }
     }
 
@@ -777,6 +778,7 @@ mod tests {
             repository_path: dir.path().to_path_buf(),
             worktree_id: "wt-test".to_string(),
             name: Some("調査 A".to_string()),
+            model: Some(app::StartModel::Haiku),
         };
         let process = fake_launcher().start(&request, sink).unwrap();
         let mut seen = Vec::new();
@@ -806,6 +808,7 @@ mod tests {
         );
         assert!(args.contains("--name=調査 A"), "{args}");
         assert!(args.contains(r#""--permission-mode","plan""#), "{args}");
+        assert!(args.contains(r#""--model","haiku""#), "{args}");
         assert!(!args.contains("--resume"), "{args}");
         // system/init の model / permissionMode が Configured として届く。
         assert!(seen.contains(&RunningSessionEvent::Configured {
@@ -877,6 +880,7 @@ mod tests {
                     repository_path: PathBuf::from(cwd),
                     worktree_id: "wt-test".to_string(),
                     name: None,
+                    model: None,
                 },
                 sink,
             )

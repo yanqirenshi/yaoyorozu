@@ -61,6 +61,7 @@ export type {
   RunningSessionRefDto,
   RunningSessionSummaryDto,
   RunningSessionSwitchDto,
+  StartModelDto,
   StartRunningSessionDto,
   WorktreeSpecDto,
   AgentKindDto,

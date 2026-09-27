@@ -55,6 +55,35 @@ impl RunningPermissionMode {
     }
 }
 
+/// 起動のときに選べるモデル(別名。issue #445)。CLI の `--model` に渡す値。**自由入力にしない**:
+/// `set_model` と同じく CLI は `--model` の名前を検証しない(存在しない名前でも起動し、最初の
+/// 返答で失敗する)ので、app が知っている別名だけを型で表す(選べるものを型の外へ出さない)。
+/// 「既定」は型に持たず `None`(`--model` を付けない = CLI の既定。従来どおり)。
+///
+/// 選択肢を「直近に報告された一覧」ではなく固定の別名にした理由(判断は issue #445 の PR):
+/// 起動前は CLI が動いておらず、一覧(`initialize` の `models`)は起動後にしか取れない。覚えた一覧を
+/// 使うと、(1)app を再起動した直後・初回は一覧が無く選べない、(2)一覧は CLI の版・契約で
+/// 変わり(150: 4件、280: 5件)、古い一覧の名前を別の版に渡す危険がある。別名(`opus` などの
+/// 系列名)は版をまたいで CLI が最新の該当モデルへ解決するので、固定でも古くならない。起動後は
+/// これまでどおり CLI の一覧(`available_models`)から切り替えられる。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartModel {
+    Opus,
+    Sonnet,
+    Haiku,
+}
+
+impl StartModel {
+    /// CLI の `--model` に渡す別名。
+    pub fn as_cli_value(self) -> &'static str {
+        match self {
+            Self::Opus => "opus",
+            Self::Sonnet => "sonnet",
+            Self::Haiku => "haiku",
+        }
+    }
+}
+
 /// 同時に持てる実行中セッション(終了していないもの)の上限。運用の方針で、語彙でも domain の
 /// 規則でもない。超えると起動は `session_busy` で止まる。
 ///
@@ -91,6 +120,8 @@ pub enum StartRunningSession {
         worktree_id: String,
         /// 表示名(`--name`)。任意。
         name: Option<String>,
+        /// 起動時のモデル(`--model`)。`None` は CLI の既定。
+        model: Option<StartModel>,
     },
     /// 新しい会話を `--session-id` で始める(ID は app が UUID v4 で決める)。cwd はリポジトリ。
     New {
@@ -101,6 +132,7 @@ pub enum StartRunningSession {
         /// 起動する worktree の ID(記録用。issue #437)。
         worktree_id: String,
         name: Option<String>,
+        model: Option<StartModel>,
     },
 }
 
@@ -143,6 +175,12 @@ impl StartRunningSession {
     pub fn name(&self) -> Option<&str> {
         match self {
             Self::Resume { name, .. } | Self::New { name, .. } => name.as_deref(),
+        }
+    }
+
+    pub fn model(&self) -> Option<StartModel> {
+        match self {
+            Self::Resume { model, .. } | Self::New { model, .. } => *model,
         }
     }
 
@@ -263,6 +301,9 @@ pub struct ResumeRunningSession {
     pub repository_path: Option<PathBuf>,
     /// 表示名(`--name`)。任意。
     pub name: Option<String>,
+    /// 起動時のモデル(`--model`。issue #445)。`None` は CLI の既定(再開する会話に記録された
+    /// モデルではなく、CLI がその時に選ぶもの)。
+    pub model: Option<StartModel>,
     /// 指定された worktree(用意済み。issue #437)。あればそこが cwd(その worktree の
     /// プロジェクトフォルダに会話ファイルがあること)。無ければ従来どおり、会話ファイルに記録された
     /// cwd で起動する(`--resume` は cwd のプロジェクトフォルダから会話を探すため。#345)。
@@ -280,6 +321,8 @@ pub struct CreateRunningSession {
     pub mode: RunningPermissionMode,
     /// 表示名(`--name`)。任意。
     pub name: Option<String>,
+    /// 起動時のモデル(`--model`。issue #445)。`None` は CLI の既定。
+    pub model: Option<StartModel>,
     /// 起動する worktree(用意済み。issue #437)。そのパスが cwd になる(リポジトリ本体で起動する
     /// ときは、本体のパスと予約 ID)。
     pub worktree: ResolvedWorktree,
@@ -439,6 +482,8 @@ fn launch(
     );
     // 起動時に選んだ権限モードが、CLI が最初のターンで `system/init` を出すまでの現在値。
     session.current_permission_mode = Some(request.mode().as_cli_value().to_string());
+    // 選んだモデルも同じ(別名のまま。`system/init` が実際のモデル名を報告したら置き換わる)。
+    session.current_model = request.model().map(|m| m.as_cli_value().to_string());
     Ok(StartedRunningSession { session, process })
 }
 
@@ -498,6 +543,7 @@ pub fn resume_running_session(
             repository_path,
             worktree_id,
             name,
+            model: request.model,
         },
         sink,
         now,
@@ -536,6 +582,7 @@ pub fn create_running_session(
             repository_path: request.repository_path.clone(),
             worktree_id: request.worktree.worktree_id.clone(),
             name,
+            model: request.model,
         },
         sink,
         now,
@@ -1036,6 +1083,7 @@ mod tests {
             mode: RunningPermissionMode::Default,
             repository_path: Some(PathBuf::from("/repo")),
             name: None,
+            model: None,
             worktree: None,
             worktree_index: WorktreeIndex::default(),
         }
@@ -1072,11 +1120,67 @@ mod tests {
             repository_path: PathBuf::from("/repo"),
             mode: RunningPermissionMode::Plan,
             name: Some("調査".to_string()),
+            model: None,
             worktree: ResolvedWorktree {
                 path: PathBuf::from("/repo"),
                 worktree_id: domain::MAIN_WORKTREE_ID.to_string(),
             },
         }
+    }
+
+    #[test]
+    fn a_model_chosen_at_start_reaches_the_cli_request_and_is_the_provisional_current_model() {
+        let launcher = FakeLauncher::with_pid(100);
+        let resumed = resume_running_session(
+            &FakeSource,
+            &launcher,
+            &FakeLedger::none(),
+            &[],
+            &[],
+            &ResumeRunningSession {
+                model: Some(StartModel::Opus),
+                ..resume_request("s1")
+            },
+            sink(),
+            1000,
+        )
+        .unwrap();
+        let created = create_running_session(
+            &launcher,
+            &FakeLedger::none(),
+            &[],
+            &[],
+            &CreateRunningSession {
+                model: Some(StartModel::Haiku),
+                ..create_request()
+            },
+            "3a392392-0000-4000-8000-000000000001".to_string(),
+            sink(),
+            1000,
+        )
+        .unwrap();
+
+        let requests = launcher.started.lock().unwrap();
+        assert_eq!(requests[0].model(), Some(StartModel::Opus));
+        assert_eq!(requests[1].model(), Some(StartModel::Haiku));
+        assert_eq!(resumed.session.current_model.as_deref(), Some("opus"));
+        assert_eq!(created.session.current_model.as_deref(), Some("haiku"));
+    }
+
+    #[test]
+    fn without_a_model_nothing_is_passed_and_the_current_model_stays_unknown() {
+        let launcher = FakeLauncher::with_pid(100);
+        let resumed = resume(&launcher, &FakeLedger::none(), &[], "s1").unwrap();
+
+        assert_eq!(launcher.started.lock().unwrap()[0].model(), None);
+        assert_eq!(resumed.session.current_model, None);
+    }
+
+    #[test]
+    fn start_models_map_to_the_cli_aliases() {
+        assert_eq!(StartModel::Opus.as_cli_value(), "opus");
+        assert_eq!(StartModel::Sonnet.as_cli_value(), "sonnet");
+        assert_eq!(StartModel::Haiku.as_cli_value(), "haiku");
     }
 
     /// 起動済みで、状態と PID を指定した実行中セッション(集まりの検証用)。
@@ -1127,6 +1231,7 @@ mod tests {
                 repository_path: PathBuf::from("/repo"),
                 worktree_id: domain::OUTSIDE_WORKTREE_ID.to_string(),
                 name: None,
+                model: None,
             }
         );
         assert_eq!(started.session.process_state, ProcessState::Starting);
@@ -1412,6 +1517,7 @@ mod tests {
                 repository_path: PathBuf::from("/repo"),
                 worktree_id: domain::MAIN_WORKTREE_ID.to_string(),
                 name: Some("調査".to_string()),
+                model: None,
             }]
         );
         let session = started.session;

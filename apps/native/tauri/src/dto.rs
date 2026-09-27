@@ -1086,6 +1086,27 @@ impl From<RunningPermissionModeDto> for app::RunningPermissionMode {
     }
 }
 
+/// 起動のときに選べるモデル(`app::StartModel` の写し。issue #445)。自由入力にしない: 文字列の
+/// 名前は受け取らず、この別名だけを受け付ける(それ以外は逆シリアライズで断る)。「既定」は
+/// 指定なし(`None`)。
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StartModelDto {
+    Opus,
+    Sonnet,
+    Haiku,
+}
+
+impl From<StartModelDto> for app::StartModel {
+    fn from(model: StartModelDto) -> Self {
+        match model {
+            StartModelDto::Opus => app::StartModel::Opus,
+            StartModelDto::Sonnet => app::StartModel::Sonnet,
+            StartModelDto::Haiku => app::StartModel::Haiku,
+        }
+    }
+}
+
 /// 実行中セッション1つの宛先(`app::RunningSessionRef` の写し)。画面が持ち回って、送信・応答・
 /// 購読・切り替えの対象を指定する。`started_at` は epoch ms で、JS の数値で安全に扱える範囲。
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -1127,6 +1148,9 @@ pub enum StartRunningSessionDto {
         session_id: String,
         mode: RunningPermissionModeDto,
         name: Option<String>,
+        /// 起動時のモデル(`--model`。省略は CLI の既定。issue #445)。
+        #[serde(default)]
+        model: Option<StartModelDto>,
         #[serde(default)]
         worktree: Option<WorktreeSpecDto>,
         /// 起動前の最新化(`git fetch` + `git merge origin/main`)を行うか(省略で行う)。
@@ -1137,6 +1161,9 @@ pub enum StartRunningSessionDto {
     New {
         mode: RunningPermissionModeDto,
         name: Option<String>,
+        /// 起動時のモデル(`--model`。省略は CLI の既定。issue #445)。
+        #[serde(default)]
+        model: Option<StartModelDto>,
         #[serde(default)]
         worktree: Option<WorktreeSpecDto>,
         /// 起動前の最新化を行うか(省略で行う)。
@@ -1494,4 +1521,46 @@ pub struct RunningSessionChangedEventDto {
 pub enum PermissionBehaviorDto {
     Allow,
     Deny,
+}
+
+#[cfg(test)]
+mod start_model_tests {
+    use super::*;
+
+    fn parse(json: &str) -> Result<StartRunningSessionDto, serde_json::Error> {
+        serde_json::from_str(json)
+    }
+
+    #[test]
+    fn a_start_request_takes_only_the_known_model_aliases() {
+        for (alias, expected) in [
+            ("opus", StartModelDto::Opus),
+            ("sonnet", StartModelDto::Sonnet),
+            ("haiku", StartModelDto::Haiku),
+        ] {
+            let json =
+                format!(r#"{{"kind":"new","mode":"default","name":null,"model":"{alias}"}}"#);
+            match parse(&json).unwrap() {
+                StartRunningSessionDto::New { model, .. } => assert_eq!(model, Some(expected)),
+                other => panic!("{other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_free_text_model_is_refused_and_an_omitted_or_null_model_means_the_cli_default() {
+        // 自由入力にしない(CLI は `--model` の名前を検証しないため。issue #445)。
+        assert!(parse(r#"{"kind":"new","mode":"default","name":null,"model":"gpt-5"}"#).is_err());
+        assert!(parse(r#"{"kind":"new","mode":"default","name":null,"model":"--x"}"#).is_err());
+        for json in [
+            r#"{"kind":"new","mode":"default","name":null}"#,
+            r#"{"kind":"new","mode":"default","name":null,"model":null}"#,
+            r#"{"kind":"resume","project":"p","session_id":"s","mode":"plan","name":null}"#,
+        ] {
+            match parse(json).unwrap() {
+                StartRunningSessionDto::New { model, .. }
+                | StartRunningSessionDto::Resume { model, .. } => assert_eq!(model, None),
+            }
+        }
+    }
 }
