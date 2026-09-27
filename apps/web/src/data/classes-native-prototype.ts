@@ -184,6 +184,10 @@ const DEFS: ClassDef[] = [
     attributes: [
       attr("id", "String"),
       attr("title", "String"),
+      // 会話に付いている表示名(最後の custom-title。前後の空白を除き、空なら None。issue #447)。
+      // title は表示用に解決済みの値(先頭のメッセージなどへ落ちる)で、こちらは実際に付いている名前
+      // だけ。再開の表示名(--name)の初期値に使う。
+      attr("custom_title", "Option<String>"),
       attr("modified_at_ms", "u64"),
       attr("cwd", "Option<String>"),
       attr("git_branch", "Option<String>"),
