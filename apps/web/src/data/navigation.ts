@@ -10,4 +10,5 @@ export const NAV_MENU_ITEMS: NavMenuItem[] = [
   { label: "サイトマップ", path: "/sitemap" },
   { label: "Classes", path: "/class-diagram" },
   { label: "TM", path: "/tm" },
+  { label: "ポンチ絵", path: "/unchi" },
 ];

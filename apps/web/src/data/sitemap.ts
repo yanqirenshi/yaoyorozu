@@ -279,6 +279,10 @@ const WEB_PAGE_DETAILS: Record<string, Omit<SiteDetail, "path">> = {
     description: "ドメインモデルのデータモデルを TM(T字形ER)で表示する。",
     wbsIds: [26, 40],
   },
+  "/unchi": {
+    description:
+      "アーキテクチャ図(ポンチ絵)を d3.unchi で表示する。ネイティブアプリ・Webアプリと、AIコーディングエージェント・GitHub との関係を描く。",
+  },
 };
 
 const SITE_DETAILS: Record<number, SiteDetail> = {
