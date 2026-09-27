@@ -40,6 +40,7 @@ import type {
   RunningSessionRefDto,
   RunningSessionSummaryDto,
   SessionDto,
+  StartModelDto,
   WorktreeSpecDto,
 } from "../api";
 import { usePageDockItems } from "../DockItemsContext";
@@ -51,6 +52,9 @@ import HubInspector from "../HubInspector";
 import type { InspectorAction, InspectorContent, InspectorField } from "../HubInspector";
 import {
   PERMISSION_MODE_LABELS,
+  START_MODELS,
+  START_MODEL_DEFAULT_LABEL,
+  START_MODEL_LABELS,
   currentPermissionModeLabel,
   processStateLabel,
 } from "../runningSessionLabels";
@@ -1026,6 +1030,9 @@ type InspectorHandlers = {
   onStartNew: (core: HubNodeCore) => void;
   startMode: RunningPermissionModeDto;
   onStartModeChange: (mode: RunningPermissionModeDto) => void;
+  // 起動時のモデル(issue #445・#448)。`null` は既定(--model を付けない)。
+  startModel: StartModelDto | null;
+  onStartModelChange: (model: StartModelDto | null) => void;
   startName: string;
   onStartNameChange: (name: string) => void;
   // 起動するフォルダ(issue #438)。
@@ -1130,6 +1137,27 @@ function HubStartSessionForm({
         </select>
       </label>
       <label className="hub-inspector-form-row">
+        <span>モデル</span>
+        {/* 選択肢・文言はビューアの「新規セッション」(NewSessionDialog)と同じものを
+            `runningSessionLabels` から使う(自由入力にしない。issue #445・#448)。 */}
+        <select
+          value={handlers.startModel ?? ""}
+          disabled={handlers.busy}
+          onChange={(e) =>
+            handlers.onStartModelChange(
+              e.target.value === "" ? null : (e.target.value as StartModelDto),
+            )
+          }
+        >
+          <option value="">{START_MODEL_DEFAULT_LABEL}</option>
+          {START_MODELS.map((model) => (
+            <option key={model} value={model}>
+              {START_MODEL_LABELS[model]}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="hub-inspector-form-row">
         <span>表示名</span>
         <input
           type="text"
@@ -1153,8 +1181,12 @@ function HubStartSessionForm({
 // backend(`RunningSessionSummaryDto.peer_messaging`)が持ち、ここは文言だけ。
 const MIN_PEER_MESSAGING_VERSION = "2.1.268";
 
-// 既存の会話を再開するときの注意書き(issue #424)。
-const RESUME_NAME_NOTE = "表示名を付けると、この会話のタイトルが変わります";
+// 既存の会話を再開するときの注意書き(issue #424。#448 で文言を変えた)。表示名には
+// その会話のいまのタイトル(custom_title)が初期値で入るので、「付けると変わる」では
+// なく「変えると変わる」。空にして起動すると、CLI が仮の名前(yaoyorozu-28 など)を
+// 付けてしまい、役割名あてのセッション間メッセージが届かなくなる(移行の第1段で
+// 実際に起きた)。
+const RESUME_NAME_NOTE = "表示名を変えると、この会話のタイトルも変わります";
 
 // ノードの `_core`(issue #109)からインスペクタの表示内容を組み立てる。
 // グラフ構築時に `_core` へ埋め込んだ値と、実行中セッションの一覧
@@ -1702,6 +1734,8 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
   // 対する一時的な値で、ノードを選び直すと初期値へ戻す。
   const [busy, setBusy] = useState(false);
   const [startMode, setStartMode] = useState<RunningPermissionModeDto>("default");
+  // 起動時のモデル(issue #448)。`null` は既定(CLI の既定のモデル)。
+  const [startModel, setStartModel] = useState<StartModelDto | null>(null);
   const [startName, setStartName] = useState("");
   // 起動するフォルダの指定(issue #438)。既定は「これまでと同じ場所」
   // (再開は会話ファイルの cwd、新規作成はリポジトリ本体)。
@@ -1778,13 +1812,14 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
           project,
           session_id: sessionId,
           mode: startMode,
+          model: startModel,
           name: startName.trim() || null,
           // 指定しない(`null`)ときは、会話ファイルに記録された cwd で開く。
           worktree: startWorktreeSpec,
         }),
       );
     },
-    [runStartAction, startMode, startName, startWorktreeSpec],
+    [runStartAction, startMode, startModel, startName, startWorktreeSpec],
   );
 
   // 新しい会話を作る。プロファイルノードは自身を、リポジトリノードはその
@@ -1798,13 +1833,14 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
         startRunningSession(profileId, {
           kind: "new",
           mode: startMode,
+          model: startModel,
           name: startName.trim() || null,
           // 新規作成は場所を必ず決める(既定はリポジトリ本体)。
           worktree: startWorktreeSpec ?? { kind: "main" },
         }),
       );
     },
-    [runStartAction, startMode, startName, startWorktreeSpec],
+    [runStartAction, startMode, startModel, startName, startWorktreeSpec],
   );
 
   const handleStopRunningSession = useCallback(
@@ -1856,6 +1892,8 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
       onStartNew: handleStartNew,
       startMode,
       onStartModeChange: setStartMode,
+      startModel,
+      onStartModelChange: setStartModel,
       startName,
       onStartNameChange: setStartName,
       startWorktreeKind,
@@ -1875,6 +1913,7 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
       handleStopRunningSession,
       handleStartNew,
       startMode,
+      startModel,
       startName,
       startWorktreeKind,
       startWorktreeId,
@@ -2090,16 +2129,22 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
   // 変化など)で入力中の表示名が消えてしまう。
   const inspectorNodeId = inspectorCore ? nodeIdOfCore(inspectorCore) : null;
   const inspectorNodeKind = inspectorCore?.kind ?? null;
+  // 再開の表示名の初期値は、その会話のいまのタイトル(`custom_title`)にする
+  // (issue #448)。表示名を空のまま起動すると CLI が仮の名前を付けてしまい、
+  // 役割名あてのセッション間メッセージが届かなくなるため、既定で今の名前を
+  // 引き継ぐ。新規セッション(リポジトリ・プロファイル)は初期値なし。
+  const inspectorInitialName = inspectorCore?.customTitle ?? "";
   useEffect(() => {
     setStartMode("default");
-    setStartName("");
+    setStartModel(null);
+    setStartName(inspectorInitialName);
     // 再開は「会話ファイルのフォルダのまま」、新規作成は「リポジトリ本体」を
     // 既定にする(issue #438。どちらも、これまでと同じ場所で起動する選択)。
     setStartWorktreeKind(inspectorNodeKind === "session" ? "keep" : "main");
     setStartWorktreeId("");
     setStartBranchName("");
     setStartError(null);
-  }, [inspectorNodeId, inspectorNodeKind]);
+  }, [inspectorNodeId, inspectorNodeKind, inspectorInitialName]);
 
   // グラフの調整メニュー(issue #246・#249)。値は `hub-tuning.json` に保存し
   // (スライダー変更後に `HUB_TUNING_SAVE_DEBOUNCE_MS` でまとめて保存)、
