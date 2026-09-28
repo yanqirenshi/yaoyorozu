@@ -733,9 +733,9 @@ const DEFS: ClassDef[] = [
     size: { w: 560, h: 0 },
   },
   {
-    name: { physical: "StartModelDto", logical: "StartModelDto", description: "起動のときに選べるモデル(StartRunningSessionDto の model。フロント→Rust なので Deserialize。issue #445)。app::StartModel へ変換(From)。自由入力にしない: 文字列の名前は受け取らず、この別名だけを受け付ける(それ以外は逆シリアライズで断る)。「既定」は指定なし(null)。serde は snake_case(opus / sonnet / haiku)" },
+    name: { physical: "StartModelDto", logical: "StartModelDto", description: "起動のときに選べるモデル(StartRunningSessionDto の model。フロント→Rust なので Deserialize。issue #445)。app::StartModel へ変換(From)。自由入力にしない: 文字列の名前は受け取らず、この別名だけを受け付ける(それ以外は逆シリアライズで断る)。「既定」は指定なし(null)。serde は snake_case(fable / opus / sonnet / haiku)。fable は issue #455 で足した(並びは新しい世代の順)" },
     stereotype: "enumeration",
-    attributes: ["Opus", "Sonnet", "Haiku"].map(label),
+    attributes: ["Fable", "Opus", "Sonnet", "Haiku"].map(label),
     position: { x: 7600, y: 6500 },
     filePath: "apps/native/tauri/src/dto.rs",
     size: { w: 240, h: 0 },
