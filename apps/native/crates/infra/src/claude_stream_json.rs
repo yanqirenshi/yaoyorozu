@@ -997,6 +997,7 @@ mod tests {
         };
 
         for (model, alias) in [
+            (app::StartModel::Fable, "fable"),
             (app::StartModel::Opus, "opus"),
             (app::StartModel::Sonnet, "sonnet"),
             (app::StartModel::Haiku, "haiku"),
