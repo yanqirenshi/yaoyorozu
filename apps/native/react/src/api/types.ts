@@ -112,6 +112,8 @@ export type SettingsDto = {
   selected_project_folders: string[];
   claude_projects_dir: string | null;
   effective_projects_dir: string;
+  // app の起動時に、前回動かしていた実行中セッションを再開するか(issue #459)。
+  restore_running_sessions: boolean;
 };
 
 export type SettingsInputDto = {
@@ -119,9 +121,17 @@ export type SettingsInputDto = {
   github_project: GithubProjectDto | null;
   selected_project_folders: string[];
   claude_projects_dir: string | null;
+  // 省略・null は「変えない」(issue #459。設定画面の UI は続きのイシュー)。
+  restore_running_sessions?: boolean | null;
 };
 
 export type SettingsCorruptedEvent = {
+  message: string;
+};
+
+// app:warning イベントのペイロード(issue #459)。処理は続くが、利用者に伝えたいこと
+// (前回動かしていたセッションを再開できなかった理由など)。
+export type AppWarningEvent = {
   message: string;
 };
 

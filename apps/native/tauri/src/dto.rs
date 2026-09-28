@@ -318,6 +318,8 @@ pub struct SettingsDto {
     /// 単純な変換では組み立てられず、呼び出し側(`get_settings`)で組み立てる
     /// (`From` 実装は用意しない)。
     pub effective_projects_dir: String,
+    /// app の起動時に、前回動かしていた実行中セッションを再開するか(issue #459)。
+    pub restore_running_sessions: bool,
 }
 
 /// `update_settings` の引数。対象はアクティブプロファイル(3項目)+グローバル
@@ -333,6 +335,10 @@ pub struct SettingsInputDto {
     pub selected_project_folders: Vec<String>,
     /// `null` は「既定に戻す」を意味する。
     pub claude_projects_dir: Option<String>,
+    /// app の起動時に、前回動かしていた実行中セッションを再開するか(issue #459)。
+    /// 省略(`null`)は「変えない」。設定画面の UI は続きのイシューで足す。
+    #[serde(default)]
+    pub restore_running_sessions: Option<bool>,
 }
 
 /// `get_project_claude_md`/`get_user_claude_md` の戻り値。両方
@@ -433,6 +439,13 @@ pub struct SkillDto {
 /// 検知し、デフォルト値へフォールバックした場合に通知する(native.md §2)。
 #[derive(Serialize, Clone)]
 pub struct SettingsCorruptedEventDto {
+    pub message: String,
+}
+
+/// `app:warning` イベントのペイロード(native.md §3.2)。処理は続けられるが、利用者に
+/// 伝えたいこと(前回動かしていたセッションを再開できなかった理由など。issue #459)。
+#[derive(Serialize, Clone)]
+pub struct AppWarningEventDto {
     pub message: String,
 }
 
@@ -1113,6 +1126,18 @@ impl From<StartModelDto> for app::StartModel {
     }
 }
 
+/// 復元(issue #459)は覚えていた別名を起動の要求へ戻すため、app → DTO の向きにも変換する。
+impl From<app::StartModel> for StartModelDto {
+    fn from(model: app::StartModel) -> Self {
+        match model {
+            app::StartModel::Fable => Self::Fable,
+            app::StartModel::Opus => Self::Opus,
+            app::StartModel::Sonnet => Self::Sonnet,
+            app::StartModel::Haiku => Self::Haiku,
+        }
+    }
+}
+
 /// 実行中セッション1つの宛先(`app::RunningSessionRef` の写し)。画面が持ち回って、送信・応答・
 /// 購読・切り替えの対象を指定する。`started_at` は epoch ms で、JS の数値で安全に扱える範囲。
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -1197,6 +1222,18 @@ impl From<WorktreeSpecDto> for app::WorktreeSpec {
             WorktreeSpecDto::Main => Self::Main,
             WorktreeSpecDto::Existing { worktree_id } => Self::Existing { worktree_id },
             WorktreeSpecDto::Branch { branch_name } => Self::Branch { branch_name },
+        }
+    }
+}
+
+/// 前回動かしていたセッションの復元(issue #459)は、覚えていた指定を起動の要求へ戻すため、
+/// app → DTO の向きにも変換する。
+impl From<app::WorktreeSpec> for WorktreeSpecDto {
+    fn from(spec: app::WorktreeSpec) -> Self {
+        match spec {
+            app::WorktreeSpec::Main => Self::Main,
+            app::WorktreeSpec::Existing { worktree_id } => Self::Existing { worktree_id },
+            app::WorktreeSpec::Branch { branch_name } => Self::Branch { branch_name },
         }
     }
 }

@@ -35,6 +35,7 @@ import type {
   SessionSummaryDto,
   ViewerTabDto,
   ViewerTabsChangedEvent,
+  AppWarningEvent,
   SettingsCorruptedEvent,
   SettingsDto,
   SettingsInputDto,
@@ -103,6 +104,7 @@ export type {
   SessionFileDto,
   SessionSummaryDto,
   ViewerTabDto,
+  AppWarningEvent,
   SettingsCorruptedEvent,
   SettingsDto,
   SettingsInputDto,
@@ -287,6 +289,16 @@ export function updateSettings(
   profileId?: string | null,
 ): Promise<void> {
   return invoke<void>("update_settings", { input, profileId: profileId ?? null });
+}
+
+// app:warning(処理は続くが利用者に伝えたいこと。issue #459)。
+export function onAppWarning(
+  callback: (event: AppWarningEvent) => void,
+): Promise<() => void> {
+  const unlisten = listen<AppWarningEvent>("app:warning", (event) => {
+    callback(event.payload);
+  });
+  return unlisten.then((fn) => fn);
 }
 
 export function onSettingsCorrupted(

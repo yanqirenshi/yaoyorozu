@@ -254,6 +254,7 @@ async fn get_settings(
             .claude_projects_dir
             .map(|p| p.display().to_string()),
         effective_projects_dir: effective_projects_dir.display().to_string(),
+        restore_running_sessions: settings.restore_running_sessions,
     })
 }
 
@@ -288,6 +289,10 @@ async fn update_settings(
         profile.github_project = github_project;
         profile.selected_project_folders = input.selected_project_folders;
         candidate.claude_projects_dir = claude_projects_dir;
+        // 省略(null)は「変えない」(issue #459。設定画面の UI は続きのイシュー)。
+        if let Some(restore) = input.restore_running_sessions {
+            candidate.restore_running_sessions = restore;
+        }
 
         app::validate_settings(&candidate)?;
 
@@ -1741,6 +1746,8 @@ pub fn run() {
             start_session_watcher(app.handle(), root);
             start_github_session_check(app);
             start_pc_data_background_load(app);
+            // 前回動かしていた実行中セッションを、ハブの初回表示を妨げず順に再開する(#459)。
+            running_session::start_restoring_running_sessions(app.handle());
             local_api::start(app)?;
             Ok(())
         })
