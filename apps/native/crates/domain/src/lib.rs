@@ -40,6 +40,8 @@ mod project;
 mod project_item;
 mod project_items_page;
 mod project_status_option;
+mod restorable_running_session;
+mod restorable_running_sessions;
 mod role;
 mod rule_summary;
 mod running_session;
@@ -108,6 +110,10 @@ pub use project::{sort_projects_by_recency, Project};
 pub use project_item::{ProjectItem, ProjectItemKind};
 pub use project_items_page::ProjectItemsPage;
 pub use project_status_option::ProjectStatusOption;
+pub use restorable_running_session::RestorableRunningSession;
+pub use restorable_running_sessions::{
+    RestorableRunningSessions, CURRENT_RESTORABLE_RUNNING_SESSIONS_VERSION,
+};
 pub use role::Role;
 pub use rule_summary::RuleSummary;
 pub use running_session::RunningSession;

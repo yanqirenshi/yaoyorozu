@@ -21,10 +21,15 @@ pub use worktree::{
     GitWorktreeManager, MergeOutcome, PreparedWorktree, ResolvedWorktree, WorktreeEntry,
     WorktreeIndex, WorktreeSpec, ORIGIN_MAIN,
 };
+mod restore_running_sessions;
 mod running_session;
 mod running_session_summary;
 pub use cli_version::{
     parse_cli_version, peer_messaging_warning, supports_peer_messaging, MIN_PEER_MESSAGING_VERSION,
+};
+pub use restore_running_sessions::{
+    ensure_restorable_conversation, forget_running_session, plan_restore, remember_running_session,
+    remember_running_session_switch, sessions_to_restore, PlannedRestore,
 };
 pub use running_session::{
     apply_running_session_event, begin_respond_permission, begin_send_to_running_session,
@@ -313,6 +318,14 @@ pub trait ViewerTabsStore {
     /// ファイルが無い・壊れている場合は空(`ViewerTabs::default()`)。
     fn load(&self, profile_id: &str) -> Result<ViewerTabs, AppError>;
     fn save(&self, profile_id: &str, tabs: &ViewerTabs) -> Result<(), AppError>;
+}
+
+/// app が起動していた実行中セッション(再開に必要な指定)の保存(port。issue #459)。
+/// 実体(`app_data_dir/running-sessions.json` の読み書き)は infra に閉じ込める。
+pub trait RestorableRunningSessionsStore {
+    /// ファイルが無い・壊れている場合は空(`RestorableRunningSessions::default()`)。
+    fn load(&self) -> Result<domain::RestorableRunningSessions, AppError>;
+    fn save(&self, sessions: &domain::RestorableRunningSessions) -> Result<(), AppError>;
 }
 
 /// 実行環境(このPC・ログインユーザー)の取得(port)。実体(レジストリ・

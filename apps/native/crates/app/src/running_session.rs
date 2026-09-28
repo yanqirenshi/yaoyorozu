@@ -87,6 +87,20 @@ impl StartModel {
             Self::Haiku => "haiku",
         }
     }
+
+    /// [`Self::as_cli_value`] の逆写像(issue #459。保存した別名・CLI が報告した一覧の値から
+    /// 戻す)。app が知らない値(CLI の既定を表す `default`、版が増やした別名、
+    /// `claude-haiku-4-5-…` のような実際のモデル名)は `None`(= `--model` を付けない。
+    /// CLI の既定で起動する)。
+    pub fn from_cli_value(value: &str) -> Option<Self> {
+        match value {
+            "fable" => Some(Self::Fable),
+            "opus" => Some(Self::Opus),
+            "sonnet" => Some(Self::Sonnet),
+            "haiku" => Some(Self::Haiku),
+            _ => None,
+        }
+    }
 }
 
 /// 同時に持てる実行中セッション(終了していないもの)の上限。運用の方針で、語彙でも domain の
@@ -1202,6 +1216,25 @@ mod tests {
         assert_eq!(StartModel::Opus.as_cli_value(), "opus");
         assert_eq!(StartModel::Sonnet.as_cli_value(), "sonnet");
         assert_eq!(StartModel::Haiku.as_cli_value(), "haiku");
+    }
+
+    #[test]
+    fn start_models_come_back_from_their_aliases_and_unknown_values_mean_the_cli_default() {
+        for model in [
+            StartModel::Fable,
+            StartModel::Opus,
+            StartModel::Sonnet,
+            StartModel::Haiku,
+        ] {
+            assert_eq!(
+                StartModel::from_cli_value(model.as_cli_value()),
+                Some(model)
+            );
+        }
+        // CLI の既定・実際のモデル名・知らない別名は「指定なし」(issue #459)。
+        for unknown in ["default", "claude-haiku-4-5-20251001", "opusplan", ""] {
+            assert_eq!(StartModel::from_cli_value(unknown), None, "{unknown:?}");
+        }
     }
 
     /// 起動済みで、状態と PID を指定した実行中セッション(集まりの検証用)。

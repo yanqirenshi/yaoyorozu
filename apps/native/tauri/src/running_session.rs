@@ -18,9 +18,10 @@
 //!   app が求める。
 
 use crate::dto::{
-    AddressedProgressDto, AppErrorDto, PermissionBehaviorDto, PermissionSuggestionDto,
-    RunningSessionChangedEventDto, RunningSessionDto, RunningSessionRefDto,
-    RunningSessionSummaryDto, RunningSessionSwitchDto, StartRunningSessionDto,
+    AddressedProgressDto, AppErrorDto, AppWarningEventDto, PermissionBehaviorDto,
+    PermissionSuggestionDto, RunningSessionChangedEventDto, RunningSessionDto,
+    RunningSessionRefDto, RunningSessionSummaryDto, RunningSessionSwitchDto,
+    StartRunningSessionDto, WorktreeSpecDto,
 };
 use crate::state::{
     resolve_effective_projects_dir, AppState, ProgressSubscriber, RunningSessionSlot,
@@ -30,7 +31,11 @@ use app::{
     RunningSessionEventSink, RunningSessionRef,
 };
 use domain::{PermissionSuggestion, ProcessState, RunningSessionByApp};
-use infra::{ClaudeCliProcessLauncher, FileRunningSessionSource, FileSystemRepository};
+use infra::{
+    ClaudeCliProcessLauncher, FileRestorableRunningSessionsStore, FileRunningSessionSource,
+    FileSystemRepository,
+};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::ipc::Channel;
@@ -39,6 +44,42 @@ use tokio::sync::{mpsc, Mutex};
 
 /// 実行中セッションの状態が変わった・権限の問い合わせが届いた/決着したことの通知。
 pub const RUNNING_SESSION_CHANGED_EVENT: &str = "running-session:changed";
+
+/// 画面に出す軽い警告(復元できなかったセッションの理由など。native.md §3.2)。
+pub const APP_WARNING_EVENT: &str = "app:warning";
+
+/// 前回動かしていた実行中セッションの控え(issue #459)。`app_data_dir` 直下に置く。
+fn restorable_running_sessions_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, AppError> {
+    app_handle
+        .path()
+        .app_data_dir()
+        .map(|dir| dir.join("running-sessions.json"))
+        .map_err(|e| AppError::Io(e.to_string()))
+}
+
+/// 控えの読み書きは小さなファイル I/O なので、ロックを持たないところでブロッキングスレッドへ
+/// 逃がして行う(native.md §2)。失敗しても起動・停止は続ける(控えは便宜であり、次の保存で
+/// 直るため)。理由はログにだけ残す。
+async fn with_restorable_store<F>(app_handle: &tauri::AppHandle, what: &'static str, change: F)
+where
+    F: FnOnce(&FileRestorableRunningSessionsStore) -> Result<(), AppError> + Send + 'static,
+{
+    let path = match restorable_running_sessions_path(app_handle) {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("{what}に失敗しました: {e}");
+            return;
+        }
+    };
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        change(&FileRestorableRunningSessionsStore::new(path))
+    })
+    .await
+    .unwrap_or_else(|_| Err(background_failed()));
+    if let Err(e) = result {
+        eprintln!("{what}に失敗しました: {e}");
+    }
+}
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -117,6 +158,8 @@ fn watched(session: &RunningSessionByApp) -> (ProcessState, usize, Option<String
 fn spawn_event_loop(
     app_handle: tauri::AppHandle,
     target: RunningSessionRef,
+    // 控え(issue #459)の更新に使う会話の ID。宛先(PID の組)からは引けないため別に渡す。
+    session_id: String,
     mut rx: mpsc::UnboundedReceiver<RunningSessionEvent>,
 ) {
     tauri::async_runtime::spawn(async move {
@@ -194,6 +237,19 @@ fn spawn_event_loop(
             }
             if let Some(payload) = notify {
                 let _ = app_handle.emit(RUNNING_SESSION_CHANGED_EVENT, payload);
+            }
+            // 切り替えが CLI に受け入れられたら、控えも現在の値にしておく(issue #459)。
+            // `Configured`(`system/init` の報告)では更新しない: モデルは実際のモデル名で届き、
+            // 別名として覚えられないため(起動時に選んだ別名を保つ)。
+            if let RunningSessionEvent::SwitchApplied(switch) = &addressed.event {
+                let switch = switch.clone();
+                let session_id = session_id.clone();
+                with_restorable_store(
+                    &app_handle,
+                    "実行中セッションの控えの更新",
+                    move |store| app::remember_running_session_switch(store, &session_id, &switch),
+                )
+                .await;
             }
             if matches!(addressed.event, RunningSessionEvent::Exited { .. }) {
                 break;
@@ -296,8 +352,10 @@ pub async fn start_running_session(
         guard.starting_session_ids.retain(|id| id != &session_id);
     };
 
-    let prepared = (|| -> Result<(Option<std::path::PathBuf>, std::path::PathBuf), AppError> {
+    type PreparedStart = (Option<std::path::PathBuf>, std::path::PathBuf, String);
+    let prepared = (|| -> Result<PreparedStart, AppError> {
         let profile = app::resolve_profile(&settings, profile_id.as_deref())?;
+        let resolved_profile_id = profile.id.clone();
         let repository = match &request {
             StartRunningSessionDto::Resume { .. } => profile.repository_path.clone(),
             // 新規は、プロファイルのリポジトリが cwd になる(未設定なら InvalidInput)。
@@ -306,9 +364,13 @@ pub async fn start_running_session(
                 profile_id.as_deref(),
             )?),
         };
-        Ok((repository, resolve_effective_projects_dir(&settings)?))
+        Ok((
+            repository,
+            resolve_effective_projects_dir(&settings)?,
+            resolved_profile_id,
+        ))
     })();
-    let (repository, root) = match prepared {
+    let (repository, root, resolved_profile_id) = match prepared {
         Ok(prepared) => prepared,
         Err(e) => {
             release(&mut *state.lock().await);
@@ -361,6 +423,12 @@ pub async fn start_running_session(
     let resumed_project = match &request {
         StartRunningSessionDto::Resume { project, .. } => Some(project.clone()),
         StartRunningSessionDto::New { .. } => None,
+    };
+    // 起動のときに選んだモデルの別名(控えに覚える値。issue #459)。`system/init` が報告する
+    // 実際のモデル名ではなく、この別名を覚える。
+    let start_model: Option<app::StartModel> = match &request {
+        StartRunningSessionDto::Resume { model, .. }
+        | StartRunningSessionDto::New { model, .. } => model.map(Into::into),
     };
     let session_id_for_task = session_id.clone();
     // claude の起動は数秒かかりうるため、async ランタイムを塞がないようブロッキングスレッドで行う。
@@ -447,7 +515,8 @@ pub async fn start_running_session(
     };
 
     let target = RunningSessionRef::of(&started.session);
-    let (dto, payload) = {
+    let remembered_project = resumed_project.clone();
+    let (dto, payload, remembered) = {
         let mut guard = state.lock().await;
         release(&mut guard);
         // 同じ会話の終了済みは置き換え、終了済みが増えすぎないよう古いものを忘れる。
@@ -474,11 +543,29 @@ pub async fn start_running_session(
             slot.available_models.clone(),
         );
         let payload = changed_event(&slot.session, None);
+        let remembered = slot.session.clone();
         guard.running_sessions.push(slot);
-        (dto, payload)
+        (dto, payload, remembered)
     };
-    spawn_event_loop(app_handle.clone(), target, rx);
+    spawn_event_loop(app_handle.clone(), target, session_id.clone(), rx);
     let _ = app_handle.emit(RUNNING_SESSION_CHANGED_EVENT, payload);
+
+    // 次の app の起動で再開できるよう、指定を覚える(issue #459。ロックの外で書く)。
+    let project = remembered_project;
+    with_restorable_store(
+        &app_handle,
+        "実行中セッションの控えの保存",
+        move |store| {
+            app::remember_running_session(
+                store,
+                &remembered,
+                &resolved_profile_id,
+                project.as_deref(),
+                start_model,
+            )
+        },
+    )
+    .await;
     Ok(dto)
 }
 
@@ -689,6 +776,15 @@ pub async fn stop_running_session(
         let slot = find_slot(&guard, &target).ok_or_else(not_running)?;
         (slot.session.clone(), slot.process.clone())
     };
+    // 利用者が止めたものは、次の app の起動で再開しない(issue #459)。すでに終了していても
+    // (CLI が自分で終わったあとに利用者が「終了」を押した場合)控えからは外す。
+    let stopped_session_id = snapshot.base.session_id.clone();
+    with_restorable_store(
+        &app_handle,
+        "実行中セッションの控えからの削除",
+        move |store| app::forget_running_session(store, &stopped_session_id),
+    )
+    .await;
     if snapshot.process_state == ProcessState::Exited {
         return Ok(());
     }
@@ -713,6 +809,110 @@ pub async fn stop_running_session(
         let _ = app_handle.emit(RUNNING_SESSION_CHANGED_EVENT, payload);
     }
     Ok(())
+}
+
+/// app の起動時に、前回動かしていた実行中セッションを順に再開する(issue #459)。ハブの初回表示を
+/// 妨げないよう、`setup` からバックグラウンドで走らせる(#205 と同じ考え方)。
+///
+/// **順に(同時に1件ずつ)**再開する: `claude` は1つが数百 MB・起動に数秒かかるため、15 件を一度に
+/// 起こすと PC が塞がる。並行させると、上限(#453)・同じ会話の二重起動・表示名の一意化(#458)の
+/// 判定が互いに追い越して読みにくくなる。1件ずつなら既存の起動の道筋
+/// ([`start_running_session`])をそのまま通せる(ガード・上限・名前の一意化がそのまま効く)。
+///
+/// 再開できなかったもの(会話ファイルが無い・worktree が無い・外部で実行中・上限)は**飛ばして
+/// 次へ進み**、理由を `app:warning` とログに残す。控えからは**消さない**: 一時的な理由
+/// (Desktop が同じ会話を開いている等)で消してしまうと、次の起動でもう試さなくなるため。
+/// 利用者が「停止」したときだけ控えから外れる。
+pub fn start_restoring_running_sessions(app_handle: &tauri::AppHandle) {
+    let app_handle = app_handle.clone();
+    tauri::async_runtime::spawn(async move {
+        let settings = {
+            let state = app_handle.state::<Mutex<AppState>>();
+            let guard = state.lock().await;
+            guard.settings.clone()
+        };
+        let root = match resolve_effective_projects_dir(&settings) {
+            Ok(root) => root,
+            Err(e) => {
+                eprintln!("前回の実行中セッションを再開できませんでした: {e}");
+                return;
+            }
+        };
+        let path = match restorable_running_sessions_path(&app_handle) {
+            Ok(path) => path,
+            Err(e) => {
+                eprintln!("前回の実行中セッションの控えを読めませんでした: {e}");
+                return;
+            }
+        };
+        let entries = tauri::async_runtime::spawn_blocking(move || {
+            app::sessions_to_restore(&FileRestorableRunningSessionsStore::new(path), &settings)
+        })
+        .await
+        .unwrap_or_else(|_| Err(background_failed()));
+        let entries = match entries {
+            Ok(entries) => entries,
+            Err(e) => {
+                eprintln!("前回の実行中セッションの控えを読めませんでした: {e}");
+                return;
+            }
+        };
+
+        for entry in entries {
+            let name = entry
+                .name
+                .clone()
+                .unwrap_or_else(|| entry.session_id.clone());
+            let planned = match app::plan_restore(&entry) {
+                Ok(planned) => planned,
+                Err(e) => {
+                    warn_restore_skipped(&app_handle, &name, &e.to_string());
+                    continue;
+                }
+            };
+            // 会話ファイルが消えていたら、起こす前に飛ばす(消えた会話を `--resume` すると、
+            // CLI は起動直後にエラーで終わり、利用者には「終了」だけが残って分かりにくい)。
+            let checked = {
+                let source = FileSystemRepository::new(root.clone());
+                let planned = planned.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    app::ensure_restorable_conversation(&source, &planned)
+                })
+                .await
+                .unwrap_or_else(|_| Err(background_failed()))
+            };
+            if let Err(e) = checked {
+                warn_restore_skipped(&app_handle, &name, &e.to_string());
+                continue;
+            }
+
+            let request = StartRunningSessionDto::Resume {
+                project: planned.project,
+                session_id: planned.session_id,
+                mode: planned.mode.into(),
+                name: planned.name,
+                model: planned.model.map(Into::into),
+                worktree: planned.worktree.map(WorktreeSpecDto::from),
+                // 復元では origin/main の最新化をしない(利用者が選んで起動したときだけ行う。
+                // 勝手にブランチを動かさない)。
+                sync_origin_main: Some(false),
+            };
+            let state = app_handle.state::<Mutex<AppState>>();
+            if let Err(e) =
+                start_running_session(app_handle.clone(), state, Some(planned.profile_id), request)
+                    .await
+            {
+                warn_restore_skipped(&app_handle, &name, &e.message);
+            }
+        }
+    });
+}
+
+/// 復元できなかった1件を、画面(`app:warning`)とログに残す。
+fn warn_restore_skipped(app_handle: &tauri::AppHandle, name: &str, reason: &str) {
+    let message = format!("「{name}」を再開できませんでした: {reason}");
+    eprintln!("{message}");
+    let _ = app_handle.emit(APP_WARNING_EVENT, AppWarningEventDto { message });
 }
 
 /// app の終了時に、起動したままの子プロセスを**全部**止める(残さない)。ウィンドウが閉じられて
