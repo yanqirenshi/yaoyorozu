@@ -63,11 +63,15 @@ impl RunningPermissionMode {
 /// 選択肢を「直近に報告された一覧」ではなく固定の別名にした理由(判断は issue #445 の PR):
 /// 起動前は CLI が動いておらず、一覧(`initialize` の `models`)は起動後にしか取れない。覚えた一覧を
 /// 使うと、(1)app を再起動した直後・初回は一覧が無く選べない、(2)一覧は CLI の版・契約で
-/// 変わり(150: 4件、280: 5件)、古い一覧の名前を別の版に渡す危険がある。別名(`opus` などの
-/// 系列名)は版をまたいで CLI が最新の該当モデルへ解決するので、固定でも古くならない。起動後は
-/// これまでどおり CLI の一覧(`available_models`)から切り替えられる。
+/// 変わり(150: 4件、280: 5件)、古い一覧の名前を別の版に渡す危険がある。別名(`fable` /
+/// `opus` などの系列名)は版をまたいで CLI が最新の該当モデルへ解決するので、固定でも古くならない。
+/// 起動後はこれまでどおり CLI の一覧(`available_models`)から切り替えられる。
+///
+/// `fable` は CLI 2.1.268 の `--help` が `--model` の別名の例に挙げるもので、issue #455 で足した。
+/// 並びは新しい世代の順(fable / opus / sonnet / haiku)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartModel {
+    Fable,
     Opus,
     Sonnet,
     Haiku,
@@ -77,6 +81,7 @@ impl StartModel {
     /// CLI の `--model` に渡す別名。
     pub fn as_cli_value(self) -> &'static str {
         match self {
+            Self::Fable => "fable",
             Self::Opus => "opus",
             Self::Sonnet => "sonnet",
             Self::Haiku => "haiku",
@@ -1182,6 +1187,7 @@ mod tests {
 
     #[test]
     fn start_models_map_to_the_cli_aliases() {
+        assert_eq!(StartModel::Fable.as_cli_value(), "fable");
         assert_eq!(StartModel::Opus.as_cli_value(), "opus");
         assert_eq!(StartModel::Sonnet.as_cli_value(), "sonnet");
         assert_eq!(StartModel::Haiku.as_cli_value(), "haiku");

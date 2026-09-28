@@ -1096,6 +1096,7 @@ impl From<RunningPermissionModeDto> for app::RunningPermissionMode {
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum StartModelDto {
+    Fable,
     Opus,
     Sonnet,
     Haiku,
@@ -1104,6 +1105,7 @@ pub enum StartModelDto {
 impl From<StartModelDto> for app::StartModel {
     fn from(model: StartModelDto) -> Self {
         match model {
+            StartModelDto::Fable => app::StartModel::Fable,
             StartModelDto::Opus => app::StartModel::Opus,
             StartModelDto::Sonnet => app::StartModel::Sonnet,
             StartModelDto::Haiku => app::StartModel::Haiku,
@@ -1538,6 +1540,7 @@ mod start_model_tests {
     #[test]
     fn a_start_request_takes_only_the_known_model_aliases() {
         for (alias, expected) in [
+            ("fable", StartModelDto::Fable),
             ("opus", StartModelDto::Opus),
             ("sonnet", StartModelDto::Sonnet),
             ("haiku", StartModelDto::Haiku),

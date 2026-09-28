@@ -27,7 +27,7 @@ import {
 // - モデルは CLI が報告した一覧(`available_models`)から選ばせる(`set_model` は名前を検証しない)。
 // - 未起動のときは「次の起動」の権限モードとモデル(issue #445)を選べ、再開に付ける表示名
 //   (任意)を入れられる。起動前は CLI が動いていないので一覧が無く、モデルは別名の固定の選択肢
-//   (既定 / opus / sonnet / haiku)から選ばせる(自由入力にしない)。
+//   (既定 / fable / opus / sonnet / haiku)から選ばせる(自由入力にしない)。
 
 type MenuKey = "mode" | "model" | "start-model";
 

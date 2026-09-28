@@ -373,7 +373,7 @@ export type RunningSessionRefDto = {
 
 // 起動のときに選べるモデル(別名。issue #445)。自由入力にしない(CLI は --model の名前を検証しない)。
 // 「既定」は指定なし(null / 省略 = --model を付けない = CLI の既定)。
-export type StartModelDto = "opus" | "sonnet" | "haiku";
+export type StartModelDto = "fable" | "opus" | "sonnet" | "haiku";
 
 // 起動の要求。再開(既存の会話を --resume)と新規(新しい会話。ID は backend が決める)で値が違う。
 // パス(cwd・リポジトリ)は渡さない(backend が会話ファイル・プロファイルから解決する)。
