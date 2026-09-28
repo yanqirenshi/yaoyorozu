@@ -90,7 +90,7 @@
  * が要求と応答を対応づける。出来事に `Configured` / `SwitchApplied`、途中経過に宛先を付ける包み
  * (`RunningSessionRef` / `AddressedProgress` / `AddressedRunningSessionEvent`)、ハブ用の
  * 一覧項目 `RunningSessionSummary`(`summarize` で作る)も app の型。定数(`MAX_RUNNING_SESSIONS`
- * = 8 / `MAX_KEPT_EXITED_SESSIONS` = 10)は型ではないので描かない。
+ * = 24(issue #453 で 8 から引き上げ)/ `MAX_KEPT_EXITED_SESSIONS` = 10)は型ではないので描かない。
  * Phase 3(worktree の用意・セッション間メッセージ対応。issue #437。PR #440)で、起動要求に
  * `worktree_id`(Resume / New の値)と、画面から来る値だけの `ResumeRunningSession` /
  * `CreateRunningSession` に用意済みの worktree(`ResolvedWorktree`)が加わり、worktree を用意する
@@ -742,9 +742,13 @@ const DEFS: ClassDef[] = [
     methods: [
       method("find_running", ["session_id: &str", "exclude_pids: &[u32]"], "Result<Option<DetectedRunning>, AppError>"),
       // 台帳にある実行中セッションの名前(name。--name / Desktop のタブ名。#437)。セッション間メッセージは
-      // 名前で宛先を指定するので、起動する CLI の名前をこれと重ならないようにするために使う
-      // (終了済みの台帳の名前も含みうる)。
-      method("taken_names", [], "Result<Vec<String>, AppError>"),
+      // 名前で宛先を指定するので、起動する CLI の名前をこれと重ならないようにするために使う。
+      // exclude_session_id は、これから起動する(再開する)会話自身の session_id(#458)。この session_id を
+      // 持つ台帳は、生死によらず衝突相手にしない(app の強制終了で残った自分自身の残骸の台帳と、再開した
+      // セッションの名前がぶつかって連番が付く事故があったため)。それ以外の台帳は、プロセスが生きていないと
+      // 確定できたものだけ除く(find_running と同じ生存判定だがバイアスは逆で、確定できないものは「使用中」に
+      // 数える。除きすぎて実行中のセッションと名前が衝突する害の方が大きいため)。
+      method("taken_names", ["exclude_session_id: &str"], "Result<Vec<String>, AppError>"),
     ],
     position: { x: 6300, y: 2050 },
     filePath: "apps/native/crates/app/src/lib.rs",
@@ -883,9 +887,9 @@ const DEFS: ClassDef[] = [
     size: { w: 400, h: 0 },
   },
   {
-    name: { physical: "StartModel", logical: "StartModel", description: "起動のときに選べるモデル(別名。app/src/running_session.rs。issue #445)。CLI の --model に渡す値(as_cli_value: opus / sonnet / haiku)。自由入力にしない: set_model と同じく CLI は --model の名前を検証しない(存在しない名前でも起動し、最初の返答で失敗する)ので、app が知っている別名だけを型で表す。「既定」は型に持たず None(--model を付けない = CLI の既定)。選択肢を「直近に報告された一覧」ではなく固定の別名にした理由: 起動前は CLI が動いておらず一覧(initialize の models)は起動後にしか取れない。覚えた一覧を使うと、app を再起動した直後・初回は一覧が無く選べないし、一覧は CLI の版で変わり(150: 4件、280: 5件)、古い一覧の名前を別の版に渡す危険がある。別名(系列名)は版をまたいで CLI が最新の該当モデルへ解決するので、固定でも古くならない。起動後はこれまでどおり CLI の一覧(AvailableModel)から切り替えられる。tauri の StartModelDto から変換される" },
+    name: { physical: "StartModel", logical: "StartModel", description: "起動のときに選べるモデル(別名。app/src/running_session.rs。issue #445)。CLI の --model に渡す値(as_cli_value: fable / opus / sonnet / haiku)。自由入力にしない: set_model と同じく CLI は --model の名前を検証しない(存在しない名前でも起動し、最初の返答で失敗する)ので、app が知っている別名だけを型で表す。「既定」は型に持たず None(--model を付けない = CLI の既定)。選択肢を「直近に報告された一覧」ではなく固定の別名にした理由: 起動前は CLI が動いておらず一覧(initialize の models)は起動後にしか取れない。覚えた一覧を使うと、app を再起動した直後・初回は一覧が無く選べないし、一覧は CLI の版で変わり(150: 4件、280: 5件)、古い一覧の名前を別の版に渡す危険がある。別名(fable / opus などの系列名)は版をまたいで CLI が最新の該当モデルへ解決するので、固定でも古くならない。起動後はこれまでどおり CLI の一覧(AvailableModel)から切り替えられる。fable は CLI 2.1.268 の --help が --model の別名の例に挙げるもので、issue #455 で足した。並びは新しい世代の順(fable / opus / sonnet / haiku)。tauri の StartModelDto から変換される" },
     stereotype: "enumeration",
-    attributes: ["Opus", "Sonnet", "Haiku"].map(label),
+    attributes: ["Fable", "Opus", "Sonnet", "Haiku"].map(label),
     methods: [
       // CLI の --model に渡す別名
       method("as_cli_value", [], "&'static str"),
