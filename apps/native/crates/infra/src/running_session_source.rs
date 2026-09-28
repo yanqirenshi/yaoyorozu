@@ -54,6 +54,8 @@ struct LedgerEntry {
     proc_start: Option<String>,
     /// プロセス開始時刻(Unixミリ秒)。
     started_at_ms: Option<i64>,
+    /// 表示名(`--name` / Desktop のタブ名。issue #437・#458)。
+    name: Option<String>,
 }
 
 impl LedgerEntry {
@@ -91,6 +93,7 @@ impl LedgerEntry {
                 _ => None,
             },
             started_at_ms: value.get("startedAt").and_then(|v| v.as_i64()),
+            name: value.get("name").and_then(|v| v.as_str()).map(String::from),
         }
     }
 }
@@ -163,7 +166,7 @@ impl RunningSessionSource for FileRunningSessionSource {
         )
     }
 
-    fn taken_names(&self) -> Result<Vec<String>, AppError> {
+    fn taken_names(&self, exclude_session_id: &str) -> Result<Vec<String>, AppError> {
         let entries = match std::fs::read_dir(&self.sessions_dir) {
             Ok(entries) => entries,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -179,9 +182,25 @@ impl RunningSessionSource for FileRunningSessionSource {
             .map(|entry| entry.path())
             .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("json"))
             .filter_map(|path| {
-                let value: serde_json::Value =
-                    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
-                value.get("name")?.as_str().map(str::to_string)
+                let ledger = LedgerEntry::read(&path);
+                let name = ledger.name?;
+                // 再開する会話自身の残骸(app 終了時の強制終了で台帳が残ったもの)は、
+                // 生死によらず衝突相手にしない(issue #458 その2: 同じ表示名で再開しても、
+                // 自分の古い台帳とぶつけて連番を付けない)。
+                if ledger.session_id.as_deref() == Some(exclude_session_id) {
+                    return None;
+                }
+                // 生きていないと確定できた台帳(`process_is_alive` が `false` を返すのは
+                // プロセスが存在しないと確定できたときだけ)の name は数えない(issue #458
+                // その1)。PID が無い・読み取れないなど確定できない場合は、従来どおり数える
+                // (「使用中かもしれない」側に倒す。除きすぎて既存の実行中と衝突する害の方が
+                // 大きい)。
+                if let Some(pid) = ledger.pid {
+                    if !process_is_alive(pid, ledger.proc_start.as_deref(), ledger.started_at_ms) {
+                        return None;
+                    }
+                }
+                Some(name)
             })
             .collect())
     }
@@ -739,5 +758,102 @@ mod tests {
         // 「存在しない」とは判定しない(アクセス拒否を NotFound にしない)。
         assert_ne!(probe_process(4), ProcessProbe::NotFound);
         assert_eq!(probe_process(DEAD_PID), ProcessProbe::NotFound);
+    }
+
+    // ---- taken_names(issue #458) ----
+
+    fn write_named_record(dir: &Path, pid: u32, session_id: &str, name: &str) {
+        write_ledger(
+            dir,
+            &format!("{pid}.json"),
+            &format!(
+                r#"{{"pid":{pid},"sessionId":"{session_id}","name":"{name}","procStart":"{}"}}"#,
+                if pid == std::process::id() {
+                    own_creation_filetime().to_string()
+                } else {
+                    "1".to_string()
+                }
+            ),
+        );
+    }
+
+    #[test]
+    fn taken_names_excludes_a_ledger_whose_process_is_confirmed_dead() {
+        // issue #458 その1: プロセスが存在しないと確定できた台帳(app の強制終了で残った
+        // 残骸など)の名前は、もう使用中ではないので数えない。
+        let dir = tempfile::tempdir().unwrap();
+        write_named_record(dir.path(), DEAD_PID, "other-session", "デザイン (UI)");
+
+        assert_eq!(
+            source(&dir).taken_names("s-new").unwrap(),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn taken_names_counts_a_ledger_of_an_alive_process() {
+        // 生きているプロセスの台帳の名前は、従来どおり使用中として数える(#437 の挙動を保つ)。
+        let dir = tempfile::tempdir().unwrap();
+        write_named_record(
+            dir.path(),
+            std::process::id(),
+            "other-session",
+            "デザイン (UI)",
+        );
+
+        assert_eq!(
+            source(&dir).taken_names("s-new").unwrap(),
+            vec!["デザイン (UI)".to_string()]
+        );
+    }
+
+    #[test]
+    fn taken_names_excludes_its_own_ledger_by_session_id_regardless_of_liveness() {
+        // issue #458 その2: 再開する会話自身の session_id を持つ台帳(自分の残骸)は、
+        // プロセスが生きていても・死んでいても衝突相手にしない。
+        let dir = tempfile::tempdir().unwrap();
+        write_named_record(dir.path(), DEAD_PID, "s-self", "デザイン (UI)");
+        assert_eq!(
+            source(&dir).taken_names("s-self").unwrap(),
+            Vec::<String>::new()
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        write_named_record(dir.path(), std::process::id(), "s-self", "デザイン (UI)");
+        assert_eq!(
+            source(&dir).taken_names("s-self").unwrap(),
+            Vec::<String>::new(),
+            "生きていても、自分自身の session_id なら数えない"
+        );
+    }
+
+    #[test]
+    fn taken_names_still_counts_a_name_when_liveness_cannot_be_determined() {
+        // PID が無い・読み取れない台帳は「生きていない」と確定できないので、従来どおり
+        // 使用中として数える(除きすぎて既存の実行中セッションと衝突する方が害が大きい)。
+        let dir = tempfile::tempdir().unwrap();
+        write_ledger(
+            dir.path(),
+            "garbage.json",
+            r#"{"sessionId":"other","name":"デザイン (UI)"}"#,
+        );
+
+        assert_eq!(
+            source(&dir).taken_names("s-new").unwrap(),
+            vec!["デザイン (UI)".to_string()]
+        );
+    }
+
+    #[test]
+    fn taken_names_returns_empty_when_the_ledger_directory_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope");
+
+        assert_eq!(
+            FileRunningSessionSource::new(missing)
+                .taken_names("s-new")
+                .unwrap(),
+            Vec::<String>::new()
+        );
     }
 }
