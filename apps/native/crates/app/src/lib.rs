@@ -439,9 +439,21 @@ pub trait RunningSessionSource {
 
     /// 台帳にある実行中セッションの名前(`name`。`--name` / Desktop のタブ名。issue #437)。
     /// セッション間メッセージは名前で宛先を指定するので、起動する CLI の名前をこれと重ならない
-    /// ようにするために使う。終了済みの台帳の名前も含みうる(重ならないよう余分に避けるだけで
-    /// 害は無い)。
-    fn taken_names(&self) -> Result<Vec<String>, AppError>;
+    /// ようにするために使う。
+    ///
+    /// `exclude_session_id` は、これから起動する(再開する)会話自身の `session_id`。この
+    /// session_id を持つ台帳は、生死によらず衝突相手にしない(issue #458: app の強制終了で
+    /// 残った自分自身の残骸の台帳と、再開したセッションの名前がぶつかって連番が付く事故が
+    /// あったため)。
+    ///
+    /// それ以外の台帳は、**プロセスが生きていないと確定できたものだけ**除く([`find_running`]
+    /// と同じ生存判定を使うが、バイアスは逆: あちらは「読めない・分からない」を実行中側に倒す
+    /// (混線の防止)が、こちらは名前の一意化が目的で、除きすぎて既存の実行中セッションと名前が
+    /// 衝突する害の方が、多少多めに避ける(連番が余分に付く)害より大きいため、確定できない
+    /// ものは引き続き「使用中」に数える。
+    ///
+    /// [`find_running`]: RunningSessionSource::find_running
+    fn taken_names(&self, exclude_session_id: &str) -> Result<Vec<String>, AppError>;
 }
 
 /// 送信先が外部で実行中とみなされた根拠(issue #345。issue #391 で `RunningSession` から

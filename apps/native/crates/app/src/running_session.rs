@@ -434,11 +434,14 @@ pub fn unique_session_name(requested: &str, taken: &[String]) -> String {
 
 /// 表示名が他と重ならないようにする(issue #437)。app が持つ実行中セッション(終了していない
 /// もの)と、台帳の名前を避ける。台帳を読めなくても、起動は止めない(重ならないことは便宜で、
-/// 読めた分だけ避ける)。
+/// 読めた分だけ避ける)。`self_session_id` はこれから起動する会話自身の session_id で、
+/// [`RunningSessionSource::taken_names`] へそのまま渡す(自分の残骸の台帳とはぶつけない。
+/// issue #458)。
 fn make_name_unique(
     name: Option<String>,
     running: &[RunningSessionByApp],
     ledger: &dyn RunningSessionSource,
+    self_session_id: &str,
 ) -> Option<String> {
     let name = name?;
     let mut taken: Vec<String> = running
@@ -446,7 +449,7 @@ fn make_name_unique(
         .filter(|s| s.process_state != ProcessState::Exited)
         .filter_map(|s| s.base.name.clone())
         .collect();
-    taken.extend(ledger.taken_names().unwrap_or_default());
+    taken.extend(ledger.taken_names(self_session_id).unwrap_or_default());
     Some(unique_session_name(&name, &taken))
 }
 
@@ -524,7 +527,7 @@ pub fn resume_running_session(
     }
     let name = validate_name(request.name.as_deref())?;
     ensure_can_start(running, starting, &request.session_id)?;
-    let name = make_name_unique(name, running, ledger);
+    let name = make_name_unique(name, running, ledger, &request.session_id);
 
     if let Some(found) = ledger.find_running(&request.session_id, &own_running_pids(running))? {
         return Err(AppError::SessionBusy(found.block_message()));
@@ -581,7 +584,7 @@ pub fn create_running_session(
     }
     let name = validate_name(request.name.as_deref())?;
     ensure_can_start(running, starting, &session_id)?;
-    let name = make_name_unique(name, running, ledger);
+    let name = make_name_unique(name, running, ledger, &session_id);
     launch(
         launcher,
         StartRunningSession::New {
@@ -990,6 +993,10 @@ mod tests {
         running_pid: Option<u32>,
         asked_excludes: Mutex<Vec<Vec<u32>>>,
         names: Vec<String>,
+        /// `taken_names` に渡された `exclude_session_id`(issue #458)。呼び出し側
+        /// (resume / create)が、これから起動する会話自身の session_id を渡していることを
+        /// 検証するために記録する。
+        asked_taken_names_excludes: Mutex<Vec<String>>,
     }
 
     impl FakeLedger {
@@ -998,13 +1005,13 @@ mod tests {
                 running_pid: None,
                 asked_excludes: Mutex::new(Vec::new()),
                 names: Vec::new(),
+                asked_taken_names_excludes: Mutex::new(Vec::new()),
             }
         }
         fn with_pid(pid: u32) -> Self {
             Self {
                 running_pid: Some(pid),
-                asked_excludes: Mutex::new(Vec::new()),
-                names: Vec::new(),
+                ..Self::none()
             }
         }
         fn with_names(names: &[&str]) -> Self {
@@ -1035,7 +1042,11 @@ mod tests {
                 }))
         }
 
-        fn taken_names(&self) -> Result<Vec<String>, AppError> {
+        fn taken_names(&self, exclude_session_id: &str) -> Result<Vec<String>, AppError> {
+            self.asked_taken_names_excludes
+                .lock()
+                .unwrap()
+                .push(exclude_session_id.to_string());
             Ok(self.names.clone())
         }
     }
@@ -1408,7 +1419,7 @@ mod tests {
                 Ok(Some(self.0.clone()))
             }
 
-            fn taken_names(&self) -> Result<Vec<String>, AppError> {
+            fn taken_names(&self, _exclude_session_id: &str) -> Result<Vec<String>, AppError> {
                 Ok(Vec::new())
             }
         }
@@ -1801,6 +1812,50 @@ mod tests {
             launcher.started.lock().unwrap()[0].name(),
             Some("調査-3"),
             "CLI へ渡す名前も一意にしたもの"
+        );
+    }
+
+    #[test]
+    fn taken_names_is_asked_to_exclude_the_conversation_being_started_itself() {
+        // issue #458: 台帳の生存判定は infra が行うが、「これから起動する会話自身の残骸は
+        // 衝突相手にしない」ためには、その session_id を taken_names へ渡す必要がある。
+        // ここでは、resume・create のそれぞれが正しい session_id を渡していることを確認する
+        // (実際の除外ロジック自体は infra 側のテストで確認する)。
+        let ledger = FakeLedger::with_names(&["名前"]);
+        resume_running_session(
+            &FakeSource,
+            &FakeLauncher::new(),
+            &ledger,
+            &[],
+            &[],
+            &ResumeRunningSession {
+                name: Some("名前".to_string()),
+                ..resume_request("s-resume")
+            },
+            sink(),
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            ledger.asked_taken_names_excludes.lock().unwrap().as_slice(),
+            &["s-resume".to_string()]
+        );
+
+        let ledger = FakeLedger::with_names(&["名前"]);
+        create_running_session(
+            &FakeLauncher::with_pid(101),
+            &ledger,
+            &[],
+            &[],
+            &create_request(),
+            "s-new".to_string(),
+            sink(),
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            ledger.asked_taken_names_excludes.lock().unwrap().as_slice(),
+            &["s-new".to_string()]
         );
     }
 
