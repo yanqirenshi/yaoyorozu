@@ -12,7 +12,9 @@ use crate::Profile;
 /// (開いているタブの最小限のスナップショット)を追加。
 /// v5 -> v6: 「1ウィンドウ = 1プロファイル」への一本化(issue #91)でタブバーを
 /// 廃止したため、`open_tabs` を削除。
-pub const CURRENT_SETTINGS_VERSION: u32 = 6;
+/// v6 -> v7: app の起動時に前回動かしていたセッションを再開するかの
+/// `restore_running_sessions`(既定 true)を追加(issue #459)。
+pub const CURRENT_SETTINGS_VERSION: u32 = 7;
 
 /// アプリの設定。複数の「プロファイル」(対象リポジトリ・GitHubプロジェクト・
 /// 対象フォルダの組)と、そのうちどれがアクティブかに加え、マシン設定である
@@ -29,6 +31,17 @@ pub struct Settings {
     /// 持たない)を読めるようにするため。
     #[serde(default)]
     pub claude_projects_dir: Option<std::path::PathBuf>,
+    /// app の起動時に、前回動かしていた実行中セッションを自動で再開するか(issue #459)。
+    /// 既定は `true`。プロファイルごとではなくマシン設定(`claude_projects_dir` と同じ扱い)。
+    /// `#[serde(default = ...)]` は、この項目を持たない古い JSON を読んだときにも既定
+    /// (再開する)になるようにするため。
+    #[serde(default = "restore_running_sessions_default")]
+    pub restore_running_sessions: bool,
+}
+
+/// `restore_running_sessions` の既定(issue #459)。
+fn restore_running_sessions_default() -> bool {
+    true
 }
 
 impl Default for Settings {
@@ -39,6 +52,7 @@ impl Default for Settings {
             version: CURRENT_SETTINGS_VERSION,
             profiles: vec![profile],
             claude_projects_dir: None,
+            restore_running_sessions: restore_running_sessions_default(),
         }
     }
 }
@@ -80,6 +94,20 @@ mod tests {
         assert_eq!(settings.profiles[0].github_project, None);
         assert!(settings.profiles[0].selected_project_folders.is_empty());
         assert_eq!(settings.claude_projects_dir, None);
+        assert!(
+            settings.restore_running_sessions,
+            "前回動かしていたセッションの再開は既定で行う(issue #459)"
+        );
+    }
+
+    #[test]
+    fn restore_running_sessions_defaults_to_true_when_the_json_has_no_such_field() {
+        // この項目を持たない JSON(v6 以前の形)を読んでも、既定(再開する)になる。
+        let json = r#"{"version":7,"profiles":[],"active_profile_id":"default"}"#;
+
+        let settings: Settings = serde_json::from_str(json).unwrap();
+
+        assert!(settings.restore_running_sessions);
     }
 
     #[test]

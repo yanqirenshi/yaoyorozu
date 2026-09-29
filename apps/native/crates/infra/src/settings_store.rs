@@ -40,6 +40,15 @@ struct SettingsV5Raw {
     claude_projects_dir: Option<PathBuf>,
 }
 
+/// v6のJSON形状(`restore_running_sessions` を持たない。issue #459 で追加する前)。
+#[derive(serde::Deserialize)]
+struct SettingsV6Raw {
+    profiles: Vec<Profile>,
+    active_profile_id: String,
+    #[serde(default)]
+    claude_projects_dir: Option<PathBuf>,
+}
+
 /// アプリ設定(`Settings`)をJSONファイルとして永続化する。
 /// native.md §2 に準拠: 書き込みはアトミック(`*.tmp` へ書く → fsync →
 /// rename)、読み込み失敗時はプロセスを落とさずデフォルト値へフォールバック
@@ -107,6 +116,8 @@ impl FileSettingsStore {
             active_profile_id: profile.id.clone(),
             profiles: vec![profile],
             claude_projects_dir: legacy.claude_projects_dir,
+            // この版には無い項目は既定で入れる(issue #459)。
+            restore_running_sessions: Settings::default().restore_running_sessions,
         };
         let _ = self.save(&migrated);
         migrated
@@ -120,6 +131,7 @@ impl FileSettingsStore {
             profiles: v4.profiles,
             active_profile_id: v4.active_profile_id,
             claude_projects_dir: v4.claude_projects_dir,
+            restore_running_sessions: Settings::default().restore_running_sessions,
         };
         let _ = self.save(&migrated);
         migrated
@@ -133,6 +145,21 @@ impl FileSettingsStore {
             profiles: v5.profiles,
             active_profile_id: v5.active_profile_id,
             claude_projects_dir: v5.claude_projects_dir,
+            restore_running_sessions: Settings::default().restore_running_sessions,
+        };
+        let _ = self.save(&migrated);
+        migrated
+    }
+
+    /// v6(`restore_running_sessions` を持たない)を現行バージョンへ移行する(issue #459)。
+    /// 既存の利用者も、次の起動から前回動かしていたセッションが再開される(既定 true)。
+    fn migrate_v6_to_current_version(&self, v6: SettingsV6Raw) -> Settings {
+        let migrated = Settings {
+            version: CURRENT_SETTINGS_VERSION,
+            profiles: v6.profiles,
+            active_profile_id: v6.active_profile_id,
+            claude_projects_dir: v6.claude_projects_dir,
+            restore_running_sessions: Settings::default().restore_running_sessions,
         };
         let _ = self.save(&migrated);
         migrated
@@ -166,6 +193,13 @@ impl SettingsStore for FileSettingsStore {
                     Err(_) => Ok(self.recovered_default()),
                 }
             }
+            Some(6) => match serde_json::from_value::<SettingsV6Raw>(value) {
+                Ok(v6) => Ok(LoadedSettings {
+                    settings: self.migrate_v6_to_current_version(v6),
+                    recovered_from_corruption: false,
+                }),
+                Err(_) => Ok(self.recovered_default()),
+            },
             Some(5) => match serde_json::from_value::<SettingsV5Raw>(value) {
                 Ok(v5) => Ok(LoadedSettings {
                     settings: self.migrate_v5_to_current_version(v5),
@@ -263,6 +297,7 @@ mod tests {
             active_profile_id: profile.id.clone(),
             profiles: vec![profile],
             claude_projects_dir: Some(PathBuf::from(r"D:\custom\projects")),
+            restore_running_sessions: false,
         };
 
         store.save(&settings).expect("should save");
@@ -498,6 +533,56 @@ mod tests {
             !loaded.recovered_from_corruption,
             "migration is not corruption"
         );
+    }
+
+    #[test]
+    fn load_migrates_v6_settings_turning_session_restore_on() {
+        // v6(`restore_running_sessions` を持たない)→ v7(issue #459)。既存の利用者も、
+        // 次の起動から前回動かしていたセッションが再開される(既定 true)。
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{"version":6,"profiles":[{"id":"p1","name":"yaoyorozu","repository_path":null,"github_project":null,"selected_project_folders":[]}],"active_profile_id":"p1","claude_projects_dir":"D:\\custom"}"#,
+        )
+        .unwrap();
+        let store = FileSettingsStore::new(path.clone());
+
+        let loaded = store.load().expect("should migrate v6 to current version");
+
+        assert_eq!(loaded.settings.version, CURRENT_SETTINGS_VERSION);
+        assert_eq!(loaded.settings.active_profile_id, "p1");
+        assert_eq!(
+            loaded.settings.claude_projects_dir,
+            Some(PathBuf::from(r"D:\custom")),
+            "他の項目は移行で変えない"
+        );
+        assert!(loaded.settings.restore_running_sessions);
+        assert!(
+            !loaded.recovered_from_corruption,
+            "migration is not corruption"
+        );
+        // 移行後の形で書き戻され、次の起動は移行なしで読める。
+        assert!(fs::read_to_string(&path)
+            .unwrap()
+            .contains("\"version\": 7"));
+        assert!(store.load().unwrap().settings.restore_running_sessions);
+    }
+
+    #[test]
+    fn load_keeps_session_restore_off_when_the_user_turned_it_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{"version":7,"profiles":[],"active_profile_id":"p1","claude_projects_dir":null,"restore_running_sessions":false}"#,
+        )
+        .unwrap();
+
+        let loaded = FileSettingsStore::new(path).load().unwrap();
+
+        assert!(!loaded.settings.restore_running_sessions);
+        assert!(!loaded.recovered_from_corruption);
     }
 
     #[test]
