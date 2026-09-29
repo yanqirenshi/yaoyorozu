@@ -33,11 +33,20 @@
  * `claude_dir_store.rs`、`SessionWatcher`/`FileSystemRepository` は
  * `session_source.rs` に同居(`SessionFileRef`・`SessionFsChange` も同じ)、`ClaudeCliProcess`・
  * `ExitSignal` は `ClaudeCliProcessLauncher` と同じ `claude_cli_process.rs` に同居)。
- * infra の型 29個(port を実装するもの23 + port を実装しない補助の型6: `SessionWatcher`・
+ * infra の型 30個(port を実装するもの24 + port を実装しない補助の型6: `SessionWatcher`・
  * `SessionFileRef`・`SessionFsChange`・`GithubAuthLog`・`ExitSignal`・`PendingSwitches`)と、
- * app の port 24個を載せた(1回きり送信の `AgentGateway`・`ClaudeCliAgent` は #392 で撤去。
+ * app の port 25個を載せた(1回きり送信の `AgentGateway`・`ClaudeCliAgent` は #392 で撤去。
  * `ViewerTabsStore`・`FileViewerTabsStore` は #420、`GitWorktreeManager`・`SystemGitWorktreeManager` は
- * #441(Phase 3。PR #440)で追加)。
+ * #441(Phase 3。PR #440)、`RestorableRunningSessionsStore`・`FileRestorableRunningSessionsStore` は
+ * #465(実行中セッションの復元。issue #459。PR #463)で追加)。
+ *
+ * 【実行中セッションの復元(issue #459。PR #463)】app の起動時に前回動かしていたセッションを
+ * 再開するため、再開に必要な指定(`domain::RestorableRunningSessions`。
+ * `classes-native-prototype.ts`)を `app_data_dir/running-sessions.json` へ保存する port
+ * `RestorableRunningSessionsStore`(実装 `FileRestorableRunningSessionsStore`)と、覚えていた1件を
+ * 起動の指定へ組み立てた `PlannedRestore` が加わった。覚える・忘れる・組み立てる
+ * (`remember_running_session` / `forget_running_session` / `plan_restore` /
+ * `sessions_to_restore` / `ensure_restorable_conversation`)は関数なので描かない。
  *
  * 【app の port の入出力の型(issue #420)】方針: app の非 port の型は、port のシグネチャ(引数・
  * 戻り値・エラー)に出てくるものだけを載せる(層はアプリケーションのビジネスルール)。
@@ -58,7 +67,7 @@
  * - infra の private な型: `DeviceCodeResponse`(GitHub の応答の読み取り用)・`LedgerEntry`・
  *   `ProcessProbe`(実行中セッションの台帳の読み取り・生存確認)・`SessionCwdSelector`・
  *   `CachedSessionSummary`(セッション走査の内部)・`LegacySettingsRaw`・`SettingsV4Raw`・
- *   `SettingsV5Raw`(設定ファイルの旧版の読み取り = マイグレーション用)・`ViewerTabsV1`・
+ *   `SettingsV5Raw`・`SettingsV6Raw`(設定ファイルの旧版の読み取り = マイグレーション用)・`ViewerTabsV1`・
  *   `ViewerTabV1`(タブの旧版の読み取り用)・`GitOutput`(git コマンドの出力の入れ物。
  *   `git_worktree_manager.rs` の内部)。wire / ファイル形式の写し(serde)で、外から見える
  *   構造ではない。`ExitSignal` は複数の型が共有するため例外として載せている。
@@ -296,6 +305,25 @@ const DEFS: ClassDef[] = [
     attributes: [attr("path", "PathBuf")],
     position: { x: 4400, y: 3150 },
     filePath: "apps/native/crates/infra/src/hub_tuning_store.rs",
+  },
+  {
+    name: { physical: "RestorableRunningSessionsStore", logical: "RestorableRunningSessionsStore", description: "app が起動していた実行中セッション(再開に必要な指定)の保存(port)。app::lib.rs。issue #459。実体(app_data_dir/running-sessions.json の読み書き)は infra に閉じ込める。ファイルが無い・壊れている場合の load は空(RestorableRunningSessions::default())。domain::RestorableRunningSessions は classes-native-prototype.ts の離れた位置にあるため線は引かない" },
+    stereotype: "interface",
+    methods: [
+      method("load", [], "Result<domain::RestorableRunningSessions, AppError>"),
+      method("save", ["sessions: &domain::RestorableRunningSessions"], "Result<(), AppError>"),
+    ],
+    position: { x: 5500, y: 2800 },
+    filePath: "apps/native/crates/app/src/lib.rs",
+    // save の引数が長く、戻り値型の列と重なるので広げる(HubTuningStore と同じ理由)。
+    size: { w: 700, h: 0 },
+  },
+  {
+    name: { physical: "FileRestorableRunningSessionsStore", logical: "FileRestorableRunningSessionsStore", description: "再開に必要な指定を app_data_dir/running-sessions.json として永続化(restorable_running_sessions_store.rs。issue #459)。FileViewerTabsStore と同じ流儀(native.md §2): 書き込みはアトミック(*.tmp へ書く → fsync → rename)、読み込み失敗時はプロセスを落とさず空で始める(壊れたファイルは *.corrupt.<timestamp> へ退避)。前回動かしていたものを覚えるだけの控えなので、読めなくても起動を止めない(復元をあきらめるだけで、利用者は手で起動できる)" },
+    attributes: [attr("path", "PathBuf")],
+    position: { x: 5500, y: 3150 },
+    filePath: "apps/native/crates/infra/src/restorable_running_sessions_store.rs",
+    size: { w: 460, h: 0 },
   },
   // ============ 実行環境・GitHub連携・エージェント ============
   {
@@ -726,6 +754,22 @@ const DEFS: ClassDef[] = [
     size: { w: 340, h: 0 },
   },
   {
+    name: { physical: "PlannedRestore", logical: "PlannedRestore", description: "覚えていた1件を、再開の指定へ組み立てたもの(app/src/restore_running_sessions.rs。issue #459)。plan_restore(関数なので描かない)が domain::RestorableRunningSession から作る。パスは含まない(呼び出し側の起動の道筋が、プロファイル・会話ファイル・Git 台帳から解決する)。worktree は覚えてある台帳の ID から戻す: main-worktree → Main / outside-repository → None(指定しない。会話ファイルに記録された cwd で開く)/ それ以外 → Existing(作らない。無ければ再開は失敗し、飛ばす)。知らない権限モード・モデルの値(版が増やしたもの)は既定に倒す(起動を止めない)。ResumeRunningSession などと同じ「起動の指定」なので、ユースケースの戻り値の型を載せない方針の例外として載せた。RunningPermissionMode・StartModel・WorktreeSpec はこの図の離れた位置にあるため線は引かない" },
+    attributes: [
+      attr("profile_id", "String"),
+      attr("project", "String"), // 会話ファイルのあるプロジェクトフォルダ名(無いものは組み立てない)
+      attr("session_id", "String"),
+      attr("mode", "RunningPermissionMode"),
+      attr("model", "Option<StartModel>"),
+      attr("name", "Option<String>"),
+      attr("worktree", "Option<WorktreeSpec>"), // None は「指定しない」
+    ],
+    position: { x: 8500, y: 3700 },
+    filePath: "apps/native/crates/app/src/restore_running_sessions.rs",
+    layer: "application",
+    size: { w: 400, h: 0 },
+  },
+  {
     name: { physical: "MergeOutcome", logical: "MergeOutcome", description: "git merge の結果(GitWorktreeManager::merge の戻り値。app/src/worktree.rs。issue #437)。UpToDate: すでに最新 / Merged: 取り込んだ / Conflict: 競合・その他の理由で取り込めなかった(呼び出し側が abort_merge して、AppError::WorktreeSyncFailed で起動を止める)" },
     stereotype: "enumeration",
     attributes: ["UpToDate", "Merged", "Conflict { detail: String }"].map(label),
@@ -1100,6 +1144,7 @@ const RELATIONSHIPS = [
   rel("realization", "FileHubTuningStore", "HubTuningStore", undefined, "top", "bottom"),
   rel("realization", "FileViewerTabsStore", "ViewerTabsStore", undefined, "top", "bottom"),
   rel("realization", "SystemGitWorktreeManager", "GitWorktreeManager", undefined, "top", "bottom"),
+  rel("realization", "FileRestorableRunningSessionsStore", "RestorableRunningSessionsStore", undefined, "top", "bottom"),
   rel("realization", "WindowsExecutionEnvironmentSource", "ExecutionEnvironmentSource", undefined, "top", "bottom"),
   rel("realization", "GithubApiClient", "GithubGateway", undefined, "top", "bottom"),
   rel("realization", "KeyringTokenStore", "TokenStore", undefined, "top", "bottom"),

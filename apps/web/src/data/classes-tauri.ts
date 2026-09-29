@@ -40,6 +40,11 @@
  * 起動時のモデルの指定(issue #445。PR #446)で `StartModelDto` が、再開時の表示名の初期値(issue #447。
  * PR #450)で `SessionSummaryDto.custom_title` が加わった。
  *
+ * 実行中セッションの復元(issue #459。PR #463)で、`app:warning` の `AppWarningEventDto` と、
+ * 設定の `restore_running_sessions`(`SettingsDto` は bool、`SettingsInputDto` は Option = 省略で
+ * 「変えない」)が加わった。`StartModelDto`・`WorktreeSpecDto` は、復元のために app → DTO の
+ * 向きの変換も持つようになった(変換は線では結ばない)。
+ *
  * 【実物との突き合わせ】`tauri/src/*.rs` の struct / enum を、この図と名前・フィールド・
  * バリアントで突き合わせた(issue #400)。ViewerTabs は専用の DTO が無く、タブの並びは
  * `Vec<ViewerTabDto>` で受け渡す(command の引数・戻り値は関数なので描かない)。
@@ -155,6 +160,13 @@ const DEFS: ClassDef[] = [
     size: { w: 340, h: 0 },
   },
   {
+    name: { physical: "AppWarningEventDto", logical: "AppWarningEventDto", description: "app:warning イベントのペイロード(native.md §3.2)。処理は続けられるが利用者に伝えたいこと(前回動かしていたセッションを再開できなかった理由など。issue #459)" },
+    attributes: [attr("message", "String")],
+    position: { x: 4100, y: 5550 },
+    filePath: "apps/native/tauri/src/dto.rs",
+    size: { w: 300, h: 0 },
+  },
+  {
     name: { physical: "SessionChangedEventDto", logical: "SessionChangedEventDto", description: "session:changed イベントのペイロード。変更のあったプロジェクト名のみ通知し、本体はフロントが取り直す" },
     attributes: [
       attr("project", "String"),
@@ -194,6 +206,8 @@ const DEFS: ClassDef[] = [
       attr("selected_project_folders", "Vec<String>"),
       attr("claude_projects_dir", "Option<String>"),
       attr("effective_projects_dir", "String"),
+      // app の起動時に、前回動かしていた実行中セッションを再開するか(issue #459)。
+      attr("restore_running_sessions", "bool"),
     ],
     position: { x: 2100, y: 7100 },
     filePath: "apps/native/tauri/src/dto.rs",
@@ -207,6 +221,8 @@ const DEFS: ClassDef[] = [
       attr("github_project", "Option<GithubProjectDto>"),
       attr("selected_project_folders", "Vec<String>"),
       attr("claude_projects_dir", "Option<String>"),
+      // 省略(null)は「変えない」(issue #459。設定画面の UI は続きのイシュー)。
+      attr("restore_running_sessions", "Option<bool>"),
     ],
     position: { x: 2900, y: 6750 },
     filePath: "apps/native/tauri/src/dto.rs",
@@ -733,7 +749,7 @@ const DEFS: ClassDef[] = [
     size: { w: 560, h: 0 },
   },
   {
-    name: { physical: "StartModelDto", logical: "StartModelDto", description: "起動のときに選べるモデル(StartRunningSessionDto の model。フロント→Rust なので Deserialize。issue #445)。app::StartModel へ変換(From)。自由入力にしない: 文字列の名前は受け取らず、この別名だけを受け付ける(それ以外は逆シリアライズで断る)。「既定」は指定なし(null)。serde は snake_case(fable / opus / sonnet / haiku)。fable は issue #455 で足した(並びは新しい世代の順)" },
+    name: { physical: "StartModelDto", logical: "StartModelDto", description: "起動のときに選べるモデル(StartRunningSessionDto の model。フロント→Rust なので Deserialize。issue #445)。app::StartModel へ変換(From)。自由入力にしない: 文字列の名前は受け取らず、この別名だけを受け付ける(それ以外は逆シリアライズで断る)。「既定」は指定なし(null)。serde は snake_case(fable / opus / sonnet / haiku)。fable は issue #455 で足した(並びは新しい世代の順)。復元(issue #459)は覚えていた別名を起動の要求へ戻すため、app → DTO の向きの変換(From<app::StartModel>)もある" },
     stereotype: "enumeration",
     attributes: ["Fable", "Opus", "Sonnet", "Haiku"].map(label),
     position: { x: 7600, y: 6500 },
@@ -741,7 +757,7 @@ const DEFS: ClassDef[] = [
     size: { w: 240, h: 0 },
   },
   {
-    name: { physical: "WorktreeSpecDto", logical: "WorktreeSpecDto", description: "どの worktree で起動するかの指定(StartRunningSessionDto の worktree。フロント→Rust なので Deserialize。issue #437)。app::WorktreeSpec へ変換(From)。パスは含まない: パスは app が決める(native.md §4)。serde は tag = \"kind\"(main | existing | branch)、snake_case。Main: リポジトリ本体(worktree は作らない)/ Existing: 既存の worktree(台帳の worktree_id)/ Branch: このブランチの worktree(無ければ app が用意する。ブランチも無ければ origin/main から作る)" },
+    name: { physical: "WorktreeSpecDto", logical: "WorktreeSpecDto", description: "どの worktree で起動するかの指定(StartRunningSessionDto の worktree。フロント→Rust なので Deserialize。issue #437)。app::WorktreeSpec へ変換(From)。パスは含まない: パスは app が決める(native.md §4)。serde は tag = \"kind\"(main | existing | branch)、snake_case。Main: リポジトリ本体(worktree は作らない)/ Existing: 既存の worktree(台帳の worktree_id)/ Branch: このブランチの worktree(無ければ app が用意する。ブランチも無ければ origin/main から作る)。復元(issue #459)は覚えていた指定を起動の要求へ戻すため、app → DTO の向きの変換(From<app::WorktreeSpec>)もある" },
     stereotype: "enumeration",
     attributes: [
       "Main",
