@@ -71,7 +71,9 @@ function edge(
 // タブを持つページには内側の余白(d3.sitemap 0.6.0 の padding)を付け、右端・下端にも
 // 余白が出るようにする。d3.sitemap は余白の内側を起点にするので、描画に渡すときに
 // 余白の分を引く(apps/web/src/app/tabs/sitemap/renderNodes.ts)。
-const TAB_WIDTH = 140;
+// いちばん長いタブ名(settings.local.json に別タブの印が付いたもの)が箱に収まる幅。
+// 収まっているかは `npm run web:check-diagram -- sitemap` の「枠からのはみ出し」で確かめる。
+const TAB_WIDTH = 200;
 const TAB_HEIGHT = 60;
 const TAB_GAP = 20;
 const TAB_CONTAINER_PADDING = 30;
