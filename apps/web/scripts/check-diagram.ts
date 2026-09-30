@@ -387,7 +387,7 @@ const HELP_TEXT = `使い方: npm run web:check-diagram -- <対象> [オプシ�
                       指定したときは、そのサーバがどの作業ツリーのコードを出しているか
                       自分で確かめること(このスクリプトは確認しない)
   --port=N           自分で開発サーバを起動するときのポート(既定は空きポートを自動選択)
-  --timeout=ms        描画待ちのタイムアウト(既定 20000)
+  --timeout=ms        描画待ちのタイムアウト(既定 45000)
   --help, -h          このヘルプを表示する
 
 確認したい作業ツリーで既に next dev 等が動いていて自分のサーバを起動できない
@@ -424,7 +424,10 @@ function parseArgs(argv: string[]): Options {
     expectCount: null,
     baseUrl: null,
     port: null,
-    timeoutMs: 20000,
+    // 初回の Turbopack コンパイルは worktree によっては数十秒かかることがある(#471)。
+    // 既定を短くすると、実際には表示できているのに「読み込みが終わらなかった」と
+    // 誤判定することがある。
+    timeoutMs: 45000,
   };
   for (const arg of rest) {
     const [key, value] = arg.replace(/^--/, "").split(/=(.*)/s);
