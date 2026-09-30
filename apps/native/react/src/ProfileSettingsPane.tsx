@@ -77,6 +77,9 @@ function ProfileSettingsPane({
   const [profileError, setProfileError] = useState<string | null>(null);
   const [repositoryPath, setRepositoryPath] = useState<string | null>(null);
   const [claudeProjectsDir, setClaudeProjectsDir] = useState<string | null>(null);
+  // app の起動時に前回動かしていたセッションを再開するか(issue #459・#464)。
+  // プロファイルごとではなくマシン設定(claudeProjectsDir と同じ扱い)。
+  const [restoreRunningSessions, setRestoreRunningSessions] = useState(true);
   const [githubOwner, setGithubOwner] = useState("");
   const [githubNumber, setGithubNumber] = useState("");
   const [folders, setFolders] = useState<ProjectDto[]>([]);
@@ -105,6 +108,7 @@ function ProfileSettingsPane({
         setProfile(settings.profiles.find((p) => p.id === targetId) ?? null);
         setRepositoryPath(settings.repository_path);
         setClaudeProjectsDir(settings.claude_projects_dir);
+        setRestoreRunningSessions(settings.restore_running_sessions);
         setGithubOwner(settings.github_project?.owner ?? "");
         setGithubNumber(
           settings.github_project ? String(settings.github_project.number) : "",
@@ -273,6 +277,7 @@ function ProfileSettingsPane({
       github_project: githubProject,
       selected_project_folders: selectedProjectFolders,
       claude_projects_dir: claudeProjectsDir,
+      restore_running_sessions: restoreRunningSessions,
     }, profileId)
       .then(() => setSaved(true))
       .catch((e) => setError(isAppError(e) ? e.message : String(e)))
@@ -487,6 +492,22 @@ function ProfileSettingsPane({
                   既定に戻す
                 </button>
               </div>
+            </section>
+
+            <section className="settings-section">
+              <h3>起動時のセッション再開</h3>
+              <label className="settings-checkbox-field">
+                <input
+                  type="checkbox"
+                  checked={restoreRunningSessions}
+                  onChange={(e) => setRestoreRunningSessions(e.target.checked)}
+                />
+                app の起動時に、前回動かしていたセッションを再開する
+              </label>
+              <p className="settings-hint">
+                利用者が「停止」または「終了」したセッションは再開されません。また、再開のとき
+                origin/main の最新化は行いません。
+              </p>
             </section>
 
             <section className="settings-section settings-folder-section">
