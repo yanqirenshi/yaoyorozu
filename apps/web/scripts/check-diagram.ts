@@ -44,7 +44,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createServer } from "node:net";
+import { createConnection, createServer } from "node:net";
 
 /* ==================================================================== *
  *   図ごとの定義(対象パス・描画完了の目印・計測スクリプト)
@@ -455,6 +455,7 @@ class UsageError extends Error {}
  * ==================================================================== */
 
 const WEB_ROOT = join(import.meta.dirname, "..");
+const REPO_ROOT = join(WEB_ROOT, "..", "..");
 
 /** 空きポートを1つ確保する(OS 割り当て → 一度閉じて番号だけ使う)。 */
 async function findFreePort(): Promise<number> {
@@ -476,7 +477,11 @@ async function findFreePort(): Promise<number> {
  */
 async function isRespondingAt(port: number): Promise<boolean> {
   try {
-    const res = await fetch(`http://localhost:${port}/`, { signal: AbortSignal.timeout(1500) });
+    // Turbopack はルートを初回アクセス時にその場でコンパイルするため、最初の1回は
+    // 数秒〜数十秒かかることがある(#471 で報告された worktree では 36 秒ほど)。
+    // ここを短くすると、そのコンパイル中のリクエストを毎回中断してしまい、
+    // 実際には起動できているのに waitForServer が失敗と判定し続けることがある。
+    const res = await fetch(`http://localhost:${port}/`, { signal: AbortSignal.timeout(45000) });
     if (!res.ok) return false;
     const body = await res.text();
     return body.includes("YAOYOROZU");
@@ -553,22 +558,42 @@ async function ensureDevServer(
   const port = options.port ?? (await findFreePort());
   console.log(`${WEB_ROOT} から、ポート ${port} で開発サーバを自分で起動する。`);
   // トークン(CSS カスタムプロパティ)の生成は web:dev と同じく先に済ませる。
-  spawnSync("npm", ["run", "tokens"], { cwd: join(WEB_ROOT, ".."), stdio: "inherit", shell: true });
+  spawnSync("npm", ["run", "tokens"], { cwd: REPO_ROOT, stdio: "inherit", shell: true });
 
-  const child = spawn("npx", ["next", "dev", "-p", String(port)], {
-    cwd: WEB_ROOT,
-    stdio: "ignore",
+  // cwd を WEB_ROOT にして `next dev` を起動すると、worktree(特に .claude/worktrees/
+  // 配下のように、上位に別の package-lock.json を持つ作業ツリーの中に入れ子で作られた
+  // もの)では Next がワークスペースのルートを見誤り、app ディレクトリを見失うことが
+  // ある(#471)。cwd はリポジトリのルートにし、対象ディレクトリは引数で明示する。
+  const output: string[] = [];
+  const child = spawn("npx", ["next", "dev", WEB_ROOT, "-p", String(port)], {
+    cwd: REPO_ROOT,
+    stdio: ["ignore", "pipe", "pipe"],
     shell: true,
     detached: process.platform !== "win32",
   });
+  const recordOutput = (chunk: Buffer) => {
+    output.push(chunk.toString("utf8"));
+    // 際限なく溜めない(失敗時の末尾数十行が分かれば十分)。
+    if (output.length > 500) output.shift();
+  };
+  child.stdout?.on("data", recordOutput);
+  child.stderr?.on("data", recordOutput);
 
-  const ok = await waitForServer(port, 60000);
+  // 初回コンパイルに数十秒かかる環境があるため(#471)、1回のリクエスト待ち(45秒)より
+  // 十分長くする。
+  const ok = await waitForServer(port, 90000);
   if (!ok) {
     killTree(child);
+    const busy = await isPortOccupied(port);
+    const tail = output.join("").split("\n").filter((l) => l.trim() !== "").slice(-40).join("\n");
     throw new Error(
-      `開発サーバ(ポート ${port})が起動しなかった。この作業ツリー(${WEB_ROOT})で ` +
-        `既に next dev 等が動いていて競合している可能性がある。そのプロセスを止めるか、` +
-        `--base-url でそのサーバの URL を明示する(--help を参照)。`,
+      (busy
+        ? `開発サーバ(ポート ${port})が起動しなかった。このポートは既に何か別のプロセスが` +
+          `使っている。そのプロセスを止めるか、--port で別のポートを指定する` +
+          `(それでも起動しないときは --base-url も検討する。--help を参照)。\n`
+        : `開発サーバ(ポート ${port})が起動しなかった(ポート自体は空いている。next dev が` +
+          `起動時に失敗した可能性がある。--base-url でそのサーバの URL を明示する手も` +
+          `ある。--help を参照)。\n`) + `--- next dev の出力(末尾) ---\n${tail || "(出力なし)"}`,
     );
   }
 
@@ -576,6 +601,22 @@ async function ensureDevServer(
     baseUrl: `http://localhost:${port}`,
     stop: () => killTree(child),
   };
+}
+
+/** そのポートに TCP で繋げるか(何かが実際に listen しているか)。 */
+function isPortOccupied(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = createConnection({ port, host: "127.0.0.1", timeout: 1000 });
+    socket.once("connect", () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once("error", () => resolve(false));
+    socket.once("timeout", () => {
+      socket.destroy();
+      resolve(false);
+    });
+  });
 }
 
 /* ==================================================================== *
