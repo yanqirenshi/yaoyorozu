@@ -6,6 +6,7 @@
  *   npm run web:check-diagram -- tm --expect-count=30
  *   npm run web:check-diagram -- sitemap
  *   npm run web:check-diagram -- --help
+ *   npm run web:check-diagram -- --cleanup   # 残った Edge の掃除だけ行う(#475)
  *
  * これまで各セッションは Claude Desktop のブラウザのペイン(preview_start /
  * javascript_tool / read_console_messages)で描画と幾何を確かめてきたが、Desktop から
@@ -41,10 +42,15 @@
  */
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createConnection, createServer } from "node:net";
+
+/** このスクリプトが起動する Edge の一時プロフィール名の接頭辞。残骸の見分けに使う。 */
+const EDGE_TEMP_PREFIX = "yaoyorozu-check-diagram-";
+/** 一時プロフィールの直下に置く、所有者(このスクリプトの process.pid)を書くファイル。 */
+const OWNER_PID_FILE = "owner-pid.txt";
 
 /* ==================================================================== *
  *   図ごとの定義(対象パス・描画完了の目印・計測スクリプト)
@@ -377,6 +383,7 @@ type Options = {
 };
 
 const HELP_TEXT = `使い方: npm run web:check-diagram -- <対象> [オプション]
+       npm run web:check-diagram -- --cleanup [--dry-run]
 
 対象: ${Object.keys(DIAGRAMS).join(" / ")}
 
@@ -388,20 +395,35 @@ const HELP_TEXT = `使い方: npm run web:check-diagram -- <対象> [オプシ�
                       自分で確かめること(このスクリプトは確認しない)
   --port=N           自分で開発サーバを起動するときのポート(既定は空きポートを自動選択)
   --timeout=ms        描画待ちのタイムアウト(既定 45000)
+  --cleanup           このスクリプトが起動して残った Edge の掃除だけを行う(後述)
+  --dry-run           --cleanup と組み合わせ、対象の一覧だけ出して止めない
   --help, -h          このヘルプを表示する
 
 確認したい作業ツリーで既に next dev 等が動いていて自分のサーバを起動できない
 (ポートが埋まっている・.next の競合でビルドが失敗する等)ときは、そのプロセスを
 止めるか、--base-url でそのサーバの URL を明示する。
 
-Edge が残ってしまったとき(異常終了などで自動の後片付けが効かなかった場合)の手動の
-掃除は、絶対に taskkill /IM msedge.exe のような**プロセス名一致の一括終了をしない**
-(全セッションが1つの app(WebView2)の上で動いており、2026-09-29 に msedgewebview2.exe
-の一括終了で app と全セッションが止まった事故がある)。このスクリプトが起動した Edge は
-一時プロフィール名が "yaoyorozu-check-diagram-" で始まるので、コマンドラインにそれを
-含むプロセスだけを PID 指定で個別に止める(例 PowerShell:
+## Edge が残ったとき(--cleanup)
+
+このスクリプトは、実行が正常に終わっても異常に終わっても Edge を止めるようにしているが
+(try/finally に加えて Ctrl+C・想定外の例外でも後片付けする)、それでも取りこぼす
+可能性はゼロではない(#475)。残ったら次のコマンドで掃除する。
+
+  npm run web:check-diagram -- --cleanup
+
+これは、\`--user-data-dir\` に \`${EDGE_TEMP_PREFIX}\`(このスクリプトの一時プロフィールの
+接頭辞)を含む msedge.exe だけを対象にし、そのうち**所有者(起動した node の PID。
+一時プロフィール内の \`${OWNER_PID_FILE}\` に記録)がもう生きていないもの**だけを PID
+指定で止め、一時プロフィールのフォルダを消す。実行中の別セッションのぶんには触れない。
+対象は実行前に一覧で表示する(--dry-run を付けると一覧だけで止めない)。
+
+**絶対に \`taskkill /IM msedge.exe\` のようなプロセス名一致の一括終了はしない**
+(全セッションが1つの app(WebView2)の上で動いており、2026-09-29 に
+msedgewebview2.exe の一括終了で app と全セッションが止まった事故がある)。手動で
+探すときも、コマンドラインに \`${EDGE_TEMP_PREFIX}\` を含むものだけを PID 指定で
+個別に止めること(例 PowerShell:
 Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" |
-  Where-Object { $_.CommandLine -like '*yaoyorozu-check-diagram-*' } |
+  Where-Object { $_.CommandLine -like '*${EDGE_TEMP_PREFIX}*' } |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 )。`;
 
@@ -459,6 +481,59 @@ class UsageError extends Error {}
 
 const WEB_ROOT = join(import.meta.dirname, "..");
 const REPO_ROOT = join(WEB_ROOT, "..", "..");
+
+/*
+ * ==================================================================== *
+ *   緊急時の後片付け(Ctrl+C・想定外の例外など、finally を通らない終了)
+ * ==================================================================== *
+ *
+ * 通常は main() の try/finally で開発サーバ・Edge を止めるが、Ctrl+C(SIGINT)は
+ * ハンドラを登録しないと Node が pending の finally を待たずに即終了する。ここでは
+ * そのときのための同期的(async を待てない)な最終手段を用意する。
+ *
+ * Windows の Job Object(親が死んだら子も終わる仕組み)は Node 標準だけでは使えない
+ * (native addon が要る)ため採用しなかった。代わりに、①この最終手段のハンドラ群と、
+ * ②`--user-data-dir` で確実に自分の Edge だけを見分けて止める killByUserDataDir、
+ * ③取りこぼしたときのための `--cleanup` の3段構えで対応する(2026-09-30、#475)。
+ */
+
+let activeEdge: { childPid?: number; userDataDir: string } | null = null;
+let activeDevServerChild: ChildProcess | null = null;
+
+/** 同期(spawnSync)だけで、分かっている範囲を止める。Ctrl+C・例外の最終手段。 */
+function emergencyCleanupSync(): void {
+  if (activeDevServerChild) {
+    killTree(activeDevServerChild);
+    activeDevServerChild = null;
+  }
+  if (activeEdge) {
+    if (activeEdge.childPid != null && process.platform === "win32") {
+      spawnSync("taskkill", ["/pid", String(activeEdge.childPid), "/T", "/F"], { stdio: "ignore" });
+    }
+    killByUserDataDir(activeEdge.userDataDir);
+    try {
+      rmSync(activeEdge.userDataDir, { recursive: true, force: true });
+    } catch {
+      // 使用中で消せなくても、プロセス自体は止めてあるので次回の --cleanup に任せる。
+    }
+    activeEdge = null;
+  }
+}
+
+process.on("exit", emergencyCleanupSync);
+process.on("SIGINT", () => {
+  emergencyCleanupSync();
+  process.exit(130);
+});
+process.on("SIGTERM", () => {
+  emergencyCleanupSync();
+  process.exit(143);
+});
+process.on("uncaughtException", (e) => {
+  console.error(e);
+  emergencyCleanupSync();
+  process.exit(1);
+});
 
 /** 空きポートを1つ確保する(OS 割り当て → 一度閉じて番号だけ使う)。 */
 async function findFreePort(): Promise<number> {
@@ -532,12 +607,22 @@ function killTree(child: ChildProcess): void {
  */
 function killByUserDataDir(userDataDir: string): void {
   if (process.platform !== "win32") return;
-  const escaped = userDataDir.replace(/'/g, "''").replace(/\\/g, "\\\\");
   const command =
     `Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | ` +
-    `Where-Object { $_.CommandLine -like '*${escaped}*' } | ` +
+    `Where-Object { $_.CommandLine -like '*${psLikeEscape(userDataDir)}*' } | ` +
     `ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`;
   spawnSync("powershell", ["-NoProfile", "-Command", command], { stdio: "ignore" });
+}
+
+/**
+ * PowerShell の単一引用符文字列(かつ -like パターン)に安全に埋め込めるようエスケープする。
+ * 単一引用符文字列でバックスラッシュはただの文字(エスケープ不要)。二重化すると逆に
+ * 実際のパス(単一のバックスラッシュ)と一致しなくなる不具合があった(#475 の一因。
+ * killByUserDataDir が常に0件ヒットになり、後片付けが効いていなかった)。
+ * -like の特殊文字(`*` `?` `[` `]`)はバッククォートでエスケープする。
+ */
+function psLikeEscape(value: string): string {
+  return value.replace(/'/g, "''").replace(/[`*?[\]]/g, "`$&");
 }
 
 /**
@@ -581,12 +666,15 @@ async function ensureDevServer(
   };
   child.stdout?.on("data", recordOutput);
   child.stderr?.on("data", recordOutput);
+  // Ctrl+C・想定外の例外など、finally を通らない終了でも止められるようにする(#475)。
+  activeDevServerChild = child;
 
   // 初回コンパイルに数十秒かかる環境があるため(#471)、1回のリクエスト待ち(45秒)より
   // 十分長くする。
   const ok = await waitForServer(port, 90000);
   if (!ok) {
     killTree(child);
+    activeDevServerChild = null;
     const busy = await isPortOccupied(port);
     const tail = output.join("").split("\n").filter((l) => l.trim() !== "").slice(-40).join("\n");
     throw new Error(
@@ -602,7 +690,10 @@ async function ensureDevServer(
 
   return {
     baseUrl: `http://localhost:${port}`,
-    stop: () => killTree(child),
+    stop: () => {
+      killTree(child);
+      activeDevServerChild = null;
+    },
   };
 }
 
@@ -646,16 +737,26 @@ function findEdge(): string {
 
 type EdgeHandle = {
   cdpPort: number;
+  userDataDir: string;
   close: () => Promise<void>;
 };
 
 /**
  * headless Edge を、毎回ちがう一時プロフィール・OS 割り当てポート(0)で起動する。
  * 固定ポートを使わないので、他セッションの Edge に繋がることがない。
+ *
+ * 起動プロセス(spawn した子)は、実際のブラウザ本体を別プロセスとして起こして
+ * 自分はすぐ終わる作りのため、その子の PID に taskkill /T しても本体に届かないことが
+ * ある(#475)。本体は `--user-data-dir` にこの実行専用の一時プロフィールを持つ
+ * `msedge.exe` として見分けられるので、後片付けは PID ではなくそれで探す
+ * (killByUserDataDir)。あわせて、このプロフィール自身の所有者(このスクリプトの
+ * process.pid)を `owner-pid.txt` に書いておく。`--cleanup` はこれを読んで、
+ * 所有者がまだ生きているプロフィール(= 実行中の別セッション)には触れない。
  */
 async function launchEdge(): Promise<EdgeHandle> {
   const edgePath = findEdge();
-  const userDataDir = mkdtempSync(join(tmpdir(), "yaoyorozu-check-diagram-"));
+  const userDataDir = mkdtempSync(join(tmpdir(), EDGE_TEMP_PREFIX));
+  writeFileSync(join(userDataDir, OWNER_PID_FILE), String(process.pid));
 
   const child = spawn(
     edgePath,
@@ -669,6 +770,9 @@ async function launchEdge(): Promise<EdgeHandle> {
     ],
     { stdio: "ignore" },
   );
+  // Ctrl+C・想定外の例外など、finally を通らない終了でも後片付けできるようにする
+  // (#475。詳しくはファイル末尾の緊急時の後片付けを参照)。
+  activeEdge = { childPid: child.pid, userDataDir };
 
   const portFile = join(userDataDir, "DevToolsActivePort");
   const deadline = Date.now() + 15000;
@@ -686,15 +790,22 @@ async function launchEdge(): Promise<EdgeHandle> {
   }
   if (cdpPort === null) {
     killTree(child);
+    killByUserDataDir(userDataDir);
     rmSync(userDataDir, { recursive: true, force: true });
+    activeEdge = null;
     throw new Error("Edge の CDP ポートを取得できなかった(DevToolsActivePort が出てこない)。");
   }
 
   return {
     cdpPort,
+    userDataDir,
     close: async () => {
+      // まず CDP で行儀よく閉じるよう頼む(確実ならこれで本体ごと終わる)。
+      // うまくいかなくても、後続の PID 指定の kill で必ずカバーする。
+      await closeEdgeGracefully(cdpPort);
       killTree(child);
       killByUserDataDir(userDataDir);
+      activeEdge = null;
       // taskkill 直後は Edge 側のファイルハンドルがまだ残っていることがあるので、
       // 少し待ってからリトライ付きで消す(rmSync の maxRetries だけでは足りない)。
       await sleep(300);
@@ -794,6 +905,175 @@ async function closePage(cdpPort: number, id: string): Promise<void> {
   await fetch(`http://127.0.0.1:${cdpPort}/json/close/${id}`).catch(() => {});
 }
 
+/**
+ * Edge に `Browser.close` で行儀よく終了するよう頼む(ベストエフォート)。
+ * これで本体が確実に終わるとは限らない(#475 の見立てどおり、起動プロセスと本体が
+ * 別プロセスのことがある)ため、失敗しても呼び出し側で PID 指定の kill を必ず続ける。
+ */
+async function closeEdgeGracefully(cdpPort: number): Promise<void> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${cdpPort}/json/version`, {
+      signal: AbortSignal.timeout(2000),
+    });
+    const info = (await res.json()) as { webSocketDebuggerUrl?: string };
+    if (!info.webSocketDebuggerUrl) return;
+    const session = await CdpSession.connect(info.webSocketDebuggerUrl);
+    try {
+      await Promise.race([session.send("Browser.close"), sleep(2000)]);
+    } finally {
+      session.close();
+    }
+  } catch {
+    // 繋げない・応答しない等はここでは無視する。
+  }
+}
+
+/* ==================================================================== *
+ *   残骸の掃除(--cleanup)
+ * ==================================================================== */
+
+type EdgeCandidate = {
+  processId: number;
+  created: string;
+  userDataDir: string | null;
+};
+
+/** 1つの Edge の起動(= 1つの一時プロフィール)にぶら下がるプロセスの束。 */
+type EdgeInstance = {
+  userDataDir: string | null;
+  created: string;
+  processIds: number[];
+  ownerAlive: boolean;
+};
+
+/** その PID のプロセスが今も存在するか(シグナル 0 で存在確認するだけで、実際には送らない)。 */
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `--user-data-dir` に EDGE_TEMP_PREFIX を含む msedge.exe(= このスクリプトが起動した
+ * もの)を、コマンドラインで絞って一覧する。プロセス名一致の一括終了はしない
+ * (CLAUDE.md 2026-09-30 のルール。ここでも対象はコマンドラインで絞り、最終的に
+ * 止める・消すのは PID / パス指定でだけ行う)。
+ *
+ * headless の Edge は、1回の起動でもレンダラ・GPU・crashpad_handler 等の
+ * サブプロセスに分かれ、その多くが同じ `--user-data-dir` を引き継いだコマンドラインで
+ * 現れる。1プロセス = 1インスタンスではないので、この関数は生のプロセス一覧を返すだけに
+ * とどめ、まとめ(インスタンス単位への集約)は groupByInstance で行う。
+ */
+function listEdgeCandidates(): EdgeCandidate[] {
+  if (process.platform !== "win32") return [];
+  const script =
+    `$results = @(Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | ` +
+    `Where-Object { $_.CommandLine -like '*${EDGE_TEMP_PREFIX}*' } | ` +
+    `ForEach-Object { [PSCustomObject]@{ ProcessId = $_.ProcessId; ` +
+    `Created = $_.CreationDate.ToString('s'); CommandLine = $_.CommandLine } }); ` +
+    `$results | ConvertTo-Json -Compress`;
+  const res = spawnSync("powershell", ["-NoProfile", "-Command", script], {
+    encoding: "utf8",
+  });
+  const stdout = (res.stdout ?? "").trim();
+  if (!stdout) return [];
+  let rows: { ProcessId: number; Created: string; CommandLine: string }[];
+  try {
+    const parsed = JSON.parse(stdout);
+    rows = Array.isArray(parsed) ? parsed : [parsed];
+  } catch {
+    return [];
+  }
+  return rows.map((row) => {
+    const match = row.CommandLine.match(/--user-data-dir=(\S+)/);
+    // サブプロセスによっては値がクォートで囲まれることがあるので剥がす。
+    const userDataDir = match ? match[1].replace(/^"|"$/g, "") : null;
+    return { processId: row.ProcessId, created: row.Created, userDataDir };
+  });
+}
+
+/** 生のプロセス一覧を、`--user-data-dir` ごと(= Edge の起動ごと)にまとめる。 */
+function groupByInstance(candidates: EdgeCandidate[]): EdgeInstance[] {
+  const groups = new Map<string, EdgeInstance>();
+  for (const c of candidates) {
+    const key = c.userDataDir ?? `(unknown:${c.processId})`;
+    const g = groups.get(key);
+    if (g) {
+      g.processIds.push(c.processId);
+      if (c.created < g.created) g.created = c.created; // いちばん早く起動したものを代表にする
+      continue;
+    }
+    let ownerAlive = true; // 所有者が分からないものは、誤って消さないよう「生きている」扱いにする。
+    if (c.userDataDir) {
+      try {
+        const ownerPid = Number(readFileSync(join(c.userDataDir, OWNER_PID_FILE), "utf8").trim());
+        ownerAlive = Number.isFinite(ownerPid) && isProcessAlive(ownerPid);
+      } catch {
+        // owner-pid.txt が無い(#475 より前に残ったものなど)は、所有者が確認できない
+        // ぶん安全側ではあるが、実際にはほぼ確実に孤児なので orphan 扱いにする。
+        ownerAlive = false;
+      }
+    }
+    groups.set(key, { userDataDir: c.userDataDir, created: c.created, processIds: [c.processId], ownerAlive });
+  }
+  return [...groups.values()];
+}
+
+function printEdgeInstances(instances: EdgeInstance[]): void {
+  for (const i of instances) {
+    const status = i.userDataDir == null ? "(user-data-dir 不明。触らない)" : i.ownerAlive ? "実行中" : "孤児";
+    console.log(
+      `  起動 ${i.created}  ${status}  プロセス ${i.processIds.length} 件(PID ${i.processIds.join(", ")})  ` +
+        (i.userDataDir ?? "(不明)"),
+    );
+  }
+}
+
+async function runCleanup(dryRun: boolean): Promise<number> {
+  const instances = groupByInstance(listEdgeCandidates());
+  if (instances.length === 0) {
+    console.log("残骸は無い。");
+    return 0;
+  }
+  console.log(`Edge ${instances.length} 件見つかった:`);
+  printEdgeInstances(instances);
+
+  const orphans = instances.filter((i) => i.userDataDir != null && !i.ownerAlive);
+  const skipped = instances.length - orphans.length;
+  if (skipped > 0) {
+    console.log(`${skipped} 件は実行中(所有者が生きている)か user-data-dir 不明のため触らない。`);
+  }
+  if (orphans.length === 0) {
+    console.log("止めるものは無い。");
+    return 0;
+  }
+
+  if (dryRun) {
+    console.log(`--dry-run のため、${orphans.length} 件は止めずに一覧だけ出した。`);
+    return 0;
+  }
+
+  for (const o of orphans) {
+    if (process.platform === "win32") {
+      for (const pid of o.processIds) {
+        spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore" });
+      }
+    }
+    if (o.userDataDir) {
+      try {
+        rmSync(o.userDataDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+      } catch {
+        // プロセスは止めてあるので、フォルダが残っても実害は小さい。
+      }
+    }
+  }
+  console.log(`${orphans.length} 件止めて、一時プロフィールを消した。`);
+  return 0;
+}
+
 /* ==================================================================== *
  *   本体
  * ==================================================================== */
@@ -801,6 +1081,11 @@ async function closePage(cdpPort: number, id: string): Promise<void> {
 type ConsoleMessage = { type: string; text: string };
 
 async function main(): Promise<number> {
+  const argv = process.argv.slice(2);
+  if (argv.includes("--cleanup")) {
+    return runCleanup(argv.includes("--dry-run"));
+  }
+
   let options: Options;
   try {
     options = parseArgs(process.argv.slice(2));
@@ -816,6 +1101,16 @@ async function main(): Promise<number> {
 
   // どの作業ツリーの図を確認しているかを必ず表示する(報告に貼れば取り違えが分かる)。
   console.log(`作業ツリー: ${WEB_ROOT}`);
+
+  const orphanCount = groupByInstance(listEdgeCandidates()).filter(
+    (i) => i.userDataDir != null && !i.ownerAlive,
+  ).length;
+  if (orphanCount > 0) {
+    console.warn(
+      `⚠ 前回までの Edge の残骸が ${orphanCount} 件残っている。` +
+        `npm run web:check-diagram -- --cleanup で片付けられる。`,
+    );
+  }
 
   let devServer: { baseUrl: string; stop: () => void } | null = null;
   let edge: EdgeHandle | null = null;
