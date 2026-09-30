@@ -169,6 +169,9 @@ npm run web:build
 ```
 
 次に `/tm` の描画と幾何(エンティティ数・重なり・結線記号の数)を確認する。
+**自分の作業ツリー(worktree)で実行する**こと(既定では、このコマンドを実行した
+作業ツリーから自分で開発サーバを起動して確認する。他セッションが動かしている
+サーバは既定では使わない)。
 
 ```bash
 npm run web:check-diagram -- tm --expect-count=30
@@ -176,7 +179,8 @@ npm run web:check-diagram -- tm --expect-count=30
 
 Microsoft Edge を headless で起動し、CDP(Chrome DevTools Protocol)で `/tm` を開いて
 計測する([check-diagram.ts](../../../apps/web/scripts/check-diagram.ts)、#462)。
-`--expect-count` はそのときの想定エンティティ数に置き換える。終了コードが 0 なら合格、
+`--expect-count` はそのときの想定エンティティ数に置き換える。実行開始時に表示される
+「作業ツリー」が自分の worktree のパスになっていることを確認する。終了コードが 0 なら合格、
 非 0 なら標準出力の JSON(`overlaps` / `overflow` / `connectors` / `cardLine` /
 `cardPath` / `optLine` / `optCircle` / `consoleMessages`)で原因を見る。判定基準:
 

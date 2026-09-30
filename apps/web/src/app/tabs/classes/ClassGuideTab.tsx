@@ -230,6 +230,9 @@ const SECTIONS: DocSection[] = [
           Desktop から yaoyorozu app へ移行したセッションはブラウザのペインを使えないため、
           コマンドで照合する(<Code>apps/web/scripts/check-diagram.ts</Code>、#462)。
           <Code>&lt;箱の数&gt;</Code> はそのときの想定値に置き換える。
+          <strong>必ず自分の作業ツリー(worktree)で実行する</strong>(既定では、実行した
+          作業ツリーから自分で開発サーバを起動して確認する。他セッションが動かしている
+          サーバは既定では使わず、実行開始時に表示される「作業ツリー」で確認できる)。
         </Para>
         <CodeBlock code={GUIDE_CHECK_COMMAND} />
         <Note>

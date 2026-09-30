@@ -5,6 +5,7 @@
  *   npm run web:check-diagram -- class-diagram --expect-count=227
  *   npm run web:check-diagram -- tm --expect-count=30
  *   npm run web:check-diagram -- sitemap
+ *   npm run web:check-diagram -- --help
  *
  * これまで各セッションは Claude Desktop のブラウザのペイン(preview_start /
  * javascript_tool / read_console_messages)で描画と幾何を確かめてきたが、Desktop から
@@ -14,14 +15,26 @@
  * (playwright / puppeteer 等は追加しない。apps/native の開発版を CDP で確認する方法
  * (native-dev-verify-from-worktree メモ)と同じやり方)。
  *
+ * **必ず、確認したい変更のある作業ツリー(worktree)でこのスクリプトを実行する**
+ * (実行開始時に、このスクリプトのある作業ツリー(WEB_ROOT)の絶対パスと、使うサーバの
+ * URL を必ず表示するので、報告に貼れば取り違えが第三者にも分かる)。
+ *
  * ポートの取り違え事故(2026-09-25、他セッションの開発サーバ・CDP に繋いでしまった)の
  * 再発防止のため、
  * - Edge は毎回ちがう一時プロフィール・`--remote-debugging-port=0`(OS が空きポートを
  *   割り当てる)で起動し、実際のポートは Edge が書き出す `DevToolsActivePort` から読む。
  *   固定ポートを推測して繋ぐことがないので、他セッションの Edge に繋がりようがない。
- * - 開発サーバは、指定 URL(既定 http://localhost:3000)にこのアプリ(タイトルが
- *   「YAOYOROZU」)が既に応答していればそれを使い、無ければこのスクリプトが空きポートで
- *   自分の Next.js を起動し、終わったら止める。
+ * - 開発サーバは、既定では**このスクリプトのある作業ツリー(WEB_ROOT)から自分で
+ *   空きポートで起動し**、終わったら止める。他セッションが起動済みのサーバ(既定の
+ *   3000 番など)を既定では絶対に使わない — worktree で作業しているのに、たまたま
+ *   3000 番で動いている main の作業ツリーの開発サーバを見て「問題なし」と誤報告する
+ *   事故(2026-09-25 の「他セッションの Vite のコードを見て誤診した」事例と同型)を防ぐ
+ *   ため。既に動いているサーバを使いたいときは `--base-url` で明示する(このときは
+ *   どの作業ツリーのコードを出しているか確認できない旨の警告を出す)。
+ * - 確認したい作業ツリーで既に `next dev` 等が動いていて自分のサーバを起動できない
+ *   ときは、そのプロセスを止めるか、`--base-url` でそのサーバの URL を明示する
+ *   (例: `--base-url=http://localhost:3000`。ただしそのサーバが確認したい作業ツリーの
+ *   コードを出しているか、自分で確かめること)。
  *
  * Node は 24 以上を前提とし、TypeScript のまま実行する(型注釈は実行時に取り除かれる。
  * scripts/generate-tokens.ts と同じ)。
@@ -356,24 +369,61 @@ const DIAGRAMS: Record<DiagramName, DiagramSpec> = {
 type Options = {
   diagram: DiagramName;
   expectCount: number | null;
+  /** 明示的に指定したときだけ使う、既に動いているサーバの URL。既定は null(自分で起動する)。 */
   baseUrl: string | null;
-  port: number;
+  /** 自分でサーバを起動するときのポート。既定は null(空きポートを自動で選ぶ)。 */
+  port: number | null;
   timeoutMs: number;
 };
 
+const HELP_TEXT = `使い方: npm run web:check-diagram -- <対象> [オプション]
+
+対象: ${Object.keys(DIAGRAMS).join(" / ")}
+
+オプション:
+  --expect-count=N   期待する箱(エンティティ・ノード)の数。合わなければ終了コードが非0
+  --base-url=URL     既に動いているサーバをそのまま使う(既定はしない。このスクリプトの
+                      ある作業ツリーから自分で開発サーバを起動して使う)。
+                      指定したときは、そのサーバがどの作業ツリーのコードを出しているか
+                      自分で確かめること(このスクリプトは確認しない)
+  --port=N           自分で開発サーバを起動するときのポート(既定は空きポートを自動選択)
+  --timeout=ms        描画待ちのタイムアウト(既定 20000)
+  --help, -h          このヘルプを表示する
+
+確認したい作業ツリーで既に next dev 等が動いていて自分のサーバを起動できない
+(ポートが埋まっている・.next の競合でビルドが失敗する等)ときは、そのプロセスを
+止めるか、--base-url でそのサーバの URL を明示する。
+
+Edge が残ってしまったとき(異常終了などで自動の後片付けが効かなかった場合)の手動の
+掃除は、絶対に taskkill /IM msedge.exe のような**プロセス名一致の一括終了をしない**
+(全セッションが1つの app(WebView2)の上で動いており、2026-09-29 に msedgewebview2.exe
+の一括終了で app と全セッションが止まった事故がある)。このスクリプトが起動した Edge は
+一時プロフィール名が "yaoyorozu-check-diagram-" で始まるので、コマンドラインにそれを
+含むプロセスだけを PID 指定で個別に止める(例 PowerShell:
+Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" |
+  Where-Object { $_.CommandLine -like '*yaoyorozu-check-diagram-*' } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+)。`;
+
 function parseArgs(argv: string[]): Options {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log(HELP_TEXT);
+    process.exit(0);
+  }
+
   const [diagramArg, ...rest] = argv;
   if (!diagramArg || !(diagramArg in DIAGRAMS)) {
     const names = Object.keys(DIAGRAMS).join(" / ");
     throw new UsageError(
-      `対象は ${names} のいずれかを指定する(例: npm run web:check-diagram -- class-diagram)`,
+      `対象は ${names} のいずれかを指定する(例: npm run web:check-diagram -- class-diagram。` +
+        `--help で使い方を表示する)`,
     );
   }
   const options: Options = {
     diagram: diagramArg as DiagramName,
     expectCount: null,
     baseUrl: null,
-    port: 3000,
+    port: null,
     timeoutMs: 20000,
   };
   for (const arg of rest) {
@@ -382,7 +432,7 @@ function parseArgs(argv: string[]): Options {
       case "expect-count":
         options.expectCount = Number(value);
         break;
-      case "url":
+      case "base-url":
         options.baseUrl = value.replace(/\/+$/, "");
         break;
       case "port":
@@ -392,7 +442,7 @@ function parseArgs(argv: string[]): Options {
         options.timeoutMs = Number(value);
         break;
       default:
-        throw new UsageError(`不明なオプション: --${key}`);
+        throw new UsageError(`不明なオプション: --${key}(--help で使い方を表示する)`);
     }
   }
   return options;
@@ -419,8 +469,12 @@ async function findFreePort(): Promise<number> {
   });
 }
 
-/** そのポートで、このアプリ(YAOYOROZU)が既に応答しているか。 */
-async function isOwnAppRunning(port: number): Promise<boolean> {
+/**
+ * そのポートで YAOYOROZU が応答しているか。自分で起動したサーバの起動待ちにのみ使う
+ * (既に動いている別のサーバを「使えるから使う」判定には使わない。タイトルに
+ * YAOYOROZU を含むかだけでは、どの作業ツリーのコードを出しているかは分からないため)。
+ */
+async function isRespondingAt(port: number): Promise<boolean> {
   try {
     const res = await fetch(`http://localhost:${port}/`, { signal: AbortSignal.timeout(1500) });
     if (!res.ok) return false;
@@ -434,7 +488,7 @@ async function isOwnAppRunning(port: number): Promise<boolean> {
 async function waitForServer(port: number, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (await isOwnAppRunning(port)) return true;
+    if (await isRespondingAt(port)) return true;
     await sleep(500);
   }
   return false;
@@ -458,20 +512,46 @@ function killTree(child: ChildProcess): void {
   }
 }
 
+/**
+ * このスクリプトが起動した Edge の生き残りを、コマンドラインに userDataDir(mkdtemp で
+ * 作った、実行のたびにちがう一時プロフィールのパス)を含むものだけに絞って止める。
+ * Chromium はクラッシュレポート用のプロセス(crashpad_handler)などを親子関係の外に
+ * 作ることがあり、`taskkill /T`(プロセスツリー)だけでは取りこぼすことがある
+ * (2026-09-29、掃除しきれなかった msedge.exe が積み重なって動作を遅くした事例)。
+ * **絶対にプロセス名一致(taskkill /IM)の一括終了はしない**(全セッションが1つの
+ * app(WebView2)の上で動いており、名前一致だと他セッションを巻き込む。同日の事故)。
+ * userDataDir はこの実行だけの一意なパスなので、これで絞る限り他プロセスに影響しない。
+ */
+function killByUserDataDir(userDataDir: string): void {
+  if (process.platform !== "win32") return;
+  const escaped = userDataDir.replace(/'/g, "''").replace(/\\/g, "\\\\");
+  const command =
+    `Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | ` +
+    `Where-Object { $_.CommandLine -like '*${escaped}*' } | ` +
+    `ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`;
+  spawnSync("powershell", ["-NoProfile", "-Command", command], { stdio: "ignore" });
+}
+
+/**
+ * 開発サーバを用意する。既定では、このスクリプトのある作業ツリー(WEB_ROOT)から
+ * 自分で空きポートで起動する(他セッションが動かしている、既定の 3000 番などの
+ * サーバは既定では絶対に使わない。worktree の変更ではなく別の作業ツリー — 多くは
+ * main — の図を見て「問題なし」と誤報告する事故を防ぐため)。
+ * `--base-url` を明示したときだけ、そのサーバをそのまま使う。
+ */
 async function ensureDevServer(
   options: Options,
 ): Promise<{ baseUrl: string; stop: () => void }> {
   if (options.baseUrl) {
+    console.warn(
+      `⚠ --base-url で指定されたサーバをそのまま使う: ${options.baseUrl}\n` +
+        `  このサーバが ${WEB_ROOT} のコードを出しているかはこのスクリプトでは確認できない。呼び出し側で確かめること。`,
+    );
     return { baseUrl: options.baseUrl, stop: () => {} };
   }
 
-  if (await isOwnAppRunning(options.port)) {
-    console.log(`開発サーバは起動済み(http://localhost:${options.port})なのでそれを使う。`);
-    return { baseUrl: `http://localhost:${options.port}`, stop: () => {} };
-  }
-
-  const port = await findFreePort();
-  console.log(`開発サーバが見つからないので、ポート ${port} で自分で起動する。`);
+  const port = options.port ?? (await findFreePort());
+  console.log(`${WEB_ROOT} から、ポート ${port} で開発サーバを自分で起動する。`);
   // トークン(CSS カスタムプロパティ)の生成は web:dev と同じく先に済ませる。
   spawnSync("npm", ["run", "tokens"], { cwd: join(WEB_ROOT, ".."), stdio: "inherit", shell: true });
 
@@ -485,7 +565,11 @@ async function ensureDevServer(
   const ok = await waitForServer(port, 60000);
   if (!ok) {
     killTree(child);
-    throw new Error(`開発サーバ(ポート ${port})が起動しなかった`);
+    throw new Error(
+      `開発サーバ(ポート ${port})が起動しなかった。この作業ツリー(${WEB_ROOT})で ` +
+        `既に next dev 等が動いていて競合している可能性がある。そのプロセスを止めるか、` +
+        `--base-url でそのサーバの URL を明示する(--help を参照)。`,
+    );
   }
 
   return {
@@ -566,6 +650,7 @@ async function launchEdge(): Promise<EdgeHandle> {
     cdpPort,
     close: async () => {
       killTree(child);
+      killByUserDataDir(userDataDir);
       // taskkill 直後は Edge 側のファイルハンドルがまだ残っていることがあるので、
       // 少し待ってからリトライ付きで消す(rmSync の maxRetries だけでは足りない)。
       await sleep(300);
@@ -685,6 +770,9 @@ async function main(): Promise<number> {
 
   const spec = DIAGRAMS[options.diagram];
 
+  // どの作業ツリーの図を確認しているかを必ず表示する(報告に貼れば取り違えが分かる)。
+  console.log(`作業ツリー: ${WEB_ROOT}`);
+
   let devServer: { baseUrl: string; stop: () => void } | null = null;
   let edge: EdgeHandle | null = null;
   let cdp: CdpSession | null = null;
@@ -697,6 +785,7 @@ async function main(): Promise<number> {
       console.error(`開発サーバの準備に失敗した: ${(e as Error).message}`);
       return 4;
     }
+    console.log(`URL: ${devServer.baseUrl}${spec.path}`);
 
     try {
       edge = await launchEdge();
