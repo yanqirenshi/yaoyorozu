@@ -45,6 +45,10 @@ export const GUIDE_FILES: GuideFile[] = [
     path: "src/data/classDiagramGuide.ts",
     role: "このタブの内容。",
   },
+  {
+    path: "scripts/check-diagram.ts",
+    role: "画面の重なり・交差・はみ出しをコマンドで確かめるスクリプト(#462)。",
+  },
 ];
 
 /** クラス1つの書き方の例。 */
@@ -354,6 +358,15 @@ export type GuideCheck = {
   item: string;
   note: string;
 };
+
+/**
+ * 確かめるコマンド。Desktop のブラウザのペイン(preview_start / javascript_tool /
+ * read_console_messages)が使えないセッション(#381 で app へ移行したセッション)向けに、
+ * headless の Microsoft Edge + CDP でこの一覧を自動で照合する(#462)。
+ * Desktop のペインが使えるセッションは、そちらで直接ブラウザ内 JS を実行してもよい。
+ */
+export const GUIDE_CHECK_COMMAND =
+  "npm run web:check-diagram -- class-diagram --expect-count=<箱の数>";
 
 /** 書いたあとに画面で確かめること。 */
 export const GUIDE_CHECKS: GuideCheck[] = [

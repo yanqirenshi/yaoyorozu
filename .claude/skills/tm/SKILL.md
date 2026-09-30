@@ -168,44 +168,34 @@ npx tsc --noEmit -p apps/web/tsconfig.json
 npm run web:build
 ```
 
-次に `/tm` を開いて描画を確認する(preview_start で `yaoyorozu-web` を起動)。
-図が広いのでビューポートを広げる(`resize_window` で 1900x1000 程度。終わったら `desktop` に戻す)。
+次に `/tm` の描画と幾何(エンティティ数・重なり・結線記号の数)を確認する。
+**自分の作業ツリー(worktree)で実行する**こと(既定では、このコマンドを実行した
+作業ツリーから自分で開発サーバを起動して確認する。他セッションが動かしている
+サーバは既定では使わない)。
 
-ブラウザで以下を実行し、**エンティティ数・重なり・結線記号の数**を照合する。
-
-```js
-const es = [...document.querySelectorAll('g.entity')].map(g => { const d = g.__data__;
-  return { n: d.name.val(), x: d.position.x, y: d.position.y,
-           r: d.position.x + Math.round(d.size.w), b: d.position.y + Math.round(d.size.h) }; });
-const ov = [];
-for (let i = 0; i < es.length; i++) for (let j = i + 1; j < es.length; j++) {
-  const a = es[i], c = es[j];
-  if (a.x < c.r && c.x < a.r && a.y < c.b && c.y < a.b) ov.push(a.n + ' x ' + c.n);
-}
-const svg = document.querySelector('g.entity').ownerSVGElement;
-({ count: es.length, overlaps: ov,
-   extentX: Math.max(...es.map(e => e.r)), extentY: Math.max(...es.map(e => e.b)),
-   connectors: svg.querySelectorAll('line.connector').length,
-   cardLine: svg.querySelectorAll('line.cardinality').length,     // cardinality 1
-   cardPath: svg.querySelectorAll('path.cardinality').length,     // cardinality 3
-   optLine:  svg.querySelectorAll('line.optionality').length,     // optionality 1
-   optCircle: svg.querySelectorAll('circle.optionality').length })// optionality 0
+```bash
+npm run web:check-diagram -- tm --expect-count=30
 ```
 
-判定基準:
+Microsoft Edge を headless で起動し、CDP(Chrome DevTools Protocol)で `/tm` を開いて
+計測する([check-diagram.ts](../../../apps/web/scripts/check-diagram.ts)、#462)。
+`--expect-count` はそのときの想定エンティティ数に置き換える。実行開始時に表示される
+「作業ツリー」が自分の worktree のパスになっていることを確認する。終了コードが 0 なら合格、
+非 0 なら標準出力の JSON(`overlaps` / `overflow` / `connectors` / `cardLine` /
+`cardPath` / `optLine` / `optCircle` / `consoleMessages`)で原因を見る。判定基準:
 
-- `count` が定義したエンティティ数と一致する。
-- `overlaps` が空。重なっていたら `position` を調整する(実寸は上の結果から読める)。
+- `count` が定義したエンティティ数と一致する(`--expect-count` で指定した値と比較される)。
+- `overlaps` が空。重なっていたら `position` を調整する。
+- `overflow` が空。ラベルが箱の外へはみ出している。
 - `connectors` がリレーションシップ数と一致する。
 - `cardLine + cardPath` と `optLine + optCircle` がどちらも **リレーションシップ数 × 2**。
   内訳も定義から数えた期待値と一致すること(合計だけ合っていても向きが逆なことがある)。
-- コンソールエラーが無い(`read_console_messages`)。
-  ただし `/wbs` を経由するとログが残るため、`/tm` を単独でリロードしてから見る。
+  これは `check-diagram.ts` が計測しないので、`cardLine` / `cardPath` / `optLine` /
+  `optCircle` の数値を見て手で照合する。
+- `consoleMessages` が空(コンソールエラー・例外が無い)。
 
-図の操作(ドラッグ・右クリック)を合成イベントで検証するときは、**React の再レンダーを
-待たずに DOM を読むと「開いていない」と誤判定する**。イベントを投げたあとに
-`await new Promise(r => setTimeout(r, 150))` を挟んでから判定すること(実際に一度
-誤った結論を出した)。`cardinality` などの結線記号は再描画を伴わないので待ち不要。
+Desktop のブラウザのペイン(preview_start / javascript_tool / read_console_messages)が
+使えるセッションは、そちらで直接ブラウザ内 JS を実行して確認してもよい(同じ照合項目)。
 
 ## 注意
 
