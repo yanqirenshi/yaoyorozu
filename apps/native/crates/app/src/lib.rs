@@ -1148,8 +1148,28 @@ pub fn save_hub_layout(
 }
 
 /// ローカルAPIサーバ(native.md §7)の既定ポート。ハードコードの散在を防ぐため
-/// ここに1箇所だけ定義する(issue #122)。
+/// ここに1箇所だけ定義する(issue #122)。**MSI 版はこの値のまま**(issue #470)。
 pub const LOCAL_API_PORT: u16 = 14200;
+
+/// ローカルAPIのポートを上書きする環境変数(native.md §7。issue #470)。
+///
+/// 判断の記録: identifier ごとにポートを自動で変える(ハッシュ等で導出する)のではなく、
+/// **起動時に明示的な上書きを与える**方式にした。自動導出は「1か所で決める」を満たしても、
+/// 実際に使われるポート番号が人には予測しづらく(ドキュメント化しにくい)、テストも
+/// 複雑になる。開発版は `tauri dev --config` のように起動のたびに設定を明示的に渡す運用
+/// (`/restart-app` 等)なので、同じ場で環境変数を1つ渡すだけで済む。値を渡さなければ
+/// 既定(MSI 版と同じ 14200)のままなので、通常の起動は何も変わらない。
+pub const LOCAL_API_PORT_ENV_VAR: &str = "YAOYOROZU_LOCAL_API_PORT";
+
+/// 実際に使うローカルAPIのポートを決める(issue #470)。`env_value` は
+/// [`LOCAL_API_PORT_ENV_VAR`] の値(未設定は `None`)。数値として読めない・範囲外(`0`)の
+/// 値は無視して既定へ戻す(不正な上書きで起動を止めない)。
+pub fn resolve_local_api_port(env_value: Option<&str>) -> u16 {
+    env_value
+        .and_then(|v| v.trim().parse::<u16>().ok())
+        .filter(|&port| port != 0)
+        .unwrap_or(LOCAL_API_PORT)
+}
 
 /// `POST /layout/{diagram}` で受け付ける図名の許可リスト(issue #122)。
 /// `apps/web` の `src/data/layout/<diagram>.json` に対応する。
@@ -1167,6 +1187,13 @@ pub trait LayoutStore {
 /// 保存先の解決)は infra に閉じ込める(issue #122)。
 pub trait LocalApiTokenStore {
     fn save(&self, token: &str) -> Result<(), AppError>;
+}
+
+/// ローカルAPIサーバが実際に使っているポートの永続化(port。issue #470)。トークンと
+/// 同じ場所(`app_data_dir`)へ書き出し、apps/web の Route Handler がトークンと同じ流儀
+/// (無ければ既定値と見なす)で読めるようにする。実体は infra に閉じ込める。
+pub trait LocalApiPortStore {
+    fn save(&self, port: u16) -> Result<(), AppError>;
 }
 
 /// 指定リポジトリに属する git worktree の一覧(port)。`repo_root` が
@@ -1189,6 +1216,11 @@ pub fn generate_local_api_token() -> String {
 /// 生成した認証トークンを永続化する。
 pub fn save_local_api_token(store: &dyn LocalApiTokenStore, token: &str) -> Result<(), AppError> {
     store.save(token)
+}
+
+/// 実際に使っているローカルAPIのポートを永続化する(issue #470)。
+pub fn save_local_api_port(store: &dyn LocalApiPortStore, port: u16) -> Result<(), AppError> {
+    store.save(port)
 }
 
 /// ローカルAPIサーバ経由のレイアウト保存(issue #122・#129)。`diagram` が
@@ -4681,6 +4713,31 @@ mod tests {
 
         assert!(result.users[0].repositories[0].branches.is_empty());
         assert!(result.users[0].repositories[0].worktrees.is_empty());
+    }
+
+    // ---- ローカルAPIのポート(issue #470) ----
+
+    #[test]
+    fn resolve_local_api_port_uses_the_default_when_there_is_no_override() {
+        assert_eq!(resolve_local_api_port(None), LOCAL_API_PORT);
+    }
+
+    #[test]
+    fn resolve_local_api_port_uses_a_valid_override() {
+        assert_eq!(resolve_local_api_port(Some("14201")), 14201);
+        // 前後の空白は許容する(環境変数の値は手で入れることがあるため)。
+        assert_eq!(resolve_local_api_port(Some(" 14201 ")), 14201);
+    }
+
+    #[test]
+    fn resolve_local_api_port_falls_back_to_the_default_for_invalid_values() {
+        for invalid in ["", "0", "not a number", "-1", "99999999"] {
+            assert_eq!(
+                resolve_local_api_port(Some(invalid)),
+                LOCAL_API_PORT,
+                "{invalid:?}"
+            );
+        }
     }
 }
 

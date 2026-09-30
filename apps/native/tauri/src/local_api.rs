@@ -1,15 +1,19 @@
+use crate::dto::AppWarningEventDto;
+use crate::running_session::APP_WARNING_EVENT;
 use crate::state::AppState;
 use app::AppError;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use infra::{FileLayoutStore, FileLocalApiTokenStore, SystemGitWorktreeLister};
+use infra::{
+    FileLayoutStore, FileLocalApiPortStore, FileLocalApiTokenStore, SystemGitWorktreeLister,
+};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
 
 /// ローカルAPIサーバ(native.md §7)のハンドラが共有する状態。`app_handle`
@@ -109,25 +113,40 @@ fn router(state: LocalApiState) -> Router {
 
 /// ローカルAPIサーバを起動する(native.md §7)。トークンは起動のたびに
 /// 新規生成して `app_data_dir/local-api-token` へ上書き保存し(前回分は
-/// 無効化)、127.0.0.1 の固定ポート(`app::LOCAL_API_PORT`)で listen する。
-/// ポート使用中等の起動失敗はアプリを止めず、既存のウォッチャー起動失敗
-/// (`start_session_watcher`)と同じ流儀で警告ログに留める。
+/// 無効化)、127.0.0.1 で listen する。
+///
+/// ポートは既定 `app::LOCAL_API_PORT`(MSI 版はこの値のまま)だが、環境変数
+/// `app::LOCAL_API_PORT_ENV_VAR` で上書きできる(issue #470。開発版が MSI 版と
+/// ポートを取り合わないようにするため)。実際に使うポートはトークンと同じ
+/// `app_data_dir/local-api-port` へ書き出し、apps/web の Route Handler がトークンと
+/// 同じ流儀(無ければ既定値と見なす)で読めるようにする。
+///
+/// ポート使用中等の起動失敗はアプリを止めず、標準エラーへ記録するとともに
+/// `app:warning`(native.md §3.2)で画面にも伝える(黙って使えないままにしない)。
 pub fn start(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let token_path = app.path().app_data_dir()?.join("local-api-token");
+    let app_data_dir = app.path().app_data_dir()?;
     let token = app::generate_local_api_token();
-    let token_store = FileLocalApiTokenStore::new(token_path);
+    let token_store = FileLocalApiTokenStore::new(app_data_dir.join("local-api-token"));
     if let Err(e) = app::save_local_api_token(&token_store, &token) {
         eprintln!("ローカルAPIトークンの保存に失敗しました: {e}");
     }
 
+    let port =
+        app::resolve_local_api_port(std::env::var(app::LOCAL_API_PORT_ENV_VAR).ok().as_deref());
+    let port_store = FileLocalApiPortStore::new(app_data_dir.join("local-api-port"));
+    if let Err(e) = app::save_local_api_port(&port_store, port) {
+        eprintln!("ローカルAPIのポートの保存に失敗しました: {e}");
+    }
+
+    let app_handle = app.handle().clone();
     let state = LocalApiState {
-        app_handle: app.handle().clone(),
+        app_handle: app_handle.clone(),
         token: Arc::new(token),
         version: Arc::new(app.package_info().version.to_string()),
     };
 
     tauri::async_runtime::spawn(async move {
-        let addr = SocketAddr::from(([127, 0, 0, 1], app::LOCAL_API_PORT));
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
         match tokio::net::TcpListener::bind(addr).await {
             Ok(listener) => {
                 if let Err(e) = axum::serve(listener, router(state)).await {
@@ -135,7 +154,10 @@ pub fn start(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Err(e) => {
-                eprintln!("ローカルAPIサーバの起動に失敗しました({addr}): {e}");
+                let message =
+                    format!("ローカルAPIサーバを起動できませんでした(ポート {port}): {e}");
+                eprintln!("{message}");
+                let _ = app_handle.emit(APP_WARNING_EVENT, AppWarningEventDto { message });
             }
         }
     });

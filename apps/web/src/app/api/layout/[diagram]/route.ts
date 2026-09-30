@@ -8,37 +8,50 @@ function isLayoutDiagram(value: string): value is LayoutDiagram {
   return (LAYOUT_DIAGRAMS as readonly string[]).includes(value);
 }
 
-// App(Tauri)側のローカルAPI(native.md §7)。ポートは apps/native の
-// `app::LOCAL_API_PORT` と同じ値をここに複製する(Web側からRustのソースは
-// 参照できないため。変更時は両方揃えること。issue #123)。
-const LOCAL_API_BASE_URL = "http://127.0.0.1:14200";
+// App(Tauri)側のローカルAPI(native.md §7)。ポートは既定 `14200`
+// (apps/native の `app::LOCAL_API_PORT` と同じ値)。App は `YAOYOROZU_LOCAL_API_PORT` で
+// 上書きできる(開発版を MSI 版と別ポートで動かすため。issue #470)ため、実際に使っている
+// ポートは `local-api-port` ファイル(トークンと同じ場所・同じ流儀)から読む。
+const DEFAULT_LOCAL_API_PORT = 14200;
 
-// 認証トークンの保存場所(native.md §7)。Windows の app_data_dir は
-// `%APPDATA%\<identifier>`(`apps/native/tauri/tauri.conf.json` の
-// identifier)。ブラウザへは渡さず、Next.js サーバ側でのみ読む。
-function localApiTokenPath(): string | null {
+// App の app_data_dir(native.md §7)。Windows では `%APPDATA%\<identifier>`
+// (`apps/native/tauri/tauri.conf.json` の identifier)。ここは日々の作業用の MSI 版
+// (`com.yaoyorozu.native`)固定で、開発版(別 identifier)は対象にしない(apps/web との連携は
+// MSI 版で行う。issue #470)。
+function localApiDataDir(): string | null {
   const appData = process.env.APPDATA;
   if (!appData) return null;
-  // 実行時の環境変数に依存する動的パスであり、ビルド時のファイルトレース
-  // (Turbopack NFT)対象ではない(誤ってプロジェクト全体をトレースしようと
-  // する警告が出るため明示的に無視する)。
-  return path.join(
-    /* turbopackIgnore: true */ appData,
-    "com.yaoyorozu.native",
-    "local-api-token",
-  );
+  return path.join(/* turbopackIgnore: true */ appData, "com.yaoyorozu.native");
 }
 
-async function readLocalApiToken(): Promise<string | null> {
-  const tokenPath = localApiTokenPath();
-  if (!tokenPath) return null;
+// 実行時の環境変数に依存する動的パスであり、ビルド時のファイルトレース(Turbopack NFT)
+// 対象ではない(誤ってプロジェクト全体をトレースしようとする警告が出るため明示的に無視する)。
+async function readLocalApiFile(fileName: string): Promise<string | null> {
+  const dataDir = localApiDataDir();
+  if (!dataDir) return null;
   try {
-    return (await readFile(tokenPath, "utf-8")).trim();
+    return (
+      await readFile(/* turbopackIgnore: true */ path.join(dataDir, fileName), "utf-8")
+    ).trim();
   } catch {
-    // App が一度も起動していない(トークンファイルが無い)場合もここに来る。
-    // App未起動と同じ扱いにする(フォールバック判定へ進む)。
+    // App が一度も起動していない(ファイルが無い)場合もここに来る。
     return null;
   }
+}
+
+// 認証トークンの保存場所(native.md §7)。ブラウザへは渡さず、Next.js サーバ側でのみ読む。
+async function readLocalApiToken(): Promise<string | null> {
+  return readLocalApiFile("local-api-token");
+}
+
+// App が実際に使っているポート(issue #470)。ファイルが無い・数値として読めない場合は
+// 既定ポートと見なす(App が上書きせず既定のまま起動している場合と同じ状態のため)。
+async function readLocalApiPort(): Promise<number> {
+  const raw = await readLocalApiFile("local-api-port");
+  const port = raw ? Number(raw) : NaN;
+  return Number.isInteger(port) && port > 0 && port < 65536
+    ? port
+    : DEFAULT_LOCAL_API_PORT;
 }
 
 // 保存先パスはフロントから受け取らずサーバ側(許可リスト)で解決する。
@@ -84,7 +97,8 @@ export async function POST(
 
   if (token) {
     try {
-      const res = await fetch(`${LOCAL_API_BASE_URL}/layout/${diagram}`, {
+      const port = await readLocalApiPort();
+      const res = await fetch(`http://127.0.0.1:${port}/layout/${diagram}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
