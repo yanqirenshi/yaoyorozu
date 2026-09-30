@@ -549,17 +549,22 @@ async function findFreePort(): Promise<number> {
 }
 
 /**
- * そのポートで YAOYOROZU が応答しているか。自分で起動したサーバの起動待ちにのみ使う
- * (既に動いている別のサーバを「使えるから使う」判定には使わない。タイトルに
+ * そのポートの path で YAOYOROZU が応答しているか。自分で起動したサーバの起動待ちに
+ * のみ使う(既に動いている別のサーバを「使えるから使う」判定には使わない。タイトルに
  * YAOYOROZU を含むかだけでは、どの作業ツリーのコードを出しているかは分からないため)。
+ *
+ * 叩く path は必ず**これから確認したい図のページ**にする。`/` は `/wbs` へ
+ * リダイレクトするため、それを叩くと無関係な `/wbs` がコンパイルされるだけで、
+ * 肝心の図のページはまだ未コンパイルのまま — 起動待ちと、この後の実際の描画待ちの
+ * 2回ぶん、初回コンパイルの時間がかかってしまっていた(#474)。
  */
-async function isRespondingAt(port: number): Promise<boolean> {
+async function isRespondingAt(port: number, path: string): Promise<boolean> {
   try {
-    // Turbopack はルートを初回アクセス時にその場でコンパイルするため、最初の1回は
+    // Turbopack はページを初回アクセス時にその場でコンパイルするため、最初の1回は
     // 数秒〜数十秒かかることがある(#471 で報告された worktree では 36 秒ほど)。
     // ここを短くすると、そのコンパイル中のリクエストを毎回中断してしまい、
     // 実際には起動できているのに waitForServer が失敗と判定し続けることがある。
-    const res = await fetch(`http://localhost:${port}/`, { signal: AbortSignal.timeout(45000) });
+    const res = await fetch(`http://localhost:${port}${path}`, { signal: AbortSignal.timeout(60000) });
     if (!res.ok) return false;
     const body = await res.text();
     return body.includes("YAOYOROZU");
@@ -568,10 +573,26 @@ async function isRespondingAt(port: number): Promise<boolean> {
   }
 }
 
-async function waitForServer(port: number, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
+/**
+ * @param onProgress 待っている間、定期的に(約15秒ごとに)経過秒数を知らせる。
+ *   失敗なのか初回コンパイル中なのかが外から分かるようにする(#474)。
+ */
+async function waitForServer(
+  port: number,
+  path: string,
+  timeoutMs: number,
+  onProgress?: (elapsedMs: number) => void,
+): Promise<boolean> {
+  const start = Date.now();
+  const deadline = start + timeoutMs;
+  let lastProgressAt = start;
   while (Date.now() < deadline) {
-    if (await isRespondingAt(port)) return true;
+    if (await isRespondingAt(port, path)) return true;
+    const now = Date.now();
+    if (onProgress && now - lastProgressAt >= 15000) {
+      onProgress(now - start);
+      lastProgressAt = now;
+    }
     await sleep(500);
   }
   return false;
@@ -634,6 +655,7 @@ function psLikeEscape(value: string): string {
  */
 async function ensureDevServer(
   options: Options,
+  path: string,
 ): Promise<{ baseUrl: string; stop: () => void }> {
   if (options.baseUrl) {
     console.warn(
@@ -669,9 +691,15 @@ async function ensureDevServer(
   // Ctrl+C・想定外の例外など、finally を通らない終了でも止められるようにする(#475)。
   activeDevServerChild = child;
 
-  // 初回コンパイルに数十秒かかる環境があるため(#471)、1回のリクエスト待ち(45秒)より
-  // 十分長くする。
-  const ok = await waitForServer(port, 90000);
+  // 初回コンパイルに数十秒かかる環境があるため(#471・#474)、1回のリクエスト待ち
+  // (60秒)より十分長くする。
+  const ok = await waitForServer(port, path, 180000, (elapsedMs) => {
+    const tail = output.join("").split("\n").filter((l) => l.trim() !== "").at(-1);
+    console.log(
+      `  …まだ起動待ち(${Math.round(elapsedMs / 1000)}秒経過)。next dev の直近の出力: ` +
+        (tail ?? "(まだ無い)"),
+    );
+  });
   if (!ok) {
     killTree(child);
     activeDevServerChild = null;
@@ -1119,7 +1147,7 @@ async function main(): Promise<number> {
 
   try {
     try {
-      devServer = await ensureDevServer(options);
+      devServer = await ensureDevServer(options, spec.path);
     } catch (e) {
       console.error(`開発サーバの準備に失敗した: ${(e as Error).message}`);
       return 4;
