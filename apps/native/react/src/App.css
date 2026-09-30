@@ -1302,14 +1302,15 @@ body,
 .settings-checkbox-field {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 0.95rem;
+  gap: var(--space-2);
+  font-size: var(--text-ui-14n-100-size);
+  font-weight: var(--text-ui-14n-100-weight);
   color: var(--text-primary);
 }
 
 /* チェックボックス付きの設定項目の補足説明(new-session-hint と同じ書式)。 */
 .settings-hint {
-  margin: 4px 0 0;
+  margin: var(--space-1) 0 0;
   font-size: var(--text-dns-14n-150-size);
   font-weight: var(--text-dns-14n-150-weight);
   color: var(--text-secondary);
