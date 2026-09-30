@@ -9,7 +9,7 @@ main 作業ツリー(`C:\Users\yanqi\prj\yaoyorozu`)で、次の2つを最新の
 
 | 対象 | 起動方法 | ポート |
 |---|---|---|
-| Tauri 開発版(動作確認専用、MSI 版とは別 identifier) | Bash のバックグラウンド実行(`tauri dev --config`) | 1425(Vite)、14200(ローカル API。MSI 版と共有 — §0 参照) |
+| Tauri 開発版(動作確認専用、MSI 版とは別 identifier) | Bash のバックグラウンド実行(`tauri dev --config`、環境変数 `YAOYOROZU_LOCAL_API_PORT=14201` を付けて起動 — §0 参照) | 1425(Vite)、14201(ローカル API) |
 | Web(Next.js) | `preview_start`(`.claude/launch.json` の `yaoyorozu-web`) | 3000 |
 
 main でのアプリ起動は 運用:リリース セッションが担当する(2026-09-19 決定)。
@@ -18,14 +18,12 @@ main でのアプリ起動は 運用:リリース セッションが担当する
 理由: identifier を分けないと、起動のたびに `app_data_dir/local-api-token` を上書きし、MSI 版のローカル API が使えなくなる(手法は memory `native-dev-verify-from-worktree` と同じ)。
 他セッションの作業を壊さないことを最優先とし、判断に迷う状態なら止めてユーザーに確認する。
 
-## 0. 前提: ローカル API のポート(14200)は MSI 版と共有
+## 0. 前提: ローカル API のポートは環境変数で MSI 版と分ける([Issue #470](https://github.com/yanqirenshi/yaoyorozu/issues/470) で解消済み)
 
-ローカル API のポート `14200` は **identifier によらず同じ**であり、MSI 版と開発版で取り合いになる。
-app 側の対応(identifier ごとにポートを変える等)は [Issue #470](https://github.com/yanqirenshi/yaoyorozu/issues/470)(実装:APP (共通) 担当)で、未着手。
-
-**#470 が入るまでは、MSI 版が動いている間は開発版のローカル API は起動できない。**
-開発版の起動ログに `ローカルAPIサーバの起動に失敗しました...(os error 10048)` が出るが、これは異常ではなく想定どおり(下記「起動後に届く通知の読み方」参照)。
-開発版は Vite(1425)のみで起動し、動作確認は画面(フロント)の確認にとどめる。apps/web との連携(レイアウト保存 API 等、ローカル API 経由の確認)は MSI 版で行う。
+ローカル API のポート(既定 `14200`)は環境変数 `YAOYOROZU_LOCAL_API_PORT` で上書きできる(native.md §7)。
+開発版を起動するときは、`tauri dev --config` と同じ Bash 呼び出しで `YAOYOROZU_LOCAL_API_PORT=14201` を付け、MSI 版(既定 14200 のまま)とポートを分ける。
+これにより、MSI 版が動いていても開発版のローカル API を起動できる(以前の制約は解消済み)。
+apps/web との連携(レイアウト保存 API 等)は、Web の Route Handler が MSI 版の identifier(`com.yaoyorozu.native`)固定でポート・トークンを読むため、引き続き MSI 版で確認する(開発版は動作確認専用で、apps/web の連携先にはならない)。
 
 ## 1. 事前確認(読み取りのみ。2つを並行して実行する)
 
@@ -62,7 +60,7 @@ $all = Get-CimInstance Win32_Process
 $dev_exe = 'C:\Users\yanqi\prj\yaoyorozu\apps\native\target\debug\native.exe'
 $msi_exe = 'C:\Program Files\YAOYOROZU\native.exe'
 # ポートごとに、使っているプロセスの実行ファイルパスとコマンドラインを出す
-Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -in 1425,3000,14200 } | ForEach-Object {
+Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -in 1425,3000,14200,14201 } | ForEach-Object {
   $p = ($all | Where-Object ProcessId -eq $_.OwningProcess)
   "{0} pid={1} exe={2} {3}" -f $_.LocalPort, $_.OwningProcess, $p.ExecutablePath, (($p.CommandLine -replace '\s+',' ').Substring(0,[Math]::Min(90,($p.CommandLine -replace '\s+',' ').Length)))
 }
@@ -77,7 +75,7 @@ Get-Process cargo,rustc -ErrorAction SilentlyContinue
 ツリーは下から `native.exe` → `cargo` → `tauri.js dev` → `cmd /c cd apps/native/tauri && tauri dev --config ...` → `node(npm)` の順に並ぶ。
 **最上位の `node`/`npm`** プロセスが停止対象。
 
-- **MSI 版(`C:\Program Files\YAOYOROZU\native.exe`)は開発版と別物。止めない。** 14200 の持ち主が MSI 版なら §0 のとおり想定どおり。
+- **MSI 版(`C:\Program Files\YAOYOROZU\native.exe`)は開発版と別物。止めない。** 14200 の持ち主が MSI 版なら §0 のとおり想定どおり(開発版は 14201 を使う)。
 - `native.exe` が無く、1425 だけが使われている → Vite だけが残っている。1425 の pid から同じ要領で親をたどり、最上位の npm を停止対象にする。
 - 3000 のプロセスが**別の worktree**(コマンドラインのパスが `C:\Users\yanqi\prj\yaoyorozu\` 以外)のものなら止めずにユーザーへ確認する。
 - **1425 を別の worktree のアプリが使っている**(exe パスが `C:\Users\yanqi\prj\yaoyorozu\apps\native\target\debug\native.exe` 以外)なら、**中断してユーザーに確認する**(このポートは main 動作確認専用の固定値だが、衝突すると気づきにくいため)。他セッションのプロセスなので止めない。
@@ -106,14 +104,15 @@ Get-Process cargo,rustc -ErrorAction SilentlyContinue
 - **Tauri(開発版)**: `apps/native/tauri` で、`--config` により identifier と Vite ポートを MSI 版と分離して起動する。Bash の `run_in_background: true` で実行し、ログはスクラッチパッドに書き出す。
 
   ```bash
-  cd /c/Users/yanqi/prj/yaoyorozu/apps/native/tauri && RUST_BACKTRACE=1 npx tauri dev --config '{"identifier":"com.yaoyorozu.native.dev-main","build":{"devUrl":"http://localhost:1425","beforeDevCommand":"npm run dev -- --port 1425"}}' > "<スクラッチパッド>/native-dev.log" 2>&1
+  cd /c/Users/yanqi/prj/yaoyorozu/apps/native/tauri && RUST_BACKTRACE=1 YAOYOROZU_LOCAL_API_PORT=14201 npx tauri dev --config '{"identifier":"com.yaoyorozu.native.dev-main","build":{"devUrl":"http://localhost:1425","beforeDevCommand":"npm run dev -- --port 1425"}}' > "<スクラッチパッド>/native-dev.log" 2>&1
   ```
 
   `RUST_BACKTRACE=1` は、パニック時にスタックトレースを残すため常に付ける。
+  `YAOYOROZU_LOCAL_API_PORT=14201` で、ローカル API のポートを MSI 版(14200)と分ける(§0。issue #470)。
   `react/vite.config.ts` は `server.port: 1420` / `strictPort: true` を既定にしているため、`--port 1425` を明示して上書きする(1420・1421 は既定設定と HMR 用に使われているため避ける)。
 
 - **起動完了の待機**: 同じく `run_in_background: true` で、Vite(1425)が応答し、かつ**開発版(target\debug)の** `native.exe` が起動しているか、エラーを検知したら終わるループを走らせる(上限15分)。
-  ローカル API(14200)は MSI 版が使用中なら開発版は取得できないため、**14200 の待ち受けは完了条件にしない**(§0)。
+  ローカル API(14201)も、MSI 版(14200)とポートが分かれているため**待ち受けを完了条件にしてよい**(§0)。
 
   ```bash
   log="<スクラッチパッド>/native-dev.log"
@@ -134,7 +133,7 @@ Get-Process cargo,rustc -ErrorAction SilentlyContinue
   echo "--- log tail ---"; sed 's/\x1b\[[0-9;]*m//g' "$log" | grep -v '^\s*$' | tail -6
   ```
 
-  `ローカルAPIサーバの起動に失敗しました...(os error 10048)` がログに出ても、上記の grep パターンには含めていない(エラー扱いしない。§0 のとおり MSI 版が使用中なら想定どおり)。
+  MSI 版(14200)と開発版(14201)はポートが分かれているため、`ローカルAPIサーバの起動に失敗しました...(os error 10048)` がログに出た場合は想定外(§0 の環境変数が効いていない・14201 を他の何かが使っている等)なので、報告する。
 
 Rust に変更があると再ビルドで1〜2分かかる。変更が無ければ数秒で終わる。
 
@@ -148,14 +147,16 @@ Get-Process native -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $d
 foreach ($u in 'http://localhost:1425','http://localhost:3000') {
   try { $r = Invoke-WebRequest -Uri $u -UseBasicParsing -TimeoutSec 90; "{0} -> {1}" -f $u, $r.StatusCode } catch { "{0} -> 失敗: {1}" -f $u, $_.Exception.Message }
 }
-# 14200 は MSI 版が使用中であることの確認(開発版が奪っていないこと)
-$o = (Get-NetTCPConnection -State Listen -LocalPort 14200 -ErrorAction SilentlyContinue).OwningProcess
-if ($o) { "14200 の持ち主: pid={0} {1}" -f $o, (Get-Process -Id $o).Path } else { "14200 は誰も待ち受けていない(MSI 版が未起動の可能性)" }
+# 14200(MSI 版)・14201(開発版)それぞれの持ち主を確認する(issue #470)
+foreach ($port in 14200, 14201) {
+  $o = (Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue).OwningProcess
+  if ($o) { "{0} の持ち主: pid={1} {2}" -f $port, $o, (Get-Process -Id $o).Path } else { "{0} は誰も待ち受けていない" -f $port }
+}
 ```
 
 - Web の初回アクセスはページのコンパイルで遅いことがあるので、タイムアウトは長め(90秒)にする。
 - 1425(開発版の Vite)が 200 でも、応答しているのが別の worktree のアプリということがある。**開発版プロセスの exe パスが `target\debug\native.exe` であること**を必ず確かめる。違っていたら、状況を添えてユーザーに報告する。
-- 14200 の持ち主が `C:\Program Files\YAOYOROZU\native.exe`(MSI 版)なら正常。開発版の exe パスがここに出ていたら identifier 分離が効いていない不具合なので、ユーザーに報告する。誰も待ち受けていなければ、MSI 版が起動していない状態(apps/web との連携確認は保留)。
+- 14200 の持ち主が `C:\Program Files\YAOYOROZU\native.exe`(MSI 版)、14201 の持ち主が開発版(`target\debug\native.exe`)ならどちらも正常。14201 の持ち主が MSI 版の exe パスだったり、14200 に開発版の exe パスが出ていたら identifier・ポート分離が効いていない不具合なので、ユーザーに報告する。14200 を誰も待ち受けていなければ、MSI 版が起動していない状態(apps/web との連携確認は保留)。
 - ウィンドウタイトルが「YAOYOROZU」以外(例:「設定」)でも、前回開いていた画面が復元されただけなので問題ない。
 
 ## 6. 報告
@@ -169,7 +170,8 @@ if ($o) { "14200 の持ち主: pid={0} {1}" -f $o, (Get-Process -Id $o).Path } e
   | Tauri(開発版、動作確認専用) | ウィンドウ表示中(pid、応答あり) |
   | └ フロント(Vite) | http://localhost:1425 → 200 |
   | Web(Next.js) | http://localhost:3000 → 200 |
-  | (参考)ローカル API(14200) | MSI 版(pid)が使用中 / 未起動 |
+  | (参考)ローカル API MSI 版(14200) | 使用中(pid)/ 未起動 |
+  | (参考)ローカル API 開発版(14201) | 使用中(pid、開発版の exe)/ 未起動 |
 
 - 未コミットの変更を残したこと
 - ローカル API 経由の確認(apps/web との連携)が必要な場合は MSI 版で行う旨
@@ -183,7 +185,7 @@ if ($o) { "14200 の持ち主: pid={0} {1}" -f $o, (Get-Process -Id $o).Path } e
 | タスク全体が exit 0。最後に Vite の `npm error code 4294967295` だけがある | ウィンドウを閉じた(正常終了) | 停止した旨を報告するだけでよい |
 | `File ... changed. Rebuilding application...` がある | `tauri dev` の監視機能が Rust ファイルの変更を検知して、自動で再ビルド・再起動した。古い `native.exe` が exit code 1 で終わることがある | 異常ではない。再起動後に動いているか確認して報告する |
 | `panicked` / `stack backtrace` がある | アプリがクラッシュした | バックトレースを添えてユーザーに報告する |
-| `ローカルAPIサーバの起動に失敗しました(127.0.0.1:14200): … (os error 10048)` がある | MSI 版(または他セッションの開発版)が先に 14200 を取っている。§0 のとおり identifier によらずポートが共通なため、開発版はローカル API なしで起動する | **異常ではない。** MSI 版が動いていれば想定どおりなので、報告で軽く触れる程度でよい |
+| `ローカルAPIサーバの起動に失敗しました(127.0.0.1:14201): … (os error 10048)` がある | MSI 版とはポートが分かれている(§0)ため、14201 を他の何か(他セッションの開発版など)が先に取っている | 想定外。14201 の持ち主を調べてユーザーに報告する |
 | こちらで `taskkill` した直後に「失敗」通知 | 自分で止めた | 想定どおり |
 
 ## 注意
