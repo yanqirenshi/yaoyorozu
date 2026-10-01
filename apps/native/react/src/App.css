@@ -379,9 +379,9 @@ body,
   color: var(--text-secondary);
 }
 
-/* 左ペインの「選んだセッション」の一覧(issue #379)。「+」は一覧の先頭。行は
-   選択用のボタン(`.project-item`)と、右上に重ねた「×」(外す)。ボタンは入れ子に
-   できないので、行(`.session-list-row`)の中で並べて × を重ねる。 */
+/* 左ペインの全セッション一覧(issue #487)。検索欄と「+ 新規」は一覧の先頭。
+   行は選択用のボタン(`.project-item`)のみ(「外す」操作を廃止したため、以前の
+   重ね配置の「×」は無くなった)。 */
 .session-list-add {
   width: 100%;
   box-sizing: border-box;
@@ -401,50 +401,9 @@ body,
   color: var(--text-primary);
 }
 
-.session-list-add:focus-visible,
-.session-list-close:focus-visible {
+.session-list-add:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
-}
-
-.session-list-row {
-  position: relative;
-}
-
-/* × の分だけ右に余白を取り、タイトル・日時・フォルダ名と重ならないようにする。 */
-.session-list-item {
-  padding-right: calc(var(--space-6) + var(--space-3));
-}
-
-.session-list-close {
-  position: absolute;
-  top: var(--space-2);
-  right: var(--space-2);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--space-6);
-  height: var(--space-6);
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-4);
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-
-.session-list-close svg {
-  width: var(--icon-16);
-  height: var(--icon-16);
-}
-
-.session-list-close:hover {
-  background: var(--color-sumi-100);
-  color: var(--text-primary);
-}
-
-.session-list-close:active {
-  background: var(--color-sumi-200);
 }
 
 /* 対象フォルダが複数のときだけ添える、そのセッションのフォルダ名(見分け用)。 */
@@ -2856,22 +2815,36 @@ button.claude-explorer-name {
   background: var(--surface-base);
 }
 
-/* 左の一覧の先頭: 「+ セッションを追加」と「+ 新規」を並べる。 */
+/* 左の一覧の先頭: 検索欄と「+ 新規」を並べる(issue #487)。 */
 .session-list-actions {
   display: flex;
   gap: var(--space-2);
 }
 
-.session-list-actions .session-list-add {
-  width: auto;
+/* 検索欄は「+ 新規」と高さを揃える(同じ padding・font-size)。 */
+.session-list-search {
   flex: 1;
   min-width: 0;
-  white-space: nowrap;
+  box-sizing: border-box;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  padding: 10px 14px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--surface-base);
 }
 
-/* 「+ 新規」は文字の幅だけ(「+ セッションを追加」を折り返させない)。 */
-.session-list-actions .session-list-add:last-child {
+.session-list-search:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* 「+ 新規」は文字の幅だけ(検索欄を圧迫しない)。 */
+.session-list-actions .session-list-add {
+  width: auto;
   flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .session-pending-note {
