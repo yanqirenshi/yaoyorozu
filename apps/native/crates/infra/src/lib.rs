@@ -24,7 +24,6 @@ mod running_session_source;
 mod session_source;
 mod settings_store;
 mod skills_store;
-mod viewer_tabs_store;
 
 pub use claude_cli_process::ClaudeCliProcessLauncher;
 pub use claude_dir_store::{claude_home_dir, FileClaudeDirStore};
@@ -50,4 +49,3 @@ pub use running_session_source::FileRunningSessionSource;
 pub use session_source::{FileSystemRepository, SessionFileRef, SessionFsChange, SessionWatcher};
 pub use settings_store::FileSettingsStore;
 pub use skills_store::FileSkillsStore;
-pub use viewer_tabs_store::FileViewerTabsStore;

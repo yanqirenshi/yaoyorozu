@@ -68,18 +68,12 @@ export type SessionSummaryDto = {
   git_branch: string | null;
 };
 
-// ビューアのセッションタブ1件(issue #353)。キーは「フォルダ + セッション ID」(issue #369)。
-// セッションを指定してビューアを開く/前面化するときの指定(フォルダ名 + セッション ID。パスは
-// 渡さない)と、`viewer:navigate` のペイロードにも使う(issue #422)。
-export type ViewerTabDto = {
+// ビューアで開く・前面化するウィンドウを移動させる先のセッション1件(issue #422)。
+// openProfileWindow / focusWindow の session 引数と、`viewer:navigate` のペイロードに使う
+// (もとは「セッションタブ」の1件だったが、タブの並びの保存・復元機能は廃止した。issue #489)。
+export type ViewerTargetDto = {
   project: string;
   session_id: string;
-};
-
-// viewer-tabs:changed のペイロード(issue #422)。並びを保存したプロファイルの ID だけ。
-// 並びの本体は getViewerTabs で取り直す。
-export type ViewerTabsChangedEvent = {
-  profile_id: string;
 };
 
 export type AppErrorDto = {

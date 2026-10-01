@@ -6,9 +6,8 @@ use domain::{
     sort_sessions_newest_first, validate_image_attachment, validate_image_count, Camera,
     ClaudeDirEntry, ClaudeDirPage, ClaudeMdFile, ClaudeSettingsFile, Conversation, GitLedger,
     GitRepositoryLedger, HubLayout, HubTuning, LogLine, Message, MessageImage, NodePosition,
-    ParsedSession, Project, RuleSummary, SessionSummary, Settings, SkillSummary, ViewerTab,
-    ViewerTabs, CURRENT_GIT_LEDGER_VERSION, CURRENT_HUB_LAYOUT_VERSION, CURRENT_HUB_TUNING_VERSION,
-    CURRENT_VIEWER_TABS_VERSION,
+    ParsedSession, Project, RuleSummary, SessionSummary, Settings, SkillSummary,
+    CURRENT_GIT_LEDGER_VERSION, CURRENT_HUB_LAYOUT_VERSION, CURRENT_HUB_TUNING_VERSION,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -310,14 +309,6 @@ pub trait HubLayoutStore {
 pub trait HubTuningStore {
     fn load(&self) -> Result<HubTuning, AppError>;
     fn save(&self, tuning: &HubTuning) -> Result<(), AppError>;
-}
-
-/// ビューアのセッションタブの並び(`ViewerTabs`。issue #353)の永続化(port)。
-/// プロファイルごとに別ファイルへ保存する(実体は infra)。
-pub trait ViewerTabsStore {
-    /// ファイルが無い・壊れている場合は空(`ViewerTabs::default()`)。
-    fn load(&self, profile_id: &str) -> Result<ViewerTabs, AppError>;
-    fn save(&self, profile_id: &str, tabs: &ViewerTabs) -> Result<(), AppError>;
 }
 
 /// app が起動していた実行中セッション(再開に必要な指定)の保存(port。issue #459)。
@@ -975,7 +966,7 @@ pub fn viewer_window_title(profile_name: &str) -> String {
 pub fn validate_viewer_session(
     project: &str,
     session_id: &str,
-) -> Result<domain::ViewerTab, AppError> {
+) -> Result<domain::ViewerTarget, AppError> {
     if !is_valid_project_dir_name(project) {
         return Err(AppError::InvalidInput(
             "不正なプロジェクト名です".to_string(),
@@ -984,7 +975,7 @@ pub fn validate_viewer_session(
     if !is_valid_session_id(session_id) {
         return Err(AppError::InvalidInput("不正なセッションIDです".to_string()));
     }
-    Ok(domain::ViewerTab {
+    Ok(domain::ViewerTarget {
         project: project.to_string(),
         session_id: session_id.to_string(),
     })
@@ -1006,7 +997,7 @@ fn encode_url_component(value: &str) -> String {
 /// プロファイルのビューアウィンドウの初期 URL(issue #76・#422)。`session` があれば、
 /// 開いたときにそのセッションを選択した状態にするクエリ(`project` / `session`。ビューアの
 /// 画面状態は URL が状態源。native.md §6)を付ける。
-pub fn viewer_window_url(profile_id: &str, session: Option<&domain::ViewerTab>) -> String {
+pub fn viewer_window_url(profile_id: &str, session: Option<&domain::ViewerTarget>) -> String {
     let mut url = format!("index.html#/profiles/{}", encode_url_component(profile_id));
     if let Some(tab) = session {
         url.push_str(&format!(
@@ -1065,54 +1056,6 @@ impl RescanQueue {
             return None;
         }
         Some(std::mem::take(&mut self.pending).into_iter().collect())
-    }
-}
-
-/// ビューアのセッションタブの並びを読み込む(issue #353)。プロファイル ID は
-/// ファイル名の構築に使うため検証する(native.md §4)。
-pub fn load_viewer_tabs(
-    store: &dyn ViewerTabsStore,
-    profile_id: &str,
-) -> Result<ViewerTabs, AppError> {
-    validate_profile_id(profile_id)?;
-    store.load(profile_id)
-}
-
-/// ビューアのセッションタブの並びを保存する(issue #353)。並びは呼び出し側が
-/// 持つ全体で丸ごと置き換える。プロジェクト名・セッションIDを検証し、同じキーの
-/// 重複は先頭だけを残す。`version` は現在のバージョンで書く。
-pub fn save_viewer_tabs(
-    store: &dyn ViewerTabsStore,
-    profile_id: &str,
-    tabs: Vec<ViewerTab>,
-) -> Result<(), AppError> {
-    validate_profile_id(profile_id)?;
-    let mut unique: Vec<ViewerTab> = Vec::with_capacity(tabs.len());
-    for tab in tabs {
-        if !is_valid_project_dir_name(&tab.project) || !is_valid_session_id(&tab.session_id) {
-            return Err(AppError::InvalidInput("不正なタブの指定です".to_string()));
-        }
-        if !unique.contains(&tab) {
-            unique.push(tab);
-        }
-    }
-    store.save(
-        profile_id,
-        &ViewerTabs {
-            version: CURRENT_VIEWER_TABS_VERSION,
-            tabs: unique,
-        },
-    )
-}
-
-fn validate_profile_id(profile_id: &str) -> Result<(), AppError> {
-    // プロファイル ID は英数字とハイフンのみ(アプリが生成する uuid 等)。
-    if is_valid_session_id(profile_id) {
-        Ok(())
-    } else {
-        Err(AppError::InvalidInput(
-            "不正なプロファイルIDです".to_string(),
-        ))
     }
 }
 
@@ -2272,82 +2215,6 @@ mod tests {
                 "should reject ({project:?}, {session_id:?}, {uuid:?})"
             );
         }
-    }
-
-    struct FakeViewerTabsStore {
-        saved: std::cell::RefCell<Vec<(String, ViewerTabs)>>,
-    }
-
-    impl ViewerTabsStore for FakeViewerTabsStore {
-        fn load(&self, _profile_id: &str) -> Result<ViewerTabs, AppError> {
-            Ok(ViewerTabs::default())
-        }
-        fn save(&self, profile_id: &str, tabs: &ViewerTabs) -> Result<(), AppError> {
-            self.saved
-                .borrow_mut()
-                .push((profile_id.to_string(), tabs.clone()));
-            Ok(())
-        }
-    }
-
-    fn viewer_tab(project: &str, key: &str) -> ViewerTab {
-        ViewerTab {
-            project: project.to_string(),
-            session_id: key.to_string(),
-        }
-    }
-
-    #[test]
-    fn save_viewer_tabs_dedupes_keeping_order_and_writes_current_version() {
-        let store = FakeViewerTabsStore {
-            saved: Default::default(),
-        };
-        save_viewer_tabs(
-            &store,
-            "p1",
-            vec![
-                viewer_tab("a", "k1"),
-                viewer_tab("b", "k2"),
-                viewer_tab("a", "k1"),
-            ],
-        )
-        .unwrap();
-        let saved = store.saved.borrow();
-        assert_eq!(saved.len(), 1);
-        assert_eq!(saved[0].0, "p1");
-        assert_eq!(saved[0].1.version, CURRENT_VIEWER_TABS_VERSION);
-        assert_eq!(
-            saved[0].1.tabs,
-            vec![viewer_tab("a", "k1"), viewer_tab("b", "k2")]
-        );
-    }
-
-    #[test]
-    fn viewer_tabs_commands_reject_unsafe_inputs() {
-        let store = FakeViewerTabsStore {
-            saved: Default::default(),
-        };
-        assert!(matches!(
-            load_viewer_tabs(&store, "../x"),
-            Err(AppError::InvalidInput(_))
-        ));
-        for bad in ["", "../x", "a/b"] {
-            assert!(matches!(
-                save_viewer_tabs(&store, bad, vec![]),
-                Err(AppError::InvalidInput(_))
-            ));
-        }
-        for tab in [
-            viewer_tab("..", "k"),
-            viewer_tab("a/b", "k"),
-            viewer_tab("a", " "),
-        ] {
-            assert!(matches!(
-                save_viewer_tabs(&store, "p1", vec![tab]),
-                Err(AppError::InvalidInput(_))
-            ));
-        }
-        assert!(store.saved.borrow().is_empty());
     }
 
     #[test]
@@ -4783,7 +4650,7 @@ mod viewer_window_tests {
             viewer_window_url("profile-1", None),
             "index.html#/profiles/profile-1"
         );
-        let tab = domain::ViewerTab {
+        let tab = domain::ViewerTarget {
             project: "proj-a".to_string(),
             session_id: "s1".to_string(),
         };
@@ -4795,7 +4662,7 @@ mod viewer_window_tests {
 
     #[test]
     fn the_window_url_encodes_characters_that_would_break_the_query() {
-        let tab = domain::ViewerTab {
+        let tab = domain::ViewerTarget {
             project: "a b&c=d#e?f".to_string(),
             session_id: "s1".to_string(),
         };
@@ -4807,7 +4674,7 @@ mod viewer_window_tests {
             "index.html#/profiles/p?project=a%20b%26c%3Dd%23e%3Ff&session=s1"
         );
         // 日本語(マルチバイト)も UTF-8 のバイトごとに %XX になる。
-        let japanese = domain::ViewerTab {
+        let japanese = domain::ViewerTarget {
             project: "会".to_string(),
             session_id: "s1".to_string(),
         };
