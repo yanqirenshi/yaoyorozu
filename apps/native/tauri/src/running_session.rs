@@ -91,7 +91,10 @@ where
     }
 }
 
-/// [`with_restorable_store`] のアーカイブ版(issue #494)。
+/// [`with_restorable_store`] のアーカイブ版(issue #494)。失敗はログにだけ残し、呼び出し側へは
+/// 伝えない(ついでの処理向け。利用者が明示的に起動した `archive_session` / `unarchive_session`
+/// command 自体は、永続化の失敗を握りつぶさず呼び出し側へ返す。native.md §3.1。
+/// [`try_with_archived_sessions_store`] を使うこと)。
 async fn with_archived_sessions_store<F>(
     app_handle: &tauri::AppHandle,
     what: &'static str,
@@ -99,20 +102,26 @@ async fn with_archived_sessions_store<F>(
 ) where
     F: FnOnce(&FileArchivedSessionsStore) -> Result<(), AppError> + Send + 'static,
 {
-    let path = match archived_sessions_path(app_handle) {
-        Ok(path) => path,
-        Err(e) => {
-            eprintln!("{what}に失敗しました: {e}");
-            return;
-        }
-    };
-    let result =
-        tauri::async_runtime::spawn_blocking(move || change(&FileArchivedSessionsStore::new(path)))
-            .await
-            .unwrap_or_else(|_| Err(background_failed()));
-    if let Err(e) = result {
-        eprintln!("{what}に失敗しました: {e}");
+    if let Err(e) = try_with_archived_sessions_store(app_handle, change).await {
+        eprintln!("{what}に失敗しました: {}", e.message);
     }
+}
+
+/// アーカイブの印の読み書き(issue #494)。失敗は呼び出し側へそのまま返す(native.md §3.1
+/// 「永続化の失敗はエラーを返す。握りつぶさない」)。利用者の操作で直接呼ばれる
+/// `archive_session` / `unarchive_session` command が使う。
+async fn try_with_archived_sessions_store<F>(
+    app_handle: &tauri::AppHandle,
+    change: F,
+) -> Result<(), AppErrorDto>
+where
+    F: FnOnce(&FileArchivedSessionsStore) -> Result<(), AppError> + Send + 'static,
+{
+    let path = archived_sessions_path(app_handle)?;
+    tauri::async_runtime::spawn_blocking(move || change(&FileArchivedSessionsStore::new(path)))
+        .await
+        .unwrap_or_else(|_| Err(background_failed()))
+        .map_err(Into::into)
 }
 
 fn now_ms() -> u64 {
@@ -604,6 +613,9 @@ pub async fn start_running_session(
     )
     .await;
     if is_resume {
+        // 起動(再開)の「ついで」の処理(issue #494)。失敗しても起動自体は成功のまま返す
+        // (利用者が明示的に起動した `archive_session`/`unarchive_session` command と違い、
+        // 印を外せなかったからといって再開を失敗扱いにする理由がないため。ログにだけ残す)。
         let sid = session_id.clone();
         with_archived_sessions_store(&app_handle, "アーカイブの印の解除", move |store| {
             app::unarchive_session(store, &sid)
@@ -864,6 +876,9 @@ pub async fn stop_running_session(
 /// `project` は印の対象ではなく(印はセッション ID だけで管理する)、変更後に発火する
 /// `session:changed`(新しいイベントは増やさない。issue #494)の対象フォルダを知らせるためだけに
 /// 使う。不正な値でも印の付与自体は失敗させず、通知だけ省く。
+///
+/// プロセスの停止は、印の保存に失敗しても取り消さない(済んでいてよい)。印の保存(永続化)が
+/// 失敗した場合は、握りつぶさず呼び出し側へそのまま返す(native.md §3.1)。
 #[tauri::command]
 pub async fn archive_session(
     app_handle: tauri::AppHandle,
@@ -873,11 +888,11 @@ pub async fn archive_session(
 ) -> Result<(), AppErrorDto> {
     stop_running_sessions_for(&app_handle, &state, &session_id).await;
 
-    with_archived_sessions_store(&app_handle, "アーカイブの印の付与", {
+    try_with_archived_sessions_store(&app_handle, {
         let session_id = session_id.clone();
         move |store| app::archive_session(store, &session_id)
     })
-    .await;
+    .await?;
 
     notify_session_changed(&app_handle, &project);
     Ok(())
@@ -890,10 +905,10 @@ pub async fn unarchive_session(
     project: String,
     session_id: String,
 ) -> Result<(), AppErrorDto> {
-    with_archived_sessions_store(&app_handle, "アーカイブの印の解除", move |store| {
+    try_with_archived_sessions_store(&app_handle, move |store| {
         app::unarchive_session(store, &session_id)
     })
-    .await;
+    .await?;
 
     notify_session_changed(&app_handle, &project);
     Ok(())
