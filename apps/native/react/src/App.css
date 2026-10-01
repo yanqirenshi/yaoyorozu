@@ -443,6 +443,13 @@ body,
   outline-offset: -2px;
 }
 
+/* ホバーで重ねて出すアーカイブ操作(issue #495)の分だけ右に余白を取り、
+   タイトル・日時・フォルダ名と重ならないようにする(旧 #487 以前の .session-list-close
+   と同じ考え方)。 */
+.session-list-item {
+  padding-right: calc(var(--space-6) + var(--space-3));
+}
+
 /* 対象フォルダが複数のときだけ添える、そのセッションのフォルダ名(見分け用)。 */
 .session-item-folder {
   font-size: 0.75rem;
@@ -2887,6 +2894,67 @@ button.claude-explorer-name {
 .session-pending-note {
   margin: 0 0 var(--space-3);
   color: var(--text-secondary);
+}
+
+/* アーカイブ済みの表示切り替え(issue #495)。検索欄・「+ 新規」の下に置く。 */
+.session-list-archived-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: var(--space-2) 0 var(--space-3);
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+/* 行のホバーで出すアーカイブ操作(issue #495)。`.session-list-row` を相対配置にして
+   右端に重ねる(旧 .session-list-close と同じ配置の流儀)。既定は隠し、ホバー・
+   フォーカス時だけ見せる(「戻す」も含めて同じ扱い。アーカイブ表示 ON で明示的に
+   探しているときの操作なので、常時見せるほど重要ではない)。 */
+.session-list-row {
+  position: relative;
+}
+
+.session-list-archive-action {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--space-6);
+  padding: 0 var(--space-2);
+  border: none;
+  border-radius: var(--radius-4);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.session-list-archive-action svg {
+  width: var(--icon-16);
+  height: var(--icon-16);
+}
+
+.session-list-row:hover .session-list-archive-action,
+.session-list-archive-action:focus-visible {
+  opacity: 1;
+}
+
+.session-list-archive-action:hover {
+  background: var(--color-sumi-100);
+  color: var(--text-primary);
+}
+
+.session-list-archive-action:active {
+  background: var(--color-sumi-200);
+}
+
+/* 「戻す」はテキストなのでアイコンのボタンより少し幅を取る。 */
+.session-list-unarchive-action {
+  font-size: 0.75rem;
+  white-space: nowrap;
 }
 
 /* 新規セッションのモーダル(`settings-dialog` を土台にする)。 */
