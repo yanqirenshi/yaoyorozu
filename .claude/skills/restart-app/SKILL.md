@@ -16,6 +16,7 @@ main でのアプリ起動は 運用:リリース セッションが担当する
 **app の使い分け(2026-09-30 決定、CLAUDE.md「セッション構成」)**: 全セッションが日々の作業で動かすのは**インストール済みの MSI 版**(identifier `com.yaoyorozu.native`、実行ファイル `C:\Program Files\YAOYOROZU\native.exe`)。
 このスキルが起動する開発版は**動作確認専用**で、別の identifier(`com.yaoyorozu.native.dev-main`)・別の Vite ポート(1425)で起動し、日々の作業用の MSI 版とは分離する。
 理由: identifier を分けないと、起動のたびに `app_data_dir/local-api-token` を上書きし、MSI 版のローカル API が使えなくなる(手法は memory `native-dev-verify-from-worktree` と同じ)。
+**開発版の exe は必ず `tauri dev --config` で作る。`cargo build` / `cargo run` を直接してできた exe を起動しない**(2026-10-01 決定、native.md §8)。`tauri.conf.json` の既定値(MSI 版と同じ identifier)が埋め込まれて本番の `app_data_dir` を読む exe になり、起動すると自動再開(#459)で本番の実行中セッション全部に再開を試みる(PR #492 の確認中に発生。拒否されて実害は無かった)。
 他セッションの作業を壊さないことを最優先とし、判断に迷う状態なら止めてユーザーに確認する。
 
 ## 0. 前提: ローカル API のポートは環境変数で MSI 版と分ける([Issue #470](https://github.com/yanqirenshi/yaoyorozu/issues/470) で解消済み)

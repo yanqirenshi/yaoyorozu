@@ -189,3 +189,11 @@ npm run tauri build
 ```
 
 - MUST: コミット前に `cargo fmt` と `cargo clippy -D warnings` を通す。
+- MUST: 動作確認用の exe は必ず `tauri dev --config`(別 identifier・別 Vite ポート・
+  `YAOYOROZU_LOCAL_API_PORT`)で作る。**`cargo build` / `cargo run` を直接してできた exe を
+  起動しない**。`tauri.conf.json` の既定値(本番の MSI 版と同じ identifier)が埋め込まれ、本番の
+  `app_data_dir` を読む exe になるため、起動すると自動再開(issue #459)で本番の実行中セッション
+  全部に再開を試み、ローカル API のトークンも上書きする(2026-10-01、PR #492 の確認中に発生。
+  backend の「他プロセスで実行中」の拒否で実害は無かった)。全セッションが MSI 版の app で動いて
+  いるため、本番の設定を読む exe は一度で全セッションを巻き込みうる。手順は `/restart-app` と
+  memory `native-dev-verify-from-worktree` を参照。
