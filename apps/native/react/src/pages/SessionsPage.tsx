@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ChangeEvent, ClipboardEvent, DragEvent, FormEvent } from "react";
+import type { ChangeEvent, ClipboardEvent, DragEvent, FormEvent, KeyboardEvent } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { DockItem } from "command-dock";
 import type { ViewMode } from "@yanqirenshi/markdown.sitter";
@@ -189,6 +189,8 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const [attachments, setAttachments] = useState<AttachedImage[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState("");
+  // 複数行入力欄(issue #483)の自動リサイズ用。高さの再計算に使う。
+  const draftInputRef = useRef<HTMLTextAreaElement>(null);
   // 次に起動する実行中セッションの権限モード(issue #392。Phase 1 は plan と default)。
   // 起動済みのプロセスには途中で反映しない(状態表示に、起動時のモードが出る)。
   const [mode, setMode] = useState<RunningPermissionModeDto>("default");
@@ -732,7 +734,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
     }
   };
 
-  const handlePaste = (event: ClipboardEvent<HTMLInputElement>) => {
+  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
     const files = Array.from(event.clipboardData.items)
       .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
       .map((item) => item.getAsFile())
@@ -741,6 +743,16 @@ function SessionsPage({ nav }: SessionsPageProps) {
     event.preventDefault();
     void addImageFiles(files);
   };
+
+  // 複数行入力欄(issue #483)。行数に応じて高さを伸ばし(上限は CSS の max-height)、
+  // 空になったら1行に戻す。いったん "auto" に戻してから scrollHeight を測ることで、
+  // 削除時にも正しく縮む。
+  useEffect(() => {
+    const el = draftInputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [draft]);
 
   const handleFilesSelected = (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
@@ -755,9 +767,9 @@ function SessionsPage({ nav }: SessionsPageProps) {
   // なってから送る(backend が、起動中の送信を断るため。#391)。別の会話の実行中セッションは
   // そのまま動かす(#407。同時数の上限を超えるときは backend が session_busy で止める)。
   // 外部(ターミナル・Desktop)で同じ会話が実行中なら、従来どおり backend が止める(#361。
-  // エラー表示)。
-  const handleSubmit = async (event: FormEvent) => {
-    event.preventDefault();
+  // エラー表示)。フォームの送信(ボタンクリック)と、入力欄での Enter キー(issue #483。
+  // handleDraftKeyDown)の両方から呼べるよう、判定込みの本体をここに分離する。
+  const submitMessage = async () => {
     if (!hasTarget || !sessionParam || !canSend || sending || !canSubmit) return;
 
     setError(null);
@@ -777,6 +789,21 @@ function SessionsPage({ nav }: SessionsPageProps) {
       setResumeNameEdit(null);
       setStartModel(null);
     }
+  };
+
+  const handleSubmit = (event: FormEvent) => {
+    event.preventDefault();
+    void submitMessage();
+  };
+
+  // Enter で送信、Shift+Enter で改行(issue #483)。IME の変換確定の Enter では
+  // 送信しない: `isComposing` が取れないブラウザ向けに keyCode 229 もフォールバックで見る
+  // (IME 確定時は Enter の keyCode が 229 になる古い挙動。念のため両方見る)。
+  const handleDraftKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== "Enter" || event.shiftKey) return;
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+    event.preventDefault();
+    void submitMessage();
   };
 
   // 新規セッションを作る(issue #409)。app が新しい会話(`--session-id`)を起動し、できたら
@@ -1050,13 +1077,15 @@ function SessionsPage({ nav }: SessionsPageProps) {
                 hidden
                 onChange={handleFilesSelected}
               />
-              <input
-                type="text"
+              <textarea
+                ref={draftInputRef}
                 className="message-input"
                 placeholder="AIにメッセージを送る(画像は貼り付けでも添付できます)"
+                rows={1}
                 value={draft}
                 disabled={!hasTarget || !canSend || sending}
                 onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={handleDraftKeyDown}
                 onPaste={handlePaste}
               />
               <button

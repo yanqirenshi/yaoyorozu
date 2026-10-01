@@ -1859,6 +1859,9 @@ body,
 .message-form {
   flex-shrink: 0;
   display: flex;
+  /* 複数行入力欄(issue #483)が伸びてもボタン類は下端に揃える(デフォルトの
+     stretch だとボタンまで縦に引き伸ばされる)。 */
+  align-items: flex-end;
   gap: 8px;
   padding: 12px 24px;
   border-bottom: 1px solid var(--border-default);
@@ -1873,8 +1876,17 @@ body,
   padding: 8px 12px;
   font-size: 0.95rem;
   font-family: inherit;
+  line-height: var(--text-body-16n-170-line-height);
   color: var(--text-primary);
   background: var(--surface-base);
+  /* 複数行(issue #483)。高さは JS 側(SessionsPage.tsx の useEffect)が
+     scrollHeight から決め、ユーザーのドラッグでの手動リサイズは不要なため resize は
+     無効にする。8行分(line-height × 8 + 上下 padding)を超えたらスクロールに切り替える。
+     calc() はパーセンテージ同士の乗算ができないため、上の line-height(170%)と同じ比率を
+     1.7 として数値で書き直している(値はこの170%と必ず揃えること)。 */
+  resize: none;
+  overflow-y: auto;
+  max-height: calc(0.95rem * 1.7 * 8 + 16px);
 }
 
 .message-input:disabled {
