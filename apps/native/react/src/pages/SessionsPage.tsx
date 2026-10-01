@@ -4,6 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import type { DockItem } from "command-dock";
 import type { ViewMode } from "@yanqirenshi/markdown.sitter";
 import {
+  archiveSession,
   checkImageAttachment,
   getGithubAuthStatus,
   getProjectClaudeMd,
@@ -19,6 +20,7 @@ import {
   saveProjectClaudeMd,
   saveProjectSettingsFile,
   startRunningSession,
+  unarchiveSession,
   updateGithubProjectItemStatus,
 } from "../api";
 import type {
@@ -162,6 +164,9 @@ function SessionsPage({ nav }: SessionsPageProps) {
   // 一覧は常に全セッションを表示し、この語で絞り込むだけ(選んだものだけを保存する
   // 仕組み(旧 viewerTabs)は廃止した)。
   const [sessionFilter, setSessionFilter] = useState("");
+  // アーカイブ済みも一覧に出すか(issue #495)。UI 状態なので保存しない(起動時は OFF)。
+  // 検索語とは AND(OFF のときは検索結果からもアーカイブ済みを除く)。
+  const [showArchived, setShowArchived] = useState(false);
   // 新規セッションのモーダル(issue #409)。
   const [newDialogOpen, setNewDialogOpen] = useState(false);
   // 再開に付ける表示名(`--name`)の、ユーザーが入力欄を編集した値。編集していなければ `null`
@@ -506,15 +511,20 @@ function SessionsPage({ nav }: SessionsPageProps) {
   // 左ペインの縦一覧(issue #487)。選んだものだけを並べる方式(#353・#379)をやめ、
   // 全セッションを常に表示し、検索語(`sessionFilter`)で絞り込むだけにする。
   // 対象: タイトル。対象フォルダが複数のときはフォルダ名も対象に含める。
+  // アーカイブ済み(issue #495)は、表示 ON(`showArchived`)でなければ除く。検索語とは
+  // AND(表示 OFF なら検索結果からもアーカイブ済みは除く)。
   const normalizedSessionFilter = sessionFilter.trim().toLowerCase();
+  const archivedFilteredSessions = showArchived
+    ? allSessions
+    : allSessions.filter(({ session }) => !session.archived);
   const visibleSessions = (
     normalizedSessionFilter
-      ? allSessions.filter(
+      ? archivedFilteredSessions.filter(
           ({ folder, session }) =>
             session.title.toLowerCase().includes(normalizedSessionFilter) ||
             (targetFolders.length > 1 && folder.toLowerCase().includes(normalizedSessionFilter)),
         )
-      : allSessions
+      : archivedFilteredSessions
   ).map(({ folder, session }) => ({ key: sessionTabKey(folder, session.id), folder, session }));
   const selectedSessionSummary = sessionGroups
     .find((g) => g.folder === projectParam)
@@ -588,6 +598,45 @@ function SessionsPage({ nav }: SessionsPageProps) {
       name: resumeName,
       model: startModel,
     });
+  };
+
+  // アーカイブする(issue #495)。実行中のものは、止めてからアーカイブすることを確認する
+  // (止めるのは共有層側。#494)。表示中の会話をアーカイブしたら、一覧から隠れる前に選択を外し
+  // (`nav.clearProjectAndSession`)、0件の案内へ戻す。変更は `session:changed` で一覧へ反映される
+  // (既存の購読。追加の取り直しは不要)。
+  const archiveSessionWithConfirm = async (project: string, sessionId: string, alive: boolean) => {
+    if (alive && !window.confirm("実行中です。止めてからアーカイブします。よろしいですか?")) {
+      return;
+    }
+    try {
+      await archiveSession(project, sessionId);
+      if (project === projectParam && sessionId === sessionParam) {
+        nav.clearProjectAndSession();
+      }
+    } catch (e) {
+      setError(isAppError(e) ? e.message : String(e));
+    }
+  };
+
+  // 一覧の行のホバーボタンから呼ぶ(issue #495)。`runningBySessionId` に有れば実行中
+  // (終了したものは載っていないので、有無だけで判定できる)。
+  const handleArchiveRow = (project: string, sessionId: string) => {
+    void archiveSessionWithConfirm(project, sessionId, runningBySessionId.has(sessionId));
+  };
+
+  // アーカイブ済みの行(表示 ON のとき)の「戻す」から呼ぶ(issue #495)。
+  const handleUnarchiveRow = (project: string, sessionId: string) => {
+    void unarchiveSession(project, sessionId).catch((e) =>
+      setError(isAppError(e) ? e.message : String(e)),
+    );
+  };
+
+  // 状態バー(`RunningSessionBar`)の「アーカイブ」から呼ぶ(issue #495)。表示中の会話が対象
+  // (出る条件は canConfigureResume や alive と同じで、projectParam/sessionParam が確定している
+  // ことが前提)。
+  const handleArchiveCurrentSession = () => {
+    if (!projectParam || !sessionParam) return;
+    void archiveSessionWithConfirm(projectParam, sessionParam, runningAlive);
   };
 
   // 会話ファイルができた新規セッションの表示中(URL が `session` だけ)を、通常の会話の
@@ -912,6 +961,16 @@ function SessionsPage({ nav }: SessionsPageProps) {
               + 新規
             </button>
           </div>
+          {/* アーカイブ済みの表示切り替え(issue #495)。UI 状態なので保存しない(既定 OFF)。
+              検索語とは AND(絞り込みと同時に効く)。 */}
+          <label className="session-list-archived-toggle">
+            <input
+              type="checkbox"
+              checked={showArchived}
+              onChange={(e) => setShowArchived(e.target.checked)}
+            />
+            アーカイブを表示
+          </label>
           {/* 会話ファイルがまだ無い新規のセッション(実行中のもの)。会話ファイルができたら通常の行になる。 */}
           {pendingSummaries.map((summary) => (
             <div key={summary.session_id} className="session-list-row">
@@ -960,6 +1019,10 @@ function SessionsPage({ nav }: SessionsPageProps) {
                         size="small"
                       />
                     )}
+                    {/* アーカイブ済みの印(issue #495。表示 ON のときだけこの行自体が
+                        出る)。実行中セッションはアーカイブ時に止める(共有層側)ので、
+                        上の実行中バッジと同時に出ることは無い。 */}
+                    {session.archived && <Badge tone="idle" label="アーカイブ" size="small" />}
                   </span>
                   {targetFolders.length > 1 && (
                     <span className="session-item-folder" title={folder}>
@@ -967,6 +1030,42 @@ function SessionsPage({ nav }: SessionsPageProps) {
                     </span>
                   )}
                 </button>
+                {/* 行のホバーで出すアーカイブ操作(issue #495。右クリックメニューの代わり)。
+                    `.project-item` ボタンの中には入れ子にできないので、行の中で並べて
+                    重ねる(旧 .session-list-close と同じ配置の流儀)。 */}
+                {session.archived ? (
+                  <button
+                    type="button"
+                    className="session-list-archive-action session-list-unarchive-action"
+                    title="戻す"
+                    aria-label={`${session.title} のアーカイブを解除`}
+                    onClick={() => handleUnarchiveRow(folder, session.id)}
+                  >
+                    戻す
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="session-list-archive-action"
+                    title="アーカイブ"
+                    aria-label={`${session.title} をアーカイブ`}
+                    onClick={() => handleArchiveRow(folder, session.id)}
+                  >
+                    <svg
+                      viewBox="0 0 20 20"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.7"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
+                      <rect x="3" y="4" width="14" height="3" rx="1" />
+                      <path d="M4 7.5v7.5a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V7.5" />
+                      <path d="M8 10.5h4" />
+                    </svg>
+                  </button>
+                )}
               </div>
             );
           })}
@@ -991,6 +1090,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
                 onStop={() => void stopRunning()}
                 onStart={handleStartRunning}
                 starting={starting}
+                onArchive={handleArchiveCurrentSession}
               />
             )}
             <form className="message-form" onSubmit={handleSubmit}>
