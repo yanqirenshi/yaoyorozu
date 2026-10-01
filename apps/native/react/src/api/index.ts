@@ -247,6 +247,18 @@ export function stopRunningSession(target: RunningSessionRefDto): Promise<void> 
   return invoke<void>("stop_running_session", { target });
 }
 
+// セッションをアーカイブする(issue #494)。会話ファイルは消さず、一覧から隠してプロセスを
+// 止める(印を外せば戻る)。変更後は session:changed(onSessionChanged)が届き、一覧を
+// 取り直せる。
+export function archiveSession(project: string, sessionId: string): Promise<void> {
+  return invoke<void>("archive_session", { project, sessionId });
+}
+
+// アーカイブを解除する(issue #494)。会話を起動(再開)すると自動でも外れる。
+export function unarchiveSession(project: string, sessionId: string): Promise<void> {
+  return invoke<void>("unarchive_session", { project, sessionId });
+}
+
 // 状態変化・権限の問い合わせの到着/決着の通知(軽量)。詳細は getRunningSession で取り直す。
 export function onRunningSessionChanged(
   callback: (event: RunningSessionChangedEvent) => void,

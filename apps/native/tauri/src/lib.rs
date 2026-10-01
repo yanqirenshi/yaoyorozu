@@ -15,9 +15,10 @@ use dto::{
     SkillSummaryDto, ViewerTargetDto, WindowStateDto, WindowTabDto,
 };
 use infra::{
-    FileClaudeDirStore, FileClaudeMdStore, FileClaudeSettingsStore, FileHubLayoutStore,
-    FileHubTuningStore, FileProjectSettingsStore, FileRulesStore, FileSettingsStore,
-    FileSkillsStore, FileSystemRepository, GithubApiClient, GithubAuthLog, KeyringTokenStore,
+    FileArchivedSessionsStore, FileClaudeDirStore, FileClaudeMdStore, FileClaudeSettingsStore,
+    FileHubLayoutStore, FileHubTuningStore, FileProjectSettingsStore, FileRulesStore,
+    FileSettingsStore, FileSkillsStore, FileSystemRepository, GithubApiClient, GithubAuthLog,
+    KeyringTokenStore,
 };
 use state::{resolve_effective_projects_dir, AppState};
 use std::path::PathBuf;
@@ -205,15 +206,27 @@ async fn get_session(
 
 #[tauri::command]
 async fn list_sessions(
+    app: tauri::AppHandle,
     state: tauri::State<'_, Mutex<AppState>>,
     project: String,
 ) -> Result<Vec<SessionSummaryDto>, AppErrorDto> {
     let root = effective_projects_dir_from_state(&state).await?;
+    let archived_path = running_session::archived_sessions_path(&app)?;
     tauri::async_runtime::spawn_blocking(
         move || -> Result<Vec<SessionSummaryDto>, app::AppError> {
             let source = FileSystemRepository::new(root);
             let sessions = app::list_sessions(&source, &project)?;
-            Ok(sessions.into_iter().map(SessionSummaryDto::from).collect())
+            let archived =
+                app::load_archived_sessions(&FileArchivedSessionsStore::new(archived_path))?;
+            Ok(sessions
+                .into_iter()
+                .map(|session| {
+                    let is_archived = archived.is_archived(&session.id);
+                    let mut dto = SessionSummaryDto::from(session);
+                    dto.archived = is_archived;
+                    dto
+                })
+                .collect())
         },
     )
     .await
@@ -494,9 +507,15 @@ async fn list_window_states(
 ///
 /// `SessionDto.cwd`/`git_branch`(issue #224)も同様に`From`では埋まらない
 /// (`domain::Session`が持たないため)。`AppState.user_sessions`から
-/// `apply_session_display_hints`で差し込む。
+/// `apply_session_display_hints`で差し込む。`SessionDto.archived`(issue #494)も同じ理由で
+/// `From`では埋まらないが、こちらは`AppState`に持たせていない独立ファイル
+/// (`archived-sessions.json`)から読むため、ロックを離した後にブロッキングスレッドで読み、
+/// `apply_archived_flags`で差し込む。
 #[tauri::command]
-async fn get_pc(state: tauri::State<'_, Mutex<AppState>>) -> Result<PcDto, AppErrorDto> {
+async fn get_pc(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Mutex<AppState>>,
+) -> Result<PcDto, AppErrorDto> {
     let guard = state.lock().await;
     let pc = app::current_pc_with_repositories(guard.pc.clone(), &guard.settings);
     let pc = app::pc_with_git_ledger(pc, &guard.git_ledger);
@@ -504,7 +523,33 @@ async fn get_pc(state: tauri::State<'_, Mutex<AppState>>) -> Result<PcDto, AppEr
     let mut dto = PcDto::from(pc);
     dto.data_loaded = guard.pc_data_loaded;
     apply_session_display_hints(&mut dto, &guard.user_sessions);
+    drop(guard);
+
+    // アーカイブの印(issue #494)。`AppState` には持たせていない独立ファイルなので、ロックの
+    // 外・ブロッキングスレッドで読む(他の永続化と同じ流儀。native.md §2)。
+    let archived_path = running_session::archived_sessions_path(&app)?;
+    let archived = tauri::async_runtime::spawn_blocking(
+        move || -> Result<domain::ArchivedSessions, app::AppError> {
+            app::load_archived_sessions(&FileArchivedSessionsStore::new(archived_path))
+        },
+    )
+    .await
+    .unwrap_or_else(|_| {
+        Err(app::AppError::Io(
+            "バックグラウンド処理に失敗しました".to_string(),
+        ))
+    })?;
+    apply_archived_flags(&mut dto, &archived);
     Ok(dto)
+}
+
+/// `SessionDto.archived`(issue #494)へ、アーカイブの印を差し込む。
+fn apply_archived_flags(dto: &mut PcDto, archived: &domain::ArchivedSessions) {
+    for user in &mut dto.users {
+        for session in &mut user.sessions {
+            session.archived = archived.is_archived(&session.session_id);
+        }
+    }
 }
 
 /// `SessionDto.cwd`/`git_branch`(issue #224)へ、表示補助データを差し込む。
@@ -1636,6 +1681,8 @@ pub fn run() {
             running_session::interrupt_running_session,
             running_session::switch_running_session,
             running_session::stop_running_session,
+            running_session::archive_session,
+            running_session::unarchive_session,
             get_settings,
             update_settings,
             switch_profile,
