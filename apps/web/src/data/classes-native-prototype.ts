@@ -26,7 +26,7 @@
  * 【対象・ファイル対応】native.md §1 の「1型(クラス)= 1ファイル」(issue #184、
  * PR #185)により、domain クレートは各型が型名 snake_case のファイルに分かれて
  * いる(例: `Settings` → `settings.rs`)。`lib.rs` は `mod` 宣言と `pub use` のみ。
- * 本図の42クラスのうち、`ProjectItemKind` は `ProjectItem` と同じ `project_item.rs`
+ * 本図の41クラスのうち、`ProjectItemKind` は `ProjectItem` と同じ `project_item.rs`
  * に、`ClaudeDirEntryKind` は `ClaudeDirEntry` と同じ `claude_dir_entry.rs` に、
  * `GitRepositoryLedger` は `GitLedger` と同じ `git_ledger.rs` に、`ObservedWorktree`
  * は `ObservedGitState` と同じ `observed_git_state.rs` に、`MessageStatus` は
@@ -34,7 +34,7 @@
  * `ImageAttachmentError` は `ImageAttachment` と同じ `image_attachment.rs` に同居する
  * (native.md 曰く「その型専用の小さな補助enum」だが、補助structも同じ扱いにしている。
  * なお `ImageMediaType` は `ImageAttachment` と `MessageImage` の両方から使われるため、
- * 「専用」には厳密には当たらない。図は実物のファイル対応どおりに描いた)。ほかの35
+ * 「専用」には厳密には当たらない。図は実物のファイル対応どおりに描いた)。ほかの34
  * クラス(`MessageKind` は `message_kind.rs`、復元の2型は `restorable_running_session(s).rs`)は
  * それぞれ単独のファイル(型名 snake_case)。掲載対象は `classes-domain.ts`
  * に掲載済みの Pc・User・Profile と、`session_line/`(34型。かつては
@@ -209,7 +209,7 @@ const DEFS: ClassDef[] = [
       method("remove", ["session_id: &str"], "()"),
       method("update", ["session_id: &str", "change: impl FnOnce(&mut RestorableRunningSession)"], "()"),
     ],
-    // ViewerTabs の下(図の空いている右上)。
+    // ViewerTarget の下(図の空いている右上)。
     position: { x: 3650, y: 1650 },
     filePath: "apps/native/crates/domain/src/restorable_running_sessions.rs",
     // メソッドの引数が長く、戻り値型の列と重なるので広げる。
@@ -397,27 +397,15 @@ const DEFS: ClassDef[] = [
     filePath: "apps/native/crates/domain/src/hub_tuning.rs",
   },
   {
-    name: { physical: "ViewerTabs", logical: "ViewerTabs", description: "ビューアで開いているセッションタブの並び(プロファイルごとに別ファイル viewer-tabs/<プロファイルID>.json)。settings.json には入れない(見た目の状態のため)。選択中のタブは保存しない(URL で持つ)。スキーマ version は 2(#369 でタブのキーを series_key から session_id に改めた。v1 からのマイグレーションは infra にある)。issue #353 / #369" },
-    attributes: [
-      attr("version", "u32"),
-      attr("tabs", "Vec<ViewerTab>"),
-    ],
-    // 以前は (2100, 2250) に置いていたが、そこは infra 図の SessionSource(2100, 2050)と
-    // FileSystemRepository(2100, 2400)の実現の線の上で、線が箱を横切っていた(issue #465。
-    // #462 の確認用スクリプトが検出)。図の空いている右上(MessageImage の下)へ移した。
-    // ViewerTab は右隣。
-    position: { x: 3650, y: 1350 },
-    filePath: "apps/native/crates/domain/src/viewer_tabs.rs",
-  },
-  {
-    name: { physical: "ViewerTab", logical: "ViewerTab", description: "ビューアのセッションタブ1件。どのセッションのタブかを特定するキー(project, session_id)だけを持つ。1つのタブ = 1セッション(セッションID = 会話ファイル)で、フォークや圧縮で別のIDのファイルに分かれた会話は別のセッションなので別のタブになる(#353 で入れたフォーク系列の鍵 series_key は #369 で廃止)。issue #353 / #369" },
+    name: { physical: "ViewerTarget", logical: "ViewerTarget", description: "ビューアで開く・前面化したウィンドウを移動させる先のセッション1件(viewer_target.rs。issue #422)。どのセッションを指すかを特定するキー(project, session_id)だけを持つ(パスは含まない。native.md §4)。もとは「ビューアのセッションタブ」(ViewerTab。issue #353 / #369)の1件だったが、タブの並びの保存・復元そのものを廃止した(issue #489。ビューアが全セッション一覧 + 検索の方式に変わったため。issue #487)ので ViewerTabs(並び)と一緒に消え、開く・前面化・移動(open_profile_window / focus_window / viewer:navigate)の指定の型として、「タブ」ではない実態に合わせて改名された" },
     attributes: [
       attr("project", "String"), // プロジェクトフォルダ名(~/.claude/projects/ 直下)
       attr("session_id", "String"), // セッションID(会話ファイル名の拡張子を除いたもの)
     ],
-    // ViewerTabs の右隣(#465 で一緒に移した)。
-    position: { x: 4050, y: 1350 },
-    filePath: "apps/native/crates/domain/src/viewer_tab.rs",
+    // 以前は ViewerTabs(#489 で廃止)の右隣に置いていたので、その左の位置へ移した。
+    // この一帯は、infra 図の線が箱を横切らないよう #465 で空けた場所(MessageImage の下)。
+    position: { x: 3650, y: 1350 },
+    filePath: "apps/native/crates/domain/src/viewer_target.rs",
   },
   // ============ /claude 画面(Explorer) ============
   {
@@ -590,7 +578,6 @@ const RELATIONSHIPS = [
   rel("association", "WindowState", "WindowTab", "tabs", "right", "left"),
   rel("association", "HubLayout", "NodePosition", "positions", "right", "left"),
   rel("association", "HubLayout", "Camera", "camera", "bottom", "top"),
-  rel("association", "ViewerTabs", "ViewerTab", "tabs", "right", "left"),
   // 実行中セッションの復元(issue #459)
   rel("association", "RestorableRunningSessions", "RestorableRunningSession", "sessions", "right", "left"),
   // 画像添付
