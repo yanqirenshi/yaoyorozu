@@ -26,7 +26,7 @@
  * 【対象・ファイル対応】native.md §1 の「1型(クラス)= 1ファイル」(issue #184、
  * PR #185)により、domain クレートは各型が型名 snake_case のファイルに分かれて
  * いる(例: `Settings` → `settings.rs`)。`lib.rs` は `mod` 宣言と `pub use` のみ。
- * 本図の41クラスのうち、`ProjectItemKind` は `ProjectItem` と同じ `project_item.rs`
+ * 本図の42クラスのうち、`ProjectItemKind` は `ProjectItem` と同じ `project_item.rs`
  * に、`ClaudeDirEntryKind` は `ClaudeDirEntry` と同じ `claude_dir_entry.rs` に、
  * `GitRepositoryLedger` は `GitLedger` と同じ `git_ledger.rs` に、`ObservedWorktree`
  * は `ObservedGitState` と同じ `observed_git_state.rs` に、`MessageStatus` は
@@ -34,7 +34,7 @@
  * `ImageAttachmentError` は `ImageAttachment` と同じ `image_attachment.rs` に同居する
  * (native.md 曰く「その型専用の小さな補助enum」だが、補助structも同じ扱いにしている。
  * なお `ImageMediaType` は `ImageAttachment` と `MessageImage` の両方から使われるため、
- * 「専用」には厳密には当たらない。図は実物のファイル対応どおりに描いた)。ほかの34
+ * 「専用」には厳密には当たらない。図は実物のファイル対応どおりに描いた)。ほかの35
  * クラス(`MessageKind` は `message_kind.rs`、復元の2型は `restorable_running_session(s).rs`)は
  * それぞれ単独のファイル(型名 snake_case)。掲載対象は `classes-domain.ts`
  * に掲載済みの Pc・User・Profile と、`session_line/`(34型。かつては
@@ -230,6 +230,22 @@ const DEFS: ClassDef[] = [
     filePath: "apps/native/crates/domain/src/restorable_running_session.rs",
     // 名前と型の列が重なるので広げる(LogLine の size の説明を参照)。
     size: { w: 360, h: 0 },
+  },
+  {
+    name: { physical: "ArchivedSessions", logical: "ArchivedSessions", description: "アーカイブ済みのセッション ID の集合(archived_sessions.rs。issue #494)。Desktop の「アーカイブ」(会話ファイルは消さず、一覧から隠してプロセスを止める。印を外せば戻る)を app にも入れるための印。会話ファイル(jsonl)には触らない。セッション ID は全体で一意なので、プロファイルをまたいで同じ印を参照する(app_data_dir/archived-sessions.json に1つだけ持つ)。archive はすでに付いていれば何もしない(重ねて呼んでも増えない)、unarchive は付いていなければ何もしない。版の定数 CURRENT_ARCHIVED_SESSIONS_VERSION は定数なので描かない" },
+    attributes: [
+      attr("version", "u32"),
+      attr("session_ids", "Vec<String>"),
+    ],
+    methods: [
+      method("is_archived", ["session_id: &str"], "bool"),
+      method("archive", ["session_id: &str"], "()"),
+      method("unarchive", ["session_id: &str"], "()"),
+    ],
+    // ViewerTarget の右隣(図の空いている右上)。
+    position: { x: 4050, y: 1350 },
+    filePath: "apps/native/crates/domain/src/archived_sessions.rs",
+    size: { w: 420, h: 0 },
   },
   // ============ 設定・プロファイル ============
   {

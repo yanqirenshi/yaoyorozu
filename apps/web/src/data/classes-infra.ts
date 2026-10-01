@@ -33,14 +33,23 @@
  * `claude_dir_store.rs`、`SessionWatcher`/`FileSystemRepository` は
  * `session_source.rs` に同居(`SessionFileRef`・`SessionFsChange` も同じ)、`ClaudeCliProcess`・
  * `ExitSignal` は `ClaudeCliProcessLauncher` と同じ `claude_cli_process.rs` に同居)。
- * infra の型 30個(port を実装するもの24 + port を実装しない補助の型6: `SessionWatcher`・
+ * infra の型 31個(port を実装するもの25 + port を実装しない補助の型6: `SessionWatcher`・
  * `SessionFileRef`・`SessionFsChange`・`GithubAuthLog`・`ExitSignal`・`PendingSwitches`)と、
- * app の port 25個を載せた(1回きり送信の `AgentGateway`・`ClaudeCliAgent` は #392 で撤去。
+ * app の port 26個を載せた(1回きり送信の `AgentGateway`・`ClaudeCliAgent` は #392 で撤去。
  * `GitWorktreeManager`・`SystemGitWorktreeManager` は
  * #441(Phase 3。PR #440)、`RestorableRunningSessionsStore`・`FileRestorableRunningSessionsStore` は
  * #465(実行中セッションの復元。issue #459。PR #463)、`LocalApiPortStore`・`FileLocalApiPortStore` は
  * #470 で追加。`ViewerTabsStore`・`FileViewerTabsStore`(#420 で追加)は、ビューアのタブの並びの
- * 保存・復元そのものの廃止(issue #489。PR #490)で撤去された)。
+ * 保存・復元そのものの廃止(issue #489。PR #490)で撤去された。`ArchivedSessionsStore`・
+ * `FileArchivedSessionsStore` は #494 で追加)。
+ *
+ * 【セッションのアーカイブ(issue #494。PR #497)】会話ファイルは消さず、一覧から隠して
+ * プロセスを止める印(`domain::ArchivedSessions`。`classes-native-prototype.ts`)を
+ * `app_data_dir/archived-sessions.json` へ保存する port `ArchivedSessionsStore`(実装
+ * `FileArchivedSessionsStore`)が加わった。印の読み書き(`archive_session` /
+ * `unarchive_session` / `load_archived_sessions`)は関数なので描かない。実行中プロセスを先に
+ * 止める処理は `AppState`(ランタイム状態)を見る必要があるため tauri 層の責務(native.md §1)。
+ * 復元の入り口(`sessions_to_restore`)も印を受け取って除外するようになった(関数)。
  *
  * 【実行中セッションの復元(issue #459。PR #463)】app の起動時に前回動かしていたセッションを
  * 再開するため、再開に必要な指定(`domain::RestorableRunningSessions`。
@@ -340,6 +349,25 @@ const DEFS: ClassDef[] = [
     position: { x: 3100, y: 4650 },
     filePath: "apps/native/crates/infra/src/local_api_port_store.rs",
     size: { w: 280, h: 0 },
+  },
+  {
+    name: { physical: "ArchivedSessionsStore", logical: "ArchivedSessionsStore", description: "アーカイブ済みのセッション ID の集合の保存(port)。app::lib.rs。issue #494。実体(app_data_dir/archived-sessions.json の読み書き)は infra に閉じ込める。ファイルが無い・壊れている場合の load は空(ArchivedSessions::default())。domain::ArchivedSessions は classes-native-prototype.ts の離れた位置にあるため線は引かない" },
+    stereotype: "interface",
+    methods: [
+      method("load", [], "Result<domain::ArchivedSessions, AppError>"),
+      method("save", ["sessions: &domain::ArchivedSessions"], "Result<(), AppError>"),
+    ],
+    position: { x: 4600, y: 3550 },
+    filePath: "apps/native/crates/app/src/lib.rs",
+    // save の引数が長く、戻り値型の列と重なるので広げる(HubTuningStore と同じ理由)。
+    size: { w: 660, h: 0 },
+  },
+  {
+    name: { physical: "FileArchivedSessionsStore", logical: "FileArchivedSessionsStore", description: "アーカイブ済みのセッション ID の集合を app_data_dir/archived-sessions.json として永続化(archived_sessions_store.rs。issue #494)。FileSettingsStore と同じ流儀(native.md §2): 書き込みはアトミック(*.tmp へ書く → fsync → rename)、読み込み失敗時はプロセスを落とさず空で始める(壊れたファイルは *.corrupt.<timestamp> へ退避)" },
+    attributes: [attr("path", "PathBuf")],
+    position: { x: 4600, y: 3900 },
+    filePath: "apps/native/crates/infra/src/archived_sessions_store.rs",
+    size: { w: 460, h: 0 },
   },
   // ============ 実行環境・GitHub連携・エージェント ============
   {
@@ -1142,6 +1170,7 @@ const RELATIONSHIPS = [
   rel("realization", "FileHubTuningStore", "HubTuningStore", undefined, "top", "bottom"),
   rel("realization", "SystemGitWorktreeManager", "GitWorktreeManager", undefined, "top", "bottom"),
   rel("realization", "FileRestorableRunningSessionsStore", "RestorableRunningSessionsStore", undefined, "top", "bottom"),
+  rel("realization", "FileArchivedSessionsStore", "ArchivedSessionsStore", undefined, "top", "bottom"),
   rel("realization", "WindowsExecutionEnvironmentSource", "ExecutionEnvironmentSource", undefined, "top", "bottom"),
   rel("realization", "GithubApiClient", "GithubGateway", undefined, "top", "bottom"),
   rel("realization", "KeyringTokenStore", "TokenStore", undefined, "top", "bottom"),

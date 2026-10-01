@@ -51,6 +51,10 @@
  * ビューアのタブの並びの保存・復元の廃止(issue #489。PR #490)で、`ViewerTabsChangedEventDto` は
  * 撤去され、`ViewerTabDto` は `ViewerTargetDto` に改名された(開く・前面化・移動の指定として残った)。
  *
+ * セッションのアーカイブ(issue #494。PR #497)で、`SessionSummaryDto`・`SessionDto` に
+ * `archived: bool` が加わった(どちらも command が `archived-sessions.json` 由来の印を差し込む)。
+ * command の `archive_session` / `unarchive_session`(`running_session.rs`)は関数なので描かない。
+ *
  * 【書き方】`classes-native-prototype.ts` と同じ基準。
  * - フィールドの型がこの図の中の別のクラス(enum を含む)を指すときだけ関係線を
  *   引く(必須・単数 → コンポジション、`Option`/`Vec`/`HashMap` → 関連)。
@@ -150,6 +154,8 @@ const DEFS: ClassDef[] = [
       attr("modified_at", "u64"),
       attr("cwd", "Option<String>"),
       attr("git_branch", "Option<String>"),
+      // アーカイブ済みの印(issue #494)。list_sessions command が archived-sessions.json から差し込む。
+      attr("archived", "bool"),
     ],
     position: { x: 2100, y: 5900 },
     filePath: "apps/native/tauri/src/dto.rs",
@@ -534,6 +540,8 @@ const DEFS: ClassDef[] = [
       // ハブのグラフ表示用の表示補助(LogLine 由来。issue #224)
       attr("cwd", "Option<String>"),
       attr("git_branch", "Option<String>"),
+      // アーカイブ済みの印(issue #494)。get_pc command が AppState の外(archived-sessions.json)から差し込む。
+      attr("archived", "bool"),
     ],
     position: { x: 2500, y: 11650 },
     filePath: "apps/native/tauri/src/dto.rs",
