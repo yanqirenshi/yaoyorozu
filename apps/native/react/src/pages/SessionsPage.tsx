@@ -323,6 +323,8 @@ function SessionsPage({ nav }: SessionsPageProps) {
     busy: sending,
     switching,
     send: sendToSession,
+    start: startRunning,
+    starting,
     respond: respondToPermission,
     interrupt: interruptRunning,
     switchTo: switchRunning,
@@ -630,6 +632,22 @@ function SessionsPage({ nav }: SessionsPageProps) {
     if (runningAlive) void switchRunning({ kind: "permission_mode", mode: value });
   };
   const selectModel = (model: string) => void switchRunning({ kind: "model", model });
+
+  // 未起動のとき、メッセージ無しで起動だけする(issue #484)。送信時の自動起動
+  // (useRunningSession の send)と同じ `ensureStarted` を使うため、引数(権限モード・
+  // 表示名・モデル)は送信時と揃っている。`RunningSessionBar` の「起動」ボタンから呼ぶ
+  // (出る条件は canConfigureResume と同じで、projectParam が確定していることが前提)。
+  const handleStartRunning = () => {
+    if (!projectParam || !sessionParam) return;
+    void startRunning({
+      profileId: resolvedProfileId,
+      project: projectParam,
+      sessionId: sessionParam,
+      mode,
+      name: resumeName,
+      model: startModel,
+    });
+  };
 
   // 会話ファイルができたら、新規のセッションを一覧(タブ)へ加える。表示中(URL が `session` だけ)
   // なら、通常の会話の表示(`project` 付き)へ移す。
@@ -1055,6 +1073,8 @@ function SessionsPage({ nav }: SessionsPageProps) {
                 canConfigureResume={!!projectParam && !!selectedSummary}
                 onInterrupt={() => void interruptRunning()}
                 onStop={() => void stopRunning()}
+                onStart={handleStartRunning}
+                starting={starting}
               />
             )}
             <form className="message-form" onSubmit={handleSubmit}>

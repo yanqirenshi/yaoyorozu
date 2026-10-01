@@ -320,10 +320,12 @@ export function useRunningSession({
   );
 
   /**
-   * 送信。未起動なら起動して、待機になってから送る(起動中の送信は backend が断るため)。
-   * 別のセッションが実行中のときは呼ばない(呼び出し側が確認して先に停止する)。
+   * 未起動なら起動して、待機になるまで待つ(起動済みならそのまま現在値を返す)。
+   * `send`(メッセージ送信時の自動起動)と `start`(issue #484。「起動」ボタン)の
+   * 両方から呼ぶ共通部分。呼び出し側は、呼ぶ前に `alive` を見て要不要を判断しなくてよい
+   * (ここで判定する)。
    */
-  const send = useCallback(
+  const ensureStarted = useCallback(
     async (args: {
       profileId: string | null;
       /** 会話ファイルのあるプロジェクトフォルダ。新規の会話(まだ会話ファイルが無い)は `null`。 */
@@ -333,6 +335,59 @@ export function useRunningSession({
       /** 再開に付ける表示名(`--name`。任意)。 */
       name?: string | null;
       /** 再開時に選ぶモデル(`--model`。省略・null は CLI の既定。issue #445)。 */
+      model?: StartModelDto | null;
+    }): Promise<RunningSessionDto> => {
+      const current = runningRef.current;
+      const alive = current !== null && current.process_state !== "exited";
+      if (!alive) {
+        if (!args.project) {
+          // 新規の会話は会話ファイルができる前に終了すると、開き直す元が無い。
+          throw new Error(
+            "この会話はまだ会話ファイルが無く、実行中のセッションも終わっているため開き直せません。新規セッションを作り直してください",
+          );
+        }
+        const started = await startRunningSession(args.profileId, {
+          kind: "resume",
+          project: args.project,
+          session_id: args.sessionId,
+          mode: args.mode,
+          name: args.name?.trim() ? args.name.trim() : null,
+          model: args.model ?? null,
+        });
+        applyRunning(started);
+      }
+      const target = runningRef.current?.target;
+      if (!target) {
+        throw new Error("実行中のセッションが見つかりません");
+      }
+      // 送る前に購読しておく(送信直後の途中経過を取りこぼさない)。
+      await ensureSubscribed(target);
+      const ready = await waitUntil(
+        (s) => s === null || s.process_state !== "starting",
+        START_TIMEOUT_MS,
+      );
+      if (!ready || ready.process_state === "starting") {
+        throw new Error("実行中のセッションの起動が終わりませんでした。しばらくしてからやり直してください");
+      }
+      if (ready.process_state === "exited") {
+        throw new Error("実行中のセッションが起動できませんでした(起動直後に終了しました)");
+      }
+      return ready;
+    },
+    [applyRunning, ensureSubscribed, waitUntil],
+  );
+
+  /**
+   * 送信。未起動なら起動して、待機になってから送る(起動中の送信は backend が断るため)。
+   * 別のセッションが実行中のときは呼ばない(呼び出し側が確認して先に停止する)。
+   */
+  const send = useCallback(
+    async (args: {
+      profileId: string | null;
+      project: string | null;
+      sessionId: string;
+      mode: RunningPermissionModeDto;
+      name?: string | null;
       model?: StartModelDto | null;
       text: string;
       images: string[];
@@ -347,41 +402,7 @@ export function useRunningSession({
         baselineUuids: callbacks.current.getMessageUuids(),
       }));
       try {
-        const current = runningRef.current;
-        const alive = current !== null && current.process_state !== "exited";
-        if (!alive) {
-          if (!args.project) {
-            // 新規の会話は会話ファイルができる前に終了すると、開き直す元が無い。
-            throw new Error(
-              "この会話はまだ会話ファイルが無く、実行中のセッションも終わっているため開き直せません。新規セッションを作り直してください",
-            );
-          }
-          const started = await startRunningSession(args.profileId, {
-            kind: "resume",
-            project: args.project,
-            session_id: args.sessionId,
-            mode: args.mode,
-            name: args.name?.trim() ? args.name.trim() : null,
-            model: args.model ?? null,
-          });
-          applyRunning(started);
-        }
-        const target = runningRef.current?.target;
-        if (!target) {
-          throw new Error("実行中のセッションが見つかりません");
-        }
-        // 送る前に購読しておく(送信直後の途中経過を取りこぼさない)。
-        await ensureSubscribed(target);
-        const ready = await waitUntil(
-          (s) => s === null || s.process_state !== "starting",
-          START_TIMEOUT_MS,
-        );
-        if (!ready || ready.process_state === "starting") {
-          throw new Error("実行中のセッションの起動が終わりませんでした。しばらくしてからやり直してください");
-        }
-        if (ready.process_state === "exited") {
-          throw new Error("実行中のセッションが起動できませんでした(起動直後に終了しました)");
-        }
+        const ready = await ensureStarted(args);
         await sendToRunningSession(ready.target, args.text, args.images);
         return true;
       } catch (e) {
@@ -393,7 +414,35 @@ export function useRunningSession({
         setBusy(false);
       }
     },
-    [applyRunning, ensureSubscribed, refresh, resetLive, updateLive, waitUntil],
+    [ensureStarted, refresh, resetLive, updateLive],
+  );
+
+  // メッセージ無しで起動だけする(issue #484)。「起動」ボタンから呼ぶ。`send` と同じ
+  // `ensureStarted` を使うので、起動時の引数(権限モード・モデル・表示名)は送信時の自動起動と
+  // 揃う。起動中は `starting` で画面側がボタンを「起動中…」にする。
+  const [starting, setStarting] = useState(false);
+  const start = useCallback(
+    async (args: {
+      profileId: string | null;
+      project: string;
+      sessionId: string;
+      mode: RunningPermissionModeDto;
+      name?: string | null;
+      model?: StartModelDto | null;
+    }): Promise<boolean> => {
+      setStarting(true);
+      try {
+        await ensureStarted(args);
+        return true;
+      } catch (e) {
+        callbacks.current.onError(messageOf(e));
+        await refresh();
+        return false;
+      } finally {
+        setStarting(false);
+      }
+    },
+    [ensureStarted, refresh],
   );
 
   const respond = useCallback(
@@ -483,5 +532,5 @@ export function useRunningSession({
     resetLive();
   }, [refresh, resetLive]);
 
-  return { running, live, busy, switching, send, respond, interrupt, switchTo, stop };
+  return { running, live, busy, switching, send, start, starting, respond, interrupt, switchTo, stop };
 }

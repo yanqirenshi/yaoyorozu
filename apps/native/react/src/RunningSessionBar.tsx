@@ -54,6 +54,10 @@ type Props = {
   canConfigureResume: boolean;
   onInterrupt: () => void;
   onStop: () => void;
+  /** 未起動のとき「終了」の位置に出す「起動」ボタンから呼ぶ(issue #484)。 */
+  onStart: () => void;
+  /** 起動中(issue #484)。ボタンを押せなくし、表示を「起動中…」にする。 */
+  starting: boolean;
 };
 
 export default function RunningSessionBar({
@@ -69,6 +73,8 @@ export default function RunningSessionBar({
   canConfigureResume,
   onInterrupt,
   onStop,
+  onStart,
+  starting,
 }: Props) {
   const alive = running !== null && running.process_state !== "exited";
   const state = running?.process_state ?? null;
@@ -253,6 +259,19 @@ export default function RunningSessionBar({
         {alive && (
           <button type="button" className="running-bar-button" onClick={onStop}>
             終了
+          </button>
+        )}
+        {/* 未起動のとき「終了」の位置に出す(issue #484)。メッセージ無しで、いまバーで
+            選んでいる値(権限モード・モデル・表示名)のまま起動だけする。会話ファイルが無い
+            新規セッションや対象未確定のときは出さない(`canConfigureResume` と同じ条件)。 */}
+        {!alive && canConfigureResume && (
+          <button
+            type="button"
+            className="running-bar-button"
+            disabled={starting}
+            onClick={onStart}
+          >
+            {starting ? "起動中…" : "起動"}
           </button>
         )}
       </span>
