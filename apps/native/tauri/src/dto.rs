@@ -186,6 +186,9 @@ pub struct SessionSummaryDto {
     /// セッションのgitブランチ(セッション中の最後の記録値)。`"HEAD"` は
     /// デタッチ状態、記録が無ければ `null`(ハブのグラフ階層用。issue #104)。
     pub git_branch: Option<String>,
+    /// アーカイブ済みか(issue #494)。会話ファイルとは別のファイルで管理する印のため、
+    /// `From` では埋まらない(`list_sessions` command が後から差し込む)。
+    pub archived: bool,
 }
 
 impl From<domain::SessionSummary> for SessionSummaryDto {
@@ -197,6 +200,7 @@ impl From<domain::SessionSummary> for SessionSummaryDto {
             modified_at: summary.modified_at_ms,
             cwd: summary.cwd,
             git_branch: summary.git_branch,
+            archived: false,
         }
     }
 }
@@ -984,6 +988,9 @@ pub struct SessionDto {
     pub subagent_files: Vec<SessionFileDto>,
     pub cwd: Option<String>,
     pub git_branch: Option<String>,
+    /// アーカイブ済みか(issue #494)。`cwd`/`git_branch` と同じく `From` では埋まらず、
+    /// `get_pc` command が `AppState` 外の `archived-sessions.json` から差し込む。
+    pub archived: bool,
 }
 
 impl From<domain::Session> for SessionDto {
@@ -1008,6 +1015,7 @@ impl From<domain::Session> for SessionDto {
             // `get_pc` commandが後から差し込む(上のドキュメントコメント参照)。
             cwd: None,
             git_branch: None,
+            archived: false,
         }
     }
 }

@@ -1,3 +1,4 @@
+mod archived_sessions_store;
 mod claude_cli;
 mod claude_cli_process;
 mod claude_dir_store;
@@ -25,6 +26,7 @@ mod session_source;
 mod settings_store;
 mod skills_store;
 
+pub use archived_sessions_store::FileArchivedSessionsStore;
 pub use claude_cli_process::ClaudeCliProcessLauncher;
 pub use claude_dir_store::{claude_home_dir, FileClaudeDirStore};
 pub use claude_md_store::FileClaudeMdStore;

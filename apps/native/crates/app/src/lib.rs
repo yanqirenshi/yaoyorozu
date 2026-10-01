@@ -20,9 +20,11 @@ pub use worktree::{
     GitWorktreeManager, MergeOutcome, PreparedWorktree, ResolvedWorktree, WorktreeEntry,
     WorktreeIndex, WorktreeSpec, ORIGIN_MAIN,
 };
+mod archive_session;
 mod restore_running_sessions;
 mod running_session;
 mod running_session_summary;
+pub use archive_session::{archive_session, load_archived_sessions, unarchive_session};
 pub use cli_version::{
     parse_cli_version, peer_messaging_warning, supports_peer_messaging, MIN_PEER_MESSAGING_VERSION,
 };
@@ -317,6 +319,14 @@ pub trait RestorableRunningSessionsStore {
     /// ファイルが無い・壊れている場合は空(`RestorableRunningSessions::default()`)。
     fn load(&self) -> Result<domain::RestorableRunningSessions, AppError>;
     fn save(&self, sessions: &domain::RestorableRunningSessions) -> Result<(), AppError>;
+}
+
+/// アーカイブ済みのセッション ID の集合の保存(port。issue #494)。実体
+/// (`app_data_dir/archived-sessions.json` の読み書き)は infra に閉じ込める。
+pub trait ArchivedSessionsStore {
+    /// ファイルが無い・壊れている場合は空(`ArchivedSessions::default()`)。
+    fn load(&self) -> Result<domain::ArchivedSessions, AppError>;
+    fn save(&self, sessions: &domain::ArchivedSessions) -> Result<(), AppError>;
 }
 
 /// 実行環境(このPC・ログインユーザー)の取得(port)。実体(レジストリ・

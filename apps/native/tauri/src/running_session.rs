@@ -32,8 +32,8 @@ use app::{
 };
 use domain::{PermissionSuggestion, ProcessState, RunningSessionByApp};
 use infra::{
-    ClaudeCliProcessLauncher, FileRestorableRunningSessionsStore, FileRunningSessionSource,
-    FileSystemRepository,
+    ClaudeCliProcessLauncher, FileArchivedSessionsStore, FileRestorableRunningSessionsStore,
+    FileRunningSessionSource, FileSystemRepository,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -57,6 +57,16 @@ fn restorable_running_sessions_path(app_handle: &tauri::AppHandle) -> Result<Pat
         .map_err(|e| AppError::Io(e.to_string()))
 }
 
+/// アーカイブ済みのセッション ID の集合(issue #494)。`app_data_dir` 直下に置く。`lib.rs` の
+/// `list_sessions` / `get_pc` command も、`archived: bool` を差し込むためにこの場所を使う。
+pub(crate) fn archived_sessions_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, AppError> {
+    app_handle
+        .path()
+        .app_data_dir()
+        .map(|dir| dir.join("archived-sessions.json"))
+        .map_err(|e| AppError::Io(e.to_string()))
+}
+
 /// 控えの読み書きは小さなファイル I/O なので、ロックを持たないところでブロッキングスレッドへ
 /// 逃がして行う(native.md §2)。失敗しても起動・停止は続ける(控えは便宜であり、次の保存で
 /// 直るため)。理由はログにだけ残す。
@@ -76,6 +86,30 @@ where
     })
     .await
     .unwrap_or_else(|_| Err(background_failed()));
+    if let Err(e) = result {
+        eprintln!("{what}に失敗しました: {e}");
+    }
+}
+
+/// [`with_restorable_store`] のアーカイブ版(issue #494)。
+async fn with_archived_sessions_store<F>(
+    app_handle: &tauri::AppHandle,
+    what: &'static str,
+    change: F,
+) where
+    F: FnOnce(&FileArchivedSessionsStore) -> Result<(), AppError> + Send + 'static,
+{
+    let path = match archived_sessions_path(app_handle) {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("{what}に失敗しました: {e}");
+            return;
+        }
+    };
+    let result =
+        tauri::async_runtime::spawn_blocking(move || change(&FileArchivedSessionsStore::new(path)))
+            .await
+            .unwrap_or_else(|_| Err(background_failed()));
     if let Err(e) = result {
         eprintln!("{what}に失敗しました: {e}");
     }
@@ -424,6 +458,9 @@ pub async fn start_running_session(
         StartRunningSessionDto::Resume { project, .. } => Some(project.clone()),
         StartRunningSessionDto::New { .. } => None,
     };
+    // 起動(再開)したら自動でアーカイブの印を外す(issue #494。開いて使い始めた = 戻した、と
+    // 見なす。新規作成はアーカイブされているはずがないので対象外)。
+    let is_resume = matches!(request, StartRunningSessionDto::Resume { .. });
     // 起動のときに選んだモデルの別名(控えに覚える値。issue #459)。`system/init` が報告する
     // 実際のモデル名ではなく、この別名を覚える。
     let start_model: Option<app::StartModel> = match &request {
@@ -566,6 +603,13 @@ pub async fn start_running_session(
         },
     )
     .await;
+    if is_resume {
+        let sid = session_id.clone();
+        with_archived_sessions_store(&app_handle, "アーカイブの印の解除", move |store| {
+            app::unarchive_session(store, &sid)
+        })
+        .await;
+    }
     Ok(dto)
 }
 
@@ -811,6 +855,110 @@ pub async fn stop_running_session(
     Ok(())
 }
 
+/// 会話をアーカイブする(issue #494。Desktop の「アーカイブ」を app にも入れる)。会話ファイルは
+/// 消さず、印(`archived-sessions.json`)を付けるだけ。app が持つ実行中プロセス(この
+/// `session_id` のもの。プロファイルをまたいで探す)があれば、印を付ける前に止める
+/// (`stop_running_session` command と同じ止め方)。外部(ターミナル等)で実行中のものは
+/// 止められないので、印だけ付ける。
+///
+/// `project` は印の対象ではなく(印はセッション ID だけで管理する)、変更後に発火する
+/// `session:changed`(新しいイベントは増やさない。issue #494)の対象フォルダを知らせるためだけに
+/// 使う。不正な値でも印の付与自体は失敗させず、通知だけ省く。
+#[tauri::command]
+pub async fn archive_session(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, Mutex<AppState>>,
+    project: String,
+    session_id: String,
+) -> Result<(), AppErrorDto> {
+    stop_running_sessions_for(&app_handle, &state, &session_id).await;
+
+    with_archived_sessions_store(&app_handle, "アーカイブの印の付与", {
+        let session_id = session_id.clone();
+        move |store| app::archive_session(store, &session_id)
+    })
+    .await;
+
+    notify_session_changed(&app_handle, &project);
+    Ok(())
+}
+
+/// 会話のアーカイブを解除する(issue #494)。`archive_session` の逆。
+#[tauri::command]
+pub async fn unarchive_session(
+    app_handle: tauri::AppHandle,
+    project: String,
+    session_id: String,
+) -> Result<(), AppErrorDto> {
+    with_archived_sessions_store(&app_handle, "アーカイブの印の解除", move |store| {
+        app::unarchive_session(store, &session_id)
+    })
+    .await;
+
+    notify_session_changed(&app_handle, &project);
+    Ok(())
+}
+
+/// `session_id` に一致する、app が持つ実行中セッション(終了していないもの)を**全部**止める。
+/// 同じ会話の二重起動は防いでいる(#361・#345)ため、通常は高々1件だが、プロファイルをまたいで
+/// 探すために `find_slot` ではなく全走査にする。
+async fn stop_running_sessions_for(
+    app_handle: &tauri::AppHandle,
+    state: &tauri::State<'_, Mutex<AppState>>,
+    session_id: &str,
+) {
+    let targets: Vec<(domain::RunningSessionByApp, Arc<dyn app::RunningProcess>)> = {
+        let guard = state.lock().await;
+        guard
+            .running_sessions
+            .iter()
+            .filter(|slot| {
+                slot.session.base.session_id == session_id
+                    && slot.session.process_state != ProcessState::Exited
+            })
+            .map(|slot| (slot.session.clone(), slot.process.clone()))
+            .collect()
+    };
+    for (mut snapshot, process) in targets {
+        let target = RunningSessionRef::of(&snapshot);
+        let stopped = tauri::async_runtime::spawn_blocking(move || {
+            app::stop_running_session(&mut snapshot, process.as_ref(), now_ms());
+            snapshot
+        })
+        .await;
+        let Ok(snapshot) = stopped else {
+            eprintln!("アーカイブ前の停止に失敗しました(バックグラウンド処理の失敗)");
+            continue;
+        };
+        let payload = {
+            let mut guard = state.lock().await;
+            find_slot_mut(&mut guard, &target).map(|slot| {
+                slot.session = snapshot;
+                changed_event(&slot.session, None)
+            })
+        };
+        if let Some(payload) = payload {
+            let _ = app_handle.emit(RUNNING_SESSION_CHANGED_EVENT, payload);
+        }
+    }
+}
+
+/// `project` が妥当な名前に見えるときだけ `session:changed` を発火する(issue #494)。
+/// アーカイブ・解除はセッション ID だけで完結する操作なので、`project` は通知のための
+/// ヒントに過ぎない。不正な値でアーカイブ自体を失敗させない。
+fn notify_session_changed(app_handle: &tauri::AppHandle, project: &str) {
+    if !domain::is_valid_project_dir_name(project) {
+        return;
+    }
+    let _ = app_handle.emit(
+        "session:changed",
+        crate::dto::SessionChangedEventDto {
+            project: project.to_string(),
+            agent: crate::dto::AgentKindDto::ClaudeCode,
+        },
+    );
+}
+
 /// app の起動時に、前回動かしていた実行中セッションを順に再開する(issue #459)。ハブの初回表示を
 /// 妨げないよう、`setup` からバックグラウンドで走らせる(#205 と同じ考え方)。
 ///
@@ -845,8 +993,21 @@ pub fn start_restoring_running_sessions(app_handle: &tauri::AppHandle) {
                 return;
             }
         };
+        let archived_path = match archived_sessions_path(&app_handle) {
+            Ok(path) => path,
+            Err(e) => {
+                eprintln!("アーカイブ済みの一覧を読めませんでした: {e}");
+                return;
+            }
+        };
         let entries = tauri::async_runtime::spawn_blocking(move || {
-            app::sessions_to_restore(&FileRestorableRunningSessionsStore::new(path), &settings)
+            let archived =
+                app::load_archived_sessions(&FileArchivedSessionsStore::new(archived_path))?;
+            app::sessions_to_restore(
+                &FileRestorableRunningSessionsStore::new(path),
+                &settings,
+                &archived,
+            )
         })
         .await
         .unwrap_or_else(|_| Err(background_failed()));

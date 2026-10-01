@@ -77,15 +77,23 @@ pub fn remember_running_session_switch(
     store.save(&saved)
 }
 
-/// 起動時に再開する一覧(保存した順)。設定で切ってあれば空(何もしない)。
+/// 起動時に再開する一覧(保存した順)。設定で切ってあれば空(何もしない)。アーカイブ済み
+/// (issue #494)は除く: 止めてからアーカイブしているので通常は控えに残らないはずだが、念のため
+/// 復元の入り口でも除外する。
 pub fn sessions_to_restore(
     store: &dyn RestorableRunningSessionsStore,
     settings: &domain::Settings,
+    archived: &domain::ArchivedSessions,
 ) -> Result<Vec<RestorableRunningSession>, AppError> {
     if !settings.restore_running_sessions {
         return Ok(Vec::new());
     }
-    Ok(store.load()?.sessions)
+    Ok(store
+        .load()?
+        .sessions
+        .into_iter()
+        .filter(|s| !archived.is_archived(&s.session_id))
+        .collect())
 }
 
 /// 覚えていた1件を、再開の指定へ組み立てたもの(issue #459)。パスは含まない(呼び出し側の
@@ -366,8 +374,40 @@ mod tests {
             ..domain::Settings::default()
         };
 
-        assert_eq!(sessions_to_restore(&store, &on).unwrap().len(), 1);
-        assert!(sessions_to_restore(&store, &off).unwrap().is_empty());
+        let none = domain::ArchivedSessions::default();
+        assert_eq!(sessions_to_restore(&store, &on, &none).unwrap().len(), 1);
+        assert!(sessions_to_restore(&store, &off, &none).unwrap().is_empty());
+    }
+
+    #[test]
+    fn sessions_to_restore_excludes_archived_sessions() {
+        // issue #494: 止める前にアーカイブしているので通常は残らないはずだが、念のため
+        // 復元の入り口でも除外する。
+        let store = FakeStore::new();
+        remember_running_session(
+            &store,
+            &session("s1", None),
+            "default",
+            Some("proj-a"),
+            None,
+        )
+        .unwrap();
+        remember_running_session(
+            &store,
+            &session("s2", None),
+            "default",
+            Some("proj-a"),
+            None,
+        )
+        .unwrap();
+        let mut archived = domain::ArchivedSessions::default();
+        archived.archive("s1");
+
+        let restored =
+            sessions_to_restore(&store, &domain::Settings::default(), &archived).unwrap();
+
+        let ids: Vec<&str> = restored.iter().map(|s| s.session_id.as_str()).collect();
+        assert_eq!(ids, vec!["s2"]);
     }
 
     #[test]
@@ -433,7 +473,11 @@ mod tests {
 
         assert!(forget_running_session(&store, "s1").is_err());
         assert!(matches!(
-            sessions_to_restore(&store, &domain::Settings::default()),
+            sessions_to_restore(
+                &store,
+                &domain::Settings::default(),
+                &domain::ArchivedSessions::default()
+            ),
             Err(AppError::Io(_))
         ));
     }

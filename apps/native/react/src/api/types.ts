@@ -66,6 +66,8 @@ export type SessionSummaryDto = {
   // ハブのグラフ階層(issue #104)。JSONLに記録が無ければ `null`。
   cwd: string | null;
   git_branch: string | null;
+  // アーカイブ済みか(issue #494)。会話ファイルは消さず、一覧から隠してプロセスを止める印。
+  archived: boolean;
 };
 
 // ビューアで開く・前面化するウィンドウを移動させる先のセッション1件(issue #422)。
@@ -319,6 +321,8 @@ export type SessionDto = {
   subagent_files: SessionFileDto[];
   cwd: string | null;
   git_branch: string | null;
+  // アーカイブ済みか(issue #494)。会話ファイルは消さず、一覧から隠してプロセスを止める印。
+  archived: boolean;
 };
 
 export type UserDto = {
