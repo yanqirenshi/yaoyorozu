@@ -3,6 +3,7 @@ import type { MouseEvent as ReactMouseEvent } from "react";
 import D3Network, { Rectum } from "@yanqirenshi/d3.network";
 import type { NodeDatum } from "@yanqirenshi/d3.network";
 import {
+  archiveSession,
   focusWindow,
   getHubLayout,
   getHubTuning,
@@ -16,6 +17,7 @@ import {
   onPcDataProgress,
   onPcSessionsUpdated,
   onRunningSessionChanged,
+  onSessionChanged,
   onSettingsUpdated,
   onWindowsChanged,
   openProfileWindow,
@@ -24,6 +26,7 @@ import {
   saveHubTuning,
   startRunningSession,
   stopRunningSession,
+  unarchiveSession,
 } from "../api";
 import type {
   CameraDto,
@@ -42,7 +45,7 @@ import type {
   WorktreeSpecDto,
 } from "../api";
 import { usePageDockItems } from "../DockItemsContext";
-import { DOMAIN_RELOAD_ICON, TUNING_ICON } from "../icons";
+import { ARCHIVE_ICON, DOMAIN_RELOAD_ICON, TUNING_ICON } from "../icons";
 import HubTuningPopover, { DEFAULT_HUB_TUNING } from "../HubTuningPopover";
 import type { HubTuning } from "../HubTuningPopover";
 import { HUB_NODE_ICON_URIS } from "../hubNodeIcons";
@@ -213,6 +216,24 @@ function applyRunningWorktreeEdgeColor(container: HTMLElement | null): void {
   });
 }
 
+// アーカイブ済みのセッション(issue #496)を表示 ON のとき薄く描く。d3.network
+// はノードの透明度を扱わないため、辺の色の上書き(`applyRunningWorktreeEdgeColor`)
+// と同じ要領で、描いた直後に `g.ng-node` の `opacity` 属性を直接書き換える。
+// 既定では描かない(非表示 OFF の間はノード自体が存在しないため対象が無い)。
+const ARCHIVED_NODE_OPACITY = "0.35";
+
+function applyArchivedNodeOpacity(container: HTMLElement | null): void {
+  container?.querySelectorAll("g.ng-node").forEach((el) => {
+    const core = (el as Element & { __data__?: { _core?: Record<string, unknown> } }).__data__
+      ?._core;
+    if (core?.archived) {
+      el.setAttribute("opacity", ARCHIVED_NODE_OPACITY);
+    } else {
+      el.removeAttribute("opacity");
+    }
+  });
+}
+
 const SIMULATION_RESTART_ALPHA = 0.1;
 const SIMULATION_DEFAULT_ALPHA_TARGET = 0.002;
 type D3SimulationLike = {
@@ -277,6 +298,9 @@ type HubNodeCore = {
   // `domain::Session`の属性ではない(`SessionDto.cwd`/`git_branch`参照)。
   cwd?: string | null;
   gitBranch?: string | null;
+  // アーカイブ済みか(`domain::Session.archived`。issue #494・#496)。会話
+  // ファイルは消さず、グラフとビューアの一覧から隠す印。
+  archived?: boolean;
   // GitRepository(`domain::GitRepository`。issue #189/#193/#224)。
   repositoryName?: string;
   repositoryPath?: string;
@@ -507,6 +531,9 @@ function buildGraphData(
   profiles: HubProfile[],
   // session_id → app が起動している実行中セッション(issue #408)。
   runningBySessionId: Map<string, RunningSessionSummaryDto>,
+  // アーカイブ済みのセッションも描くか(issue #496)。OFF(既定)なら
+  // ノード・線ごと図から除く。ON のときは `applyArchivedNodeOpacity` で薄く描く。
+  showArchived: boolean,
   savedPositions: Record<string, NodePositionDto>,
   currentPositions: Map<string, NodePositionDto>,
 ) {
@@ -816,9 +843,17 @@ function buildGraphData(
     }
   });
 
-  const columns = Math.max(1, Math.ceil(Math.sqrt(sessions.length * SESSION_GRID_ASPECT)));
+  // アーカイブ済みは既定では図から除く(issue #496)。表示 ON のときは残し、
+  // 薄く描く(`archived` を core に積んでおき、描画後に `applyArchivedNodeOpacity`
+  // が参照する)。除いたセッションは `drawnSessionIds`(下記)には影響しない
+  // ので、仮ノードの重複判定は常に全件を見る。
+  const visibleSessions = sessions.filter((session) => showArchived || !session.archived);
+  const columns = Math.max(
+    1,
+    Math.ceil(Math.sqrt(visibleSessions.length * SESSION_GRID_ASPECT)),
+  );
 
-  sessions.forEach((session, i) => {
+  visibleSessions.forEach((session, i) => {
     // ノードIDは session_id で作る。旧実装(issue #214〜#215)では、同じ
     // session_id の jsonl がworktree移動により複数フォルダにできることで
     // session_id が一意でなくなる問題を避けるため会話ファイルのパスを
@@ -878,6 +913,7 @@ function buildGraphData(
       subagentFileCount: session.subagent_files.length,
       cwd: session.cwd,
       gitBranch: session.git_branch,
+      archived: session.archived,
       // 起動(再開)・ビューア表示(issue #408)に使う値。
       project: projectFolderOf(session),
       ownerProfileId: owningProfile?.id,
@@ -1026,6 +1062,11 @@ type InspectorHandlers = {
   onStartResume: (core: HubNodeCore) => void;
   onStop: (target: RunningSessionRefDto) => void;
   onStartNew: (core: HubNodeCore) => void;
+  // アーカイブ・アーカイブ解除(issue #496)。project/sessionId が無いノード
+  // (仮ノード等)では呼べないため、呼び出し側(buildSessionInspectorContent)で
+  // ボタンを無効にする。
+  onArchiveSession: (core: HubNodeCore) => void;
+  onUnarchiveSession: (core: HubNodeCore) => void;
   startMode: RunningPermissionModeDto;
   onStartModeChange: (mode: RunningPermissionModeDto) => void;
   // 起動時のモデル(issue #445・#448)。`null` は既定(--model を付けない)。
@@ -1339,6 +1380,24 @@ function buildSessionInspectorContent(
       disabled: handlers.busy || !canAddress || handlers.startInputIncomplete,
     });
   }
+  // アーカイブ・戻す(issue #496)。project/sessionId が無い(仮ノード等)と
+  // 呼べないため押せなくする。実行中のものをアーカイブするときは、押した
+  // 呼び出し側(HubGraphPage)が先に確認を出す(止めてからアーカイブする。
+  // 停止自体は backend の archive_session が行う)。
+  const canArchive = Boolean(core.project && core.sessionId);
+  if (core.archived) {
+    actions.push({
+      label: "戻す",
+      onClick: () => handlers.onUnarchiveSession(core),
+      disabled: handlers.busy || !canArchive,
+    });
+  } else {
+    actions.push({
+      label: "アーカイブ",
+      onClick: () => handlers.onArchiveSession(core),
+      disabled: handlers.busy || !canArchive,
+    });
+  }
   // 会話ファイルがまだ無い仮ノード(issue #424)は、モデル属性(会話ファイルから
   // 読むもの)がまだ無いので、その旨だけを出す。
   const modelFields: InspectorField[] = core.provisional
@@ -1354,6 +1413,10 @@ function buildSessionInspectorContent(
   return {
     title: truncate(core.sessionTitle ?? "セッション", SESSION_TITLE_MAX_CHARS),
     fields: [
+      // アーカイブ済み(issue #496)。表示 ON のときだけノードが見えるので
+      // (既定 OFF では描かれない)、ノードの薄さ(`applyArchivedNodeOpacity`)
+      // だけに頼らず文字でも出す。
+      ...(core.archived ? [{ label: "アーカイブ", value: "アーカイブ済み" }] : []),
       // 実行中セッション(issue #408)。ノードの枠(色・太さ)だけに頼らず、
       // 状態は必ず文字でも出す。
       { label: "実行状態", value: processStateLabel(running?.process_state ?? null) },
@@ -1599,6 +1662,10 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
     return map;
   }, [runningSessions]);
 
+  // アーカイブ済みのセッションを図に出すか(issue #496)。ビューアの表示切り替え
+  // (issue #495)と同じく UI 状態なので保存しない(起動時は既定 OFF)。
+  const [showArchived, setShowArchived] = useState(false);
+
   // 起動後のバックグラウンド読み込み(Git台帳の観測・全プロジェクトの
   // jsonl走査。issue #212)が完了したら`pc`を取り直す(成否によらず発火
   // する。issue #218)。
@@ -1612,6 +1679,9 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
   // `pc:data_loaded` 側の `loadPc` でも取り直されるため取りこぼさない)。
   // セッションファイルの変更による差分再走査の完了(`pc:sessions_updated`。
   // issue #311)でも同じデバウンスで取り直す(セッションが進行中だと続けて届く)。
+  // アーカイブ・アーカイブ解除(issue #494・#496)の `session:changed` も同じ
+  // 扱いにする。この画面からの操作(`handleArchiveSession` 等)に加え、
+  // ビューアなど他のウィンドウで操作されたときも図に反映されるようにするため。
   const progressReloadTimer = useRef<number | null>(null);
   useEffect(() => {
     const scheduleReload = () => {
@@ -1633,6 +1703,7 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
         scheduleReload();
       }),
       onPcSessionsUpdated(scheduleReload),
+      onSessionChanged(scheduleReload),
     ];
     return () => {
       unlistenPromises.forEach((p) => p.then((unlisten) => unlisten()));
@@ -1867,6 +1938,32 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
     [profiles, runInspectorAction],
   );
 
+  // アーカイブする(issue #496)。実行中のものは、止めてからアーカイブする
+  // ことを確認する(止めるのは backend の `archive_session` 側。issue #494)。
+  // ビューア(issue #495)の `archiveSessionWithConfirm` と同じ流儀。
+  const handleArchiveSession = useCallback(
+    (core: HubNodeCore) => {
+      const { project, sessionId } = core;
+      if (!project || !sessionId) return;
+      const alive = runningBySessionId.has(sessionId);
+      if (alive && !window.confirm("実行中です。止めてからアーカイブします。よろしいですか?")) {
+        return;
+      }
+      runInspectorAction(() => archiveSession(project, sessionId));
+    },
+    [runningBySessionId, runInspectorAction],
+  );
+
+  // アーカイブを解除する(issue #496)。
+  const handleUnarchiveSession = useCallback(
+    (core: HubNodeCore) => {
+      const { project, sessionId } = core;
+      if (!project || !sessionId) return;
+      runInspectorAction(() => unarchiveSession(project, sessionId));
+    },
+    [runInspectorAction],
+  );
+
   const inspectorHandlers: InspectorHandlers = useMemo(
     () => ({
       onOpenProfile: openOrFocusProfile,
@@ -1874,6 +1971,8 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
       onStartResume: handleStartResume,
       onStop: handleStopRunningSession,
       onStartNew: handleStartNew,
+      onArchiveSession: handleArchiveSession,
+      onUnarchiveSession: handleUnarchiveSession,
       startMode,
       onStartModeChange: setStartMode,
       startModel,
@@ -1896,6 +1995,8 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
       handleStartResume,
       handleStopRunningSession,
       handleStartNew,
+      handleArchiveSession,
+      handleUnarchiveSession,
       startMode,
       startModel,
       startName,
@@ -2028,8 +2129,9 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
   // `savedPositions` はGitRepository/GitBranchノードの位置(issue #224)に
   // 反映するため依存に含める。
   // 実行中セッションの状態(issue #408)はセッションノードの枠に出るため、
-  // 変わったら描き直す。
-  const dataKey = JSON.stringify({ pc, profiles, runningSessions, savedPositions });
+  // 変わったら描き直す。アーカイブ済みの表示切り替え(issue #496)も、表示する
+  // ノード自体が変わるため含める。
+  const dataKey = JSON.stringify({ pc, profiles, runningSessions, savedPositions, showArchived });
   useEffect(() => {
     // NOTE: `@yanqirenshi/d3.network` の `Edges.js`(`draw()`)には、IDが
     // 一致した既存の辺要素(本来は「更新」として残すべきもの)まで無条件に
@@ -2052,13 +2154,16 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
       pc,
       profiles,
       runningBySessionId,
+      showArchived,
       savedPositions,
       currentPositions,
     );
     validPositionKeysRef.current = positionKeys;
     rectum.data({ nodes, edges });
-    // 辺ごとの色はライブラリが読まないため、描いた直後に上書きする(issue #438)。
+    // 辺ごとの色・ノードの透明度はライブラリが読まないため、描いた直後に
+    // 上書きする(issue #438・#496)。
     applyRunningWorktreeEdgeColor(hubPageRef.current);
+    applyArchivedNodeOpacity(hubPageRef.current);
     restartSimulation(rectum);
     // 開いているインスペクタの中身を、描き直したノードの値で更新する
     // (issue #424)。仮ノードが会話ファイルのできた通常のノードへ置き換わった
@@ -2314,8 +2419,21 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
         // 吹き出しの開閉状態(枠線・選択色に反映。issue #255。AppDock 参照)。
         popupOpen: tuningOpen,
       },
+      {
+        // アーカイブ済みの表示切り替え(issue #496)。ビューア(issue #495)の
+        // チェックボックスと同じ UI 状態(保存しない・既定 OFF)。吹き出しは
+        // 持たないが、ON/OFF が一目で分かるよう「グラフの調整」と同じ
+        // `popupOpen` の仕組みで押下中の見た目(ドック背景色)を流用する
+        // (枠線が常に付くのは「グラフの調整」と同じ見え方になる。トークンの
+        // 範囲内の判断として、専用の見た目は作らずこの既存の仕組みに乗せた)。
+        id: "hub-show-archived",
+        label: ARCHIVE_ICON,
+        title: "アーカイブ済みを表示",
+        onClick: () => setShowArchived((show) => !show),
+        popupOpen: showArchived,
+      },
     ],
-    [handleReload, tuningOpen],
+    [handleReload, tuningOpen, showArchived],
   );
   usePageDockItems(dockItems);
 

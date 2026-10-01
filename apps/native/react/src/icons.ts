@@ -38,6 +38,17 @@ export const TUNING_ICON = `
   <circle cx="8" cy="15" r="1.8" fill="var(--dock-bg, #fff)" />
 </svg>`;
 
+// ハブ(`/`)専用: アーカイブ済みの表示切り替え(issue #496)。ビューアの一覧に
+// ある行のアーカイブ操作(SessionsPage.tsx)と同じ、箱+蓋の線画。
+export const ARCHIVE_ICON = `
+<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor"
+     stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
+     xmlns="http://www.w3.org/2000/svg">
+  <rect x="3" y="4" width="14" height="3" rx="1" />
+  <path d="M4 7.5v7.5a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V7.5" />
+  <path d="M8 10.5h4" />
+</svg>`;
+
 export const MODE_ICON = `
 <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor"
      stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
