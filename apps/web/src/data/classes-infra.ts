@@ -36,9 +36,11 @@
  * infra の型 30個(port を実装するもの24 + port を実装しない補助の型6: `SessionWatcher`・
  * `SessionFileRef`・`SessionFsChange`・`GithubAuthLog`・`ExitSignal`・`PendingSwitches`)と、
  * app の port 25個を載せた(1回きり送信の `AgentGateway`・`ClaudeCliAgent` は #392 で撤去。
- * `ViewerTabsStore`・`FileViewerTabsStore` は #420、`GitWorktreeManager`・`SystemGitWorktreeManager` は
+ * `GitWorktreeManager`・`SystemGitWorktreeManager` は
  * #441(Phase 3。PR #440)、`RestorableRunningSessionsStore`・`FileRestorableRunningSessionsStore` は
- * #465(実行中セッションの復元。issue #459。PR #463)で追加)。
+ * #465(実行中セッションの復元。issue #459。PR #463)、`LocalApiPortStore`・`FileLocalApiPortStore` は
+ * #470 で追加。`ViewerTabsStore`・`FileViewerTabsStore`(#420 で追加)は、ビューアのタブの並びの
+ * 保存・復元そのものの廃止(issue #489。PR #490)で撤去された)。
  *
  * 【実行中セッションの復元(issue #459。PR #463)】app の起動時に前回動かしていたセッションを
  * 再開するため、再開に必要な指定(`domain::RestorableRunningSessions`。
@@ -67,9 +69,8 @@
  * - infra の private な型: `DeviceCodeResponse`(GitHub の応答の読み取り用)・`LedgerEntry`・
  *   `ProcessProbe`(実行中セッションの台帳の読み取り・生存確認)・`SessionCwdSelector`・
  *   `CachedSessionSummary`(セッション走査の内部)・`LegacySettingsRaw`・`SettingsV4Raw`・
- *   `SettingsV5Raw`・`SettingsV6Raw`(設定ファイルの旧版の読み取り = マイグレーション用)・`ViewerTabsV1`・
- *   `ViewerTabV1`(タブの旧版の読み取り用)・`GitOutput`(git コマンドの出力の入れ物。
- *   `git_worktree_manager.rs` の内部)。wire / ファイル形式の写し(serde)で、外から見える
+ *   `SettingsV5Raw`・`SettingsV6Raw`(設定ファイルの旧版の読み取り = マイグレーション用)・
+ *   `GitOutput`(git コマンドの出力の入れ物。`git_worktree_manager.rs` の内部)。wire / ファイル形式の写し(serde)で、外から見える
  *   構造ではない。`ExitSignal` は複数の型が共有するため例外として載せている。
  * - domain クレートの `session_line/`(34型。JSONL 行の読み取り用。`classes-native-prototype.ts` の
  *   説明を参照)と、`LogLineBase`(`LogLine` の共通属性を Rust では埋め込み struct にしたもの。
@@ -325,6 +326,21 @@ const DEFS: ClassDef[] = [
     filePath: "apps/native/crates/infra/src/restorable_running_sessions_store.rs",
     size: { w: 460, h: 0 },
   },
+  {
+    name: { physical: "LocalApiPortStore", logical: "LocalApiPortStore", description: "ローカルAPIサーバが実際に使っているポートの永続化(port)。app::lib.rs。issue #470。トークンと同じ場所(app_data_dir)へ書き出し、apps/web の Route Handler がトークンと同じ流儀(無ければ既定値と見なす)で読めるようにする。実体は infra に閉じ込める" },
+    stereotype: "interface",
+    methods: [method("save", ["port: u16"], "Result<(), AppError>")],
+    position: { x: 3100, y: 4300 },
+    filePath: "apps/native/crates/app/src/lib.rs",
+    size: { w: 340, h: 0 },
+  },
+  {
+    name: { physical: "FileLocalApiPortStore", logical: "FileLocalApiPortStore", description: "ローカルAPIサーバが実際に使っているポートを app_data_dir/local-api-port へ保存する(local_api_port_store.rs。issue #470)。FileLocalApiTokenStore と同じ流儀: アプリはこのファイルを読み返さない(起動のたびに上書きする、書き込み専用の値)。書き込みはアトミック(*.tmp へ書く → fsync → rename)。トークンと同じディレクトリへ書く" },
+    attributes: [attr("path", "PathBuf")],
+    position: { x: 3100, y: 4650 },
+    filePath: "apps/native/crates/infra/src/local_api_port_store.rs",
+    size: { w: 280, h: 0 },
+  },
   // ============ 実行環境・GitHub連携・エージェント ============
   {
     name: { physical: "ExecutionEnvironmentSource", logical: "ExecutionEnvironmentSource", description: "実行環境(PC・ログインユーザー)の取得(port)。app::lib.rs" },
@@ -496,24 +512,6 @@ const DEFS: ClassDef[] = [
     position: { x: 2500, y: 2570 },
     filePath: "apps/native/crates/infra/src/session_source.rs",
     size: { w: 360, h: 0 },
-  },
-  {
-    name: { physical: "ViewerTabsStore", logical: "ViewerTabsStore", description: "ビューアのセッションタブの並び(domain::ViewerTabs。issue #353)の永続化(port)。プロファイルごとに別ファイルへ保存する。app::lib.rs。ファイルが無い・壊れている場合の load は空(ViewerTabs::default())" },
-    stereotype: "interface",
-    methods: [
-      method("load", ["profile_id: &str"], "Result<ViewerTabs, AppError>"),
-      method("save", ["profile_id: &str", "tabs: &ViewerTabs"], "Result<(), AppError>"),
-    ],
-    position: { x: 4950, y: 2800 },
-    filePath: "apps/native/crates/app/src/lib.rs",
-    // save の引数が長く、戻り値型の列と重なるので広げる(HubTuningStore と同じ理由)。
-    size: { w: 480, h: 0 },
-  },
-  {
-    name: { physical: "FileViewerTabsStore", logical: "FileViewerTabsStore", description: "ViewerTabs をプロファイルごとの JSON ファイル(<dir>/<プロファイルID>.json)として永続化(viewer_tabs_store.rs。issue #353)。FileHubTuningStore と同じ流儀: アトミック書き込み・破損時は *.corrupt.<timestamp> へ退避して空で始める。v1(キーが series_key)のファイルは v2(キーが session_id。#369)へ移行して読む(ViewerTabsV1・ViewerTabV1 はそのための private な読み取り用の型で、図には描かない)。プロファイルIDは app 層で検証済みの前提" },
-    attributes: [attr("dir", "PathBuf")],
-    position: { x: 4950, y: 3150 },
-    filePath: "apps/native/crates/infra/src/viewer_tabs_store.rs",
   },
   {
     name: { physical: "GithubAuthLog", logical: "GithubAuthLog", description: "GitHub 認証まわりの診断ログ(github_auth_log.rs。issue #261)。いつ・どの操作で・どのインスタンスがトークンを無効と判断/削除したかの証拠を、app_data_dir 配下の追記式ファイル(1行1イベント。ローカル専用)に残す。トークン全文・Authorization ヘッダは書かない(識別は token_fingerprint の先頭・末尾数文字のみ)。ベストエフォート(書き込みに失敗してもアプリの動作を妨げない)。port を実装しない補助の型で、tauri 層が record を呼ぶ。1MB を超えたら <name>.1 へ退避する" },
@@ -1142,7 +1140,6 @@ const RELATIONSHIPS = [
   rel("realization", "FileProjectSettingsStore", "ProjectSettingsStore", undefined, "top", "bottom"),
   rel("realization", "FileHubLayoutStore", "HubLayoutStore", undefined, "top", "bottom"),
   rel("realization", "FileHubTuningStore", "HubTuningStore", undefined, "top", "bottom"),
-  rel("realization", "FileViewerTabsStore", "ViewerTabsStore", undefined, "top", "bottom"),
   rel("realization", "SystemGitWorktreeManager", "GitWorktreeManager", undefined, "top", "bottom"),
   rel("realization", "FileRestorableRunningSessionsStore", "RestorableRunningSessionsStore", undefined, "top", "bottom"),
   rel("realization", "WindowsExecutionEnvironmentSource", "ExecutionEnvironmentSource", undefined, "top", "bottom"),
@@ -1150,6 +1147,7 @@ const RELATIONSHIPS = [
   rel("realization", "KeyringTokenStore", "TokenStore", undefined, "top", "bottom"),
   rel("realization", "FileLayoutStore", "LayoutStore", undefined, "top", "bottom"),
   rel("realization", "FileLocalApiTokenStore", "LocalApiTokenStore", undefined, "top", "bottom"),
+  rel("realization", "FileLocalApiPortStore", "LocalApiPortStore", undefined, "top", "bottom"),
   rel("realization", "SystemGitWorktreeLister", "GitWorktreeLister", undefined, "top", "bottom"),
   rel("realization", "FileClaudeDirStore", "ClaudeDirStore", undefined, "top", "bottom"),
   // Git台帳・観測(第3弾)

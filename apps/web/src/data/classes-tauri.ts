@@ -46,8 +46,10 @@
  * 向きの変換も持つようになった(変換は線では結ばない)。
  *
  * 【実物との突き合わせ】`tauri/src/*.rs` の struct / enum を、この図と名前・フィールド・
- * バリアントで突き合わせた(issue #400)。ViewerTabs は専用の DTO が無く、タブの並びは
- * `Vec<ViewerTabDto>` で受け渡す(command の引数・戻り値は関数なので描かない)。
+ * バリアントで突き合わせた(issue #400)。
+ *
+ * ビューアのタブの並びの保存・復元の廃止(issue #489。PR #490)で、`ViewerTabsChangedEventDto` は
+ * 撤去され、`ViewerTabDto` は `ViewerTargetDto` に改名された(開く・前面化・移動の指定として残った)。
  *
  * 【書き方】`classes-native-prototype.ts` と同じ基準。
  * - フィールドの型がこの図の中の別のクラス(enum を含む)を指すときだけ関係線を
@@ -151,13 +153,6 @@ const DEFS: ClassDef[] = [
     ],
     position: { x: 2100, y: 5900 },
     filePath: "apps/native/tauri/src/dto.rs",
-  },
-  {
-    name: { physical: "ViewerTabsChangedEventDto", logical: "ViewerTabsChangedEventDto", description: "viewer-tabs:changed イベントのペイロード(issue #422)。タブの並びを保存したプロファイルの ID だけを通知し、データ本体はフロントが get_viewer_tabs で取り直す(native.md §3.2)" },
-    attributes: [attr("profile_id", "String")],
-    position: { x: 3700, y: 5550 },
-    filePath: "apps/native/tauri/src/dto.rs",
-    size: { w: 340, h: 0 },
   },
   {
     name: { physical: "AppWarningEventDto", logical: "AppWarningEventDto", description: "app:warning イベントのペイロード(native.md §3.2)。処理は続けられるが利用者に伝えたいこと(前回動かしていたセッションを再開できなかった理由など。issue #459)" },
@@ -628,7 +623,7 @@ const DEFS: ClassDef[] = [
     filePath: "apps/native/tauri/src/dto.rs",
   },
   {
-    name: { physical: "ViewerTabDto", logical: "ViewerTabDto", description: "ビューアのセッションタブ1件。domain::ViewerTab と相互変換(From 両方向)。キーは (project, session_id)(issue #353・#369)。タブの並び(domain::ViewerTabs)は Vec<ViewerTabDto> として受け渡し、専用の DTO は無い(version はフロントで使わない)" },
+    name: { physical: "ViewerTargetDto", logical: "ViewerTargetDto", description: "ビューアで開く・前面化するウィンドウを移動させる先のセッション1件。domain::ViewerTarget と相互変換(From 両方向)。キーは (project, session_id)だけで、パスは含まない(native.md §4)。open_profile_window / focus_window の session 引数と、viewer:navigate イベントのペイロードに使う(issue #422)。もとは ViewerTabDto(セッションタブ1件。#353・#369)だったが、タブの並びの保存・復元そのものの廃止(issue #489。PR #490)で改名された" },
     attributes: [attr("project", "String"), attr("session_id", "String")],
     position: { x: 4100, y: 9700 },
     filePath: "apps/native/tauri/src/dto.rs",
