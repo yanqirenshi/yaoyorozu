@@ -12,13 +12,12 @@ use dto::{
     HubTuningDto, MessageImageDto, NodePositionDto, PcDto, ProfileSummaryDto, ProjectDto,
     ProjectItemsPageDto, ProjectSettingsFileDto, RuleDto, RuleSummaryDto, SessionChangedEventDto,
     SessionSummaryDto, SettingsCorruptedEventDto, SettingsDto, SettingsInputDto, SkillDto,
-    SkillSummaryDto, ViewerTabDto, ViewerTabsChangedEventDto, WindowStateDto, WindowTabDto,
+    SkillSummaryDto, ViewerTargetDto, WindowStateDto, WindowTabDto,
 };
 use infra::{
     FileClaudeDirStore, FileClaudeMdStore, FileClaudeSettingsStore, FileHubLayoutStore,
     FileHubTuningStore, FileProjectSettingsStore, FileRulesStore, FileSettingsStore,
-    FileSkillsStore, FileSystemRepository, FileViewerTabsStore, GithubApiClient, GithubAuthLog,
-    KeyringTokenStore,
+    FileSkillsStore, FileSystemRepository, GithubApiClient, GithubAuthLog, KeyringTokenStore,
 };
 use state::{resolve_effective_projects_dir, AppState};
 use std::path::PathBuf;
@@ -410,7 +409,7 @@ async fn open_profile_window(
     app: tauri::AppHandle,
     state: tauri::State<'_, Mutex<AppState>>,
     profile_id: String,
-    session: Option<ViewerTabDto>,
+    session: Option<ViewerTargetDto>,
 ) -> Result<(), AppErrorDto> {
     let session = session
         .map(|s| app::validate_viewer_session(&s.project, &s.session_id))
@@ -591,7 +590,7 @@ async fn reconcile_git_state(app: tauri::AppHandle) -> Result<(), AppErrorDto> {
 async fn focus_window(
     app: tauri::AppHandle,
     label: String,
-    session: Option<ViewerTabDto>,
+    session: Option<ViewerTargetDto>,
 ) -> Result<(), AppErrorDto> {
     let session = session
         .map(|s| app::validate_viewer_session(&s.project, &s.session_id))
@@ -606,7 +605,11 @@ async fn focus_window(
     }
     let _ = window.set_focus();
     if let Some(tab) = session {
-        let _ = app.emit_to(label.as_str(), "viewer:navigate", ViewerTabDto::from(tab));
+        let _ = app.emit_to(
+            label.as_str(),
+            "viewer:navigate",
+            ViewerTargetDto::from(tab),
+        );
     }
     Ok(())
 }
@@ -629,72 +632,6 @@ fn hub_tuning_path(app: &tauri::AppHandle) -> Result<PathBuf, AppErrorDto> {
         .app_data_dir()
         .map(|dir| dir.join("hub-tuning.json"))
         .map_err(|e| AppErrorDto::from(app::AppError::Io(e.to_string())))
-}
-
-/// ビューアのセッションタブの保存先ディレクトリ(`app_data_dir/viewer-tabs/`。
-/// プロファイルごとに `<プロファイルID>.json`。issue #353)。`AppState` には
-/// 持たせない(見た目の状態で `settings:updated` を発火させないため)。
-fn viewer_tabs_dir(app: &tauri::AppHandle) -> Result<PathBuf, AppErrorDto> {
-    app.path()
-        .app_data_dir()
-        .map(|dir| dir.join("viewer-tabs"))
-        .map_err(|e| AppErrorDto::from(app::AppError::Io(e.to_string())))
-}
-
-/// プロファイルのセッションタブの並びを返す(issue #353)。ファイルが無い/壊れて
-/// いる場合は空。
-#[tauri::command]
-async fn get_viewer_tabs(
-    app: tauri::AppHandle,
-    profile_id: String,
-) -> Result<Vec<ViewerTabDto>, AppErrorDto> {
-    let dir = viewer_tabs_dir(&app)?;
-    tauri::async_runtime::spawn_blocking(move || -> Result<Vec<ViewerTabDto>, app::AppError> {
-        let store = FileViewerTabsStore::new(dir);
-        let tabs = app::load_viewer_tabs(&store, &profile_id)?;
-        Ok(tabs.tabs.into_iter().map(Into::into).collect())
-    })
-    .await
-    .unwrap_or_else(|_| {
-        Err(app::AppError::Io(
-            "バックグラウンド処理に失敗しました".to_string(),
-        ))
-    })
-    .map_err(Into::into)
-}
-
-/// プロファイルのセッションタブの並びを丸ごと保存する(issue #353)。保存できたら、軽量イベント
-/// `viewer-tabs:changed`(そのプロファイルの ID)で知らせ、開いているビューアが並びを
-/// 取り直せるようにする(issue #422。ロックは持たないので、保存 → emit の順)。
-#[tauri::command]
-async fn save_viewer_tabs(
-    app: tauri::AppHandle,
-    profile_id: String,
-    tabs: Vec<ViewerTabDto>,
-) -> Result<(), AppErrorDto> {
-    let dir = viewer_tabs_dir(&app)?;
-    let saved_profile_id = profile_id.clone();
-    tauri::async_runtime::spawn_blocking(move || -> Result<(), app::AppError> {
-        let store = FileViewerTabsStore::new(dir);
-        app::save_viewer_tabs(
-            &store,
-            &profile_id,
-            tabs.into_iter().map(Into::into).collect(),
-        )
-    })
-    .await
-    .unwrap_or_else(|_| {
-        Err(app::AppError::Io(
-            "バックグラウンド処理に失敗しました".to_string(),
-        ))
-    })?;
-    let _ = app.emit(
-        "viewer-tabs:changed",
-        ViewerTabsChangedEventDto {
-            profile_id: saved_profile_id,
-        },
-    );
-    Ok(())
 }
 
 /// ハブグラフの調整値を返す(issue #249)。ファイルが無い/壊れている場合は
@@ -1714,8 +1651,6 @@ pub fn run() {
             get_hub_layout,
             save_hub_layout,
             get_hub_tuning,
-            get_viewer_tabs,
-            save_viewer_tabs,
             save_hub_tuning,
             get_project_claude_md,
             save_project_claude_md,

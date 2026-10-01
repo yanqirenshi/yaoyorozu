@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// app が起動していた実行中セッション(再開に必要な指定)を、`app_data_dir/running-sessions.json`
-/// として永続化する(issue #459)。`FileViewerTabsStore` と同じ流儀(native.md §2): 書き込みは
+/// として永続化する(issue #459)。`FileSettingsStore` と同じ流儀(native.md §2): 書き込みは
 /// アトミック(`*.tmp` へ書く → fsync → rename)、読み込み失敗時はプロセスを落とさず空で始める
 /// (壊れたファイルは `*.corrupt.<timestamp>` へ退避)。
 ///

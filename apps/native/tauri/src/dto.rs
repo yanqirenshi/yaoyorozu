@@ -201,37 +201,32 @@ impl From<domain::SessionSummary> for SessionSummaryDto {
     }
 }
 
-/// ビューアのセッションタブ1件(issue #353)。`get_viewer_tabs` の戻り値にも
-/// `save_viewer_tabs` の入力にも使う。
+/// ビューアで開く・前面化するウィンドウを移動させる先のセッション1件(issue #422)。
+/// `open_profile_window` / `focus_window` の `session` 引数と、`viewer:navigate` イベントの
+/// ペイロードに使う(もとは「セッションタブ」の1件だったが、タブの並びの保存・復元機能は
+/// 廃止した。issue #489)。
 #[derive(Serialize, Deserialize, Clone)]
-pub struct ViewerTabDto {
+pub struct ViewerTargetDto {
     pub project: String,
     pub session_id: String,
 }
 
-impl From<domain::ViewerTab> for ViewerTabDto {
-    fn from(tab: domain::ViewerTab) -> Self {
+impl From<domain::ViewerTarget> for ViewerTargetDto {
+    fn from(target: domain::ViewerTarget) -> Self {
         Self {
-            project: tab.project,
-            session_id: tab.session_id,
+            project: target.project,
+            session_id: target.session_id,
         }
     }
 }
 
-impl From<ViewerTabDto> for domain::ViewerTab {
-    fn from(dto: ViewerTabDto) -> Self {
+impl From<ViewerTargetDto> for domain::ViewerTarget {
+    fn from(dto: ViewerTargetDto) -> Self {
         Self {
             project: dto.project,
             session_id: dto.session_id,
         }
     }
-}
-
-/// `viewer-tabs:changed` イベントのペイロード(issue #422)。並びを保存したプロファイルの ID
-/// だけを通知し、データ本体はフロントが `get_viewer_tabs` で取り直す(native.md §3.2)。
-#[derive(Serialize, Clone)]
-pub struct ViewerTabsChangedEventDto {
-    pub profile_id: String,
 }
 
 /// `session:changed` イベントのペイロード。変更のあったプロジェクト(フォルダ名)

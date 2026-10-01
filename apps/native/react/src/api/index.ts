@@ -33,8 +33,7 @@ import type {
   RunningSessionSwitchDto,
   SessionChangedEvent,
   SessionSummaryDto,
-  ViewerTabDto,
-  ViewerTabsChangedEvent,
+  ViewerTargetDto,
   AppWarningEvent,
   SettingsCorruptedEvent,
   SettingsDto,
@@ -47,7 +46,6 @@ import type {
 } from "./types";
 
 export type {
-  ViewerTabsChangedEvent,
   AddressedProgressDto,
   AvailableModelDto,
   PermissionBehaviorDto,
@@ -103,7 +101,7 @@ export type {
   SessionDto,
   SessionFileDto,
   SessionSummaryDto,
-  ViewerTabDto,
+  ViewerTargetDto,
   AppWarningEvent,
   SettingsCorruptedEvent,
   SettingsDto,
@@ -135,15 +133,6 @@ export function getSessionLineRaw(
   uuid: string,
 ): Promise<string> {
   return invoke<string>("get_session_line_raw", { project, sessionId, uuid });
-}
-
-// ビューアのセッションタブの並び(プロファイルごと。issue #353)。
-export function getViewerTabs(profileId: string): Promise<ViewerTabDto[]> {
-  return invoke<ViewerTabDto[]>("get_viewer_tabs", { profileId });
-}
-
-export function saveViewerTabs(profileId: string, tabs: ViewerTabDto[]): Promise<void> {
-  return invoke<void>("save_viewer_tabs", { profileId, tabs });
 }
 
 export function listSessions(project: string): Promise<SessionSummaryDto[]> {
@@ -331,7 +320,7 @@ export function renameProfile(profileId: string, name: string): Promise<void> {
 // issue #76)。ウィンドウ生成はRust側で行う(native.md §4)。`session`(任意。issue #422)を
 // 渡すと、開いたビューアでそのセッションを選択した状態にする(フォルダ名 + セッション ID。
 // パスは渡さない)。
-export function openProfileWindow(profileId: string, session?: ViewerTabDto): Promise<void> {
+export function openProfileWindow(profileId: string, session?: ViewerTargetDto): Promise<void> {
   return invoke<void>("open_profile_window", { profileId, session: session ?? null });
 }
 
@@ -351,25 +340,16 @@ export function listWindowStates(): Promise<WindowStateDto[]> {
 
 // 指定ラベルのウィンドウを前面化する。`session`(任意。issue #422)を渡すと、そのウィンドウの
 // ビューアをそのセッションへ移動させる(`viewer:navigate` で伝える。onViewerNavigate)。
-export function focusWindow(label: string, session?: ViewerTabDto): Promise<void> {
+export function focusWindow(label: string, session?: ViewerTargetDto): Promise<void> {
   return invoke<void>("focus_window", { label, session: session ?? null });
 }
 
 // このウィンドウのビューアを、指定セッションへ移動する要求(focusWindow に session を渡した
 // とき、そのウィンドウだけに届く。issue #422)。
-export function onViewerNavigate(callback: (target: ViewerTabDto) => void): Promise<() => void> {
-  const unlisten = listen<ViewerTabDto>("viewer:navigate", (event) => {
-    callback(event.payload);
-  });
-  return unlisten.then((fn) => fn);
-}
-
-// セッションタブの並びが保存された通知(軽量。並びは getViewerTabs で取り直す。issue #422)。
-// 自分の保存でも届く。
-export function onViewerTabsChanged(
-  callback: (event: ViewerTabsChangedEvent) => void,
+export function onViewerNavigate(
+  callback: (target: ViewerTargetDto) => void,
 ): Promise<() => void> {
-  const unlisten = listen<ViewerTabsChangedEvent>("viewer-tabs:changed", (event) => {
+  const unlisten = listen<ViewerTargetDto>("viewer:navigate", (event) => {
     callback(event.payload);
   });
   return unlisten.then((fn) => fn);

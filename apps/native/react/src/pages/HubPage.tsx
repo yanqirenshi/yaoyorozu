@@ -8,7 +8,6 @@ import {
   getHubTuning,
   getPc,
   getSettings,
-  getViewerTabs,
   isAppError,
   listRunningSessions,
   listWindowStates,
@@ -23,7 +22,6 @@ import {
   reconcileGitState,
   saveHubLayout,
   saveHubTuning,
-  saveViewerTabs,
   startRunningSession,
   stopRunningSession,
 } from "../api";
@@ -466,8 +464,8 @@ function findRunningWorktree(
 
 // 会話ファイルのパスから、それが置かれているフォルダ名(`project`)を取り出す
 // (issue #408)。`~/.claude/projects/<project>/<session_id>.jsonl` の <project>
-// で、再開(`start_running_session` の resume)とビューアのタブ(`ViewerTabDto`)
-// のキーに使う。同じ session_id の会話ファイルが複数ある(worktree 移動。
+// で、再開(`start_running_session` の resume)とビューアを開く指定(`ViewerTargetDto`)
+// に使う。同じ session_id の会話ファイルが複数ある(worktree 移動。
 // issue #217)ときは、並びが更新時刻の古い順なので最後の(最も新しい)ものを使う。
 function projectFolderOf(session: SessionDto): string | null {
   const files = session.conversation_files;
@@ -1850,16 +1848,10 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
     [runInspectorAction],
   );
 
-  // セッションをビューア(プロファイルのウィンドウ)で開く(issue #408・#424)。
-  // ビューアが表示するのは「プロファイルごとのセッションタブの並び」
-  // (`save_viewer_tabs`。issue #353)なので、まだ無ければそこへ足してから、
-  // そのセッションを指定してウィンドウを開く(既に開いていれば前面化して
-  // そのセッションへ移動させる)。
-  // #408 では `open_profile_window` がプロファイルしか受け取らず「開くだけ・
-  // 選択されない」「既に開いているウィンドウには足したタブがすぐ出ない」と
-  // いう制約があったが、共有層(issue #422)で `session` 引数と
-  // `viewer-tabs:changed` が入ったため、どちらもここで解消している
-  // (タブの反映はビューア側が購読して取り直すので、ハブ側の追加処理は不要)。
+  // セッションをビューア(プロファイルのウィンドウ)で開く(issue #408・#424)。ビューアは
+  // 全セッション + 検索の方式になり(issue #487)、「プロファイルごとのセッションタブの並び」
+  // を保存・復元する機能は廃止した(issue #489)ので、ここは開く・前面化するだけでよい
+  // (既に開いていれば前面化してそのセッションへ移動させる。`session` 引数は issue #422)。
   const handleOpenInViewer = useCallback(
     (core: HubNodeCore) => {
       const { project, sessionId, ownerProfileId } = core;
@@ -1867,17 +1859,9 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
       const profile = profiles.find((p) => p.id === ownerProfileId);
       const session = { project, session_id: sessionId };
       runInspectorAction(() =>
-        getViewerTabs(ownerProfileId)
-          .then((tabs) =>
-            tabs.some((tab) => tab.project === project && tab.session_id === sessionId)
-              ? undefined
-              : saveViewerTabs(ownerProfileId, [...tabs, session]),
-          )
-          .then(() =>
-            profile?.windowLabel
-              ? focusWindow(profile.windowLabel, session)
-              : openProfileWindow(ownerProfileId, session),
-          ),
+        profile?.windowLabel
+          ? focusWindow(profile.windowLabel, session)
+          : openProfileWindow(ownerProfileId, session),
       );
     },
     [profiles, runInspectorAction],

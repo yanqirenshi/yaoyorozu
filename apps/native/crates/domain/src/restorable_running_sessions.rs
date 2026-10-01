@@ -1,6 +1,6 @@
 use crate::RestorableRunningSession;
 
-/// `RestorableRunningSessions` の現在のスキーマバージョン(他の永続化型 `ViewerTabs` 等と
+/// `RestorableRunningSessions` の現在のスキーマバージョン(他の永続化型 `Settings` 等と
 /// 同じ流儀。issue #459)。
 pub const CURRENT_RESTORABLE_RUNNING_SESSIONS_VERSION: u32 = 1;
 
@@ -8,7 +8,7 @@ pub const CURRENT_RESTORABLE_RUNNING_SESSIONS_VERSION: u32 = 1;
 /// へ保存し、次の app の起動で順に再開する。
 ///
 /// 並びは**起動した順**(復元もこの順で行う)。`settings.json` には入れない(見た目の状態では
-/// ないが、頻繁に書き換わり `settings:updated` を無駄に発火させないため。`viewer-tabs.json` と
+/// ないが、頻繁に書き換わり `settings:updated` を無駄に発火させないため。`hub-layout.json` と
 /// 同じ考え方)。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RestorableRunningSessions {
