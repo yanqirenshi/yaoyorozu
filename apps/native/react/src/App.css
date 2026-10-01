@@ -375,8 +375,45 @@ body,
 }
 
 .session-item-updated {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   font-size: 0.75rem;
   color: var(--text-secondary);
+}
+
+/* 実行中セッションの状態での色分け(issue #491)。ハブの sessionNodeCircleStyle
+   (HubPage.tsx)と同じ 3 色 + 無色。背景全体を塗ると選択中の行(.selected)と
+   区別しにくくなるため、左端の帯(border-left)だけで示す。権限待ちは太めにして
+   目立たせる(人が答えるまで進まないため)。色だけに頼らないよう、状態の文言は
+   バッジ(.session-item-updated 内の Badge)で必ず添える。 */
+.session-list-item-running {
+  border-left-color: var(--color-kincha-500);
+  border-left-width: 4px;
+}
+
+.session-list-item-awaiting {
+  border-left-color: var(--color-kincha-700);
+  border-left-width: 6px;
+}
+
+.session-list-item-idle {
+  border-left-color: var(--color-sumi-400);
+  border-left-width: 4px;
+}
+
+/* 選択中(.selected)は四辺の border-color を var(--color-primary) に変えるため、
+   左端の帯の色だけ詳細度を上げて保持する(選択中でも実行中の状態が分かるように)。 */
+.project-item.selected.session-list-item-running {
+  border-left-color: var(--color-kincha-500);
+}
+
+.project-item.selected.session-list-item-awaiting {
+  border-left-color: var(--color-kincha-700);
+}
+
+.project-item.selected.session-list-item-idle {
+  border-left-color: var(--color-sumi-400);
 }
 
 /* 左ペインの全セッション一覧(issue #487)。検索欄と「+ 新規」は一覧の先頭。

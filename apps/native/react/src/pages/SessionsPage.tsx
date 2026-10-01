@@ -22,7 +22,9 @@ import {
   updateGithubProjectItemStatus,
 } from "../api";
 import type {
+  ProcessStateDto,
   RunningPermissionModeDto,
+  RunningSessionSummaryDto,
   StartModelDto,
   MessageDto,
   ProjectItemDto,
@@ -102,6 +104,24 @@ const SESSION_TAB_SEPARATOR = "|";
 
 function sessionTabKey(folder: string, sessionId: string): string {
   return `${folder}${SESSION_TAB_SEPARATOR}${sessionId}`;
+}
+
+// 左の一覧の行の色分け(issue #491)。ハブの sessionNodeCircleStyle(HubPage.tsx)と
+// 同じ 3 状態 + 無色の考え方: いま動いている・人の操作を待っている(起動中・実行中)は
+// 金茶、人の操作を待っている(権限待ち)は金茶の濃い方で強調、落ち着いている(待機)は墨、
+// 実行中でない(未起動)は無色。`null`(実行中セッションが無い)も無色。
+function sessionRowStateClass(state: ProcessStateDto | null): string {
+  switch (state) {
+    case "starting":
+    case "running":
+      return "session-list-item-running";
+    case "awaiting_permission":
+      return "session-list-item-awaiting";
+    case "idle":
+      return "session-list-item-idle";
+    default:
+      return "";
+  }
 }
 
 /**
@@ -521,6 +541,16 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const pendingSummaries = runningList.filter(
     (s) => s.process_state !== "exited" && !knownSessionIds.has(s.session_id),
   );
+  // session_id → 実行中セッション(issue #491)。一覧の行の色分け・バッジに使う。
+  // ハブの runningBySessionId(HubPage.tsx)と同じ作り: 終了したもの(一覧には残る)は
+  // 載せず、未起動と同じ扱いにする。
+  const runningBySessionId = useMemo(() => {
+    const map = new Map<string, RunningSessionSummaryDto>();
+    runningList.forEach((summary) => {
+      if (summary.process_state !== "exited") map.set(summary.session_id, summary);
+    });
+    return map;
+  }, [runningList]);
   const pendingSelected =
     !projectParam && sessionParam
       ? (pendingSummaries.find((s) => s.session_id === sessionParam) ?? null)
@@ -907,28 +937,39 @@ function SessionsPage({ nav }: SessionsPageProps) {
           ))}
           {/* 全セッション(検索で絞り込み済み。issue #487)。一覧から外す操作(旧「×」・
               Delete キー)は、全件表示になったことで意味を持たなくなったため廃止した
-              (会話ファイルの削除はこの画面では行わない)。 */}
-          {visibleSessions.map(({ key, folder, session }) => (
-            <div key={key} className="session-list-row">
-              <button
-                type="button"
-                className={`project-item session-list-item ${
-                  key === selectedTabValue ? "selected" : ""
-                }`}
-                onClick={() => handleSelectSession(folder, session.id)}
-              >
-                <span className="session-item-title">{session.title}</span>
-                <span className="session-item-updated">
-                  {new Date(session.modified_at).toLocaleString()}
-                </span>
-                {targetFolders.length > 1 && (
-                  <span className="session-item-folder" title={folder}>
-                    {folder}
+              (会話ファイルの削除はこの画面では行わない)。実行中なら左端の帯と状態の
+              バッジで色分けする(issue #491。未起動は今までどおり無色・バッジ無し)。 */}
+          {visibleSessions.map(({ key, folder, session }) => {
+            const sessionRunning = runningBySessionId.get(session.id) ?? null;
+            return (
+              <div key={key} className="session-list-row">
+                <button
+                  type="button"
+                  className={`project-item session-list-item ${sessionRowStateClass(
+                    sessionRunning?.process_state ?? null,
+                  )} ${key === selectedTabValue ? "selected" : ""}`}
+                  onClick={() => handleSelectSession(folder, session.id)}
+                >
+                  <span className="session-item-title">{session.title}</span>
+                  <span className="session-item-updated">
+                    {new Date(session.modified_at).toLocaleString()}
+                    {sessionRunning && (
+                      <Badge
+                        tone={processStateTone(sessionRunning.process_state)}
+                        label={processStateLabel(sessionRunning.process_state)}
+                        size="small"
+                      />
+                    )}
                   </span>
-                )}
-              </button>
-            </div>
-          ))}
+                  {targetFolders.length > 1 && (
+                    <span className="session-item-folder" title={folder}>
+                      {folder}
+                    </span>
+                  )}
+                </button>
+              </div>
+            );
+          })}
         </div>
       )}
       <div className="session-conversation">
