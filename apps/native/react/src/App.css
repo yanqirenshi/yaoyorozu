@@ -2927,15 +2927,48 @@ button.claude-explorer-name {
   color: var(--text-secondary);
 }
 
-/* アーカイブ済みの表示切り替え(issue #495)。検索欄・「+ 新規」の下に置く。 */
-.session-list-archived-toggle {
+/* 一覧の区分トグル(issue #506。#495 の「アーカイブを表示」チェックボックスを置き換え)。
+   検索欄・「+」の下に置く、セグメント風の3つのボタン(起動・未起動・アーカイブ)。
+   ON(aria-pressed="true")は塗り、OFF は枠だけ(SelectButton 等と見分けるため、ここだけの配色)。 */
+.session-list-category-toggle {
   display: flex;
-  align-items: center;
   gap: var(--space-1);
   margin: var(--space-2) 0 var(--space-3);
-  font-size: 0.8rem;
+}
+
+.session-list-category-button {
+  flex: 1;
+  box-sizing: border-box;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-4);
+  background: transparent;
   color: var(--text-secondary);
+  padding: var(--space-1) var(--space-2);
+  font-size: 0.75rem;
+  font-family: inherit;
   cursor: pointer;
+}
+
+.session-list-category-button:hover {
+  background: var(--state-hover);
+  color: var(--text-primary);
+}
+
+.session-list-category-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.session-list-category-button[aria-pressed="true"] {
+  background: var(--color-kincha-500);
+  border-color: var(--color-kincha-500);
+  color: var(--text-inverse);
+  font-weight: 600;
+}
+
+.session-list-category-button[aria-pressed="true"]:hover {
+  background: var(--color-kincha-600);
+  border-color: var(--color-kincha-600);
 }
 
 /* 行のホバーで出すアーカイブ操作(issue #495)。`.session-list-row` を相対配置にして

@@ -164,9 +164,14 @@ function SessionsPage({ nav }: SessionsPageProps) {
   // 一覧は常に全セッションを表示し、この語で絞り込むだけ(選んだものだけを保存する
   // 仕組み(旧 viewerTabs)は廃止した)。
   const [sessionFilter, setSessionFilter] = useState("");
-  // アーカイブ済みも一覧に出すか(issue #495)。UI 状態なので保存しない(起動時は OFF)。
-  // 検索語とは AND(OFF のときは検索結果からもアーカイブ済みを除く)。
-  const [showArchived, setShowArchived] = useState(false);
+  // 一覧の区分トグル(issue #506。#495 の「アーカイブを表示」チェックボックスを置き換え)。
+  // 区分は 1 セッション 1 つ: archived なら「アーカイブ」(実行中より優先)、そうでなく
+  // 実行中(runningBySessionId にある。会話ファイルの無い新規セッションも含む)なら「起動」、
+  // 残りが「未起動」。ON = 一覧に表示。UI 状態なので保存しない。既定はいまの見え方と同じ
+  // (起動 ON・未起動 ON・アーカイブ OFF)。検索語とは AND。
+  const [showRunningCategory, setShowRunningCategory] = useState(true);
+  const [showIdleCategory, setShowIdleCategory] = useState(true);
+  const [showArchivedCategory, setShowArchivedCategory] = useState(false);
   // 新規セッションのモーダル(issue #409)。
   const [newDialogOpen, setNewDialogOpen] = useState(false);
   // 再開に付ける表示名(`--name`)の、ユーザーが入力欄を編集した値。編集していなければ `null`
@@ -508,24 +513,46 @@ function SessionsPage({ nav }: SessionsPageProps) {
     .flatMap((group) => group.sessions.map((session) => ({ folder: group.folder, session })))
     .sort((a, b) => b.session.modified_at - a.session.modified_at);
 
+  // 会話ファイルがまだ無い新規のセッション(issue #409)。app が起動して持っているセッションのうち、
+  // 一覧(会話ファイルから作る)に無いもの。左の一覧に並べ、選ぶと空の会話として開く
+  // (URL は `session` だけで `project` を持たない)。会話ファイルができたら通常の行になる。
+  const runningList = useRunningSessionList();
+  const knownSessionIds = new Set(allSessions.map(({ session }) => session.id));
+  const pendingSummaries = runningList.filter(
+    (s) => s.process_state !== "exited" && !knownSessionIds.has(s.session_id),
+  );
+  // session_id → 実行中セッション(issue #491)。一覧の行の色分け・バッジ・区分(#506)に使う。
+  // ハブの runningBySessionId(HubPage.tsx)と同じ作り: 終了したもの(一覧には残る)は
+  // 載せず、未起動と同じ扱いにする。
+  const runningBySessionId = useMemo(() => {
+    const map = new Map<string, RunningSessionSummaryDto>();
+    runningList.forEach((summary) => {
+      if (summary.process_state !== "exited") map.set(summary.session_id, summary);
+    });
+    return map;
+  }, [runningList]);
+
   // 左ペインの縦一覧(issue #487)。選んだものだけを並べる方式(#353・#379)をやめ、
   // 全セッションを常に表示し、検索語(`sessionFilter`)で絞り込むだけにする。
   // 対象: タイトル。対象フォルダが複数のときはフォルダ名も対象に含める。
-  // アーカイブ済み(issue #495)は、表示 ON(`showArchived`)でなければ除く。検索語とは
-  // AND(表示 OFF なら検索結果からもアーカイブ済みは除く)。
+  // 区分トグル(issue #506)で表示 OFF の区分は除く。検索語とは AND。
   const normalizedSessionFilter = sessionFilter.trim().toLowerCase();
-  const archivedFilteredSessions = showArchived
-    ? allSessions
-    : allSessions.filter(({ session }) => !session.archived);
+  const categoryFilteredSessions = allSessions.filter(({ session }) => {
+    if (session.archived) return showArchivedCategory;
+    if (runningBySessionId.has(session.id)) return showRunningCategory;
+    return showIdleCategory;
+  });
   const visibleSessions = (
     normalizedSessionFilter
-      ? archivedFilteredSessions.filter(
+      ? categoryFilteredSessions.filter(
           ({ folder, session }) =>
             session.title.toLowerCase().includes(normalizedSessionFilter) ||
             (targetFolders.length > 1 && folder.toLowerCase().includes(normalizedSessionFilter)),
         )
-      : archivedFilteredSessions
+      : categoryFilteredSessions
   ).map(({ folder, session }) => ({ key: sessionTabKey(folder, session.id), folder, session }));
+  // 会話ファイルの無い新規セッション(issue #409)も「起動」の区分として扱う(issue #506)。
+  const visiblePendingSummaries = showRunningCategory ? pendingSummaries : [];
   const selectedSessionSummary = sessionGroups
     .find((g) => g.folder === projectParam)
     ?.sessions.find((s) => s.id === sessionParam);
@@ -543,24 +570,6 @@ function SessionsPage({ nav }: SessionsPageProps) {
   // 別の会話が実行中でも、この会話へ送るときはそのまま新しく起動する。issue #407)。
   const runningAlive = running !== null && running.process_state !== "exited";
 
-  // 会話ファイルがまだ無い新規のセッション(issue #409)。app が起動して持っているセッションのうち、
-  // 一覧(会話ファイルから作る)に無いもの。左の一覧に並べ、選ぶと空の会話として開く
-  // (URL は `session` だけで `project` を持たない)。会話ファイルができたら通常の行になる。
-  const runningList = useRunningSessionList();
-  const knownSessionIds = new Set(allSessions.map(({ session }) => session.id));
-  const pendingSummaries = runningList.filter(
-    (s) => s.process_state !== "exited" && !knownSessionIds.has(s.session_id),
-  );
-  // session_id → 実行中セッション(issue #491)。一覧の行の色分け・バッジに使う。
-  // ハブの runningBySessionId(HubPage.tsx)と同じ作り: 終了したもの(一覧には残る)は
-  // 載せず、未起動と同じ扱いにする。
-  const runningBySessionId = useMemo(() => {
-    const map = new Map<string, RunningSessionSummaryDto>();
-    runningList.forEach((summary) => {
-      if (summary.process_state !== "exited") map.set(summary.session_id, summary);
-    });
-    return map;
-  }, [runningList]);
   const pendingSelected =
     !projectParam && sessionParam
       ? (pendingSummaries.find((s) => s.session_id === sessionParam) ?? null)
@@ -940,8 +949,10 @@ function SessionsPage({ nav }: SessionsPageProps) {
       {view === "chat" && (
         <div className="project-list">
           {/* 検索(issue #487。インクリメンタル・大文字小文字を区別しない部分一致)と
-              「+ 新規」。一覧には常に全セッションを表示するため、旧「+ セッションを
-              追加」(選んで一覧に加える方式)は廃止した。 */}
+              「+」(issue #506。文字だけだと読みにくいので title / aria-label は
+              「新しい会話を始める」「新規セッション」のまま残す)。一覧には常に
+              全セッションを表示するため、旧「+ セッションを追加」(選んで一覧に
+              加える方式)は廃止した。 */}
           <div className="session-list-actions">
             <input
               type="text"
@@ -958,21 +969,41 @@ function SessionsPage({ nav }: SessionsPageProps) {
               aria-label="新規セッション"
               onClick={() => setNewDialogOpen(true)}
             >
-              + 新規
+              +
             </button>
           </div>
-          {/* アーカイブ済みの表示切り替え(issue #495)。UI 状態なので保存しない(既定 OFF)。
-              検索語とは AND(絞り込みと同時に効く)。 */}
-          <label className="session-list-archived-toggle">
-            <input
-              type="checkbox"
-              checked={showArchived}
-              onChange={(e) => setShowArchived(e.target.checked)}
-            />
-            アーカイブを表示
-          </label>
-          {/* 会話ファイルがまだ無い新規のセッション(実行中のもの)。会話ファイルができたら通常の行になる。 */}
-          {pendingSummaries.map((summary) => (
+          {/* 一覧の区分トグル(issue #506。#495 の「アーカイブを表示」チェックボックスを
+              置き換え)。ON = 一覧に表示。UI 状態なので保存しない。検索語とは AND
+              (絞り込みと同時に効く)。 */}
+          <div className="session-list-category-toggle" role="group" aria-label="表示する区分">
+            <button
+              type="button"
+              className="session-list-category-button"
+              aria-pressed={showRunningCategory}
+              onClick={() => setShowRunningCategory((v) => !v)}
+            >
+              起動
+            </button>
+            <button
+              type="button"
+              className="session-list-category-button"
+              aria-pressed={showIdleCategory}
+              onClick={() => setShowIdleCategory((v) => !v)}
+            >
+              未起動
+            </button>
+            <button
+              type="button"
+              className="session-list-category-button"
+              aria-pressed={showArchivedCategory}
+              onClick={() => setShowArchivedCategory((v) => !v)}
+            >
+              アーカイブ
+            </button>
+          </div>
+          {/* 会話ファイルがまだ無い新規のセッション(実行中のもの。issue #506 で「起動」区分の
+              一部となり、区分トグルが OFF なら隠れる)。会話ファイルができたら通常の行になる。 */}
+          {visiblePendingSummaries.map((summary) => (
             <div key={summary.session_id} className="session-list-row">
               <button
                 type="button"
@@ -1165,9 +1196,11 @@ function SessionsPage({ nav }: SessionsPageProps) {
                 <p>
                   {targetFolders.length === 0
                     ? "設定のClaudeタブで対象フォルダを選択してください。"
-                    : normalizedSessionFilter && visibleSessions.length === 0
-                      ? "該当するセッションがありません。"
-                      : "左の一覧からセッションを選んでください。"}
+                    : !showRunningCategory && !showIdleCategory && !showArchivedCategory
+                      ? "表示する区分を選んでください。"
+                      : normalizedSessionFilter && visibleSessions.length === 0
+                        ? "該当するセッションがありません。"
+                        : "左の一覧からセッションを選んでください。"}
                 </p>
               ) : (
                 <>
