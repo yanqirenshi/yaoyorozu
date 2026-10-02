@@ -238,6 +238,11 @@ pub enum RunningSessionSwitch {
 pub enum RunningSessionEvent {
     /// 最初の `system/init` を受けた(以降のターンごとの `init` も同じ出来事として届く)。
     Initialized,
+    /// CLI がターンを始めた(`message_start`)。app からの送信(`begin_send_to_running_session`)を
+    /// 介さずに始まったターン(セッション間メッセージの受信など、CLI 自身が始めたターン)でも
+    /// 「実行中」にするための出来事(issue #501)。画面へ流す途中経過ではない
+    /// (`Progress` ではない)ので、状態だけを動かす。
+    TurnStarted,
     /// CLI が報告した現在の設定(`system/init` の `model` / `permissionMode`。ターンごとに届く)。
     /// 項目が無かったものは `None`。
     Configured {
@@ -832,6 +837,7 @@ pub fn stop_running_session(
 /// | 出来事 | 状態への反映 |
 /// |---|---|
 /// | `Initialized` | `Initialized` |
+/// | `TurnStarted` | `TurnStarted`(issue #501。CLI 自身が始めたターンも「実行中」にする) |
 /// | `Configured` | 現在のモデル・権限モードを、報告された値で更新(欠けた項目は変えない) |
 /// | `SwitchApplied` | 切り替えた値を現在のモデル・権限モードに反映 |
 /// | `Progress(TurnFinished)` | `TurnFinished` |
@@ -846,6 +852,7 @@ pub fn apply_running_session_event(
 ) {
     match event {
         RunningSessionEvent::Initialized => session.apply(ProcessTrigger::Initialized, now),
+        RunningSessionEvent::TurnStarted => session.apply(ProcessTrigger::TurnStarted, now),
         RunningSessionEvent::Configured {
             model,
             permission_mode,
@@ -2158,6 +2165,18 @@ mod tests {
             process.sent.lock().unwrap().as_slice(),
             &[("こんにちは".to_string(), 0)]
         );
+        assert_eq!(session.process_state, ProcessState::Running);
+        assert_eq!(session.process_state_at, 2000);
+    }
+
+    /// issue #501: app の送信(`begin_send_to_running_session` / `MessageSent`)を介さず、
+    /// セッション間メッセージの受信など CLI 自身が始めたターンでも「実行中」になる。
+    #[test]
+    fn a_turn_started_by_the_cli_itself_moves_idle_to_running() {
+        let (mut session, _) = started_in(ProcessState::Idle);
+
+        apply_running_session_event(&mut session, &RunningSessionEvent::TurnStarted, 2000);
+
         assert_eq!(session.process_state, ProcessState::Running);
         assert_eq!(session.process_state_at, 2000);
     }

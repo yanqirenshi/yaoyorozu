@@ -337,6 +337,11 @@ fn available_models(response: Option<&Value>) -> Vec<AvailableModel> {
 fn map_stream_event(value: &Value) -> Option<RunningSessionEvent> {
     let event = value.get("event")?;
     match event.get("type")?.as_str()? {
+        // ターンの始まり(issue #501)。app からの送信を介さずに始まったターン
+        // (セッション間メッセージの受信など)でも「実行中」にするための合図。ツール使用を
+        // 挟むターンでは1ターンに複数回届くことがあるが、`Idle` からだけ `Running` へ動くので
+        // 実行中にもう一度届いても状態は変わらない。
+        "message_start" => Some(RunningSessionEvent::TurnStarted),
         "content_block_start" => {
             let block = event.get("content_block")?;
             if block.get("type")?.as_str()? != "tool_use" {
@@ -641,10 +646,21 @@ mod tests {
         );
     }
 
+    /// issue #501: `message_start` は `TurnStarted` に写る(app の送信を介さずに始まった
+    /// ターンでも「実行中」にするため)。
+    #[test]
+    fn maps_message_start_to_turn_started() {
+        assert_eq!(
+            only(
+                r#"{"type":"stream_event","event":{"type":"message_start","message":{"model":"m"}}}"#
+            ),
+            RunningSessionEvent::TurnStarted
+        );
+    }
+
     #[test]
     fn drops_stream_events_that_are_not_text_or_tool_starts() {
         for line in [
-            r#"{"type":"stream_event","event":{"type":"message_start","message":{"model":"m"}}}"#,
             r#"{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}}"#,
             r#"{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}}"#,
             r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":""}}}"#,

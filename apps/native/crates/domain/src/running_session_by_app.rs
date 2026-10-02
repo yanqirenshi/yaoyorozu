@@ -79,6 +79,7 @@ impl RunningSessionByApp {
     /// |---|---|
     /// | `Initialized` | 起動中 → 待機 |
     /// | `MessageSent` | 待機 → 実行中 |
+    /// | `TurnStarted` | 待機 → 実行中(issue #501。CLI 自身が始めたターンも拾う) |
     /// | `PermissionAsked` | 実行中 → 権限待ち |
     /// | `PermissionSettled` | 権限待ち → 実行中 |
     /// | `TurnFinished` | 実行中 → 待機 |
@@ -95,6 +96,7 @@ impl RunningSessionByApp {
             (_, T::Exited) => S::Exited,
             (S::Starting, T::Initialized) => S::Idle,
             (S::Idle, T::MessageSent) => S::Running,
+            (S::Idle, T::TurnStarted) => S::Running,
             (S::Running, T::PermissionAsked) => S::AwaitingPermission,
             (S::AwaitingPermission, T::PermissionSettled) => S::Running,
             (S::Running, T::TurnFinished) => S::Idle,
@@ -226,6 +228,7 @@ mod tests {
         let table = [
             (Starting, Initialized, Idle),
             (Idle, MessageSent, Running),
+            (Idle, TurnStarted, Running),
             (Running, PermissionAsked, AwaitingPermission),
             (AwaitingPermission, PermissionSettled, Running),
             (Running, TurnFinished, Idle),
@@ -262,6 +265,7 @@ mod tests {
         let all = [
             Initialized,
             MessageSent,
+            TurnStarted,
             PermissionAsked,
             PermissionSettled,
             TurnFinished,
@@ -270,6 +274,7 @@ mod tests {
         let valid = [
             (Starting, Initialized),
             (Idle, MessageSent),
+            (Idle, TurnStarted),
             (Running, PermissionAsked),
             (AwaitingPermission, PermissionSettled),
             (Running, TurnFinished),
@@ -298,11 +303,38 @@ mod tests {
         assert_eq!(s.process_state, Running);
     }
 
+    /// CLI 自身が始めたターン(issue #501)でも、すでに実行中なら実行中のまま
+    /// (`MessageSent` と同じ扱い)。
+    #[test]
+    fn a_turn_started_by_the_cli_itself_also_moves_idle_to_running() {
+        let mut s = in_state(Idle);
+
+        s.apply(TurnStarted, 99);
+
+        assert_eq!(s.process_state, Running);
+        assert_eq!(s.process_state_at, 99);
+    }
+
+    #[test]
+    fn turn_started_while_running_stays_running() {
+        let mut s = in_state(Running);
+
+        s.apply(TurnStarted, 99);
+
+        assert_eq!(s.process_state, Running);
+    }
+
     #[test]
     fn exited_never_comes_back() {
         let mut s = in_state(ProcessState::Exited);
 
-        for trigger in [Initialized, MessageSent, PermissionAsked, TurnFinished] {
+        for trigger in [
+            Initialized,
+            MessageSent,
+            TurnStarted,
+            PermissionAsked,
+            TurnFinished,
+        ] {
             s.apply(trigger, 99);
         }
 
