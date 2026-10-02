@@ -7,6 +7,10 @@ pub enum ProcessTrigger {
     Initialized,
     /// 入力を送った(待機 → 実行中)。
     MessageSent,
+    /// CLI がターンを始めた(`message_start`。待機 → 実行中)。app からの送信を介さずに
+    /// ターンが始まった場合(セッション間メッセージなど、CLI 自身が始めたターン)に、
+    /// `MessageSent` を補う(issue #501)。
+    TurnStarted,
     /// ツール使用の問い合わせが届いた(実行中 → 権限待ち)。
     PermissionAsked,
     /// 問い合わせが決着した(応答した・取り消された。権限待ち → 実行中)。
