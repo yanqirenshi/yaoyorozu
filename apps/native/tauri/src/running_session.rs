@@ -215,20 +215,21 @@ fn spawn_event_loop(
                 RunningSessionEvent::Exited { exit_code, .. } => *exit_code,
                 _ => None,
             };
-            if let RunningSessionEvent::Exited { stderr_tail, .. } = &addressed.event {
-                if !stderr_tail.is_empty() {
-                    // 起動失敗などの手がかり(正常系では何も出ない)。秘匿値は含まれない想定だが、
-                    // 画面には出さずログにだけ残す。
-                    eprintln!("実行中セッション(claude)が終了しました。標準エラー: {stderr_tail}");
-                }
-            }
 
-            let (notify, subscribers) = {
+            let (notify, subscribers, exited_abnormally) = {
                 let state = app_handle.state::<Mutex<AppState>>();
                 let mut guard = state.lock().await;
                 match find_slot_mut(&mut guard, &target) {
                     Some(slot) => {
                         let before = watched(&slot.session);
+                        // 起動直後の終了など、理由を画面に出す必要があるものは名前を控えておく
+                        // (ロックの外で emit するため)。
+                        let display_name = slot
+                            .session
+                            .base
+                            .name
+                            .clone()
+                            .unwrap_or_else(|| slot.session.base.session_id.clone());
                         app::apply_running_session_event(
                             &mut slot.session,
                             &addressed.event,
@@ -253,14 +254,29 @@ fn spawn_event_loop(
                         if matches!(addressed.event, RunningSessionEvent::Exited { .. }) {
                             slot.subscribers.clear();
                         }
+                        let exited_abnormally = match &addressed.event {
+                            RunningSessionEvent::Exited { stderr_tail, .. }
+                                if !stderr_tail.is_empty() =>
+                            {
+                                Some((display_name, stderr_tail.clone()))
+                            }
+                            _ => None,
+                        };
                         (
                             changed.then(|| changed_event(&slot.session, exit_code)),
                             subscribers,
+                            exited_abnormally,
                         )
                     }
-                    None => (None, Vec::new()),
+                    None => (None, Vec::new(), None),
                 }
             };
+            if let Some((name, stderr_tail)) = exited_abnormally {
+                // 起動直後の終了など、CLI 自身が理由を残して終わったときは画面にも出す
+                // (native.md §3.2。issue #504)。正常系(利用者の「停止」)では何も出ない
+                // (`stderr_tail` が空のまま)。
+                warn_exited_with_error(&app_handle, &name, &stderr_tail);
+            }
 
             // 途中経過を、購読中の画面へ流す(ロックの外)。送れなくなった購読は取り除く。
             if let Some(progress) = addressed.as_progress() {
@@ -1074,19 +1090,56 @@ pub fn start_restoring_running_sessions(app_handle: &tauri::AppHandle) {
                 sync_origin_main: Some(false),
             };
             let state = app_handle.state::<Mutex<AppState>>();
-            if let Err(e) =
-                start_running_session(app_handle.clone(), state, Some(planned.profile_id), request)
-                    .await
+            match start_running_session(
+                app_handle.clone(),
+                state,
+                Some(planned.profile_id),
+                request,
+            )
+            .await
             {
-                warn_restore_skipped(&app_handle, &name, &e.message);
+                Ok(dto) => wait_until_settled(&app_handle, &dto.target.into()).await,
+                Err(e) => warn_restore_skipped(&app_handle, &name, &e.message),
             }
         }
     });
 }
 
+/// 起動した1件が「起動中」を抜けるまで待つ(issue #504)。次の控えを起こす前にここで待つことで、
+/// 「1件ずつ再開する」(複数の実 CLI プロセスの起動を同時に走らせない)を実際に守る。
+/// `claude` の起動(最初の `system/init` を受けるまで)は通常数秒だが、PC の混雑などで
+/// 延びることもあるため上限を設け、超えたら(遅いだけで失敗ではないので)待たずに次へ進む。
+async fn wait_until_settled(app_handle: &tauri::AppHandle, target: &RunningSessionRef) {
+    const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
+    const MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+    let started = std::time::Instant::now();
+    loop {
+        let state = app_handle.state::<Mutex<AppState>>();
+        let guard = state.lock().await;
+        let settled = match find_slot(&guard, target) {
+            Some(slot) => slot.session.process_state != ProcessState::Starting,
+            // 一覧から消えている(終了済みを忘れた等)なら、待つ理由は無い。
+            None => true,
+        };
+        drop(guard);
+        if settled || started.elapsed() >= MAX_WAIT {
+            return;
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
 /// 復元できなかった1件を、画面(`app:warning`)とログに残す。
 fn warn_restore_skipped(app_handle: &tauri::AppHandle, name: &str, reason: &str) {
     let message = format!("「{name}」を再開できませんでした: {reason}");
+    eprintln!("{message}");
+    let _ = app_handle.emit(APP_WARNING_EVENT, AppWarningEventDto { message });
+}
+
+/// 実行中セッションが(起動直後を含め)標準エラーを残して終わったことを、画面(`app:warning`)と
+/// ログに残す(issue #504)。[`warn_restore_skipped`] と異なり、再開に限らず通常の起動でも使う。
+fn warn_exited_with_error(app_handle: &tauri::AppHandle, name: &str, reason: &str) {
+    let message = format!("「{name}」が終了しました: {reason}");
     eprintln!("{message}");
     let _ = app_handle.emit(APP_WARNING_EVENT, AppWarningEventDto { message });
 }
