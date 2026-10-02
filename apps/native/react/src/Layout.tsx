@@ -3,7 +3,7 @@ import { Outlet, useLocation, useNavigate } from "react-router";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { DockItem } from "command-dock";
 import AppDock from "./AppDock";
-import { getSettings, onSettingsCorrupted, onSettingsUpdated } from "./api";
+import { getSettings, onAppWarning, onSettingsCorrupted, onSettingsUpdated } from "./api";
 import type { ProfileSummaryDto } from "./api";
 import { DockItemsProvider } from "./DockItemsContext";
 import type { PageDockItem } from "./DockItemsContext";
@@ -61,12 +61,27 @@ function Layout() {
   const [pageItems, setPageItems] = useState<PageDockItem[]>([]);
   const [corruptionWarning, setCorruptionWarning] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<ProfileSummaryDto[]>([]);
+  const [appWarnings, setAppWarnings] = useState<{ id: number; message: string }[]>([]);
 
   useEffect(() => {
     // 設定ファイルの破損は起動直後(まだ /settings にいるとは限らない)に
     // 届きうるため、常にマウントされているレイアウト側で受け取る。
     const unlistenPromise = onSettingsCorrupted(({ message }) => {
       setCorruptionWarning(message);
+    });
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
+
+  useEffect(() => {
+    // 起動時の自動再開の失敗など(issue #459・#504)は、どの画面にいても届くため
+    // 常にマウントされているレイアウト側で受け取る。複数届きうるので一覧に積む
+    // (利用者が個別に消せる)。
+    let nextId = 0;
+    const unlistenPromise = onAppWarning(({ message }) => {
+      const id = nextId++;
+      setAppWarnings((warnings) => [...warnings, { id, message }]);
     });
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
@@ -175,6 +190,24 @@ function Layout() {
     <div className="app-shell">
       {corruptionWarning && (
         <p className="corruption-warning">{corruptionWarning}</p>
+      )}
+      {appWarnings.length > 0 && (
+        <div className="app-warning-list">
+          {appWarnings.map(({ id, message }) => (
+            <p key={id} className="app-warning">
+              <span>{message}</span>
+              <button
+                type="button"
+                className="app-warning-dismiss"
+                onClick={() =>
+                  setAppWarnings((warnings) => warnings.filter((w) => w.id !== id))
+                }
+              >
+                ×
+              </button>
+            </p>
+          ))}
+        </div>
       )}
       <DockItemsProvider setItems={setPageItems}>
         <Outlet />
