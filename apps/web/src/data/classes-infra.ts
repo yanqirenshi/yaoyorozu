@@ -970,14 +970,16 @@ const DEFS: ClassDef[] = [
     size: { w: 360, h: 0 },
   },
   {
-    name: { physical: "RunningSessionEvent", logical: "RunningSessionEvent", description: "実行中セッション(子プロセス)からの出来事(app/src/running_session.rs)。infra の読み取りスレッドが、CLI の wire 形式を domain の型に写したうえで RunningSessionEventSink へ流す。子プロセスごとの受け口は宛先(pid)を起動後にしか知らないので宛先を持たず、tauri の処理タスクが宛先を付ける(AddressedRunningSessionEvent)。apply_running_session_event(純粋な規則)が状態へ反映する: Initialized → Initialized / Configured → 現在のモデル・権限モードを反映(値のあるものだけ)/ SwitchApplied → 受け入れられた切り替えを現在値へ反映 / Progress(TurnFinished) → TurnFinished / Progress(それ以外) → 状態は動かさない / ModelsListed → 状態は動かさない(tauri が slot に保持して画面へ知らせる) / PermissionRequested → 答え待ちに足して PermissionAsked / PermissionCancelled → 答え待ちから外す / Exited → 答え待ちを捨てて Exited(Configured と SwitchApplied は #407、ModelsListed は #409 で加わった)" },
+    name: { physical: "RunningSessionEvent", logical: "RunningSessionEvent", description: "実行中セッション(子プロセス)からの出来事(app/src/running_session.rs)。infra の読み取りスレッドが、CLI の wire 形式を domain の型に写したうえで RunningSessionEventSink へ流す。子プロセスごとの受け口は宛先(pid)を起動後にしか知らないので宛先を持たず、tauri の処理タスクが宛先を付ける(AddressedRunningSessionEvent)。apply_running_session_event(純粋な規則)が状態へ反映する: Initialized → Initialized / TurnStarted → TurnStarted(待機 → 実行中。app からの送信を介さず CLI が始めたターン)/ Configured → 現在のモデル・権限モードを反映(値のあるものだけ)/ SwitchApplied → 受け入れられた切り替えを現在値へ反映 / Progress(TurnFinished) → TurnFinished / Progress(それ以外) → 状態は動かさない / ModelsListed → 状態は動かさない(tauri が slot に保持して画面へ知らせる) / PermissionRequested → 答え待ちに足して PermissionAsked / PermissionCancelled → 答え待ちから外す / Exited → 答え待ちを捨てて Exited(Configured と SwitchApplied は #407、ModelsListed は #409、TurnStarted は #501 で加わった)" },
     stereotype: "enumeration",
     attributes: [
       "Initialized",
-      // 選べるモデルの一覧(#409。PR #418)。AvailableModel はこの図の、離れた位置。
-      "ModelsListed(Vec<AvailableModel>)",
+      // CLI がターンを始めた(message_start。#501)。画面へ流す途中経過ではないので状態だけを動かす。
+      "TurnStarted",
       "Configured { model: Option<String>, permission_mode: Option<String> }",
       "SwitchApplied(RunningSessionSwitch)",
+      // 選べるモデルの一覧(#409。PR #418)。AvailableModel はこの図の、離れた位置。
+      "ModelsListed(Vec<AvailableModel>)",
       "Progress(domain::ProgressEvent)",
       "PermissionRequested(domain::PermissionRequest)",
       "PermissionCancelled { request_id: String }",
