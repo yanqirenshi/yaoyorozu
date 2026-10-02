@@ -474,6 +474,8 @@ const DEFS: ClassDef[] = [
       // 入口・出口は PoC #382 レポート §7.1:
       //   Initialized: 起動中 → 待機 / MessageSent: 待機 → 実行中 / PermissionAsked: 実行中 → 権限待ち
       //   PermissionSettled: 権限待ち → 実行中 / TurnFinished: 実行中 → 待機 / Exited: どの状態からでも → 終了
+      // 【#501 で追加】TurnStarted: 待機 → 実行中(CLI が自分でターンを始めた = message_start。
+      // app からの送信を介さないターンでも実行中にする。ほかの組み合わせは変わっていない)。
       // 表にない組み合わせは状態を変えない(実行中に次の入力を送っても実行中のまま。キューは CLI 側)。
       // 終了は戻らない。【実装との差(#391)】at_time を process_state_at に記録するのは、状態が
       // 変わったときだけ(設計は「いずれの場合も」。変わらない契機や終了後の契機で「状態を最後に
@@ -511,11 +513,14 @@ const DEFS: ClassDef[] = [
     filePath: "apps/native/crates/domain/src/process_state.rs",
   },
   {
-    name: { physical: "ProcessTrigger", logical: "ProcessTrigger", description: "ProcessState を動かす出来事(RunningSessionByApp.apply の入力)。app が子プロセスとのやり取りから決める。TM には無い(状態遷移の入力であり、保存しない)" }, // 論理名: プロセス状態の遷移契機
+    name: { physical: "ProcessTrigger", logical: "ProcessTrigger", description: "ProcessState を動かす出来事(RunningSessionByApp.apply の入力)。app が子プロセスとのやり取りから決める。TM には無い(状態遷移の入力であり、保存しない)。TurnStarted は issue #501 で加わった(CLI が自分で始めたターンでも実行中にするため)" }, // 論理名: プロセス状態の遷移契機
     stereotype: "enumeration",
     attributes: [
       "Initialized",
       "MessageSent",
+      // 【#501】CLI がターンを始めた(message_start)。app からの送信を介さずにターンが
+      // 始まった場合(セッション間メッセージの受信など、CLI 自身が始めたターン)に MessageSent を補う。
+      "TurnStarted",
       "PermissionAsked",
       "PermissionSettled",
       "TurnFinished",
