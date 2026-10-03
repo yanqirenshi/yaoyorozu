@@ -48,7 +48,6 @@ import MessageText from "../MessageText";
 import ProfileSettingsPane from "../ProfileSettingsPane";
 import RawLineDialog from "../RawLineDialog";
 import { SendErrorBody } from "../SendErrorBody";
-import Badge from "../Badge";
 import LiveTurnView from "../LiveTurnView";
 import NewSessionDialog from "../NewSessionDialog";
 import type { NewSessionInput } from "../NewSessionDialog";
@@ -58,7 +57,6 @@ import { MAX_SESSION_NAME_CHARS } from "../runningSessionLabels";
 import {
   PERMISSION_MODE_LABELS,
   processStateLabel,
-  processStateTone,
   selectableModeOf,
 } from "../runningSessionLabels";
 import { useRunningSession } from "../useRunningSession";
@@ -1009,34 +1007,44 @@ function SessionsPage({ nav }: SessionsPageProps) {
           </div>
           {/* 会話ファイルがまだ無い新規のセッション(実行中のもの。issue #506 で「起動」区分の
               一部となり、区分トグルが OFF なら隠れる)。会話ファイルができたら通常の行になる。 */}
-          {visiblePendingSummaries.map((summary) => (
-            <div key={summary.session_id} className="session-list-row">
-              <button
-                type="button"
-                className={`project-item session-list-item ${
-                  pendingSelected?.session_id === summary.session_id ? "selected" : ""
-                }`}
-                onClick={() => {
-                  if (confirmDiscardIfDirty()) nav.setProjectAndSession(null, summary.session_id);
-                }}
-              >
-                <span className="session-item-title">{summary.name ?? "新規セッション"}</span>
-                <span className="session-item-updated">
-                  <Badge
-                    tone={processStateTone(summary.process_state)}
-                    label={processStateLabel(summary.process_state)}
-                    size="small"
-                  />
-                </span>
-              </button>
-            </div>
-          ))}
+          {visiblePendingSummaries.map((summary) => {
+            const title = summary.name ?? "新規セッション";
+            // 更新日時・状態バッジを行から消した(issue #519)ので、情報はホバーの
+            // title へ残す(会話ファイルが無い新規セッションには更新日時が無い)。
+            const rowTitle = `${title} / ${processStateLabel(summary.process_state)}`;
+            return (
+              <div key={summary.session_id} className="session-list-row">
+                <button
+                  type="button"
+                  className={`project-item session-list-item ${
+                    pendingSelected?.session_id === summary.session_id ? "selected" : ""
+                  }`}
+                  title={rowTitle}
+                  onClick={() => {
+                    if (confirmDiscardIfDirty()) nav.setProjectAndSession(null, summary.session_id);
+                  }}
+                >
+                  <span className="session-item-title">{title}</span>
+                </button>
+              </div>
+            );
+          })}
           {/* 全セッション(検索で絞り込み済み。issue #487)。一覧から外す操作(旧「×」・
               Delete キー)は、全件表示になったことで意味を持たなくなったため廃止した
               (会話ファイルの削除はこの画面では行わない)。実行中なら左端の帯と状態の
               バッジで色分けする(issue #491。未起動は今までどおり無色・バッジ無し)。 */}
           {visibleSessions.map(({ key, folder, session }) => {
             const sessionRunning = runningBySessionId.get(session.id) ?? null;
+            // 更新日時・状態バッジ(issue #491)を行から消し、タイトルだけにする
+            // (issue #519)。左端の色帯(sessionRowStateClass)で実行中かどうかの
+            // 見分けは残るが、具体的な状態・更新日時はホバーの title でのみ分かる
+            // ようにする(情報を完全には失わない)。
+            const statusLabel = session.archived
+              ? "アーカイブ"
+              : sessionRunning
+                ? processStateLabel(sessionRunning.process_state)
+                : "未起動";
+            const rowTitle = `${session.title} / ${new Date(session.modified_at).toLocaleString()} / ${statusLabel}`;
             return (
               <div key={key} className="session-list-row">
                 <button
@@ -1044,23 +1052,10 @@ function SessionsPage({ nav }: SessionsPageProps) {
                   className={`project-item session-list-item ${sessionRowStateClass(
                     sessionRunning?.process_state ?? null,
                   )} ${key === selectedTabValue ? "selected" : ""}`}
+                  title={rowTitle}
                   onClick={() => handleSelectSession(folder, session.id)}
                 >
                   <span className="session-item-title">{session.title}</span>
-                  <span className="session-item-updated">
-                    {new Date(session.modified_at).toLocaleString()}
-                    {sessionRunning && (
-                      <Badge
-                        tone={processStateTone(sessionRunning.process_state)}
-                        label={processStateLabel(sessionRunning.process_state)}
-                        size="small"
-                      />
-                    )}
-                    {/* アーカイブ済みの印(issue #495。表示 ON のときだけこの行自体が
-                        出る)。実行中セッションはアーカイブ時に止める(共有層側)ので、
-                        上の実行中バッジと同時に出ることは無い。 */}
-                    {session.archived && <Badge tone="idle" label="アーカイブ" size="small" />}
-                  </span>
                   {targetFolders.length > 1 && (
                     <span className="session-item-folder" title={folder}>
                       {folder}

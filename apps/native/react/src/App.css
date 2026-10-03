@@ -374,19 +374,13 @@ body,
   white-space: nowrap;
 }
 
-.session-item-updated {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-}
-
 /* 実行中セッションの状態での色分け(issue #491)。ハブの sessionNodeCircleStyle
    (HubPage.tsx)と同じ 3 色 + 無色。背景全体を塗ると選択中の行(.selected)と
    区別しにくくなるため、左端の帯(border-left)だけで示す。権限待ちは太めにして
-   目立たせる(人が答えるまで進まないため)。色だけに頼らないよう、状態の文言は
-   バッジ(.session-item-updated 内の Badge)で必ず添える。 */
+   目立たせる(人が答えるまで進まないため)。更新日時・状態バッジ(.session-item-updated)
+   は行を詰めるため issue #519 で廃止し、具体的な状態は行の title(ホバー)に移した
+   (色帯だけでは「実行中かどうか」までしか伝わらないが、それ以上の詳細は常時は
+   出さない判断)。 */
 .session-list-item-running {
   border-left-color: var(--color-kincha-500);
   border-left-width: 4px;
