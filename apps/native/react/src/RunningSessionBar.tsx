@@ -247,6 +247,13 @@ export default function RunningSessionBar({
 
       {!alive && canConfigureResume && (
         <span className="running-bar-name-field">
+          {/* 入力欄には、会話の現在の表示名を初期値として入れてある(issue #445)。同じ値で再開すれば
+              タイトルは変わらず、CLI が既定の名前(フォルダ名 + 連番)を付けない(セッション間
+              メッセージの宛先に、役割名を使い続けられる)。変えると、CLI が会話ファイルにタイトルの行を
+              足して、この会話のタイトルも変わる(最後のタイトルの行が採用される。CLI の挙動。#426)。
+              空にもできる(その場合は CLI が既定の名前を付ける)。注意書きは常時表示の
+              `.running-bar-name-note` だったが、状態バーの縦幅を取るため issue #513 で廃止し、
+              この `title`(ホバーで出るツールチップ)に移した(情報自体は失わない)。 */}
           <input
             type="text"
             className="running-bar-name"
@@ -255,16 +262,8 @@ export default function RunningSessionBar({
             onChange={(e) => onResumeNameChange(e.target.value)}
             placeholder="表示名(任意)"
             aria-label="表示名(任意。次に開くときに付ける)"
-            aria-describedby="running-bar-name-note"
+            title="変えると、この会話のタイトルも変わります"
           />
-          {/* 入力欄には、会話の現在の表示名を初期値として入れてある(issue #445)。同じ値で再開すれば
-              タイトルは変わらず、CLI が既定の名前(フォルダ名 + 連番)を付けない(セッション間
-              メッセージの宛先に、役割名を使い続けられる)。変えると、CLI が会話ファイルにタイトルの行を
-              足して、この会話のタイトルも変わる(最後のタイトルの行が採用される。CLI の挙動。#426)。
-              空にもできる(その場合は CLI が既定の名前を付ける)。 */}
-          <span id="running-bar-name-note" className="running-bar-name-note">
-            変えると、この会話のタイトルも変わります
-          </span>
         </span>
       )}
 
