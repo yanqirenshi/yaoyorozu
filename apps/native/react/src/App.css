@@ -443,13 +443,6 @@ body,
   outline-offset: -2px;
 }
 
-/* ホバーで重ねて出すアーカイブ操作(issue #495)の分だけ右に余白を取り、
-   タイトル・日時・フォルダ名と重ならないようにする(旧 #487 以前の .session-list-close
-   と同じ考え方)。 */
-.session-list-item {
-  padding-right: calc(var(--space-6) + var(--space-3));
-}
-
 /* 対象フォルダが複数のときだけ添える、そのセッションのフォルダ名(見分け用)。 */
 .session-item-folder {
   font-size: 0.75rem;
@@ -2050,6 +2043,16 @@ body,
   background-color: var(--color-sumi-100);
 }
 
+/* アーカイブ/戻す(issue #511)。会話ペイン(.session-conversation)の最後の子要素
+   (.conversation-scroll は flex: 1 なので、これは常に一番下に来る)。左寄せで、
+   会話の表示・入力欄とは別の行にして重ならないようにする。 */
+.conversation-archive-bar {
+  flex-shrink: 0;
+  display: flex;
+  padding: var(--space-2) var(--space-6);
+  border-top: 1px solid var(--border-default);
+}
+
 .error {
   color: var(--semantic-error-fg);
 }
@@ -2586,6 +2589,15 @@ button.claude-explorer-name {
   align-items: center;
 }
 
+/* 状態バッジの高さ・左右の余白を、隣の選択ボタン(.action-button-small)と揃える
+   (issue #511)。Badge は仕様(uiButton.ts 同様 uiBadge.ts が正)を持つ共有部品で、
+   他の利用箇所(一覧の行等)は仕様どおりの小さいバッジのままでよいため、Badge 自体や
+   `size` の値を変えず、この状態バー内に限定したセレクタで上書きする。 */
+.running-bar-status .badge {
+  height: 32px;
+  padding: 0 var(--space-3);
+}
+
 .running-bar-actions {
   margin-left: auto;
   display: flex;
@@ -2962,56 +2974,6 @@ button.claude-explorer-name {
 .session-list-category-button[aria-pressed="true"]:hover {
   background: var(--color-kincha-600);
   border-color: var(--color-kincha-600);
-}
-
-/* 行のホバーで出すアーカイブ操作(issue #495)。`.session-list-row` を相対配置にして
-   右端に重ねる(旧 .session-list-close と同じ配置の流儀)。既定は隠し、ホバー・
-   フォーカス時だけ見せる(「戻す」も含めて同じ扱い。アーカイブ表示 ON で明示的に
-   探しているときの操作なので、常時見せるほど重要ではない)。 */
-.session-list-row {
-  position: relative;
-}
-
-.session-list-archive-action {
-  position: absolute;
-  top: var(--space-2);
-  right: var(--space-2);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: var(--space-6);
-  padding: 0 var(--space-2);
-  border: none;
-  border-radius: var(--radius-4);
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  opacity: 0;
-}
-
-.session-list-archive-action svg {
-  width: var(--icon-16);
-  height: var(--icon-16);
-}
-
-.session-list-row:hover .session-list-archive-action,
-.session-list-archive-action:focus-visible {
-  opacity: 1;
-}
-
-.session-list-archive-action:hover {
-  background: var(--color-sumi-100);
-  color: var(--text-primary);
-}
-
-.session-list-archive-action:active {
-  background: var(--color-sumi-200);
-}
-
-/* 「戻す」はテキストなのでアイコンのボタンより少し幅を取る。 */
-.session-list-unarchive-action {
-  font-size: 0.75rem;
-  white-space: nowrap;
 }
 
 /* 新規セッションのモーダル(`settings-dialog` を土台にする)。 */

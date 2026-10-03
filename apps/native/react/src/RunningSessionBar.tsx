@@ -58,9 +58,6 @@ type Props = {
   onStart: () => void;
   /** 起動中(issue #484)。ボタンを押せなくし、表示を「起動中…」にする。 */
   starting: boolean;
-  /** 「アーカイブ」ボタンから呼ぶ(issue #495。実行中なら「終了」の隣、未起動なら
-   * 「起動」の隣に出す。対象の確定・実行中の確認は呼び出し側の責務)。 */
-  onArchive: () => void;
 };
 
 export default function RunningSessionBar({
@@ -78,7 +75,6 @@ export default function RunningSessionBar({
   onStop,
   onStart,
   starting,
-  onArchive,
 }: Props) {
   const alive = running !== null && running.process_state !== "exited";
   const state = running?.process_state ?? null;
@@ -294,14 +290,6 @@ export default function RunningSessionBar({
             onClick={onStart}
           >
             {starting ? "起動中…" : "起動"}
-          </button>
-        )}
-        {/* 「終了」(実行中)または「起動」(未起動・対象確定)の隣に出す(issue #495)。
-            実行中のものは、止めてからアーカイブすることの確認を呼び出し側(onArchive)が行う。
-            新規セッション(会話ファイルが無い。canConfigureResume が false)は出さない。 */}
-        {(alive || canConfigureResume) && (
-          <button type="button" className="running-bar-button" onClick={onArchive}>
-            アーカイブ
           </button>
         )}
       </span>

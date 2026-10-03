@@ -627,24 +627,19 @@ function SessionsPage({ nav }: SessionsPageProps) {
     }
   };
 
-  // 一覧の行のホバーボタンから呼ぶ(issue #495)。`runningBySessionId` に有れば実行中
-  // (終了したものは載っていないので、有無だけで判定できる)。
-  const handleArchiveRow = (project: string, sessionId: string) => {
-    void archiveSessionWithConfirm(project, sessionId, runningBySessionId.has(sessionId));
-  };
-
-  // アーカイブ済みの行(表示 ON のとき)の「戻す」から呼ぶ(issue #495)。
-  const handleUnarchiveRow = (project: string, sessionId: string) => {
-    void unarchiveSession(project, sessionId).catch((e) =>
-      setError(isAppError(e) ? e.message : String(e)),
-    );
-  };
-
-  // 状態バー(`RunningSessionBar`)の「アーカイブ」から呼ぶ(issue #495)。表示中の会話が対象
-  // (出る条件は canConfigureResume や alive と同じで、projectParam/sessionParam が確定している
-  // ことが前提)。
-  const handleArchiveCurrentSession = () => {
+  // 会話ペイン左下の「アーカイブ」/「戻す」から呼ぶ(issue #495・#510・#511)。表示中の
+  // 会話が対象(projectParam/sessionParam が確定していることが前提)。一覧行のホバー
+  // ボタン(#495)は会話を開くつもりで誤って押してしまう事故があったため #510 で廃止し、
+  // いったん状態バーに集約したが、#511 で状態バーからも会話ペインの専用の行へ移した。
+  // アーカイブ済みかどうかで呼び分ける(ボタンの表示もこの区別で切り替える。呼び出し側)。
+  const handleArchiveToggleCurrentSession = () => {
     if (!projectParam || !sessionParam) return;
+    if (selectedSummary?.archived) {
+      void unarchiveSession(projectParam, sessionParam).catch((e) =>
+        setError(isAppError(e) ? e.message : String(e)),
+      );
+      return;
+    }
     void archiveSessionWithConfirm(projectParam, sessionParam, runningAlive);
   };
 
@@ -1061,42 +1056,6 @@ function SessionsPage({ nav }: SessionsPageProps) {
                     </span>
                   )}
                 </button>
-                {/* 行のホバーで出すアーカイブ操作(issue #495。右クリックメニューの代わり)。
-                    `.project-item` ボタンの中には入れ子にできないので、行の中で並べて
-                    重ねる(旧 .session-list-close と同じ配置の流儀)。 */}
-                {session.archived ? (
-                  <button
-                    type="button"
-                    className="session-list-archive-action session-list-unarchive-action"
-                    title="戻す"
-                    aria-label={`${session.title} のアーカイブを解除`}
-                    onClick={() => handleUnarchiveRow(folder, session.id)}
-                  >
-                    戻す
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="session-list-archive-action"
-                    title="アーカイブ"
-                    aria-label={`${session.title} をアーカイブ`}
-                    onClick={() => handleArchiveRow(folder, session.id)}
-                  >
-                    <svg
-                      viewBox="0 0 20 20"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.7"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      aria-hidden="true"
-                    >
-                      <rect x="3" y="4" width="14" height="3" rx="1" />
-                      <path d="M4 7.5v7.5a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V7.5" />
-                      <path d="M8 10.5h4" />
-                    </svg>
-                  </button>
-                )}
               </div>
             );
           })}
@@ -1121,7 +1080,6 @@ function SessionsPage({ nav }: SessionsPageProps) {
                 onStop={() => void stopRunning()}
                 onStart={handleStartRunning}
                 starting={starting}
-                onArchive={handleArchiveCurrentSession}
               />
             )}
             <form className="message-form" onSubmit={handleSubmit}>
@@ -1315,6 +1273,22 @@ function SessionsPage({ nav }: SessionsPageProps) {
                 </>
               )}
             </div>
+            {/* アーカイブ/戻す(issue #495・#510・#511)。状態バーの中断・終了とは分け、
+                会話の表示(.conversation-scroll)・入力欄(.message-form)と重ならない、
+                会話ペインの左下に置く。出る条件は旧 RunningSessionBar の「アーカイブ」
+                ボタンと同じ(実行中、または対象が会話ファイルのある会話)。実行中のものは
+                止めてからアーカイブすることを確認する(handleArchiveToggleCurrentSession)。 */}
+            {hasTarget && (runningAlive || (!!projectParam && !!selectedSummary)) && (
+              <div className="conversation-archive-bar">
+                <button
+                  type="button"
+                  className="running-bar-button"
+                  onClick={handleArchiveToggleCurrentSession}
+                >
+                  {selectedSummary?.archived ? "戻す" : "アーカイブ"}
+                </button>
+              </div>
+            )}
           </>
         ) : view === "profile-settings" ? (
           // /settings と同じプロファイル設定(共有コンポーネント)を、このウィンドウの
@@ -1483,10 +1457,15 @@ function SessionsPage({ nav }: SessionsPageProps) {
         {/* コンテンツ領域の下端のフッター(ユーザー指示)。表示の切り替え・
             再読み込み・保存などの操作をここにまとめる。サイドメニューや
             セッション一覧の下には回り込ませない(ページ全体のフッターにはしない)。
-            項目の中身・挙動は従来のまま(`dockItems`)。 */}
-        <div className="viewer-footer">
-          <ViewerToolbar items={dockItems} />
-        </div>
+            項目の中身・挙動は従来のまま(`dockItems`)。会話ビュー(chat)では出さない
+            (issue #511。権限モードは状態バーに既にあり重複、再読み込みは会話ビューには
+            不要と判断)。CLAUDE.md / Rules / Skills など他のビューでは保存・再読み込み等の
+            操作がここにしか無いため、従来どおり出す。 */}
+        {view !== "chat" && (
+          <div className="viewer-footer">
+            <ViewerToolbar items={dockItems} />
+          </div>
+        )}
       </div>
       </div>
     </div>
