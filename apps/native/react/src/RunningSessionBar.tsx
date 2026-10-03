@@ -108,6 +108,27 @@ export default function RunningSessionBar({
 
   const currentMode = alive ? selectableModeOf(running.current_permission_mode) : selectedMode;
 
+  // ボタン自体に現在値を出す(issue #508。従来はボタンの隣に「権限モード: …」
+  // 「モデル: …」の説明書き(`.running-bar-mode`)を並べていたが、ボタンのラベルを
+  // 種別名(「権限モード」「モデル」)から現在値に置き換えて1か所にまとめた。
+  // 見た目のラベルだけでは用途が分からなくなるため、アクセシブルネーム・ツール
+  // チップ(`ariaLabel`/`title`)に種別名を残す。
+  const permissionModeValueLabel = alive
+    ? currentPermissionModeLabel(running.current_permission_mode)
+    : PERMISSION_MODE_LABELS[selectedMode];
+  const permissionModeAriaLabel = alive
+    ? `権限モード(現在: ${permissionModeValueLabel})`
+    : `次の起動の権限モード(現在: ${permissionModeValueLabel})`;
+  // 実行中のモデルは、最初の返答が来るまで CLI から報告されない(issue #409)。
+  // 未確定の間はボタンの文字自体を「モデル(未確定)」にする(現在値が無いので
+  // 種別名だけの表示にすると、他のボタンと紛れて現在値が無いことが伝わらないため)。
+  const aliveModelValueLabel = running?.current_model ?? "モデル(未確定)";
+  const aliveModelAriaLabel = running?.current_model
+    ? `モデル(現在: ${running.current_model})`
+    : "モデル(未確定)";
+  const startModelValueLabel = startModelLabel(selectedStartModel);
+  const startModelAriaLabel = `次の起動のモデル(現在: ${startModelValueLabel})`;
+
   return (
     <div className="running-bar" role="group" aria-label="実行中のセッション" ref={rootRef}>
       {showsProgress && (
@@ -123,14 +144,11 @@ export default function RunningSessionBar({
       </span>
 
       <span className="running-bar-switch">
-        <span className="running-bar-mode">
-          {alive
-            ? `権限モード: ${currentPermissionModeLabel(running.current_permission_mode)}`
-            : `次の起動: ${PERMISSION_MODE_LABELS[selectedMode]}`}
-        </span>
         <SelectButton
           size="small"
-          label="権限モード"
+          label={permissionModeValueLabel}
+          ariaLabel={permissionModeAriaLabel}
+          title={permissionModeAriaLabel}
           disabled={alive && !canSwitch}
           onClick={() => setOpenMenu((m) => (m === "mode" ? null : "mode"))}
         />
@@ -157,12 +175,11 @@ export default function RunningSessionBar({
 
       {alive && (
         <span className="running-bar-switch">
-          <span className="running-bar-mode">
-            モデル: {running.current_model ?? "(最初の返答のあとに表示)"}
-          </span>
           <SelectButton
             size="small"
-            label="モデル"
+            label={aliveModelValueLabel}
+            ariaLabel={aliveModelAriaLabel}
+            title={aliveModelAriaLabel}
             disabled={!canSwitch || models.length === 0}
             onClick={() => setOpenMenu((m) => (m === "model" ? null : "model"))}
           />
@@ -193,10 +210,11 @@ export default function RunningSessionBar({
       {/* 未起動: 次の起動のモデル(別名の固定の選択肢。issue #445)。 */}
       {!alive && canConfigureResume && (
         <span className="running-bar-switch">
-          <span className="running-bar-mode">次の起動のモデル: {startModelLabel(selectedStartModel)}</span>
           <SelectButton
             size="small"
-            label="モデル"
+            label={startModelValueLabel}
+            ariaLabel={startModelAriaLabel}
+            title={startModelAriaLabel}
             onClick={() => setOpenMenu((m) => (m === "start-model" ? null : "start-model"))}
           />
           {openMenu === "start-model" && (
