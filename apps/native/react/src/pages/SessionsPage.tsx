@@ -72,6 +72,10 @@ import type { PaneView, ViewerNav } from "../viewerNav";
 
 const PAGE_SIZE = 50;
 
+// 一覧ペインのヘッダ(issue #521)の「仕様」リンクの先。apps/web の開発サーバの既定ポート。
+// 設定で変えられるようにするのは別イシュー。ハードコードの散在禁止でこの1箇所にまとめる。
+const SPEC_SITE_URL = "http://localhost:3000";
+
 type SessionGroup = {
   folder: string;
   sessions: SessionSummaryDto[];
@@ -156,6 +160,9 @@ function SessionsPage({ nav }: SessionsPageProps) {
   // ID。`windowProfileId` が `null`(`/profiles` に id 省略)の場合はアクティブ
   // プロファイルへフォールバックする(Rust側 `resolve_profile` と同じ規則)。
   const [resolvedProfileId, setResolvedProfileId] = useState<string | null>(null);
+  // 一覧ペインのヘッダ(issue #521)に出すプロファイル名。読み込み前・該当プロファイルが
+  // 見つからない間は null(ヘッダには空で出す。読み込み中に空白が一瞬出ること自体は許容)。
+  const [profileName, setProfileName] = useState<string | null>(null);
   const [targetFolders, setTargetFolders] = useState<string[]>([]);
   const [sessionGroups, setSessionGroups] = useState<SessionGroup[]>([]);
   // 左ペインの検索語(issue #487。インクリメンタル・大文字小文字を区別しない部分一致)。
@@ -266,6 +273,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
       .then((settings) => {
         const profileId = windowProfileId ?? settings.active_profile_id;
         setResolvedProfileId(profileId);
+        setProfileName(settings.profiles.find((p) => p.id === profileId)?.name ?? null);
         setRepositoryPath(settings.repository_path);
         setTargetFolders(settings.selected_project_folders);
         setGithubProject(settings.github_project);
@@ -431,6 +439,9 @@ function SessionsPage({ nav }: SessionsPageProps) {
     const unlistenPromise = onSettingsUpdated(() => {
       getSettings(windowProfileId)
         .then((settings) => {
+          const profileId = windowProfileId ?? settings.active_profile_id;
+          setResolvedProfileId(profileId);
+          setProfileName(settings.profiles.find((p) => p.id === profileId)?.name ?? null);
           setRepositoryPath(settings.repository_path);
           setTargetFolders(settings.selected_project_folders);
           setGithubProject(settings.github_project);
@@ -952,6 +963,23 @@ function SessionsPage({ nav }: SessionsPageProps) {
           一覧を出し入れしても破棄されない(会話に戻ればそのまま)。 */}
       {view === "chat" && (
         <div className="project-list">
+          {/* 一覧ペインのヘッダ(issue #521)。左にこのウィンドウのプロファイル名
+              (長い名前は省略表示。`title` に全体を残す)、右に「仕様」(apps/web の
+              ドキュメンテーションツール)を既定のブラウザで開くリンク。プロファイルの
+              切り替えに追従する(loadTargetFoldersAndSessions / onSettingsUpdated の
+              どちらでも profileName を更新する)。 */}
+          <div className="project-list-header">
+            <span className="project-list-header-profile" title={profileName ?? undefined}>
+              {profileName}
+            </span>
+            <button
+              type="button"
+              className="project-list-header-spec-link"
+              onClick={() => void openUrl(SPEC_SITE_URL)}
+            >
+              仕様
+            </button>
+          </div>
           {/* 検索(issue #487。インクリメンタル・大文字小文字を区別しない部分一致)と
               「+」(issue #506。文字だけだと読みにくいので title / aria-label は
               「新しい会話を始める」「新規セッション」のまま残す)。一覧には常に
