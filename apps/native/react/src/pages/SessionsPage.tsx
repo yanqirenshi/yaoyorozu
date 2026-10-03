@@ -576,6 +576,17 @@ function SessionsPage({ nav }: SessionsPageProps) {
       : null;
   // 表示中の対象がある(会話ファイルのある会話、または新規のセッション)。
   const hasTarget = !!sessionParam && (!!projectParam || !!pendingSelected);
+  // 選択を外した(hasTarget が false になった)ら、書きかけの下書き・添付を空にする
+  // (issue #515)。入力欄自体を hasTarget のときだけ描くようにしたため、隠れたまま
+  // 残ると、別の(または同じ)会話へ戻ったときに意図せず古い下書きが蘇ってしまう。
+  // 対象を切り替えただけ(ある会話から別の会話へ)のときは、従来どおり保持したまま
+  // (こちらは #515 の対象外。選択が無い状態を経由しない切り替えでは消さない)。
+  useEffect(() => {
+    if (!hasTarget) {
+      setDraft("");
+      setAttachments([]);
+    }
+  }, [hasTarget]);
   // `--resume <ID>` 化(issue #345)により、一覧に出るセッションはすべて送信対象にできる。新規の
   // セッション(会話ファイルがまだ無い)も、実行中なら送れる。
   const canSend = !!selectedSummary || !!pendingSelected;
@@ -1082,71 +1093,76 @@ function SessionsPage({ nav }: SessionsPageProps) {
                 starting={starting}
               />
             )}
-            <form className="message-form" onSubmit={handleSubmit}>
-              {/* 画像の添付(ファイル選択。貼り付けは入力欄の paste で受ける。issue #349) */}
-              <button
-                type="button"
-                className="message-attach"
-                title="画像を添付"
-                aria-label="画像を添付"
-                disabled={!hasTarget || !canSend || sending}
-                onClick={() => fileInputRef.current?.click()}
-              >
-                画像
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                multiple
-                hidden
-                onChange={handleFilesSelected}
-              />
-              <textarea
-                ref={draftInputRef}
-                className="message-input"
-                placeholder="AIにメッセージを送る(画像は貼り付けでも添付できます)"
-                rows={1}
-                value={draft}
-                disabled={!hasTarget || !canSend || sending}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={handleDraftKeyDown}
-                onPaste={handlePaste}
-              />
-              <button
-                type="submit"
-                className="message-send"
-                disabled={
-                  !hasTarget || !canSend || sending || !canSubmit
-                }
-              >
-                {sending ? "送信中…" : "送信"}
-              </button>
-            </form>
-            {attachments.length > 0 && (
-              <div className="message-attachments">
-                {attachments.map((image, i) => (
-                  <div key={image.id} className="message-attachment">
-                    <img
-                      className="message-attachment-thumb"
-                      src={image.dataUrl}
-                      alt={`添付画像 ${i + 1}`}
-                    />
-                    <button
-                      type="button"
-                      className="message-attachment-remove"
-                      title="この画像を外す"
-                      aria-label={`添付画像 ${i + 1} を外す`}
-                      disabled={sending}
-                      onClick={() =>
-                        setAttachments((prev) => prev.filter((a) => a.id !== image.id))
-                      }
-                    >
-                      ×
-                    </button>
+            {/* メッセージ入力欄・添付サムネイルは、選んでいる対象があるときだけ描く
+                (issue #515。従来は常に出して disabled にするだけだった)。選択を外した
+                ときの下書き・添付のクリアは、上の useEffect(`[hasTarget]`)で行う。 */}
+            {hasTarget && (
+              <>
+                <form className="message-form" onSubmit={handleSubmit}>
+                  {/* 画像の添付(ファイル選択。貼り付けは入力欄の paste で受ける。issue #349) */}
+                  <button
+                    type="button"
+                    className="message-attach"
+                    title="画像を添付"
+                    aria-label="画像を添付"
+                    disabled={!canSend || sending}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    画像
+                  </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    hidden
+                    onChange={handleFilesSelected}
+                  />
+                  <textarea
+                    ref={draftInputRef}
+                    className="message-input"
+                    placeholder="AIにメッセージを送る(画像は貼り付けでも添付できます)"
+                    rows={1}
+                    value={draft}
+                    disabled={!canSend || sending}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={handleDraftKeyDown}
+                    onPaste={handlePaste}
+                  />
+                  <button
+                    type="submit"
+                    className="message-send"
+                    disabled={!canSend || sending || !canSubmit}
+                  >
+                    {sending ? "送信中…" : "送信"}
+                  </button>
+                </form>
+                {attachments.length > 0 && (
+                  <div className="message-attachments">
+                    {attachments.map((image, i) => (
+                      <div key={image.id} className="message-attachment">
+                        <img
+                          className="message-attachment-thumb"
+                          src={image.dataUrl}
+                          alt={`添付画像 ${i + 1}`}
+                        />
+                        <button
+                          type="button"
+                          className="message-attachment-remove"
+                          title="この画像を外す"
+                          aria-label={`添付画像 ${i + 1} を外す`}
+                          disabled={sending}
+                          onClick={() =>
+                            setAttachments((prev) => prev.filter((a) => a.id !== image.id))
+                          }
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                )}
+              </>
             )}
             <div className="conversation-scroll">
               {error && <p className="error">{error}</p>}
