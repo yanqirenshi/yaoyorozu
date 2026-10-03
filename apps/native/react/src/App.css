@@ -2586,13 +2586,6 @@ button.claude-explorer-name {
   align-items: center;
 }
 
-.running-bar-mode {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .running-bar-actions {
   margin-left: auto;
   display: flex;

@@ -19,6 +19,13 @@ export type ActionButtonProps = {
   /** フォーム送信のときだけ `submit`。既定は `button`。 */
   type?: "button" | "submit";
   onClick?: MouseEventHandler<HTMLButtonElement>;
+  /** 見た目のラベルだけでは用途が分からないとき、アクセシブルネームと
+   * ツールチップを補う(issue #508。選択ボタンが現在値をラベルに出す用途向け)。
+   * 省略時は見た目のラベルがそのままアクセシブルネームになる(従来どおり)。
+   * 仕様(uiButton.ts)に無い属性だが、共有部品のため最小限の追加として
+   * ここに足す(apps/native 側の裁定。PR 参照)。 */
+  ariaLabel?: string;
+  title?: string;
 };
 
 type ActionButtonKind = "add" | "save" | "edit" | "select";
@@ -37,6 +44,8 @@ export default function ActionButton({
   disabled = false,
   type = "button",
   onClick,
+  ariaLabel,
+  title,
 }: ActionButtonProps & { kind: ActionButtonKind }) {
   return (
     <button
@@ -44,6 +53,8 @@ export default function ActionButton({
       className={`action-button action-button-${kind} action-button-${size}`}
       disabled={disabled}
       onClick={onClick}
+      aria-label={ariaLabel}
+      title={title}
     >
       {label ?? DEFAULT_LABELS[kind]}
     </button>
