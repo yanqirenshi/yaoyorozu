@@ -60,6 +60,12 @@ type Props = {
   onStart: () => void;
   /** 起動中(issue #484)。ボタンを押せなくし、表示を「起動中…」にする。 */
   starting: boolean;
+  /** 会話の現在のタイトル(issue #524)。`canConfigureResume` が true(会話ファイルの
+   * ある会話)のときだけ、モデルの隣にこの値のボタンを出す。新規セッション(会話ファイルが
+   * 無い)では出さない。 */
+  sessionTitle: string;
+  /** セッション名のボタンから呼ぶ(issue #524)。呼び出し側でモーダルを開く。 */
+  onRenameSession: () => void;
 };
 
 export default function RunningSessionBar({
@@ -77,6 +83,8 @@ export default function RunningSessionBar({
   onStop,
   onStart,
   starting,
+  sessionTitle,
+  onRenameSession,
 }: Props) {
   const alive = running !== null && running.process_state !== "exited";
   const state = running?.process_state ?? null;
@@ -232,6 +240,22 @@ export default function RunningSessionBar({
               ))}
             </div>
           )}
+        </span>
+      )}
+
+      {/* セッション名のボタン(issue #524)。モデルの隣。押すと親がモーダルを開く
+          (入力・保存は親の責務。ここは表示とクリックの受け渡しだけ)。会話ファイルの
+          ある会話のときだけ(`canConfigureResume` と同じ条件)。長い名前は
+          CSS(.running-bar-session-name)で省略する。 */}
+      {canConfigureResume && (
+        <span className="running-bar-switch running-bar-session-name">
+          <SelectButton
+            size="small"
+            label={sessionTitle}
+            ariaLabel={`セッション名(現在: ${sessionTitle})`}
+            title={`セッション名(現在: ${sessionTitle})`}
+            onClick={onRenameSession}
+          />
         </span>
       )}
 
