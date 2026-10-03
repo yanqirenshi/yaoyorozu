@@ -350,6 +350,47 @@ body,
   margin: 0 0 8px;
 }
 
+/* 一覧ペインのヘッダ(issue #521)。左にこのウィンドウのプロファイル名、右に
+   「仕様」(apps/web のドキュメンテーションツール)へのリンク。`.project-list` の
+   gap で検索欄と自然に間隔が空く(個別の margin は持たない)。 */
+.project-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.project-list-header-profile {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* リンクの見た目(枠・塗りなし、下線)は会話の「データ」ボタン(.message-meta-data)と
+   同じ流儀。 */
+.project-list-header-spec-link {
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--text-secondary);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.project-list-header-spec-link:hover {
+  color: var(--text-primary);
+}
+
+.project-list-header-spec-link:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .project-item {
   display: flex;
   flex-direction: column;
@@ -2939,10 +2980,12 @@ button.claude-explorer-name {
 /* 一覧の区分トグル(issue #506。#495 の「アーカイブを表示」チェックボックスを置き換え)。
    検索欄・「+」の下に置く、セグメント風の3つのボタン(起動・未起動・アーカイブ)。
    ON(aria-pressed="true")は塗り、OFF は枠だけ(SelectButton 等と見分けるため、ここだけの配色)。 */
+/* 行が詰まった(issue #519)分、区分トグルの余白も詰める(issue #521。
+   0.3 倍。直値を書かず、元の間隔(--space-2 / --space-3)からの比率で持つ)。 */
 .session-list-category-toggle {
   display: flex;
   gap: var(--space-1);
-  margin: var(--space-2) 0 var(--space-3);
+  margin: calc(var(--space-2) * 0.3) 0 calc(var(--space-3) * 0.3);
 }
 
 .session-list-category-button {
