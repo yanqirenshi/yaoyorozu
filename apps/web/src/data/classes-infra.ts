@@ -68,6 +68,13 @@
  * `list_parsed_sessions` / `session_line_raw` に置き換わっていたが、図が追従していなかった。
  * #400 の突き合わせは型の名前・フィールド中心で、port のメソッド一覧は対象外だった)。
  *
+ * 【port のメソッド一覧の突き合わせ(issue #528)】#400 の突き合わせは型の名前・フィールド中心で、
+ * port のメソッド一覧は対象外だった(そのため `SessionSource` のずれが #523 まで残っていた)。
+ * port 26 個のメソッドを名前・引数・戻り値まで実物と突き合わせ、`HubTuningStore` の型名
+ * (`domain::HubTuning` → 宣言どおりの `HubTuning`)を直した。ほかの 25 個は一致していた。
+ * メソッドを描いている struct / enum 13 個も名前で突き合わせ、`StartModel` の `from_cli_value`
+ * (#459 の復元で加わった逆写像)の漏れを足した。
+ *
  * 【app の port の入出力の型(issue #420)】方針: app の非 port の型は、port のシグネチャ(引数・
  * 戻り値・エラー)に出てくるものだけを載せる(層はアプリケーションのビジネスルール)。
  * 載せたもの: `AppError`(ほぼすべての port のエラー)・`FileFingerprint`・`SessionContent`
@@ -315,8 +322,9 @@ const DEFS: ClassDef[] = [
     name: { physical: "HubTuningStore", logical: "HubTuningStore", description: "ハブグラフの force シミュレーション調整値(domain::HubTuning)の永続化(port)。app::lib.rs" },
     stereotype: "interface",
     methods: [
-      method("load", [], "Result<domain::HubTuning, AppError>"),
-      method("save", ["tuning: &domain::HubTuning"], "Result<(), AppError>"),
+      // トレイト定義は use で取り込んだ名前(domain:: を付けない)。冒頭の書き方の基準どおり実物に合わせる。
+      method("load", [], "Result<HubTuning, AppError>"),
+      method("save", ["tuning: &HubTuning"], "Result<(), AppError>"),
     ],
     position: { x: 4400, y: 2800 },
     filePath: "apps/native/crates/app/src/lib.rs",
@@ -976,6 +984,10 @@ const DEFS: ClassDef[] = [
     methods: [
       // CLI の --model に渡す別名
       method("as_cli_value", [], "&'static str"),
+      // as_cli_value の逆写像(#459。保存した別名・CLI が報告した一覧の値から戻す)。app が
+      // 知らない値(CLI の既定を表す default、版が増やした別名、claude-haiku-4-5-… のような
+      // 実際のモデル名)は None = --model を付けない(CLI の既定で起動する)。
+      method("from_cli_value", ["value: &str"], "Option<Self>"),
     ],
     position: { x: 7700, y: 2750 },
     filePath: "apps/native/crates/app/src/running_session.rs",
