@@ -59,6 +59,15 @@
  * (`remember_running_session` / `forget_running_session` / `plan_restore` /
  * `sessions_to_restore` / `ensure_restorable_conversation`)は関数なので描かない。
  *
+ * 【セッションの表示名の変更(issue #523。PR #525)】`SessionSource` に `append_custom_title` が
+ * 加わった。この port で唯一の書き込みで、会話ファイルを**置き換えず追記する**(理由は
+ * `FileSystemRepository` の説明を参照)。ユースケース `rename_session`(`rename_session.rs`)と
+ * command `rename_session` は関数なので描かない。
+ * あわせて、`SessionSource` のメソッド一覧を実物にそろえた(`session` / `latest_session_id` /
+ * `latest_session_cwd` は実装側で `read_session` / `session_fingerprint` / `session_cwd` /
+ * `list_parsed_sessions` / `session_line_raw` に置き換わっていたが、図が追従していなかった。
+ * #400 の突き合わせは型の名前・フィールド中心で、port のメソッド一覧は対象外だった)。
+ *
  * 【app の port の入出力の型(issue #420)】方針: app の非 port の型は、port のシグネチャ(引数・
  * 戻り値・エラー)に出てくるものだけを載せる(層はアプリケーションのビジネスルール)。
  * 載せたもの: `AppError`(ほぼすべての port のエラー)・`FileFingerprint`・`SessionContent`
@@ -146,22 +155,26 @@ import {
 const DEFS: ClassDef[] = [
   // ============ セッション閲覧 ============
   {
-    name: { physical: "SessionSource", logical: "SessionSource", description: "プロジェクト・セッションの読み取り(port)。app::lib.rs" },
+    name: { physical: "SessionSource", logical: "SessionSource", description: "プロジェクト・セッションの読み取り(port)。app::lib.rs。ほぼ読み取り専用で、append_custom_title(issue #523)だけが書き込み。read_session は会話ファイルを1回だけ読んで表示用のメッセージ(記録順)と LogLine を返し、返す fingerprint は読み始める前の状態(読んでいる途中で伸びても次回は読み直す側に倒す。issue #350)。session_fingerprint は中身を読まずに状態だけを返す(キャッシュの照合用)。session_cwd は対象セッション自身の cwd(--resume は ID で指定するため、フォルダ内の最新ではない。issue #345)。list_parsed_sessions は list_sessions と同じ走査に相乗りし、行(LogLine)は読まない(遅延読み込み)。session_line_raw は uuid が一致する行の生のテキスト(ビューアの「データ」表示。issue #313)" },
     stereotype: "interface",
     methods: [
       method("list_projects", [], "Result<Vec<Project>, AppError>"),
-      method("session", ["project: &str", "session_id: &str"], "Result<Session, AppError>"),
-      method("latest_session_id", ["project: &str"], "Result<String, AppError>"),
-      method("latest_session_cwd", ["project: &str"], "Result<PathBuf, AppError>"),
+      method("read_session", ["project: &str", "session_id: &str"], "Result<SessionContent, AppError>"),
+      method("session_fingerprint", ["project: &str", "session_id: &str"], "Result<FileFingerprint, AppError>"),
+      method("session_cwd", ["project: &str", "session_id: &str"], "Result<PathBuf, AppError>"),
       method("list_sessions", ["project: &str"], "Result<Vec<SessionSummary>, AppError>"),
+      method("list_parsed_sessions", ["project: &str"], "Result<Vec<ParsedSession>, AppError>"),
+      method("session_line_raw", ["project: &str", "session_id: &str", "uuid: &str"], "Result<String, AppError>"),
+      // 【#523】会話ファイルへ custom-title 行を追記して表示名を変える。この port で唯一の書き込み。
+      method("append_custom_title", ["project: &str", "session_id: &str", "title: &str"], "Result<(), AppError>"),
     ],
     position: { x: 2100, y: 2050 },
     filePath: "apps/native/crates/app/src/lib.rs",
     // メソッド名・引数が長く、戻り値型の列と重なるので広げる。
-    size: { w: 410, h: 0 },
+    size: { w: 660, h: 0 },
   },
   {
-    name: { physical: "FileSystemRepository", logical: "FileSystemRepository", description: "~/.claude/projects/ 配下の .jsonl を読む SessionSource 実装(session_source.rs)" },
+    name: { physical: "FileSystemRepository", logical: "FileSystemRepository", description: "~/.claude/projects/ 配下の .jsonl を読む SessionSource 実装(session_source.rs)。【書き込みについて(issue #523)】会話ファイルへの書き込みは、append_custom_title(custom-title 行の追記)で app がこれを初めて行う。CLI が実行中でも同じファイルへ追記を続けているため、native.md §2 のアトミックな書き込み(*.tmp → rename)のようにファイル全体を置き換えることはしない(置き換えると、実行中の CLI が書いた分を消してしまう)。実行中の CLI へタイトルを伝える stream-json の手段が無いため、追記が唯一の方法(調査の結果)。表示側は同じファイル内の custom-title 行のうち最後のものを使う(domain::resolve_session_title)ので、追記するだけでよい" },
     attributes: [attr("projects_dir", "PathBuf")],
     position: { x: 2100, y: 2400 },
     filePath: "apps/native/crates/infra/src/session_source.rs",
