@@ -2883,6 +2883,15 @@ button.claude-explorer-name {
   min-width: 0;
 }
 
+/* セッション名のボタン(issue #524)は会話のタイトルをそのまま出すため、他の
+   ボタン(固定の語)と違って長くなりうる。共有部品(ActionButton)自体は変えず、
+   ここだけ幅の上限と省略(…)を上書きする(issue #511 のバッジの扱いと同じ流儀)。 */
+.running-bar-session-name .action-button {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .running-bar-menu {
   position: absolute;
   top: calc(100% + var(--space-1));

@@ -17,6 +17,7 @@ import {
   onSessionChanged,
   onSettingsUpdated,
   onViewerNavigate,
+  renameSession,
   saveProjectClaudeMd,
   saveProjectSettingsFile,
   startRunningSession,
@@ -52,6 +53,7 @@ import LiveTurnView from "../LiveTurnView";
 import NewSessionDialog from "../NewSessionDialog";
 import type { NewSessionInput } from "../NewSessionDialog";
 import PermissionRequestCard from "../PermissionRequestCard";
+import RenameSessionDialog from "../RenameSessionDialog";
 import RunningSessionBar from "../RunningSessionBar";
 import { MAX_SESSION_NAME_CHARS } from "../runningSessionLabels";
 import {
@@ -179,6 +181,9 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const [showArchivedCategory, setShowArchivedCategory] = useState(false);
   // 新規セッションのモーダル(issue #409)。
   const [newDialogOpen, setNewDialogOpen] = useState(false);
+  // セッション名を変えるモーダル(issue #524)。表示中の会話ファイルのある会話が対象
+  // (出す条件は RunningSessionBar の canConfigureResume と同じ)。
+  const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   // 再開に付ける表示名(`--name`)の、ユーザーが入力欄を編集した値。編集していなければ `null`
   // で、入力欄にはその会話の現在の表示名(`custom_title`)を初期値として出す(issue #445。
   // 同じ値なら会話のタイトルは変わらず、CLI が既定の名前を付けない)。送信・会話の切り替えで戻す。
@@ -663,6 +668,19 @@ function SessionsPage({ nav }: SessionsPageProps) {
     void archiveSessionWithConfirm(projectParam, sessionParam, runningAlive);
   };
 
+  // 状態バーの「セッション名」ボタンから呼ぶ(issue #524)。モーダルの「変更」での確定は
+  // handleRenameSession が行う。表示の更新は `session:changed`(既存の購読)で一覧・
+  // `selectedSummary` 経由の `session.title` に反映される。
+  const handleRenameSession = async (title: string) => {
+    if (!projectParam || !sessionParam) return;
+    try {
+      await renameSession(projectParam, sessionParam, title);
+      setRenameDialogOpen(false);
+    } catch (e) {
+      setError(isAppError(e) ? e.message : String(e));
+    }
+  };
+
   // 会話ファイルができた新規セッションの表示中(URL が `session` だけ)を、通常の会話の
   // 表示(`project` 付き)へ移す(issue #487。一覧は全件表示になったため「タブへ加える」
   // 処理は不要になった)。
@@ -951,6 +969,13 @@ function SessionsPage({ nav }: SessionsPageProps) {
           onClose={() => setNewDialogOpen(false)}
         />
       )}
+      {renameDialogOpen && selectedSummary && (
+        <RenameSessionDialog
+          initialTitle={selectedSummary.title}
+          onRename={(title) => void handleRenameSession(title)}
+          onClose={() => setRenameDialogOpen(false)}
+        />
+      )}
       <div className="viewer-body">
       {/* ビュー切り替えは上部のタブではなく、画面の最左端のサイドメニュー
           (issue #263)。切り替えの挙動(`handleSwitchView`)は従来のまま。 */}
@@ -1114,6 +1139,8 @@ function SessionsPage({ nav }: SessionsPageProps) {
                 onStop={() => void stopRunning()}
                 onStart={handleStartRunning}
                 starting={starting}
+                sessionTitle={selectedSummary?.title ?? ""}
+                onRenameSession={() => setRenameDialogOpen(true)}
               />
             )}
             {/* メッセージ入力欄・添付サムネイルは、選んでいる対象があるときだけ描く
