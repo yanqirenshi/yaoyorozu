@@ -19,7 +19,9 @@ import {
 // 会話ビューの上部に出す、実行中セッション(app が起動したままの claude)の状態表示
 // (issue #392。#409 で、現在のモデル・権限モードの表示と、その場での切り替えを足した)。
 // プロセスの状態・権限モード・モデルを出し、中断・終了の操作を置く。状態は
-// イベント → Query で取り直したもの(楽観更新しない)。起動中・実行中は LoadingIcon(#393)。
+// イベント → Query で取り直したもの(楽観更新しない)。進行中(起動中・実行中)の
+// ローディングアイコンは issue #517 で `LiveTurnView` の「作成中」の横へ移した
+// (ここに残るのは設定の切り替え中(`switching`)のものだけ)。
 //
 // - 切り替えの選択は既存部品の選択ボタン(`SelectButton`)で開く一覧から行う。切り替えている間
 //   (`switching`)と、起動中は操作できない。結果(現在値)は CLI が受け入れたあとの取り直しで
@@ -78,7 +80,6 @@ export default function RunningSessionBar({
 }: Props) {
   const alive = running !== null && running.process_state !== "exited";
   const state = running?.process_state ?? null;
-  const showsProgress = alive && (state === "starting" || state === "running");
   const canInterrupt = alive && (state === "running" || state === "awaiting_permission");
   // 起動中(initialize の応答前)は CLI へ切り替えを要求できない。
   const canSwitch = alive && state !== "starting" && !switching;
@@ -127,12 +128,11 @@ export default function RunningSessionBar({
 
   return (
     <div className="running-bar" role="group" aria-label="実行中のセッション" ref={rootRef}>
-      {showsProgress && (
-        <LoadingIcon
-          size="small"
-          label={state === "starting" ? "セッションを起動中" : "AI が応答中"}
-        />
-      )}
+      {/* 進行中(起動中・実行中)のローディングアイコンは、ここには出さない(issue #517)。
+          会話に表示先がある「実行中」は `LiveTurnView` の「作成中」の横へ移した。
+          「起動中」は会話にまだ表示先が無い(会話ファイル・ライブなターンのどちらも
+          無い)ため、アイコンの出しどころが無く、このバッジ(「起動中」の文字)だけで
+          伝える(PR #517 の判断)。 */}
       {/* 状態の変化を支援技術に伝える領域(色が変わっただけでは何も伝わらない。issue #411)。
           LoadingIcon は自分で role="status" を持つので、包まずバッジだけを包む。 */}
       <span className="running-bar-status" role="status">

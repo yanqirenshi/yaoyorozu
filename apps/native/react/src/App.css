@@ -2638,6 +2638,14 @@ button.claude-explorer-name {
   color: var(--color-kincha-800);
 }
 
+/* 「作成中」とローディングアイコンを横に並べるラッパ(issue #517)。`.message-meta`
+   自体は縦並び(flex-direction: column)なので、ここだけ横並びにする。 */
+.message-meta-live-group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
 .live-tools {
   list-style: none;
   margin: var(--space-2) 0 0;

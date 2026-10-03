@@ -1,3 +1,4 @@
+import LoadingIcon from "./LoadingIcon";
 import MessageText from "./MessageText";
 import type { MessageDto } from "./api/types";
 import type { LiveTurn } from "./useRunningSession";
@@ -56,7 +57,14 @@ export default function LiveTurnView({ live, messages }: Props) {
         <div className="message-row message-row-assistant message-row-live">
           <div className="message-meta message-meta-assistant">
             <span className="message-meta-role">assistant</span>
-            <span className="message-meta-live">作成中</span>
+            {/* 進行中のローディングアイコンは、ここ(会話の「作成中」の横)に出す
+                (issue #517。以前は状態バー側にも別に出していたが、表示先が重複して
+                いたため会話側に一本化した)。`message-meta` は縦並びなので、アイコンと
+                文字が横に並ぶ小さなラッパ(.message-meta-live-group)を挟む。 */}
+            <span className="message-meta-live-group">
+              <LoadingIcon size="small" label="作成中" />
+              <span className="message-meta-live">作成中</span>
+            </span>
           </div>
           <div className="message message-assistant message-live">
             {segments.map((segment) => (
