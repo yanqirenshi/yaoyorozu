@@ -259,6 +259,19 @@ export function unarchiveSession(project: string, sessionId: string): Promise<vo
   return invoke<void>("unarchive_session", { project, sessionId });
 }
 
+// セッションの表示名(タイトル)を変える(issue #523)。会話ファイルへ custom-title 行を
+// 追記する(実行中の CLI にタイトルを伝える手段は無いため)。実行中プロセスがある場合、
+// その宛先名(起動時の --name。セッション間メッセージの宛先)はこれでは変わらず、次に
+// その会話を起動し直すまで古い名前のまま。変更後は session:changed が届き、一覧を
+// 取り直せる。
+export function renameSession(
+  project: string,
+  sessionId: string,
+  title: string,
+): Promise<void> {
+  return invoke<void>("rename_session", { project, sessionId, title });
+}
+
 // 状態変化・権限の問い合わせの到着/決着の通知(軽量)。詳細は getRunningSession で取り直す。
 export function onRunningSessionChanged(
   callback: (event: RunningSessionChangedEvent) => void,
