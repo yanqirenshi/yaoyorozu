@@ -531,6 +531,14 @@ mod tests {
             ) -> Result<String, AppError> {
                 Err(AppError::NotFound("unused".to_string()))
             }
+            fn append_custom_title(
+                &self,
+                _project: &str,
+                _session_id: &str,
+                _title: &str,
+            ) -> Result<(), AppError> {
+                Ok(())
+            }
         }
         let planned = plan_restore(&entry("s1")).unwrap();
 

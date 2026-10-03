@@ -930,6 +930,33 @@ pub async fn unarchive_session(
     Ok(())
 }
 
+/// セッションの表示名(タイトル)を変える(issue #523)。会話ファイルへ `custom-title` 行を
+/// 追記する(実行中の CLI にタイトルを伝える手段が無いための代替。`app::rename_session` の
+/// ドキュメント参照)。**実行中プロセスがある場合、その宛先名(起動時の `--name`。セッション間
+/// メッセージの宛先に使われる)はこれでは変わらず、次にその会話を起動し直すまで古い名前のまま**
+/// (呼び出し側の画面で利用者に伝えること)。
+#[tauri::command]
+pub async fn rename_session(
+    state: tauri::State<'_, Mutex<AppState>>,
+    app_handle: tauri::AppHandle,
+    project: String,
+    session_id: String,
+    title: String,
+) -> Result<(), AppErrorDto> {
+    let settings = state.lock().await.settings.clone();
+    let root = resolve_effective_projects_dir(&settings)?;
+    let notify_project = project.clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), app::AppError> {
+        let source = FileSystemRepository::new(root);
+        app::rename_session(&source, &project, &session_id, &title)
+    })
+    .await
+    .unwrap_or_else(|_| Err(background_failed()))?;
+
+    notify_session_changed(&app_handle, &notify_project);
+    Ok(())
+}
+
 /// `session_id` に一致する、app が持つ実行中セッション(終了していないもの)を**全部**止める。
 /// 同じ会話の二重起動は防いでいる(#361・#345)ため、通常は高々1件だが、プロファイルをまたいで
 /// 探すために `find_slot` ではなく全走査にする。

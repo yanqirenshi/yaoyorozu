@@ -1683,6 +1683,7 @@ pub fn run() {
             running_session::stop_running_session,
             running_session::archive_session,
             running_session::unarchive_session,
+            running_session::rename_session,
             get_settings,
             update_settings,
             switch_profile,

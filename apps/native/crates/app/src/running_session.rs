@@ -120,8 +120,9 @@ pub const MAX_RUNNING_SESSIONS: usize = 24;
 /// 見られるように残す。上限を超えた古いものから忘れる)。
 pub const MAX_KEPT_EXITED_SESSIONS: usize = 10;
 
-/// 表示名(`--name`)の長さの上限(文字数)。
-const MAX_NAME_CHARS: usize = 100;
+/// 表示名(`--name`)の長さの上限(文字数)。[`crate::rename_session`] も同じ上限を使う
+/// (issue #523)ため `pub(crate)`。
+pub(crate) const MAX_NAME_CHARS: usize = 100;
 
 /// モデル名(`set_model`)の長さの上限(文字数)。
 const MAX_MODEL_CHARS: usize = 100;
@@ -1110,6 +1111,14 @@ mod tests {
             _uuid: &str,
         ) -> Result<String, AppError> {
             Err(AppError::NotFound("unused".to_string()))
+        }
+        fn append_custom_title(
+            &self,
+            _project: &str,
+            _session_id: &str,
+            _title: &str,
+        ) -> Result<(), AppError> {
+            Ok(())
         }
     }
 

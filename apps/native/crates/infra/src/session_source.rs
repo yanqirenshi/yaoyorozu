@@ -564,6 +564,43 @@ impl SessionSource for FileSystemRepository {
             .map(|path| build_parsed_session(&project_dir, path))
             .collect()
     }
+
+    fn append_custom_title(
+        &self,
+        project: &str,
+        session_id: &str,
+        title: &str,
+    ) -> Result<(), AppError> {
+        let path = self
+            .projects_dir
+            .join(project)
+            .join(format!("{session_id}.jsonl"));
+        // ファイル全体を置き換える native.md §2 のアトミック書き込み(`*.tmp` → rename)は
+        // ここでは使わない: 会話ファイルは CLI が実行中でも書き続けているファイルで、
+        // 置き換えると CLI が書いた分を消してしまう(trait のドキュメント参照)。
+        // `OpenOptions::append` は `create` を付けないため、ファイルが無ければ
+        // 開けずに失敗する(存在しない会話を装って書き込まない)。1行分を1回の
+        // `write_all` で書くことで、CLI 側の書き込みと混線しない(OS のファイル
+        // 追記は1回の書き込み単位でアトミック)。
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    AppError::NotFound(format!("{} が見つかりません: {e}", path.display()))
+                } else {
+                    AppError::Io(format!("{} を開けませんでした: {e}", path.display()))
+                }
+            })?;
+        let line = serde_json::json!({
+            "type": "custom-title",
+            "customTitle": title,
+            "sessionId": session_id,
+        });
+        use std::io::Write;
+        file.write_all(format!("{line}\n").as_bytes())
+            .map_err(|e| AppError::Io(format!("{} へ書き込めませんでした: {e}", path.display())))
+    }
 }
 
 /// 会話ファイル1件から `ParsedSession` を組み立てる。走査キャッシュ
@@ -1160,6 +1197,65 @@ mod tests {
             .expect("should get cwd");
 
         assert_eq!(cwd, PathBuf::from(WORKTREE_CWD));
+    }
+
+    #[test]
+    fn append_custom_title_adds_a_line_without_touching_existing_ones() {
+        // issue #523: 追記のみ(既存行はそのまま)。
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        let path = project_dir.join("s1.jsonl");
+        fs::write(
+            &path,
+            r#"{"type":"user","sessionId":"s1","message":{"content":"hello"}}"#.to_string() + "\n",
+        )
+        .unwrap();
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        repo.append_custom_title("proj", "s1", "新しいタイトル")
+            .expect("should append");
+
+        let content = fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(lines[0].contains("\"hello\""), "{lines:?}");
+        let appended: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(appended["type"], "custom-title");
+        assert_eq!(appended["customTitle"], "新しいタイトル");
+        assert_eq!(appended["sessionId"], "s1");
+    }
+
+    #[test]
+    fn append_custom_title_appends_again_without_losing_the_previous_title() {
+        // 同一セッションに複数回タイトルを変えても、両方の行が残る
+        // (読み取り側は最後の行を使う。domain::resolve_session_title)。
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        fs::write(project_dir.join("s1.jsonl"), "").unwrap();
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        repo.append_custom_title("proj", "s1", "最初").unwrap();
+        repo.append_custom_title("proj", "s1", "次").unwrap();
+
+        let content = fs::read_to_string(project_dir.join("s1.jsonl")).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(lines[0].contains("最初"));
+        assert!(lines[1].contains("次"));
+    }
+
+    #[test]
+    fn append_custom_title_fails_for_a_session_file_that_does_not_exist() {
+        // 存在しない会話を装って新規ファイルを作らない(issue #523)。
+        let dir = tempfile::tempdir().unwrap();
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+
+        let result = repo.append_custom_title("proj", "missing", "タイトル");
+
+        assert!(matches!(result, Err(AppError::NotFound(_))), "{result:?}");
+        assert!(!dir.path().join("proj").join("missing.jsonl").exists());
     }
 
     #[test]

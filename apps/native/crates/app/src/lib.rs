@@ -21,6 +21,7 @@ pub use worktree::{
     WorktreeIndex, WorktreeSpec, ORIGIN_MAIN,
 };
 mod archive_session;
+mod rename_session;
 mod restore_running_sessions;
 mod running_session;
 mod running_session_summary;
@@ -28,6 +29,7 @@ pub use archive_session::{archive_session, load_archived_sessions, unarchive_ses
 pub use cli_version::{
     parse_cli_version, peer_messaging_warning, supports_peer_messaging, MIN_PEER_MESSAGING_VERSION,
 };
+pub use rename_session::rename_session;
 pub use restore_running_sessions::{
     ensure_restorable_conversation, forget_running_session, plan_restore, remember_running_session,
     remember_running_session_switch, sessions_to_restore, PlannedRestore,
@@ -207,6 +209,22 @@ pub trait SessionSource {
         session_id: &str,
         uuid: &str,
     ) -> Result<String, AppError>;
+
+    /// 会話ファイルへ `custom-title` 行を追記し、表示名(タイトル)を変える(issue #523)。
+    /// `SessionSource` でここだけが書き込みで、かつ CLI 自身が書いているファイルへの
+    /// 唯一の書き込みである(他の全メソッドは読み取りのみ)。会話ファイルを丸ごと
+    /// 置き換えるのではなく**追記のみ**で行うこと: CLI が実行中でも同じファイルへ追記を
+    /// 続けており、native.md §2 の「アトミックな書き込み」(`*.tmp` → rename)はファイル全体を
+    /// 置き換えるため、実行中の CLI が書いた分を消してしまう危険がある(調査の結果、
+    /// 実行中の CLI へタイトルを伝える stream-json の手段が無いため、この追記が唯一の方法)。
+    /// 表示側は同じファイル内に複数回現れた `custom-title` 行のうち最後のものを使う
+    /// (`domain::resolve_session_title`)ため、追記するだけでよい。
+    fn append_custom_title(
+        &self,
+        project: &str,
+        session_id: &str,
+        title: &str,
+    ) -> Result<(), AppError>;
 }
 
 /// アプリ設定の永続化(port)。実体(ファイル形式・保存先の解決)は infra に
@@ -1840,6 +1858,15 @@ mod tests {
             self.raw_line
                 .clone()
                 .ok_or_else(|| AppError::NotFound("該当する行が見つかりませんでした".to_string()))
+        }
+
+        fn append_custom_title(
+            &self,
+            _project: &str,
+            _session_id: &str,
+            _title: &str,
+        ) -> Result<(), AppError> {
+            Ok(())
         }
     }
 
