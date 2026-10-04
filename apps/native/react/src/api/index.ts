@@ -272,6 +272,14 @@ export function renameSession(
   return invoke<void>("rename_session", { project, sessionId, title });
 }
 
+// Web アプリ(apps/web の開発サーバ)が応答するまで、必要なら起動して待つ(issue #530)。
+// 応答していれば何もせずすぐ返る(二重起動しない)。呼び出し側はこれが終わってから
+// openUrl で開くこと。起動を待つ間(初回コンパイルで数十秒かかることがある)は、
+// このPromiseが解決するまでボタンを無効化するなどして利用者に分かるようにする。
+export function ensureWebAppRunning(profileId?: string | null): Promise<void> {
+  return invoke<void>("ensure_web_app_running", { profileId: profileId ?? null });
+}
+
 // 状態変化・権限の問い合わせの到着/決着の通知(軽量)。詳細は getRunningSession で取り直す。
 export function onRunningSessionChanged(
   callback: (event: RunningSessionChangedEvent) => void,

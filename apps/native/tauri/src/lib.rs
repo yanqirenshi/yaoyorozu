@@ -3,6 +3,7 @@ mod local_api;
 mod running_session;
 mod session_scan_queue;
 mod state;
+mod web_dev_server;
 
 use app::{SettingsStore, TokenStore};
 use dto::{
@@ -1684,6 +1685,7 @@ pub fn run() {
             running_session::archive_session,
             running_session::unarchive_session,
             running_session::rename_session,
+            web_dev_server::ensure_web_app_running,
             get_settings,
             update_settings,
             switch_profile,
@@ -1741,6 +1743,7 @@ pub fn run() {
             // (issue #391)。
             if matches!(event, tauri::RunEvent::Exit) {
                 running_session::stop_running_session_on_exit(app_handle);
+                web_dev_server::stop_web_dev_server_on_exit(app_handle);
             }
         });
 }

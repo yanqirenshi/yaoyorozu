@@ -6,6 +6,7 @@ import type { ViewMode } from "@yanqirenshi/markdown.sitter";
 import {
   archiveSession,
   checkImageAttachment,
+  ensureWebAppRunning,
   getGithubAuthStatus,
   getProjectClaudeMd,
   getProjectSettingsFile,
@@ -165,6 +166,9 @@ function SessionsPage({ nav }: SessionsPageProps) {
   // 一覧ペインのヘッダ(issue #521)に出すプロファイル名。読み込み前・該当プロファイルが
   // 見つからない間は null(ヘッダには空で出す。読み込み中に空白が一瞬出ること自体は許容)。
   const [profileName, setProfileName] = useState<string | null>(null);
+  // 「仕様」を押してから Web アプリ(apps/web)の起動を待っている間(issue #530)。
+  // 初回コンパイルで数十秒かかることがあるため、ボタンを無効化して分かるようにする。
+  const [specLinkBusy, setSpecLinkBusy] = useState(false);
   const [targetFolders, setTargetFolders] = useState<string[]>([]);
   const [sessionGroups, setSessionGroups] = useState<SessionGroup[]>([]);
   // 左ペインの検索語(issue #487。インクリメンタル・大文字小文字を区別しない部分一致)。
@@ -874,6 +878,21 @@ function SessionsPage({ nav }: SessionsPageProps) {
     }
   };
 
+  // 「仕様」を押したとき(issue #530)。Web アプリ(apps/web)が応答していなければ app が
+  // 起動してから開く(二重起動しない。待っている間はボタンを無効化)。失敗・タイムアウトは
+  // 既存の app:warning バナー(#504)に理由が出るので、ここでは個別に表示しない。
+  const handleOpenSpec = async () => {
+    setSpecLinkBusy(true);
+    try {
+      await ensureWebAppRunning(resolvedProfileId);
+      await openUrl(SPEC_SITE_URL);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setSpecLinkBusy(false);
+    }
+  };
+
   // ビューアでは dock を表示しない(issue #257)ため、これらの操作は dock ではなく
   // ページ内の `ViewerToolbar` に出す(内容・挙動は dock 時代のまま)。
   const dockItems = useMemo<DockItem[]>(() => {
@@ -992,7 +1011,8 @@ function SessionsPage({ nav }: SessionsPageProps) {
               (長い名前は省略表示。`title` に全体を残す)、右に「仕様」(apps/web の
               ドキュメンテーションツール)を既定のブラウザで開くリンク。プロファイルの
               切り替えに追従する(loadTargetFoldersAndSessions / onSettingsUpdated の
-              どちらでも profileName を更新する)。 */}
+              どちらでも profileName を更新する)。Web アプリが応答していなければ app が
+              起動してから開く(issue #530。待っている間はボタンを無効化)。 */}
           <div className="project-list-header">
             <span className="project-list-header-profile" title={profileName ?? undefined}>
               {profileName}
@@ -1000,9 +1020,10 @@ function SessionsPage({ nav }: SessionsPageProps) {
             <button
               type="button"
               className="project-list-header-spec-link"
-              onClick={() => void openUrl(SPEC_SITE_URL)}
+              onClick={() => void handleOpenSpec()}
+              disabled={specLinkBusy}
             >
-              仕様
+              {specLinkBusy ? "仕様(起動中…)" : "仕様"}
             </button>
           </div>
           {/* 検索(issue #487。インクリメンタル・大文字小文字を区別しない部分一致)と

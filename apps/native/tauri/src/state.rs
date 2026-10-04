@@ -131,6 +131,15 @@ pub struct AppState {
     /// ファイル監視が検知した会話ファイルの変更の待ち行列(ハブの自動更新。
     /// issue #311。`session_scan_queue::enqueue_changed`)。実行時状態で永続化しない。
     pub session_rescan: app::RescanQueue,
+    /// app が起動した apps/web の開発サーバ(issue #530)。「仕様」リンクから、応答が無いときに
+    /// 起動する。多重起動を防ぐため1つだけ持つ(利用者が手で起動したものはここに乗らず、
+    /// 応答の確認だけで検知する)。app 終了時にはこれだけを止める(手動起動分は対象外)。
+    pub web_dev_server: Option<WebDevServerSlot>,
+}
+
+/// app が起動した Web アプリの開発サーバ1つ(issue #530)。
+pub struct WebDevServerSlot {
+    pub process: Arc<dyn app::WebDevServerProcess>,
 }
 
 /// エポック秒からのミリ秒。`GitBranch`/`GitWorktree`の
@@ -238,6 +247,7 @@ impl AppState {
                 pc_data_loaded: false,
                 session_scan_generation: 0,
                 session_rescan: app::RescanQueue::default(),
+                web_dev_server: None,
             },
             recovered_from_corruption: loaded.recovered_from_corruption,
         })
