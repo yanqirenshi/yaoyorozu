@@ -1007,138 +1007,145 @@ function SessionsPage({ nav }: SessionsPageProps) {
           一覧を出し入れしても破棄されない(会話に戻ればそのまま)。 */}
       {view === "chat" && (
         <div className="project-list">
-          {/* 一覧ペインのヘッダ(issue #521)。左にこのウィンドウのプロファイル名
-              (長い名前は省略表示。`title` に全体を残す)、右に「仕様」(apps/web の
-              ドキュメンテーションツール)を既定のブラウザで開くリンク。プロファイルの
-              切り替えに追従する(loadTargetFoldersAndSessions / onSettingsUpdated の
-              どちらでも profileName を更新する)。Web アプリが応答していなければ app が
-              起動してから開く(issue #530。待っている間はボタンを無効化)。 */}
-          <div className="project-list-header">
-            <span className="project-list-header-profile" title={profileName ?? undefined}>
-              {profileName}
-            </span>
-            <button
-              type="button"
-              className="project-list-header-spec-link"
-              onClick={() => void handleOpenSpec()}
-              disabled={specLinkBusy}
-            >
-              {specLinkBusy ? "仕様(起動中…)" : "仕様"}
-            </button>
+          {/* 上部(ヘッダ・検索・区分トグル)は固定し、行の一覧だけをスクロールさせる
+              (issue #531。以前はペイン全体が overflow-y: auto だったため、上部も
+              一緒に流れてしまっていた)。 */}
+          <div className="project-list-top">
+            {/* 一覧ペインのヘッダ(issue #521)。左にこのウィンドウのプロファイル名
+                (長い名前は省略表示。`title` に全体を残す)、右に「仕様」(apps/web の
+                ドキュメンテーションツール)を既定のブラウザで開くリンク。プロファイルの
+                切り替えに追従する(loadTargetFoldersAndSessions / onSettingsUpdated の
+                どちらでも profileName を更新する)。Web アプリが応答していなければ app が
+                起動してから開く(issue #530。待っている間はボタンを無効化)。 */}
+            <div className="project-list-header">
+              <span className="project-list-header-profile" title={profileName ?? undefined}>
+                {profileName}
+              </span>
+              <button
+                type="button"
+                className="project-list-header-spec-link"
+                onClick={() => void handleOpenSpec()}
+                disabled={specLinkBusy}
+              >
+                {specLinkBusy ? "仕様(起動中…)" : "仕様"}
+              </button>
+            </div>
+            {/* 検索(issue #487。インクリメンタル・大文字小文字を区別しない部分一致)と
+                「+」(issue #506。文字だけだと読みにくいので title / aria-label は
+                「新しい会話を始める」「新規セッション」のまま残す)。一覧には常に
+                全セッションを表示するため、旧「+ セッションを追加」(選んで一覧に
+                加える方式)は廃止した。 */}
+            <div className="session-list-actions">
+              <input
+                type="text"
+                className="session-list-search"
+                placeholder="セッションを検索"
+                value={sessionFilter}
+                onChange={(e) => setSessionFilter(e.target.value)}
+                aria-label="セッションを検索"
+              />
+              <button
+                type="button"
+                className="session-list-add"
+                title="新しい会話を始める"
+                aria-label="新規セッション"
+                onClick={() => setNewDialogOpen(true)}
+              >
+                +
+              </button>
+            </div>
+            {/* 一覧の区分トグル(issue #506。#495 の「アーカイブを表示」チェックボックスを
+                置き換え)。ON = 一覧に表示。UI 状態なので保存しない。検索語とは AND
+                (絞り込みと同時に効く)。 */}
+            <div className="session-list-category-toggle" role="group" aria-label="表示する区分">
+              <button
+                type="button"
+                className="session-list-category-button"
+                aria-pressed={showRunningCategory}
+                onClick={() => setShowRunningCategory((v) => !v)}
+              >
+                起動
+              </button>
+              <button
+                type="button"
+                className="session-list-category-button"
+                aria-pressed={showIdleCategory}
+                onClick={() => setShowIdleCategory((v) => !v)}
+              >
+                未起動
+              </button>
+              <button
+                type="button"
+                className="session-list-category-button"
+                aria-pressed={showArchivedCategory}
+                onClick={() => setShowArchivedCategory((v) => !v)}
+              >
+                アーカイブ
+              </button>
+            </div>
           </div>
-          {/* 検索(issue #487。インクリメンタル・大文字小文字を区別しない部分一致)と
-              「+」(issue #506。文字だけだと読みにくいので title / aria-label は
-              「新しい会話を始める」「新規セッション」のまま残す)。一覧には常に
-              全セッションを表示するため、旧「+ セッションを追加」(選んで一覧に
-              加える方式)は廃止した。 */}
-          <div className="session-list-actions">
-            <input
-              type="text"
-              className="session-list-search"
-              placeholder="セッションを検索"
-              value={sessionFilter}
-              onChange={(e) => setSessionFilter(e.target.value)}
-              aria-label="セッションを検索"
-            />
-            <button
-              type="button"
-              className="session-list-add"
-              title="新しい会話を始める"
-              aria-label="新規セッション"
-              onClick={() => setNewDialogOpen(true)}
-            >
-              +
-            </button>
+          <div className="project-list-rows">
+            {/* 会話ファイルがまだ無い新規のセッション(実行中のもの。issue #506 で「起動」区分の
+                一部となり、区分トグルが OFF なら隠れる)。会話ファイルができたら通常の行になる。 */}
+            {visiblePendingSummaries.map((summary) => {
+              const title = summary.name ?? "新規セッション";
+              // 更新日時・状態バッジを行から消した(issue #519)ので、情報はホバーの
+              // title へ残す(会話ファイルが無い新規セッションには更新日時が無い)。
+              const rowTitle = `${title} / ${processStateLabel(summary.process_state)}`;
+              return (
+                <div key={summary.session_id} className="session-list-row">
+                  <button
+                    type="button"
+                    className={`project-item session-list-item ${
+                      pendingSelected?.session_id === summary.session_id ? "selected" : ""
+                    }`}
+                    title={rowTitle}
+                    onClick={() => {
+                      if (confirmDiscardIfDirty()) nav.setProjectAndSession(null, summary.session_id);
+                    }}
+                  >
+                    <span className="session-item-title">{title}</span>
+                  </button>
+                </div>
+              );
+            })}
+            {/* 全セッション(検索で絞り込み済み。issue #487)。一覧から外す操作(旧「×」・
+                Delete キー)は、全件表示になったことで意味を持たなくなったため廃止した
+                (会話ファイルの削除はこの画面では行わない)。実行中なら左端の帯と状態の
+                バッジで色分けする(issue #491。未起動は今までどおり無色・バッジ無し)。 */}
+            {visibleSessions.map(({ key, folder, session }) => {
+              const sessionRunning = runningBySessionId.get(session.id) ?? null;
+              // 更新日時・状態バッジ(issue #491)を行から消し、タイトルだけにする
+              // (issue #519)。左端の色帯(sessionRowStateClass)で実行中かどうかの
+              // 見分けは残るが、具体的な状態・更新日時はホバーの title でのみ分かる
+              // ようにする(情報を完全には失わない)。
+              const statusLabel = session.archived
+                ? "アーカイブ"
+                : sessionRunning
+                  ? processStateLabel(sessionRunning.process_state)
+                  : "未起動";
+              const rowTitle = `${session.title} / ${new Date(session.modified_at).toLocaleString()} / ${statusLabel}`;
+              return (
+                <div key={key} className="session-list-row">
+                  <button
+                    type="button"
+                    className={`project-item session-list-item ${sessionRowStateClass(
+                      sessionRunning?.process_state ?? null,
+                    )} ${key === selectedTabValue ? "selected" : ""}`}
+                    title={rowTitle}
+                    onClick={() => handleSelectSession(folder, session.id)}
+                  >
+                    <span className="session-item-title">{session.title}</span>
+                    {targetFolders.length > 1 && (
+                      <span className="session-item-folder" title={folder}>
+                        {folder}
+                      </span>
+                    )}
+                  </button>
+                </div>
+              );
+            })}
           </div>
-          {/* 一覧の区分トグル(issue #506。#495 の「アーカイブを表示」チェックボックスを
-              置き換え)。ON = 一覧に表示。UI 状態なので保存しない。検索語とは AND
-              (絞り込みと同時に効く)。 */}
-          <div className="session-list-category-toggle" role="group" aria-label="表示する区分">
-            <button
-              type="button"
-              className="session-list-category-button"
-              aria-pressed={showRunningCategory}
-              onClick={() => setShowRunningCategory((v) => !v)}
-            >
-              起動
-            </button>
-            <button
-              type="button"
-              className="session-list-category-button"
-              aria-pressed={showIdleCategory}
-              onClick={() => setShowIdleCategory((v) => !v)}
-            >
-              未起動
-            </button>
-            <button
-              type="button"
-              className="session-list-category-button"
-              aria-pressed={showArchivedCategory}
-              onClick={() => setShowArchivedCategory((v) => !v)}
-            >
-              アーカイブ
-            </button>
-          </div>
-          {/* 会話ファイルがまだ無い新規のセッション(実行中のもの。issue #506 で「起動」区分の
-              一部となり、区分トグルが OFF なら隠れる)。会話ファイルができたら通常の行になる。 */}
-          {visiblePendingSummaries.map((summary) => {
-            const title = summary.name ?? "新規セッション";
-            // 更新日時・状態バッジを行から消した(issue #519)ので、情報はホバーの
-            // title へ残す(会話ファイルが無い新規セッションには更新日時が無い)。
-            const rowTitle = `${title} / ${processStateLabel(summary.process_state)}`;
-            return (
-              <div key={summary.session_id} className="session-list-row">
-                <button
-                  type="button"
-                  className={`project-item session-list-item ${
-                    pendingSelected?.session_id === summary.session_id ? "selected" : ""
-                  }`}
-                  title={rowTitle}
-                  onClick={() => {
-                    if (confirmDiscardIfDirty()) nav.setProjectAndSession(null, summary.session_id);
-                  }}
-                >
-                  <span className="session-item-title">{title}</span>
-                </button>
-              </div>
-            );
-          })}
-          {/* 全セッション(検索で絞り込み済み。issue #487)。一覧から外す操作(旧「×」・
-              Delete キー)は、全件表示になったことで意味を持たなくなったため廃止した
-              (会話ファイルの削除はこの画面では行わない)。実行中なら左端の帯と状態の
-              バッジで色分けする(issue #491。未起動は今までどおり無色・バッジ無し)。 */}
-          {visibleSessions.map(({ key, folder, session }) => {
-            const sessionRunning = runningBySessionId.get(session.id) ?? null;
-            // 更新日時・状態バッジ(issue #491)を行から消し、タイトルだけにする
-            // (issue #519)。左端の色帯(sessionRowStateClass)で実行中かどうかの
-            // 見分けは残るが、具体的な状態・更新日時はホバーの title でのみ分かる
-            // ようにする(情報を完全には失わない)。
-            const statusLabel = session.archived
-              ? "アーカイブ"
-              : sessionRunning
-                ? processStateLabel(sessionRunning.process_state)
-                : "未起動";
-            const rowTitle = `${session.title} / ${new Date(session.modified_at).toLocaleString()} / ${statusLabel}`;
-            return (
-              <div key={key} className="session-list-row">
-                <button
-                  type="button"
-                  className={`project-item session-list-item ${sessionRowStateClass(
-                    sessionRunning?.process_state ?? null,
-                  )} ${key === selectedTabValue ? "selected" : ""}`}
-                  title={rowTitle}
-                  onClick={() => handleSelectSession(folder, session.id)}
-                >
-                  <span className="session-item-title">{session.title}</span>
-                  {targetFolders.length > 1 && (
-                    <span className="session-item-folder" title={folder}>
-                      {folder}
-                    </span>
-                  )}
-                </button>
-              </div>
-            );
-          })}
         </div>
       )}
       <div className="session-conversation">

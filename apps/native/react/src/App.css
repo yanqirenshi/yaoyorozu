@@ -323,15 +323,19 @@ body,
   background: var(--surface-raised);
 }
 
-/* 画面左の一覧ペイン(固定幅+縦スクロール)。ビューアのセッション一覧と
-   設定のプロファイル一覧(issue #74)で骨格を共有する。ビューアのセッション一覧は
-   #348 でヘッダのタブに移したが、#379 で左ペインの縦一覧へ戻した。 */
+/* 画面左の一覧ペイン(固定幅)。ビューアのセッション一覧と設定のプロファイル一覧
+   (issue #74)で骨格を共有する。ビューアのセッション一覧は #348 でヘッダのタブに
+   移したが、#379 で左ペインの縦一覧へ戻した。
+   スクロールの仕方は issue #531 で分かれた: 設定のプロファイル一覧はペイン全体が
+   スクロールするまま(`.settings-profile-pane` 側にだけ overflow-y を残す)。
+   ビューアのセッション一覧は上部(ヘッダ・検索・区分トグル。`.project-list-top`)を
+   固定し、行の一覧(`.project-list-rows`)だけをスクロールさせるため、`.project-list`
+   自体は overflow を持たない(内側の `.project-list-rows` が overflow-y: auto)。 */
 .project-list,
 .settings-profile-pane {
   width: 320px;
   flex-shrink: 0;
   border-right: 1px solid var(--border-default);
-  overflow-y: auto;
   padding: 16px;
   display: flex;
   flex-direction: column;
@@ -342,6 +346,31 @@ body,
    下に隠れないよう、下端に余白を残す(issue #59 と同じ理由)。 */
 .settings-profile-pane {
   padding-bottom: 96px;
+  overflow-y: auto;
+}
+
+/* 固定する上部(issue #531)。`.project-list` 自身は overflow を持たないため、
+   子要素の高さの合計で縦に伸びようとするが、flex-shrink: 0 で潰れないようにする
+   だけで良く、特別な高さ指定は要らない。 */
+.project-list-top {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 行だけをスクロールさせる領域(issue #531)。`.project-list` が
+   `display: flex; flex-direction: column` なので、残りの高さいっぱいに
+   広がるよう flex: 1 + min-height: 0(flex item の既定の min-height: auto を
+   打ち消して縮められるようにする)。行が少なく中身がこの領域より低いときは、
+   overflow-y: auto の既定どおりスクロールバーは出ない。 */
+.project-list-rows {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .settings-profile-pane h2 {
