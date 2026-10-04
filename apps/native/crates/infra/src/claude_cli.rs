@@ -23,14 +23,63 @@ pub(crate) fn claude_executable() -> &'static str {
     "claude"
 }
 
-/// プロセス起動時の `io::Error` を分類する。
-/// 実行ファイル自体が見つからない場合と、それ以外の起動失敗を区別する。
-pub(crate) fn map_spawn_error(program: &str, e: std::io::Error) -> AppError {
+/// プロセス起動時の `io::Error` を分類する。実行ファイル自体が見つからない場合と、
+/// それ以外の起動失敗を区別する。
+///
+/// Windows は作業ディレクトリ(`cwd`)が無いときも実行ファイルが無いときと同じ
+/// `ErrorKind::NotFound` を返すため(issue #534)、`NotFound` を無条件に「実行ファイルが
+/// 無い」とは解釈しない。呼び出し側(`ClaudeCliProcessLauncher::start`)は spawn の前に
+/// `cwd.is_dir()` を確かめて `CwdMissing` を返しているが、確認と実際の spawn の間に
+/// ディレクトリが削除される競合もあり得るため、ここでも確かめて正しく分類し直す。
+pub(crate) fn map_spawn_error(program: &str, cwd: &std::path::Path, e: std::io::Error) -> AppError {
     if e.kind() == std::io::ErrorKind::NotFound {
+        if !cwd.is_dir() {
+            return AppError::CwdMissing(format!(
+                "作業ディレクトリが見つかりません: {}",
+                cwd.display()
+            ));
+        }
         AppError::CliNotFound(format!(
             "{program} コマンドが見つかりません。インストールされているか確認してください。"
         ))
     } else {
         AppError::Io(format!("{program} の起動に失敗しました: {e}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::ErrorKind;
+    use std::path::PathBuf;
+
+    fn not_found() -> std::io::Error {
+        std::io::Error::new(ErrorKind::NotFound, "not found")
+    }
+
+    #[test]
+    fn not_found_with_a_missing_cwd_is_reported_as_cwd_missing() {
+        let error = map_spawn_error("claude", &PathBuf::from("Z:/no/such/dir"), not_found());
+
+        assert!(matches!(error, AppError::CwdMissing(_)), "{error:?}");
+    }
+
+    #[test]
+    fn not_found_with_an_existing_cwd_is_reported_as_cli_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let error = map_spawn_error("claude", dir.path(), not_found());
+
+        assert!(matches!(error, AppError::CliNotFound(_)), "{error:?}");
+    }
+
+    #[test]
+    fn other_errors_are_reported_as_io_regardless_of_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let error = std::io::Error::new(ErrorKind::PermissionDenied, "denied");
+
+        let error = map_spawn_error("claude", dir.path(), error);
+
+        assert!(matches!(error, AppError::Io(_)), "{error:?}");
     }
 }

@@ -126,7 +126,7 @@ impl RunningSessionLauncher for ClaudeCliProcessLauncher {
 
         let mut child = command
             .spawn()
-            .map_err(|e| map_spawn_error(&self.program, e))?;
+            .map_err(|e| map_spawn_error(&self.program, request.cwd(), e))?;
         let pid = child.id();
         let stdin = child.stdin.take();
         let stdout = child.stdout.take();
