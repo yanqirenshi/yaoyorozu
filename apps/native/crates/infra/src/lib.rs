@@ -25,6 +25,7 @@ mod running_session_source;
 mod session_source;
 mod settings_store;
 mod skills_store;
+mod web_dev_server;
 
 pub use archived_sessions_store::FileArchivedSessionsStore;
 pub use claude_cli_process::ClaudeCliProcessLauncher;
@@ -51,3 +52,4 @@ pub use running_session_source::FileRunningSessionSource;
 pub use session_source::{FileSystemRepository, SessionFileRef, SessionFsChange, SessionWatcher};
 pub use settings_store::FileSettingsStore;
 pub use skills_store::FileSkillsStore;
+pub use web_dev_server::{HttpWebAppProbe, NpmWebDevServerLauncher};
