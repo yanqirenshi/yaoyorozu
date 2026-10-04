@@ -63,6 +63,14 @@ pub async fn ensure_web_app_running(
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     }
+    // タイムアウトしたら追跡を諦める(issue #530 のレビュー指摘): 残したままだと
+    // `web_app_readiness` がずっと `Starting` を返し、次に押しても起動し直せず
+    // 固まってしまう。生きていれば(クラッシュではなく単に遅いだけ)止めてから捨てる
+    // (捨てるだけで止めないと、次の起動が同じポートに重なる)。次に押せば `NeedsStart`
+    // から起動し直せる。
+    if let Some(slot) = state.lock().await.web_dev_server.take() {
+        slot.process.stop();
+    }
     let message =
         "Web アプリ(apps/web)の起動がタイムアウトしました。手動で `npm run web:dev` の様子を確認してください".to_string();
     warn(&app_handle, &message);
