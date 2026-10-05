@@ -52,13 +52,17 @@ async fn effective_projects_dir_from_state(
 /// プロファイル操作系コマンド(`switch_profile`/`create_profile`/
 /// `delete_profile`/`rename_profile`)で重複する定型処理をまとめる
 /// (issue #72)。
+/// `protect_existing` が真なら、復旧直後の最初の保存として、上書きする前に今のファイルの
+/// 複製を残す(issue #538)。呼び出し側は `AppState.settings_recovery_pending` を読んで
+/// 渡し、渡したあとは(ロックの中で)偽に戻すこと(2回目以降は複製しない)。
 async fn persist_settings(
     settings: domain::Settings,
     save_path: PathBuf,
+    protect_existing: bool,
 ) -> Result<(), AppErrorDto> {
     tauri::async_runtime::spawn_blocking(move || -> Result<(), app::AppError> {
         let store = FileSettingsStore::new(save_path);
-        store.save(&settings)
+        store.save(&settings, protect_existing)
     })
     .await
     .unwrap_or_else(|_| {
@@ -288,7 +292,7 @@ async fn update_settings(
     // `guard.settings` を書き換えないまま抜ける(無効な値をメモリ上の状態に
     // 残さないため)。`profile_id` が未指定ならアクティブプロファイルを対象に
     // する(メインウィンドウの挙動不変。issue #76)。
-    let (settings_to_persist, save_path, projects_dir_changed) = {
+    let (settings_to_persist, save_path, projects_dir_changed, protect_existing) = {
         let mut guard = state.lock().await;
 
         let mut candidate = guard.settings.clone();
@@ -312,10 +316,15 @@ async fn update_settings(
         let projects_dir_changed =
             guard.settings.claude_projects_dir != candidate.claude_projects_dir;
         guard.settings = candidate.clone();
-        (candidate, guard.save_path.clone(), projects_dir_changed)
+        (
+            candidate,
+            guard.save_path.clone(),
+            projects_dir_changed,
+            std::mem::take(&mut guard.settings_recovery_pending),
+        )
     };
 
-    persist_settings(settings_to_persist.clone(), save_path).await?;
+    persist_settings(settings_to_persist.clone(), save_path, protect_existing).await?;
 
     if projects_dir_changed {
         match resolve_effective_projects_dir(&settings_to_persist) {
@@ -335,13 +344,17 @@ async fn switch_profile(
     state: tauri::State<'_, Mutex<AppState>>,
     profile_id: String,
 ) -> Result<(), AppErrorDto> {
-    let (settings_to_persist, save_path) = {
+    let (settings_to_persist, save_path, protect_existing) = {
         let mut guard = state.lock().await;
         let updated = app::switch_profile(&guard.settings, &profile_id)?;
         guard.settings = updated.clone();
-        (updated, guard.save_path.clone())
+        (
+            updated,
+            guard.save_path.clone(),
+            std::mem::take(&mut guard.settings_recovery_pending),
+        )
     };
-    persist_settings(settings_to_persist, save_path).await?;
+    persist_settings(settings_to_persist, save_path, protect_existing).await?;
     let _ = app.emit("settings:updated", ());
     Ok(())
 }
@@ -354,13 +367,18 @@ async fn create_profile(
     state: tauri::State<'_, Mutex<AppState>>,
     name: Option<String>,
 ) -> Result<ProfileSummaryDto, AppErrorDto> {
-    let (settings_to_persist, save_path, created) = {
+    let (settings_to_persist, save_path, created, protect_existing) = {
         let mut guard = state.lock().await;
         let (updated, created) = app::create_profile(&guard.settings, name);
         guard.settings = updated.clone();
-        (updated, guard.save_path.clone(), created)
+        (
+            updated,
+            guard.save_path.clone(),
+            created,
+            std::mem::take(&mut guard.settings_recovery_pending),
+        )
     };
-    persist_settings(settings_to_persist, save_path).await?;
+    persist_settings(settings_to_persist, save_path, protect_existing).await?;
     let _ = app.emit("settings:updated", ());
     Ok(ProfileSummaryDto {
         id: created.id,
@@ -376,13 +394,17 @@ async fn delete_profile(
     state: tauri::State<'_, Mutex<AppState>>,
     profile_id: String,
 ) -> Result<(), AppErrorDto> {
-    let (settings_to_persist, save_path) = {
+    let (settings_to_persist, save_path, protect_existing) = {
         let mut guard = state.lock().await;
         let updated = app::delete_profile(&guard.settings, &profile_id)?;
         guard.settings = updated.clone();
-        (updated, guard.save_path.clone())
+        (
+            updated,
+            guard.save_path.clone(),
+            std::mem::take(&mut guard.settings_recovery_pending),
+        )
     };
-    persist_settings(settings_to_persist, save_path).await?;
+    persist_settings(settings_to_persist, save_path, protect_existing).await?;
     let _ = app.emit("settings:updated", ());
     Ok(())
 }
@@ -395,13 +417,17 @@ async fn rename_profile(
     profile_id: String,
     name: String,
 ) -> Result<(), AppErrorDto> {
-    let (settings_to_persist, save_path) = {
+    let (settings_to_persist, save_path, protect_existing) = {
         let mut guard = state.lock().await;
         let updated = app::rename_profile(&guard.settings, &profile_id, &name)?;
         guard.settings = updated.clone();
-        (updated, guard.save_path.clone())
+        (
+            updated,
+            guard.save_path.clone(),
+            std::mem::take(&mut guard.settings_recovery_pending),
+        )
     };
-    persist_settings(settings_to_persist, save_path).await?;
+    persist_settings(settings_to_persist, save_path, protect_existing).await?;
     let _ = app.emit("settings:updated", ());
     Ok(())
 }
@@ -1406,17 +1432,22 @@ fn setup_app_state(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Erro
     let state::LoadResult {
         state,
         recovered_from_corruption,
+        evacuated,
     } = AppState::load(save_path, git_ledger_path)?;
     let root = resolve_effective_projects_dir(&state.settings)?;
     app.manage(Mutex::new(state));
 
     if recovered_from_corruption {
-        let _ = app.emit(
-            "settings:corrupted",
-            SettingsCorruptedEventDto {
-                message: "設定ファイルが破損していたため、初期状態に戻しました。設定を再度行ってください。".to_string(),
-            },
-        );
+        // issue #538: 本当に内容が壊れていた(`evacuated`)場合と、読めなかっただけの場合を
+        // 文言で区別する。後者は元ファイルをそのまま残しているので、その旨も伝える。
+        let message = if evacuated {
+            "設定ファイルが破損していたため、初期状態に戻しました。設定を再度行ってください。"
+                .to_string()
+        } else {
+            "設定ファイルを読み込めなかったため、初期状態で起動しました(ファイルはそのまま残しています。一時的な問題の可能性があります)。設定が元に戻っていないか確認してください。"
+                .to_string()
+        };
+        let _ = app.emit("settings:corrupted", SettingsCorruptedEventDto { message });
     }
     Ok(root)
 }
