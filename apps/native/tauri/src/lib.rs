@@ -1,4 +1,5 @@
 mod dto;
+mod external_link_guard;
 mod local_api;
 mod running_session;
 mod session_scan_queue;
@@ -1682,6 +1683,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(external_link_guard::init())
         // ウィンドウが閉じられたら(全ウィンドウ共通のハンドラ。issue #83)
         // レジストリから自動除去する。フロント側の明示的な解除には頼らない。
         .on_window_event(|window, event| {
