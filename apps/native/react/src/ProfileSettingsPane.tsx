@@ -4,8 +4,10 @@ import { useSearchParams } from "react-router";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
+  createYyzScaffold,
   getGithubAuthStatus,
   getSettings,
+  getYyzScaffoldStatus,
   githubLoginStart,
   githubLogout,
   isAppError,
@@ -24,6 +26,7 @@ import type {
   GithubProjectSummaryDto,
   ProfileSummaryDto,
   ProjectDto,
+  YyzScaffoldStatusDto,
 } from "./api";
 import Tabs, { tabPanelProps } from "./Tabs";
 
@@ -76,6 +79,13 @@ function ProfileSettingsPane({
   const [renameDraft, setRenameDraft] = useState("");
   const [profileError, setProfileError] = useState<string | null>(null);
   const [repositoryPath, setRepositoryPath] = useState<string | null>(null);
+  // 「仕様フォルダ(yyz/)を作る」(issue #547)。保存済みの repository_path に対する
+  // 状態なので、フォーム入力中(未保存)の repositoryPath とは別に loadSettingsData 側で
+  // 取り直す(保存前のパスに対して作成ボタンを有効にしない)。
+  const [yyzStatus, setYyzStatus] = useState<YyzScaffoldStatusDto | null>(null);
+  const [yyzStatusError, setYyzStatusError] = useState<string | null>(null);
+  const [yyzCreating, setYyzCreating] = useState(false);
+  const [yyzCreateError, setYyzCreateError] = useState<string | null>(null);
   const [claudeProjectsDir, setClaudeProjectsDir] = useState<string | null>(null);
   // app の起動時に前回動かしていたセッションを再開するか(issue #459・#464)。
   // プロファイルごとではなくマシン設定(claudeProjectsDir と同じ扱い)。
@@ -114,6 +124,22 @@ function ProfileSettingsPane({
           settings.github_project ? String(settings.github_project.number) : "",
         );
         setSelectedProjectFolders(settings.selected_project_folders);
+
+        setYyzCreateError(null);
+        if (!settings.repository_path) {
+          setYyzStatus(null);
+          setYyzStatusError(null);
+          return;
+        }
+        return getYyzScaffoldStatus(profileId)
+          .then((status) => {
+            setYyzStatus(status);
+            setYyzStatusError(null);
+          })
+          .catch((e) => {
+            setYyzStatus(null);
+            setYyzStatusError(isAppError(e) ? e.message : String(e));
+          });
       })
       .catch((e) => setError(isAppError(e) ? e.message : String(e)));
   }, [profileId]);
@@ -241,6 +267,18 @@ function ProfileSettingsPane({
     if (typeof path === "string") {
       setRepositoryPath(path);
     }
+  };
+
+  const handleCreateYyzScaffold = () => {
+    setYyzCreating(true);
+    setYyzCreateError(null);
+    createYyzScaffold(profileId)
+      .then((status) => {
+        setYyzStatus(status);
+        setYyzStatusError(null);
+      })
+      .catch((e) => setYyzCreateError(isAppError(e) ? e.message : String(e)))
+      .finally(() => setYyzCreating(false));
   };
 
   const handleChooseProjectsDir = async () => {
@@ -380,6 +418,32 @@ function ProfileSettingsPane({
               <button type="button" onClick={handleChooseFolder}>
                 フォルダを選択
               </button>
+            </div>
+
+            <div className="settings-yyz-scaffold">
+              <button
+                type="button"
+                onClick={handleCreateYyzScaffold}
+                disabled={!repositoryPath || yyzStatus?.complete === true || yyzCreating}
+              >
+                {yyzStatus?.complete ? "作成済み" : "仕様フォルダ(yyz/)を作る"}
+              </button>
+              {!repositoryPath && (
+                <p className="settings-hint">
+                  先に対象リポジトリを選択して保存してください。
+                </p>
+              )}
+              {yyzStatusError && <p className="error">{yyzStatusError}</p>}
+              {yyzCreateError && <p className="error">{yyzCreateError}</p>}
+              {yyzStatus && yyzStatus.files.length > 0 && (
+                <ul className="settings-yyz-scaffold-files">
+                  {yyzStatus.files.map((file) => (
+                    <li key={file.relative_path}>
+                      {file.exists ? "✓" : "未作成"} {file.relative_path}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           </section>
         )}

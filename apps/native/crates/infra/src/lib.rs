@@ -26,6 +26,7 @@ mod session_source;
 mod settings_store;
 mod skills_store;
 mod web_dev_server;
+mod yyz_scaffold_writer;
 
 pub use archived_sessions_store::FileArchivedSessionsStore;
 pub use claude_cli_process::ClaudeCliProcessLauncher;
@@ -53,3 +54,4 @@ pub use session_source::{FileSystemRepository, SessionFileRef, SessionFsChange, 
 pub use settings_store::FileSettingsStore;
 pub use skills_store::FileSkillsStore;
 pub use web_dev_server::{HttpWebAppProbe, NpmWebDevServerLauncher};
+pub use yyz_scaffold_writer::FileYyzScaffoldWriter;

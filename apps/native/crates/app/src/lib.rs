@@ -26,6 +26,7 @@ mod restore_running_sessions;
 mod running_session;
 mod running_session_summary;
 mod web_dev_server;
+mod yyz_scaffold;
 pub use archive_session::{archive_session, load_archived_sessions, unarchive_session};
 pub use cli_version::{
     parse_cli_version, peer_messaging_warning, supports_peer_messaging, MIN_PEER_MESSAGING_VERSION,
@@ -53,6 +54,10 @@ pub use running_session_summary::{
 pub use web_dev_server::{
     web_app_readiness, WebAppProbe, WebAppReadiness, WebDevServerLauncher, WebDevServerProcess,
     WEB_DEV_SERVER_PORT,
+};
+pub use yyz_scaffold::{
+    create_yyz_scaffold, yyz_scaffold_status, YyzScaffoldFileStatus, YyzScaffoldStatus,
+    YyzScaffoldWriter, YYZ_SCAFFOLD_FILES,
 };
 
 #[derive(Debug, thiserror::Error)]

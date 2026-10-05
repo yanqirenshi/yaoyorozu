@@ -1569,6 +1569,39 @@ pub enum PermissionBehaviorDto {
     Deny,
 }
 
+/// `yyz/` 一式のうち1ファイルの状態(issue #547)。
+#[derive(Serialize, Clone)]
+pub struct YyzScaffoldFileStatusDto {
+    pub relative_path: String,
+    pub exists: bool,
+}
+
+impl From<app::YyzScaffoldFileStatus> for YyzScaffoldFileStatusDto {
+    fn from(status: app::YyzScaffoldFileStatus) -> Self {
+        Self {
+            relative_path: status.relative_path,
+            exists: status.exists,
+        }
+    }
+}
+
+/// `yyz/` 一式の状態(issue #547)。問い合わせ(`get_yyz_scaffold_status`)・作成
+/// (`create_yyz_scaffold`)のどちらの戻り値にも使う。
+#[derive(Serialize, Clone)]
+pub struct YyzScaffoldStatusDto {
+    pub files: Vec<YyzScaffoldFileStatusDto>,
+    pub complete: bool,
+}
+
+impl From<app::YyzScaffoldStatus> for YyzScaffoldStatusDto {
+    fn from(status: app::YyzScaffoldStatus) -> Self {
+        Self {
+            files: status.files.into_iter().map(Into::into).collect(),
+            complete: status.complete,
+        }
+    }
+}
+
 #[cfg(test)]
 mod start_model_tests {
     use super::*;

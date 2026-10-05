@@ -43,6 +43,7 @@ import type {
   StartRunningSessionDto,
   WindowStateDto,
   WindowTabDto,
+  YyzScaffoldStatusDto,
 } from "./types";
 
 export type {
@@ -111,6 +112,8 @@ export type {
   UserDto,
   WindowStateDto,
   WindowTabDto,
+  YyzScaffoldFileStatusDto,
+  YyzScaffoldStatusDto,
 } from "./types";
 
 export function listProjects(): Promise<ProjectDto[]> {
@@ -278,6 +281,25 @@ export function renameSession(
 // このPromiseが解決するまでボタンを無効化するなどして利用者に分かるようにする。
 export function ensureWebAppRunning(profileId?: string | null): Promise<void> {
   return invoke<void>("ensure_web_app_running", { profileId: profileId ?? null });
+}
+
+// yyz/(Web アプリが実行時に読む仕様データの置き場所。issue #543)の状態を確かめる
+// (issue #547)。副作用なし。repository_path が未設定のプロファイルはエラーになる。
+export function getYyzScaffoldStatus(
+  profileId?: string | null,
+): Promise<YyzScaffoldStatusDto> {
+  return invoke<YyzScaffoldStatusDto>("get_yyz_scaffold_status", {
+    profileId: profileId ?? null,
+  });
+}
+
+// yyz/ のうち足りないものだけ作る(issue #547)。既存のファイルは絶対に上書きしない。
+export function createYyzScaffold(
+  profileId?: string | null,
+): Promise<YyzScaffoldStatusDto> {
+  return invoke<YyzScaffoldStatusDto>("create_yyz_scaffold", {
+    profileId: profileId ?? null,
+  });
 }
 
 // 状態変化・権限の問い合わせの到着/決着の通知(軽量)。詳細は getRunningSession で取り直す。
