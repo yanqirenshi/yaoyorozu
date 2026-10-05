@@ -1,0 +1,132 @@
+{
+  "nodes": [
+    {
+      "type": "NODE",
+      "id": 1,
+      "label": { "text": "YAOYOROZU", "position": { "x": 20, "y": 24 } },
+      "description": "AIを利用したITプロダクト開発をサポートするアプリ",
+      "size": { "w": 860, "h": 340 },
+      "position": { "x": 0, "y": 0 },
+      "children": [
+        {
+          "type": "NODE",
+          "id": 2,
+          "label": { "text": "ネイティブアプリ(apps/native)", "position": { "x": 20, "y": 24 } },
+          "description": "AIコーディングエージェントをラップし、GitHub でタスクを管理する",
+          "size": { "w": 380, "h": 240 },
+          "position": { "x": 30, "y": 70 },
+          "children": [
+            {
+              "type": "NODE",
+              "id": 4,
+              "label": { "text": "React(画面)", "position": { "x": 20, "y": 24 } },
+              "size": { "w": 150, "h": 100 },
+              "position": { "x": 20, "y": 90 }
+            },
+            {
+              "type": "NODE",
+              "id": 5,
+              "label": { "text": "Tauri(Rust)", "position": { "x": 20, "y": 24 } },
+              "size": { "w": 150, "h": 100 },
+              "position": { "x": 210, "y": 90 }
+            }
+          ]
+        },
+        {
+          "type": "NODE",
+          "id": 3,
+          "label": { "text": "Webアプリ(apps/web)", "position": { "x": 20, "y": 24 } },
+          "description": "プロダクトの情報(仕様など)を管理する。AIと人のコミュニケーションの場",
+          "size": { "w": 380, "h": 240 },
+          "position": { "x": 450, "y": 70 },
+          "children": [
+            {
+              "type": "NODE",
+              "id": 6,
+              "label": { "text": "Next.js", "position": { "x": 20, "y": 24 } },
+              "size": { "w": 150, "h": 100 },
+              "position": { "x": 20, "y": 90 }
+            },
+            {
+              "type": "NODE",
+              "id": 7,
+              "label": { "text": "d3 ライブラリ群", "position": { "x": 20, "y": 24 } },
+              "description": "WBS・構成図・サイトマップ・Classes・TM を描く",
+              "size": { "w": 150, "h": 100 },
+              "position": { "x": 210, "y": 90 }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "NODE",
+      "id": 10,
+      "label": { "text": "AIコーディングエージェント", "position": { "x": 20, "y": 24 } },
+      "size": { "w": 420, "h": 200 },
+      "position": { "x": 0, "y": 440 },
+      "children": [
+        {
+          "type": "NODE",
+          "id": 11,
+          "label": { "text": "Claude Code", "position": { "x": 20, "y": 24 } },
+          "size": { "w": 110, "h": 80 },
+          "position": { "x": 20, "y": 90 }
+        },
+        {
+          "type": "NODE",
+          "id": 12,
+          "label": { "text": "Gemini", "position": { "x": 20, "y": 24 } },
+          "size": { "w": 110, "h": 80 },
+          "position": { "x": 155, "y": 90 }
+        },
+        {
+          "type": "NODE",
+          "id": 13,
+          "label": { "text": "Codex", "position": { "x": 20, "y": 24 } },
+          "size": { "w": 110, "h": 80 },
+          "position": { "x": 290, "y": 90 }
+        }
+      ]
+    },
+    {
+      "type": "NODE",
+      "id": 20,
+      "label": { "text": "GitHub", "position": { "x": 20, "y": 24 } },
+      "size": { "w": 380, "h": 200 },
+      "position": { "x": 480, "y": 440 },
+      "children": [
+        {
+          "type": "NODE",
+          "id": 21,
+          "label": { "text": "Issue / Pull Request", "position": { "x": 20, "y": 24 } },
+          "size": { "w": 170, "h": 80 },
+          "position": { "x": 20, "y": 90 }
+        },
+        {
+          "type": "NODE",
+          "id": 22,
+          "label": { "text": "Projects", "position": { "x": 20, "y": 24 } },
+          "size": { "w": 140, "h": 80 },
+          "position": { "x": 220, "y": 90 }
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": 100,
+      "from": { "id": 2, "position": 0 },
+      "to": { "id": 10, "position": 180 },
+      "stroke": { "colorRole": "border.strong", "width": 2 },
+      "label": { "text": "ラップして操作" }
+    },
+    {
+      "id": 101,
+      "from": { "id": 2, "position": 0 },
+      "to": { "id": 20, "position": 180 },
+      "stroke": { "colorRole": "border.strong", "width": 2 },
+      "label": { "text": "タスク管理" }
+    }
+  ]
+}

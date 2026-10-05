@@ -7,7 +7,7 @@ import path from "node:path";
 // パスはこのサーバ側でだけ組み立てる(web.md・native.md §4 と同じ考え方)。
 
 /** 現時点で読めるドキュメント名の許可リスト。増やすときはここへ足す。 */
-const SPEC_DOCS = ["wbs"] as const;
+const SPEC_DOCS = ["wbs", "deployment", "unchi"] as const;
 type SpecDoc = (typeof SPEC_DOCS)[number];
 function isSpecDoc(value: string): value is SpecDoc {
   return (SPEC_DOCS as readonly string[]).includes(value);
