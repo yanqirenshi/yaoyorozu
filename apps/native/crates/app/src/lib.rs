@@ -236,7 +236,11 @@ pub trait SessionSource {
 /// 閉じ込める。`app` は `Settings` という抽象的な値だけを扱う。
 pub trait SettingsStore {
     fn load(&self) -> Result<LoadedSettings, AppError>;
-    fn save(&self, settings: &Settings) -> Result<(), AppError>;
+    /// `protect_existing` が真なら、置き換える前に今の内容をバックアップへ複製する
+    /// (issue #538)。既定値へ復旧した直後の最初の保存で使う: 復旧の原因が実は一時的な
+    /// I/O エラーで、置き換え先に本当は有効な内容が残っていた場合でも、上書きで
+    /// 失われないようにするための保険(ベストエフォート。複製に失敗しても保存は続ける)。
+    fn save(&self, settings: &Settings, protect_existing: bool) -> Result<(), AppError>;
 }
 
 /// `CLAUDE.md` の読み書き(port)。`repo_dir` の解決(設定リポジトリ/
@@ -310,14 +314,21 @@ pub trait ProjectSettingsStore {
     ) -> Result<(), AppError>;
 }
 
-/// 起動時に読み込んだ設定。ファイルが存在しない場合と破損していた場合を
-/// 区別しない(どちらもデフォルト値へフォールバックする)が、破損からの
-/// 復旧があったかどうかは呼び出し側(tauri層)が `app:warning` を出すか
-/// どうかの判断に使うため保持する。
+/// 起動時に読み込んだ設定。ファイルが存在しない場合はどちらも偽のまま
+/// (フォールバックだが異常ではない)。
+///
+/// `recovered_from_corruption` と `evacuated` は別の軸(issue #538): 読み込み自体が
+/// できなかった(ロック・一時的なI/Oエラー等)場合も既定値へ戻すが、内容が本当に
+/// 壊れているとは限らないため、その場合は `evacuated` を偽のままにして元ファイルを
+/// 残す(`recovered_from_corruption` は真になる)。内容を読めたが解釈できなかった
+/// (JSONとして壊れている・未知のバージョン等)場合だけ、元ファイルを
+/// `*.corrupt.<timestamp>` へ退避して `evacuated` も真にする。
+/// どちらの場合も、呼び出し側(tauri層)はこれを見て `app:warning` の文言を変える。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedSettings {
     pub settings: Settings,
     pub recovered_from_corruption: bool,
+    pub evacuated: bool,
 }
 
 /// ハブグラフのノード位置の永続化(port)。`settings.json` とは別ファイルに
@@ -1264,7 +1275,7 @@ pub fn validate_settings(settings: &Settings) -> Result<(), AppError> {
 /// (呼び出し側がメモリ上の状態を更新する際に使う)。
 pub fn update_settings(store: &dyn SettingsStore, input: Settings) -> Result<Settings, AppError> {
     validate_settings(&input)?;
-    store.save(&input)?;
+    store.save(&input, false)?;
     Ok(input)
 }
 
@@ -2572,6 +2583,7 @@ mod tests {
                 loaded: LoadedSettings {
                     settings,
                     recovered_from_corruption: false,
+                    evacuated: false,
                 },
                 saved: std::cell::RefCell::new(Vec::new()),
                 fail_save: false,
@@ -2584,7 +2596,7 @@ mod tests {
             Ok(self.loaded.clone())
         }
 
-        fn save(&self, settings: &Settings) -> Result<(), AppError> {
+        fn save(&self, settings: &Settings, _protect_existing: bool) -> Result<(), AppError> {
             if self.fail_save {
                 return Err(AppError::Io("boom".to_string()));
             }

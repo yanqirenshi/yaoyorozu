@@ -3,7 +3,13 @@ use domain::{GithubProject, Profile, Settings, CURRENT_SETTINGS_VERSION};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// 設定ファイルを読む際、一時的な I/O エラー(ロック・同期ツールの読み取り中など)を
+/// やり過ごすための再試行回数(issue #538)。1回も読めなければ [`LoadedSettings::evacuated`]
+/// を立てずに(退避しない)既定値へ戻す。
+const READ_RETRY_ATTEMPTS: u32 = 3;
+const READ_RETRY_DELAY: Duration = Duration::from_millis(150);
 
 /// v1〜v3のJSON形状(対象リポジトリ・GitHubプロジェクト・対象フォルダを
 /// プロファイルに包まず直接持つ)。v1/v2の旧フィールド `selected_session_ids`
@@ -79,11 +85,26 @@ impl FileSettingsStore {
         let _ = fs::rename(&self.path, corrupt_path);
     }
 
-    fn recovered_default(&self) -> LoadedSettings {
+    /// 内容を読めたが解釈できなかった(JSONとして壊れている・未知のバージョン等。
+    /// issue #538)場合のフォールバック。元ファイルは退避するので、以後は触れない
+    /// (壊れていると確定しているため)。
+    fn corrupted_default(&self) -> LoadedSettings {
         self.evacuate_corrupt_file();
         LoadedSettings {
             settings: Settings::default(),
             recovered_from_corruption: true,
+            evacuated: true,
+        }
+    }
+
+    /// ファイル自体を読めなかった(再試行しても失敗。issue #538)場合のフォールバック。
+    /// 内容が壊れているとは限らない(ロック・一時的なI/Oエラーの可能性がある)ため、
+    /// `corrupted_default` と違って**退避しない**(元ファイルをそのまま残す)。
+    fn unreadable_default(&self) -> LoadedSettings {
+        LoadedSettings {
+            settings: Settings::default(),
+            recovered_from_corruption: true,
+            evacuated: false,
         }
     }
 
@@ -119,7 +140,7 @@ impl FileSettingsStore {
             // この版には無い項目は既定で入れる(issue #459)。
             restore_running_sessions: Settings::default().restore_running_sessions,
         };
-        let _ = self.save(&migrated);
+        let _ = self.save(&migrated, false);
         migrated
     }
 
@@ -133,7 +154,7 @@ impl FileSettingsStore {
             claude_projects_dir: v4.claude_projects_dir,
             restore_running_sessions: Settings::default().restore_running_sessions,
         };
-        let _ = self.save(&migrated);
+        let _ = self.save(&migrated, false);
         migrated
     }
 
@@ -147,7 +168,7 @@ impl FileSettingsStore {
             claude_projects_dir: v5.claude_projects_dir,
             restore_running_sessions: Settings::default().restore_running_sessions,
         };
-        let _ = self.save(&migrated);
+        let _ = self.save(&migrated, false);
         migrated
     }
 
@@ -161,7 +182,7 @@ impl FileSettingsStore {
             claude_projects_dir: v6.claude_projects_dir,
             restore_running_sessions: Settings::default().restore_running_sessions,
         };
-        let _ = self.save(&migrated);
+        let _ = self.save(&migrated, false);
         migrated
     }
 }
@@ -172,15 +193,37 @@ impl SettingsStore for FileSettingsStore {
             return Ok(LoadedSettings {
                 settings: Settings::default(),
                 recovered_from_corruption: false,
+                evacuated: false,
             });
         }
 
-        let Ok(content) = fs::read_to_string(&self.path) else {
-            return Ok(self.recovered_default());
+        // 読めないこと自体は、内容が壊れていることを意味しない(issue #538)。
+        // ロック・ウイルス対策ソフトや同期ツールの走査中など、一時的な理由で
+        // 読めないことがあるため、少し待って何度か試す。それでも読めなければ
+        // (本当に読めないのか、内容が壊れているのかは区別できないので)既定値で
+        // 起動するが、**退避はしない**(元ファイルをそのまま残す。中身が実は
+        // 問題無い可能性があるため)。
+        let mut content = None;
+        for attempt in 0..READ_RETRY_ATTEMPTS {
+            match fs::read_to_string(&self.path) {
+                Ok(text) => {
+                    content = Some(text);
+                    break;
+                }
+                Err(_) if attempt + 1 < READ_RETRY_ATTEMPTS => {
+                    std::thread::sleep(READ_RETRY_DELAY);
+                }
+                Err(_) => {}
+            }
+        }
+        let Some(content) = content else {
+            return Ok(self.unreadable_default());
         };
 
+        // ここからは「読めた」ので、以降の失敗は内容そのものの問題(本当の破損)として
+        // 扱い、退避する。
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
-            return Ok(self.recovered_default());
+            return Ok(self.corrupted_default());
         };
 
         match value.get("version").and_then(serde_json::Value::as_u64) {
@@ -189,45 +232,50 @@ impl SettingsStore for FileSettingsStore {
                     Ok(settings) => Ok(LoadedSettings {
                         settings,
                         recovered_from_corruption: false,
+                        evacuated: false,
                     }),
-                    Err(_) => Ok(self.recovered_default()),
+                    Err(_) => Ok(self.corrupted_default()),
                 }
             }
             Some(6) => match serde_json::from_value::<SettingsV6Raw>(value) {
                 Ok(v6) => Ok(LoadedSettings {
                     settings: self.migrate_v6_to_current_version(v6),
                     recovered_from_corruption: false,
+                    evacuated: false,
                 }),
-                Err(_) => Ok(self.recovered_default()),
+                Err(_) => Ok(self.corrupted_default()),
             },
             Some(5) => match serde_json::from_value::<SettingsV5Raw>(value) {
                 Ok(v5) => Ok(LoadedSettings {
                     settings: self.migrate_v5_to_current_version(v5),
                     recovered_from_corruption: false,
+                    evacuated: false,
                 }),
-                Err(_) => Ok(self.recovered_default()),
+                Err(_) => Ok(self.corrupted_default()),
             },
             Some(4) => match serde_json::from_value::<SettingsV4Raw>(value) {
                 Ok(v4) => Ok(LoadedSettings {
                     settings: self.migrate_v4_to_current_version(v4),
                     recovered_from_corruption: false,
+                    evacuated: false,
                 }),
-                Err(_) => Ok(self.recovered_default()),
+                Err(_) => Ok(self.corrupted_default()),
             },
             Some(1..=3) => match serde_json::from_value::<LegacySettingsRaw>(value) {
                 Ok(legacy) => Ok(LoadedSettings {
                     settings: self.migrate_legacy_to_current_version(legacy),
                     recovered_from_corruption: false,
+                    evacuated: false,
                 }),
-                Err(_) => Ok(self.recovered_default()),
+                Err(_) => Ok(self.corrupted_default()),
             },
             // 未知のバージョン(将来のアプリが書いたファイルを古いアプリが
             // 読む場合など)は解釈できないため、破損扱いとして退避する。
-            _ => Ok(self.recovered_default()),
+            _ => Ok(self.corrupted_default()),
         }
     }
 
-    fn save(&self, settings: &Settings) -> Result<(), AppError> {
+    fn save(&self, settings: &Settings, protect_existing: bool) -> Result<(), AppError> {
         let json = serde_json::to_string_pretty(settings)
             .map_err(|e| AppError::Io(format!("設定のシリアライズに失敗しました: {e}")))?;
 
@@ -235,6 +283,25 @@ impl SettingsStore for FileSettingsStore {
             fs::create_dir_all(parent).map_err(|e| {
                 AppError::Io(format!("{} を作成できませんでした: {e}", parent.display()))
             })?;
+        }
+
+        if protect_existing && self.path.is_file() {
+            // 既定値へ復旧した直後の最初の保存(issue #538)。復旧の原因が一時的な
+            // I/O エラーで、今の内容が実は有効だった場合に備え、上書きする前に
+            // 複製を残す(ベストエフォート。複製に失敗しても保存自体は続ける)。
+            let millis = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            let file_name = self
+                .path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("settings.json");
+            let backup_path = self
+                .path
+                .with_file_name(format!("{file_name}.before-overwrite.{millis}"));
+            let _ = fs::copy(&self.path, backup_path);
         }
 
         let tmp_path = PathBuf::from(format!("{}.tmp", self.path.display()));
@@ -300,7 +367,7 @@ mod tests {
             restore_running_sessions: false,
         };
 
-        store.save(&settings).expect("should save");
+        store.save(&settings, false).expect("should save");
         let loaded = store.load().expect("should load");
 
         assert_eq!(loaded.settings, settings);
@@ -313,7 +380,9 @@ mod tests {
         let path = dir.path().join("settings.json");
         let store = FileSettingsStore::new(path.clone());
 
-        store.save(&Settings::default()).expect("should save");
+        store
+            .save(&Settings::default(), false)
+            .expect("should save");
 
         assert!(path.is_file());
         assert!(!dir.path().join("settings.json.tmp").exists());
@@ -330,6 +399,7 @@ mod tests {
 
         assert_eq!(loaded.settings, Settings::default());
         assert!(loaded.recovered_from_corruption);
+        assert!(loaded.evacuated, "本当に内容が壊れているので退避する");
         assert!(!path.exists(), "corrupt file should have been moved away");
 
         let corrupt_files: Vec<_> = fs::read_dir(dir.path())
@@ -359,6 +429,100 @@ mod tests {
 
         assert_eq!(loaded.settings, Settings::default());
         assert!(loaded.recovered_from_corruption);
+        assert!(loaded.evacuated);
+    }
+
+    #[test]
+    fn load_does_not_evacuate_when_the_file_cannot_be_read_but_is_not_actually_corrupt() {
+        // issue #538: 読めないこと(ロック・同期ツールの読み取り中など)と内容が本当に
+        // 壊れていることを区別する。無効なUTF-8バイト列は `fs::read_to_string` を
+        // 「読めない(Err)」にする手軽な手段として使う(本当の原因がロック等でも
+        // `read_to_string` のエラーとしては区別できないため、同じコード経路を通る)。
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, [0xFF, 0xFE, 0x00, 0x01]).unwrap();
+        let store = FileSettingsStore::new(path.clone());
+
+        let loaded = store.load().expect("should fall back to default");
+
+        assert_eq!(loaded.settings, Settings::default());
+        assert!(loaded.recovered_from_corruption);
+        assert!(
+            !loaded.evacuated,
+            "読めなかっただけなので退避してはいけない"
+        );
+        assert!(path.is_file(), "元ファイルは残したまま");
+        let corrupt_files: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".corrupt."))
+            .collect();
+        assert!(
+            corrupt_files.is_empty(),
+            "読めなかっただけでは退避ファイルを作らない"
+        );
+    }
+
+    #[test]
+    fn save_backs_up_the_existing_file_before_overwriting_when_protecting() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, r#"{"old":"content"}"#).unwrap();
+        let store = FileSettingsStore::new(path.clone());
+
+        store.save(&Settings::default(), true).expect("should save");
+
+        let backups: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .contains("settings.json.before-overwrite.")
+            })
+            .collect();
+        assert_eq!(backups.len(), 1, "上書き前の内容を複製しておく");
+        let backup_content = fs::read_to_string(backups[0].path()).unwrap();
+        assert_eq!(backup_content, r#"{"old":"content"}"#);
+        // 保存自体は普通に進む(新しい内容に置き換わる)。
+        assert!(fs::read_to_string(&path).unwrap().contains("\"version\""));
+    }
+
+    #[test]
+    fn save_does_not_back_up_when_there_is_nothing_to_protect() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let store = FileSettingsStore::new(path.clone());
+
+        store
+            .save(&Settings::default(), true)
+            .expect("should save even with nothing to back up");
+
+        let backups: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains("before-overwrite"))
+            .collect();
+        assert!(backups.is_empty());
+    }
+
+    #[test]
+    fn save_does_not_back_up_when_not_protecting() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, r#"{"old":"content"}"#).unwrap();
+        let store = FileSettingsStore::new(path.clone());
+
+        store
+            .save(&Settings::default(), false)
+            .expect("should save");
+
+        let backups: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains("before-overwrite"))
+            .collect();
+        assert!(backups.is_empty());
     }
 
     #[test]

@@ -48,6 +48,11 @@ pub struct RunningSessionSlot {
 pub struct AppState {
     pub settings: Settings,
     pub save_path: PathBuf,
+    /// 起動時の設定読み込みが既定値へ復旧した(issue #538)直後、まだ一度も保存していない
+    /// かどうか。真の間は、次の保存(`persist_settings`)が上書きする前に今のファイルの
+    /// 複製を残す(復旧の原因が実は一時的なI/Oエラーで、ファイルに有効な内容が残っていた
+    /// 場合に備える保険)。一度保存したら偽に戻し、以後の保存では複製を作らない。
+    pub settings_recovery_pending: bool,
     /// 認証済みGitHubアカウントのログイン名。トークン自体はここには置かず
     /// `TokenStore`(OSキーチェーン)にのみ保管する(native.md §4)。
     /// 起動時は `None` から始まり、既存トークンがあればバックグラウンドで
@@ -190,11 +195,13 @@ pub fn reconcile_and_save_git_ledger(
     result.ledger
 }
 
-/// [`AppState::load`] の結果。設定ファイルの破損から復旧した場合、呼び出し側
-/// (`run()`)が `settings:corrupted` イベントを emit するかどうかの判断に使う。
+/// [`AppState::load`] の結果。設定ファイルの復旧があった場合、呼び出し側(`run()`)が
+/// `settings:corrupted` イベントを emit するかどうか・文言の判断に使う(issue #538:
+/// 本当に内容が壊れていた `evacuated` と、読めなかっただけの場合を区別する)。
 pub struct LoadResult {
     pub state: AppState,
     pub recovered_from_corruption: bool,
+    pub evacuated: bool,
 }
 
 impl AppState {
@@ -233,6 +240,7 @@ impl AppState {
             state: AppState {
                 settings: loaded.settings,
                 save_path,
+                settings_recovery_pending: loaded.recovered_from_corruption,
                 github_login: None,
                 window_states: app::WindowRegistry::new(),
                 pc,
@@ -250,6 +258,7 @@ impl AppState {
                 web_dev_server: None,
             },
             recovered_from_corruption: loaded.recovered_from_corruption,
+            evacuated: loaded.evacuated,
         })
     }
 }
