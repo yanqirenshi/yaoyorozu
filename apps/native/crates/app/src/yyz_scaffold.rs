@@ -23,12 +23,18 @@ const README_CONTENT: &str = "\
 
 - `spec/<doc>.json` に**計算を含まない素の値**で置いてください(計算・表示の定義は Web アプリ側にあります)。
 - git にコミットして履歴を残してください(仕様は git が真。コードと同じ扱いです)。
-- 対応している `<doc>` は移行が進むにつれて増えます。いまは `wbs` です。親イシュー
-  https://github.com/yanqirenshi/yaoyorozu/issues/543 を参照してください。
+- 対応している `<doc>` は移行が進むにつれて増えます。いまは `wbs` / `deployment` / `unchi` です。
+  親イシュー https://github.com/yanqirenshi/yaoyorozu/issues/543 を参照してください。
 ";
 
 /// 空の WBS(issue #547 本文の決定どおり。`yaoyorozu/yyz/spec/wbs.json` と同じキー)。
 const EMPTY_WBS_JSON: &str = "{\"projects\":[],\"wbs\":[],\"workpackages\":[],\"edges\":[]}\n";
+
+/// 空の構成図(issue #548 で移行済みの `yaoyorozu/yyz/spec/deployment.json` と同じキー)。
+const EMPTY_DEPLOYMENT_JSON: &str = "{\"nodes\":[],\"edges\":[]}\n";
+
+/// 空のポンチ絵(issue #548 で移行済みの `yaoyorozu/yyz/spec/unchi.json` と同じキー)。
+const EMPTY_UNCHI_JSON: &str = "{\"nodes\":[],\"edges\":[]}\n";
 
 pub const YYZ_SCAFFOLD_FILES: &[YyzScaffoldFile] = &[
     YyzScaffoldFile {
@@ -38,6 +44,14 @@ pub const YYZ_SCAFFOLD_FILES: &[YyzScaffoldFile] = &[
     YyzScaffoldFile {
         relative_path: "yyz/spec/wbs.json",
         default_content: EMPTY_WBS_JSON,
+    },
+    YyzScaffoldFile {
+        relative_path: "yyz/spec/deployment.json",
+        default_content: EMPTY_DEPLOYMENT_JSON,
+    },
+    YyzScaffoldFile {
+        relative_path: "yyz/spec/unchi.json",
+        default_content: EMPTY_UNCHI_JSON,
     },
 ];
 
