@@ -4,7 +4,9 @@ export type NavMenuItem = {
 };
 
 export const NAV_MENU_ITEMS: NavMenuItem[] = [
-  { label: "WBS", path: "/wbs" },
+  // #544: WBS だけ、実行時にリポジトリの yyz/ から読む新しい URL へ先行して移した
+  // (いまは yaoyorozu 固定)。他の画面は #543 の後の段で順に移す。
+  { label: "WBS", path: "/yaoyorozu/wbs" },
   { label: "構成図", path: "/deployment-diagram" },
   { label: "UI", path: "/ui" },
   { label: "サイトマップ", path: "/sitemap" },

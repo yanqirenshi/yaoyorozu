@@ -253,7 +253,9 @@ const SETTINGS_TAB_DESCRIPTIONS = [
 
 // NAV_MENU_ITEMS のパスがキー。
 const WEB_PAGE_DETAILS: Record<string, Omit<SiteDetail, "path">> = {
-  "/wbs": {
+  // #544: navigation.ts の WBS だけ新しい URL(/yaoyorozu/wbs)になったため、キーも
+  // それに合わせる(webPageId / WEB_PAGE_DETAILS は NAV_MENU_ITEMS の path をキーにする)。
+  "/yaoyorozu/wbs": {
     description: "プロダクトの WBS(作業分解構成)を表で一覧する。",
     wbsIds: [21],
   },

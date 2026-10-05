@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 
 export default function Home() {
-  redirect("/wbs");
+  // #544: 二重リダイレクト(/ → /wbs → /yaoyorozu/wbs)を避けるため直接指定する。
+  redirect("/yaoyorozu/wbs");
 }

@@ -76,6 +76,7 @@ Claude Code で以下のセッションに役割を分けて対応する。
 
 - `apps/web` — Next.js製のWebアプリ。WBS/構成図/UIデザイン/サイトマップ/Classes/TM図を表示するドキュメンテーションツール
 - `apps/native` — Tauri v2製のネイティブアプリ。Claude Codeのセッション履歴ビューア(開発中)
+- `yyz/` — このリポジトリ(yaoyorozu)自身の仕様データ。Webアプリが実行時に読む(`{リポジトリ}/yyz/spec/*.json`、詳細は `.claude/rules/web.md` §2)。Webアプリは複数リポジトリの仕様を扱えるようにする移行中で(issue #543)、各リポジトリが自分の `yyz/` を持つ想定
 
 ## 配布(apps/native)
 
