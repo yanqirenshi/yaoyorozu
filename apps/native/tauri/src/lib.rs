@@ -5,6 +5,7 @@ mod running_session;
 mod session_scan_queue;
 mod state;
 mod web_dev_server;
+mod yyz_scaffold;
 
 use app::{SettingsStore, TokenStore};
 use dto::{
@@ -1719,6 +1720,8 @@ pub fn run() {
             running_session::unarchive_session,
             running_session::rename_session,
             web_dev_server::ensure_web_app_running,
+            yyz_scaffold::get_yyz_scaffold_status,
+            yyz_scaffold::create_yyz_scaffold,
             get_settings,
             update_settings,
             switch_profile,

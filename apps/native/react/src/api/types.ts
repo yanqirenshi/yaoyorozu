@@ -539,3 +539,15 @@ export type RunningSessionChangedEvent = {
 
 // 権限の問い合わせへの答えの種別。取り消し(CLI 側が決める)は選べない。
 export type PermissionBehaviorDto = "allow" | "deny";
+
+// yyz/(issue #543)一式のうち1ファイルの状態(issue #547)。
+export type YyzScaffoldFileStatusDto = {
+  relative_path: string;
+  exists: boolean;
+};
+
+// yyz/ 一式の状態。getYyzScaffoldStatus / createYyzScaffold のどちらの戻り値にも使う。
+export type YyzScaffoldStatusDto = {
+  files: YyzScaffoldFileStatusDto[];
+  complete: boolean;
+};
