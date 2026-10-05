@@ -39,6 +39,21 @@ function clampWidth(value: number) {
   return Math.min(INSPECTOR_WIDTH.max, Math.max(INSPECTOR_WIDTH.min, value));
 }
 
+/**
+ * デザイントークン(`var(--color-…)`)を実際の色の値に解決する。
+ *
+ * d3.classes はヘッダの塗りを SVG のプレゼンテーション属性(`fill="…"`)として書き出すが、
+ * そこでは `var()` が解決されないため、`tokens.css` のカスタムプロパティを読んで literal に
+ * 直してから渡す(web.md §4 の「CSS へ値を書き写さない」は守ったまま)。
+ * 解決できなければ元の文字列をそのまま返す。
+ */
+function resolveCssColor(value: string, scope: Element): string {
+  const name = value.match(/^var\((--[\w-]+)\)$/)?.[1];
+  if (!name) return value;
+  const resolved = getComputedStyle(scope).getPropertyValue(name).trim();
+  return resolved || value;
+}
+
 /** 保存キー(`<関係線 id>:<from|to>`)から関係線 id を取り出す。 */
 function relationshipIdOf(portKey: string) {
   return portKey.slice(0, portKey.lastIndexOf(":"));
@@ -106,10 +121,20 @@ export default function ClassesTab() {
     const container = containerRef.current;
     if (!container) return;
 
+    // 箱はヘッダ(クラス名の行)だけをクリーンアーキテクチャの層で塗り分ける。
+    // 本体は d3.classes の既定(白・黒枠)のまま。
     const classes = applyLayoutOverrides(
       CLASS_DIAGRAM_DATA.classes,
       overridesRef.current,
-    );
+    ).map((c) => {
+      const layerKey = CLASS_LAYERS[c.name.physical];
+      if (!layerKey) return c;
+      const layer = ARCHITECTURE_LAYER_BY_KEY[layerKey];
+      return {
+        ...c,
+        header: { background: { color: resolveCssColor(layer.fill, container) } },
+      };
+    });
     const relationships = applyPortOverrides(
       CLASS_DIAGRAM_DATA.relationships,
       portOverridesRef.current,
@@ -119,25 +144,14 @@ export default function ClassesTab() {
     // クラスの id は物理名(classDiagram.ts の defineDiagram で付与)。DOM の data-id もこれになる。
     const classById = new Map(classes.map((c) => [c.name.physical, c]));
 
-    const diagram = new ClassDiagram(container);
+    // 背景のグリッド線は出さない(図の内容だけを見せる)。
+    const diagram = new ClassDiagram(container, { grid: { draw: false } });
     diagramRef.current = diagram;
     diagram.loadFromData({ classes, relationships }).render();
     // d3.classes は視点を等倍・原点で作り、そのとき transform を書かない(監視では
     // 気づけない)ので、描いた直後に保存済みの視点へ戻す。
     const svg = container.querySelector("svg");
     if (svg) applyCamera(svg);
-
-    // 箱の色をクリーンアーキテクチャの層で塗り分ける。d3.classes に色の指定が無いため、
-    // 描いた直後に本体の矩形へ style で当てる(ドラッグで動かしても矩形は残るので一度でよい)。
-    container.querySelectorAll<SVGGElement>("g.class-box").forEach((el) => {
-      const dataId = el.getAttribute("data-id");
-      const layerKey = dataId ? CLASS_LAYERS[dataId] : undefined;
-      const body = el.querySelector<SVGRectElement>(".box-body");
-      if (!layerKey || !body) return;
-      const layer = ARCHITECTURE_LAYER_BY_KEY[layerKey];
-      body.style.fill = layer.fill;
-      body.style.stroke = layer.border;
-    });
 
     // d3.classes の ClassBox はドラッグ移動をライブラリ内部で完結させており、
     // 通知コールバック(dragend相当)が無い。SitemapTab と同じ方式で、
