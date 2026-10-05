@@ -1,5 +1,11 @@
 import moment from "moment";
 
+// 【移行中の重複。正は yyz/spec/wbs.json】(#543・#544)
+// このファイルは sitemap.ts の静的 import(WBS の名前・親子関係によるパンくず)と、
+// class-diagram 等に埋め込まれた WbsTab.tsx の「WBS」サブタブがまだ使っているため
+// 残している(/wbs 本体は #544 で yyz/spec/wbs.json を実行時に読む形へ移行済み)。
+// 内容を変えるときは両方を直すこと。sitemap.ts・WbsTab.tsx が移行すれば、
+// このファイルと重複は無くせる見込み(#543 に残課題として記録済み)。
 export const WBS_SOURCE = {
   projects: [{ _id: 1, _class: "PROJECT", name: "YAOYOROZU" }],
   wbs: [
