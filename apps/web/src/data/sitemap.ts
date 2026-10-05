@@ -190,6 +190,13 @@ export const SITEMAP_DATA = {
         item.label,
         WEB_ROW_START_X + index * (NODE_WIDTH + GAP_X),
         ROW * 2,
+        // #548 で構成図の URL が /yaoyorozu/deployment-diagram になり、ボックスの上に
+        // 添えるパス表示(renderNodes.ts)が既定幅(NODE_WIDTH)からはみ出すようになった。
+        // 右隣(UI)との間の GAP_X(100)の余白に収まる範囲(+80)で広げる。
+        // 他のページの位置は動かしていない(この1つだけの対症療法)。
+        item.path === "/yaoyorozu/deployment-diagram"
+          ? { w: NODE_WIDTH + 80, h: NODE_HEIGHT }
+          : undefined,
       ),
     ),
 
@@ -259,7 +266,9 @@ const WEB_PAGE_DETAILS: Record<string, Omit<SiteDetail, "path">> = {
     description: "プロダクトの WBS(作業分解構成)を表で一覧する。",
     wbsIds: [21],
   },
-  "/deployment-diagram": {
+  // #548: navigation.ts の構成図も新しい URL(/yaoyorozu/deployment-diagram)に
+  // なったため、キーも合わせる(理由は WBS(#544)と同じ)。
+  "/yaoyorozu/deployment-diagram": {
     description:
       "システムの構成図を表示する。「WBS」タブにはシステム構成の WBS を出す。",
     wbsIds: [22, 10],
@@ -283,7 +292,7 @@ const WEB_PAGE_DETAILS: Record<string, Omit<SiteDetail, "path">> = {
     description: "ドメインモデルのデータモデルを TM(T字形ER)で表示する。",
     wbsIds: [26, 40],
   },
-  "/unchi": {
+  "/yaoyorozu/unchi": {
     description:
       "アーキテクチャ図(ポンチ絵)を d3.unchi で表示する。ネイティブアプリ・Webアプリと、AIコーディングエージェント・GitHub との関係を描く。",
   },
