@@ -275,12 +275,13 @@ export function renameSession(
   return invoke<void>("rename_session", { project, sessionId, title });
 }
 
-// Web アプリ(apps/web の開発サーバ)が応答するまで、必要なら起動して待つ(issue #530)。
-// 応答していれば何もせずすぐ返る(二重起動しない)。呼び出し側はこれが終わってから
-// openUrl で開くこと。起動を待つ間(初回コンパイルで数十秒かかることがある)は、
-// このPromiseが解決するまでボタンを無効化するなどして利用者に分かるようにする。
-export function ensureWebAppRunning(profileId?: string | null): Promise<void> {
-  return invoke<void>("ensure_web_app_running", { profileId: profileId ?? null });
+// Web アプリ(apps/web の開発サーバ)が応答するまで、必要なら起動して待ち、開くべき URL を
+// 返す(issue #530・#554)。応答していれば何もせずすぐ返る(二重起動しない)。呼び出し側は
+// これが終わってから戻り値の URL を openUrl で開くこと(URL はリポジトリ名を含むため
+// フロント側で組み立てない。issue #554)。起動を待つ間(初回コンパイルで数十秒かかることが
+// ある)は、このPromiseが解決するまでボタンを無効化するなどして利用者に分かるようにする。
+export function ensureWebAppRunning(profileId?: string | null): Promise<string> {
+  return invoke<string>("ensure_web_app_running", { profileId: profileId ?? null });
 }
 
 // yyz/(Web アプリが実行時に読む仕様データの置き場所。issue #543)の状態を確かめる

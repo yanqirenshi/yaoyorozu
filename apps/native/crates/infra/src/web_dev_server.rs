@@ -2,11 +2,19 @@
 //! `claude` CLI の起動(`claude_cli.rs` / `claude_cli_process.rs`)と同じ流儀: 実行ファイルの
 //! 解決・起動失敗の分類・プロセスツリーごとの終了。
 
-use app::{AppError, WebAppProbe, WebDevServerLauncher, WebDevServerProcess, WEB_DEV_SERVER_PORT};
+use app::{
+    AppError, WebAppProbe, WebAppRepositoryProbe, WebDevServerLauncher, WebDevServerProcess,
+    WEB_DEV_SERVER_PORT,
+};
+use std::collections::VecDeque;
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+/// 起動失敗時のメッセージに添える、標準出力・標準エラーの末尾の行数(issue #554)。
+const OUTPUT_TAIL_LINES: usize = 20;
 
 /// `npm run web:dev` を起動する実行ファイル。PATH解決に任せる(`claude_executable` と同じ
 /// 考え方。issue #345の申し送り)。
@@ -43,16 +51,18 @@ impl WebDevServerLauncher for NpmWebDevServerLauncher {
         let mut command = Command::new(npm_executable());
         command.args(["run", "web:dev"]);
         command.current_dir(repository_path);
+        // 標準出力・標準エラーは捨てずに拾う(issue #554)。失敗(例: web:dev を持たない
+        // リポジトリで起動してしまった)に即座に気づき、理由をメッセージに添えるため。
         command
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
             command.creation_flags(CREATE_NO_WINDOW);
         }
-        let child = command.spawn().map_err(|e| {
+        let mut child = command.spawn().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 AppError::CliNotFound(
                     "npm コマンドが見つかりません。Node.js がインストールされているか確認してください。"
@@ -62,16 +72,68 @@ impl WebDevServerLauncher for NpmWebDevServerLauncher {
                 AppError::Io(format!("npm の起動に失敗しました: {e}"))
             }
         })?;
+        let tail = OutputTail::new();
+        if let Some(stdout) = child.stdout.take() {
+            spawn_tail_reader(stdout, tail.clone());
+        }
+        if let Some(stderr) = child.stderr.take() {
+            spawn_tail_reader(stderr, tail.clone());
+        }
         Ok(std::sync::Arc::new(NpmWebDevServerProcess {
             pid: child.id(),
             child: Mutex::new(child),
+            tail,
         }))
     }
+}
+
+/// 標準出力・標準エラーの末尾 [`OUTPUT_TAIL_LINES`] 行を保持するリングバッファ(issue #554)。
+/// stdout と stderr の両方の読み取りスレッドから共有して書き込む(混ざった行の前後関係は
+/// 保証しないが、失敗原因の手がかりとしては十分)。
+struct OutputTail {
+    lines: Mutex<VecDeque<String>>,
+}
+
+impl OutputTail {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            lines: Mutex::new(VecDeque::new()),
+        })
+    }
+
+    fn push(&self, line: String) {
+        let mut lines = self.lines.lock().unwrap_or_else(|e| e.into_inner());
+        if lines.len() >= OUTPUT_TAIL_LINES {
+            lines.pop_front();
+        }
+        lines.push_back(line);
+    }
+
+    fn snapshot(&self) -> String {
+        self.lines
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+/// `reader` を1行ずつ読んで `tail` へ流し込むスレッドを起動する。プロセスが終了して
+/// パイプが閉じれば自然にスレッドも終わる(join不要。issue #554)。
+fn spawn_tail_reader<R: Read + Send + 'static>(reader: R, tail: Arc<OutputTail>) {
+    std::thread::spawn(move || {
+        for line in BufReader::new(reader).lines().map_while(Result::ok) {
+            tail.push(line);
+        }
+    });
 }
 
 struct NpmWebDevServerProcess {
     pid: u32,
     child: Mutex<Child>,
+    tail: Arc<OutputTail>,
 }
 
 impl WebDevServerProcess for NpmWebDevServerProcess {
@@ -85,6 +147,14 @@ impl WebDevServerProcess for NpmWebDevServerProcess {
         // (`claude_cli_process.rs::kill_process_tree` と同じ考え方。issue #530)。
         kill_process_tree(self.pid);
         let _ = self.child.lock().unwrap_or_else(|e| e.into_inner()).kill();
+    }
+
+    fn exited_with_output(&self) -> Option<String> {
+        let mut child = self.child.lock().unwrap_or_else(|e| e.into_inner());
+        match child.try_wait() {
+            Ok(Some(_status)) => Some(self.tail.snapshot()),
+            _ => None,
+        }
     }
 }
 
@@ -131,5 +201,82 @@ impl HttpWebAppProbe {
 impl WebAppProbe for HttpWebAppProbe {
     fn is_responding(&self) -> bool {
         self.client.get(&self.url).send().is_ok()
+    }
+}
+
+/// `repository_path/package.json` を読み、`scripts.web:dev` の有無で Web アプリ(apps/web)
+/// を持つかを確かめる [`WebAppRepositoryProbe`] 実装(issue #554)。読めない・JSON として
+/// 壊れている等はすべて「持たない」として扱う(多数のリポジトリを順に見るだけの判定に
+/// エラーを伝播させる必要はない)。
+pub struct PackageJsonWebAppRepositoryProbe;
+
+impl PackageJsonWebAppRepositoryProbe {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for PackageJsonWebAppRepositoryProbe {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl WebAppRepositoryProbe for PackageJsonWebAppRepositoryProbe {
+    fn has_web_dev_script(&self, repository_path: &Path) -> bool {
+        let Ok(content) = std::fs::read_to_string(repository_path.join("package.json")) else {
+            return false;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
+            return false;
+        };
+        value
+            .get("scripts")
+            .and_then(|scripts| scripts.get("web:dev"))
+            .is_some()
+    }
+}
+
+#[cfg(test)]
+mod package_json_probe_tests {
+    use super::*;
+
+    #[test]
+    fn detects_the_web_dev_script_when_present() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"scripts":{"web:dev":"npm run tokens && npm run dev --workspace=web"}}"#,
+        )
+        .expect("write package.json");
+
+        assert!(PackageJsonWebAppRepositoryProbe::new().has_web_dev_script(dir.path()));
+    }
+
+    #[test]
+    fn reports_false_when_the_script_is_absent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"scripts":{"build":"tsc"}}"#,
+        )
+        .expect("write package.json");
+
+        assert!(!PackageJsonWebAppRepositoryProbe::new().has_web_dev_script(dir.path()));
+    }
+
+    #[test]
+    fn reports_false_when_package_json_is_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        assert!(!PackageJsonWebAppRepositoryProbe::new().has_web_dev_script(dir.path()));
+    }
+
+    #[test]
+    fn reports_false_when_package_json_is_not_valid_json() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("package.json"), "not json").expect("write package.json");
+
+        assert!(!PackageJsonWebAppRepositoryProbe::new().has_web_dev_script(dir.path()));
     }
 }

@@ -52,8 +52,8 @@ pub use running_session_summary::{
     RunningSessionSummary,
 };
 pub use web_dev_server::{
-    web_app_readiness, WebAppProbe, WebAppReadiness, WebDevServerLauncher, WebDevServerProcess,
-    WEB_DEV_SERVER_PORT,
+    find_web_app_repository, web_app_readiness, web_app_spec_url, WebAppProbe, WebAppReadiness,
+    WebAppRepositoryProbe, WebDevServerLauncher, WebDevServerProcess, WEB_DEV_SERVER_PORT,
 };
 pub use yyz_scaffold::{
     create_yyz_scaffold, yyz_scaffold_status, YyzScaffoldFileStatus, YyzScaffoldStatus,
