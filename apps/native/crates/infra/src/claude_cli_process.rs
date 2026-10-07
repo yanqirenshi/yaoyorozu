@@ -50,7 +50,7 @@ pub struct ClaudeCliProcessLauncher {
 impl ClaudeCliProcessLauncher {
     pub fn new() -> Self {
         Self {
-            program: claude_executable().to_string(),
+            program: claude_executable(),
             leading_args: Vec::new(),
         }
     }
