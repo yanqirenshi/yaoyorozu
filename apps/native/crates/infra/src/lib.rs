@@ -53,5 +53,7 @@ pub use running_session_source::FileRunningSessionSource;
 pub use session_source::{FileSystemRepository, SessionFileRef, SessionFsChange, SessionWatcher};
 pub use settings_store::FileSettingsStore;
 pub use skills_store::FileSkillsStore;
-pub use web_dev_server::{HttpWebAppProbe, NpmWebDevServerLauncher};
+pub use web_dev_server::{
+    HttpWebAppProbe, NpmWebDevServerLauncher, PackageJsonWebAppRepositoryProbe,
+};
 pub use yyz_scaffold_writer::FileYyzScaffoldWriter;

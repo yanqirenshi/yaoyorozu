@@ -75,10 +75,6 @@ import type { PaneView, ViewerNav } from "../viewerNav";
 
 const PAGE_SIZE = 50;
 
-// 一覧ペインのヘッダ(issue #521)の「仕様」リンクの先。apps/web の開発サーバの既定ポート。
-// 設定で変えられるようにするのは別イシュー。ハードコードの散在禁止でこの1箇所にまとめる。
-const SPEC_SITE_URL = "http://localhost:3000";
-
 type SessionGroup = {
   folder: string;
   sessions: SessionSummaryDto[];
@@ -878,14 +874,15 @@ function SessionsPage({ nav }: SessionsPageProps) {
     }
   };
 
-  // 「仕様」を押したとき(issue #530)。Web アプリ(apps/web)が応答していなければ app が
-  // 起動してから開く(二重起動しない。待っている間はボタンを無効化)。失敗・タイムアウトは
-  // 既存の app:warning バナー(#504)に理由が出るので、ここでは個別に表示しない。
+  // 「仕様」を押したとき(issue #530・#554)。Web アプリ(apps/web)が応答していなければ app が
+  // 起動してから、戻り値の URL(押したプロファイルのリポジトリ名入り。#554)を開く
+  // (二重起動しない。待っている間はボタンを無効化)。失敗・タイムアウトは既存の
+  // app:warning バナー(#504)に理由が出るので、ここでは個別に表示しない。
   const handleOpenSpec = async () => {
     setSpecLinkBusy(true);
     try {
-      await ensureWebAppRunning(resolvedProfileId);
-      await openUrl(SPEC_SITE_URL);
+      const url = await ensureWebAppRunning(resolvedProfileId);
+      await openUrl(url);
     } catch (e) {
       console.error(e);
     } finally {
@@ -1016,7 +1013,8 @@ function SessionsPage({ nav }: SessionsPageProps) {
                 ドキュメンテーションツール)を既定のブラウザで開くリンク。プロファイルの
                 切り替えに追従する(loadTargetFoldersAndSessions / onSettingsUpdated の
                 どちらでも profileName を更新する)。Web アプリが応答していなければ app が
-                起動してから開く(issue #530。待っている間はボタンを無効化)。 */}
+                起動してから開く(issue #530。待っている間はボタンを無効化)。リポジトリ
+                未設定のプロファイルでは押せない(issue #554。リポジトリ名が決まらないため)。 */}
             <div className="project-list-header">
               <span className="project-list-header-profile" title={profileName ?? undefined}>
                 {profileName}
@@ -1025,7 +1023,12 @@ function SessionsPage({ nav }: SessionsPageProps) {
                 type="button"
                 className="project-list-header-spec-link"
                 onClick={() => void handleOpenSpec()}
-                disabled={specLinkBusy}
+                disabled={specLinkBusy || !repositoryPath}
+                title={
+                  !repositoryPath
+                    ? "リポジトリが設定されていません。設定画面で対象リポジトリを指定してください"
+                    : undefined
+                }
               >
                 {specLinkBusy ? "仕様(起動中…)" : "仕様"}
               </button>
