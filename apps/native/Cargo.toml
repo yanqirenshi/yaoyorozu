@@ -1,3 +1,11 @@
 [workspace]
 resolver = "2"
 members = ["crates/domain", "crates/app", "crates/infra", "tauri"]
+
+# 開発ビルドのデバッグ情報を減らし、コンパイル・リンクを速くする(issue #561。
+# #559 の実測: tauri層1行変更が19.7秒→15.1秒(-23%)、target も半分に)。
+# `debug = 0`(-51%)は採らない: パニック時のバックトレースから行番号が消えるため
+# (`line-tables-only` なら行番号は残り、失うのはデバッガでの変数表示だけ)。
+# [profile.release](MSIの配布物)はここでは変えない。
+[profile.dev]
+debug = "line-tables-only"
