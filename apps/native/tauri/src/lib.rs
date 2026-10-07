@@ -12,10 +12,10 @@ use dto::{
     AgentKindDto, AppErrorDto, CameraDto, ClaudeDirPageDto, ClaudeMdDto, ClaudeSettingsDto,
     ConversationDto, DeviceCodeDto, GithubAuthFailedEventDto, GithubAuthStatusDto,
     GithubAuthenticatedEventDto, GithubProjectDto, GithubProjectSummaryDto, HubLayoutDto,
-    HubTuningDto, MessageImageDto, NodePositionDto, PcDto, ProfileSummaryDto, ProjectDto,
-    ProjectItemsPageDto, ProjectSettingsFileDto, RuleDto, RuleSummaryDto, SessionChangedEventDto,
-    SessionSummaryDto, SettingsCorruptedEventDto, SettingsDto, SettingsInputDto, SkillDto,
-    SkillSummaryDto, ViewerTargetDto, WindowStateDto, WindowTabDto,
+    HubTuningDto, MessageImageDto, NodeMoveDto, NodePositionDto, PcDto, ProfileSummaryDto,
+    ProjectDto, ProjectItemsPageDto, ProjectSettingsFileDto, RuleDto, RuleSummaryDto,
+    SessionChangedEventDto, SessionSummaryDto, SettingsCorruptedEventDto, SettingsDto,
+    SettingsInputDto, SkillDto, SkillSummaryDto, ViewerTargetDto, WindowStateDto, WindowTabDto,
 };
 use infra::{
     FileArchivedSessionsStore, FileClaudeDirStore, FileClaudeMdStore, FileClaudeSettingsStore,
@@ -764,15 +764,16 @@ async fn get_hub_layout(app: tauri::AppHandle) -> Result<HubLayoutDto, AppErrorD
     .map_err(Into::into)
 }
 
-/// ハブグラフのノード位置を丸ごと置き換えて保存する(issue #121)。マージ
-/// ではなく置き換えなので、呼び出し側は現在有効な全ノード分の位置を渡す
-/// こと(存在しないノードの残骸は自然に消える)。視点(`camera`。issue #268)も
-/// 同じく丸ごと置き換える(`None` は視点なし)。
+/// ハブグラフのノード位置・動き方の上書きを丸ごと置き換えて保存する
+/// (issue #121・#558)。マージではなく置き換えなので、呼び出し側は現在有効な
+/// 全ノード分の位置・動き方を渡すこと(存在しないノードの残骸は自然に消える)。
+/// 視点(`camera`。issue #268)も同じく丸ごと置き換える(`None` は視点なし)。
 #[tauri::command]
 async fn save_hub_layout(
     app: tauri::AppHandle,
     positions: std::collections::HashMap<String, NodePositionDto>,
     camera: Option<CameraDto>,
+    moves: std::collections::HashMap<String, NodeMoveDto>,
 ) -> Result<(), AppErrorDto> {
     let path = hub_layout_path(&app)?;
     tauri::async_runtime::spawn_blocking(move || -> Result<(), app::AppError> {
@@ -781,7 +782,11 @@ async fn save_hub_layout(
             .into_iter()
             .map(|(key, position)| (key, position.into()))
             .collect();
-        app::save_hub_layout(&store, positions, camera.map(Into::into))
+        let moves = moves
+            .into_iter()
+            .map(|(key, value)| (key, value.into()))
+            .collect();
+        app::save_hub_layout(&store, positions, camera.map(Into::into), moves)
     })
     .await
     .unwrap_or_else(|_| {

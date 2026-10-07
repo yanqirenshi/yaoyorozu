@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent as ReactMouseEvent } from "react";
+import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import D3Network, { Rectum } from "@yanqirenshi/d3.network";
 import type { NodeDatum } from "@yanqirenshi/d3.network";
 import {
@@ -35,6 +35,7 @@ import type {
   GitWorktreeDto,
   GithubProjectDto,
   HubLayoutDto,
+  NodeMoveDto,
   NodePositionDto,
   PcDto,
   RunningPermissionModeDto,
@@ -270,6 +271,13 @@ type HubNodeCore = {
   // ため保存しない。issue #226)。GitRepository/GitBranch ノード(issue #224)は
   // 台帳の個体指定子(repository_path/branch_id)由来のキーで保存する。
   positionKey?: string;
+  // 動き方(issue #558)。`buildGraphData` が解決した現在値(上書きが無ければ
+  // 種類ごとの既定)。ライブラリ自身もこの値をそのまま読む(`Nodes.js` の
+  // `data._core = {...option}` で、渡したオブジェクト全体がそのまま core になる)。
+  move?: NodeMoveDto;
+  // インスペクタの「既定に戻す」を押せるかどうか(issue #558)。`moves` に
+  // 明示的な上書きがあるかどうかで、既定値と偶然同じ値を選んだ場合と区別する。
+  moveOverridden?: boolean;
   // Pc(`domain::Pc`。issue #182・#283)
   pcName?: string;
   systemUuid?: string;
@@ -536,6 +544,9 @@ function buildGraphData(
   showArchived: boolean,
   savedPositions: Record<string, NodePositionDto>,
   currentPositions: Map<string, NodePositionDto>,
+  // ノードごとの動き方の上書き(issue #558)。キーは `nodeIdOfCore` と同じ
+  // (セッションは `session:<session_id>`、それ以外は positionKey)。
+  savedMoves: Record<string, NodeMoveDto>,
 ) {
   const nodes: Record<string, unknown>[] = [];
   const edges: Record<string, unknown>[] = [];
@@ -543,12 +554,27 @@ function buildGraphData(
   // 存在しないノードの位置情報をここで自然に除外する(呼び出し側が保存前に
   // この集合でフィルタする)。
   const positionKeys = new Set<string>();
+  // 現在のグラフに実在するノードの集合(issue #558)。`positionKeys` と違い
+  // セッションも含む(動き方の上書きは位置を保存しないセッションにも持たせ
+  // られるため)。保存時、既に存在しないノードの動き方の上書きをここで
+  // 自然に除外する。
+  const moveKeys = new Set<string>();
   let edgeSeq = 0;
 
   // ドラッグで固定した位置(issue #121)があればそれを使い、無ければ計算した
   // 既定位置を使う(issue #224でGitRepository/GitBranchノードに導入)。
   const resolvePosition = (positionKey: string, defaultX: number, defaultY: number) =>
     savedPositions[positionKey] ?? { x: defaultX, y: defaultY };
+
+  // 動き方の上書き(issue #558)があればそれを使い、無ければ種類ごとの既定
+  // (セッションは will、それ以外は support)を使う。呼び出し側は必ず
+  // `moveKeys.add(moveKey)` も行うこと(消えたノードの上書きを保存から
+  // 落とすため)。
+  const resolveMove = (moveKey: string, defaultMove: NodeMoveDto): NodeMoveDto =>
+    savedMoves[moveKey] ?? defaultMove;
+  // インスペクタの「既定に戻す」の有効・無効に使う(issue #558。既定値と
+  // 偶然同じ値を明示的に選んだ場合も「上書きあり」として区別する)。
+  const isMoveOverridden = (moveKey: string): boolean => moveKey in savedMoves;
 
   const user = pc?.users[0];
   const repositories = user?.repositories ?? [];
@@ -569,6 +595,7 @@ function buildGraphData(
     repo.branches.forEach((branch) => {
       const branchNodeId = gitBranchNodeId(branch.branch_id);
       positionKeys.add(branchNodeId);
+      moveKeys.add(branchNodeId);
       const branchPosition = resolvePosition(
         branchNodeId,
         BRANCH_COLUMN_X,
@@ -578,7 +605,8 @@ function buildGraphData(
         id: branchNodeId,
         x: branchPosition.x,
         y: branchPosition.y,
-        move: "support",
+        move: resolveMove(branchNodeId, "support"),
+        moveOverridden: isMoveOverridden(branchNodeId),
         label: {
           text: truncate(branch.branch_name, SESSION_LABEL_MAX_CHARS),
           fill: COLOR_SUMI,
@@ -602,6 +630,7 @@ function buildGraphData(
     const repositoryNodeId = `git-repository:${repo.repository_path}`;
     const profileForRepository = findProfileForRepository(repo.repository_path, profiles);
     positionKeys.add(repositoryNodeId);
+    moveKeys.add(repositoryNodeId);
     const repositoryPosition = resolvePosition(
       repositoryNodeId,
       REPOSITORY_COLUMN_X,
@@ -615,7 +644,8 @@ function buildGraphData(
       id: repositoryNodeId,
       x: repositoryPosition.x,
       y: repositoryPosition.y,
-      move: "support",
+      move: resolveMove(repositoryNodeId, "support"),
+      moveOverridden: isMoveOverridden(repositoryNodeId),
       label: {
         text: truncate(repo.repository_name, SESSION_LABEL_MAX_CHARS),
         fill: COLOR_SUMI,
@@ -644,6 +674,7 @@ function buildGraphData(
     repo.worktrees.forEach((worktree, i) => {
       const worktreeNodeId = gitWorktreeNodeId(worktree.worktree_id);
       positionKeys.add(worktreeNodeId);
+      moveKeys.add(worktreeNodeId);
       const worktreePosition = resolvePosition(
         worktreeNodeId,
         WORKTREE_COLUMN_X,
@@ -657,7 +688,8 @@ function buildGraphData(
         id: worktreeNodeId,
         x: worktreePosition.x,
         y: worktreePosition.y,
-        move: "support",
+        move: resolveMove(worktreeNodeId, "support"),
+        moveOverridden: isMoveOverridden(worktreeNodeId),
         label: {
           text: truncate(worktree.worktree_name, SESSION_LABEL_MAX_CHARS),
           fill: COLOR_SUMI,
@@ -704,12 +736,14 @@ function buildGraphData(
   if (pc) {
     const pcNodeId = "pc";
     positionKeys.add(pcNodeId);
+    moveKeys.add(pcNodeId);
     const pcPosition = resolvePosition(pcNodeId, PC_COLUMN_X, GIT_NODE_ORIGIN_Y);
     nodes.push({
       id: pcNodeId,
       x: pcPosition.x,
       y: pcPosition.y,
-      move: "support",
+      move: resolveMove(pcNodeId, "support"),
+      moveOverridden: isMoveOverridden(pcNodeId),
       label: {
         text: truncate(pc.pc_name, SESSION_LABEL_MAX_CHARS),
         fill: COLOR_SUMI,
@@ -728,12 +762,14 @@ function buildGraphData(
     if (user) {
       const userNodeId = `user:${user.user_id}`;
       positionKeys.add(userNodeId);
+      moveKeys.add(userNodeId);
       const userPosition = resolvePosition(userNodeId, USER_COLUMN_X, GIT_NODE_ORIGIN_Y);
       nodes.push({
         id: userNodeId,
         x: userPosition.x,
         y: userPosition.y,
-        move: "support",
+        move: resolveMove(userNodeId, "support"),
+        moveOverridden: isMoveOverridden(userNodeId),
         label: {
           text: truncate(user.user_name, SESSION_LABEL_MAX_CHARS),
           fill: COLOR_SUMI,
@@ -775,6 +811,7 @@ function buildGraphData(
   profiles.forEach((profile) => {
     const profileNodeId = `profile:${profile.id}`;
     positionKeys.add(profileNodeId);
+    moveKeys.add(profileNodeId);
     const repositoryKey = profile.repositoryPath
       ? normalizePathForComparison(profile.repositoryPath)
       : null;
@@ -794,7 +831,8 @@ function buildGraphData(
       id: profileNodeId,
       x: position.x,
       y: position.y,
-      move: "support",
+      move: resolveMove(profileNodeId, "support"),
+      moveOverridden: isMoveOverridden(profileNodeId),
       label: {
         text: truncate(profile.name, SESSION_LABEL_MAX_CHARS),
         fill: COLOR_SUMI,
@@ -861,6 +899,7 @@ function buildGraphData(
     // 同じ session_id の Session を1つに集約する(`conversation_files` が
     // 1..*)ようになったため、session_id は再び一意になり、本来のIDへ戻した。
     const sessionNodeId = `session:${session.session_id}`;
+    moveKeys.add(sessionNodeId);
     const title = resolveSessionTitle(session);
     // app が起動している実行中セッション(issue #408)。終了したものは
     // 呼び出し側で除いてあるので、ここに来るのは動いているものだけ。
@@ -887,7 +926,8 @@ function buildGraphData(
       id: sessionNodeId,
       x: position.x,
       y: position.y,
-      move: "will",
+      move: resolveMove(sessionNodeId, "will"),
+      moveOverridden: isMoveOverridden(sessionNodeId),
       label: {
         text: truncate(title, SESSION_LABEL_MAX_CHARS),
         fill: COLOR_SUMI,
@@ -969,6 +1009,7 @@ function buildGraphData(
   runningBySessionId.forEach((running, sessionId) => {
     if (drawnSessionIds.has(sessionId)) return;
     const sessionNodeId = `session:${sessionId}`;
+    moveKeys.add(sessionNodeId);
     const repository = repositoryNodeByPath.get(
       normalizePathForComparison(running.repository_path),
     );
@@ -987,7 +1028,8 @@ function buildGraphData(
       id: sessionNodeId,
       x: position.x,
       y: position.y,
-      move: "will",
+      move: resolveMove(sessionNodeId, "will"),
+      moveOverridden: isMoveOverridden(sessionNodeId),
       label: {
         text: truncate(title, SESSION_LABEL_MAX_CHARS),
         fill: COLOR_SUMI,
@@ -1032,7 +1074,7 @@ function buildGraphData(
     }
   });
 
-  return { nodes, edges, positionKeys };
+  return { nodes, edges, positionKeys, moveKeys };
 }
 
 // ノードの `_core` から、グラフのノードID(`buildGraphData` が振ったもの)を
@@ -1062,6 +1104,8 @@ type InspectorHandlers = {
   onStartResume: (core: HubNodeCore) => void;
   onStop: (target: RunningSessionRefDto) => void;
   onStartNew: (core: HubNodeCore) => void;
+  // ノードの動き方を変える(issue #558)。`move` が `null` は「既定に戻す」。
+  onSetNodeMove: (core: HubNodeCore, move: NodeMoveDto | null) => void;
   // アーカイブ・アーカイブ解除(issue #496)。project/sessionId が無いノード
   // (仮ノード等)では呼べないため、呼び出し側(buildSessionInspectorContent)で
   // ボタンを無効にする。
@@ -1227,24 +1271,91 @@ const MIN_PEER_MESSAGING_VERSION = "2.1.268";
 // 実際に起きた)。
 const RESUME_NAME_NOTE = "表示名を変えると、この会話のタイトルも変わります";
 
+// ノードの種類ごとの動き方の既定値(issue #558)。画面に固定していた値
+// (`buildGraphData` 参照)と同じ: セッションは自動で動き、それ以外はドラッグで
+// 動かせる。
+const DEFAULT_NODE_MOVE: Record<HubNodeCore["kind"], NodeMoveDto> = {
+  session: "will",
+  pc: "support",
+  user: "support",
+  profile: "support",
+  "git-repository": "support",
+  "git-branch": "support",
+  "git-worktree": "support",
+};
+
+const NODE_MOVE_LABELS: Record<NodeMoveDto, string> = {
+  will: "自動で動く",
+  support: "ドラッグで動かせる",
+  freeze: "動かない",
+};
+const NODE_MOVE_ORDER: NodeMoveDto[] = ["will", "support", "freeze"];
+
+// インスペクタの「動き方」の切り替え(issue #558)。ノード種別を問わず、
+// `buildInspectorContent` がどの種類にも同じものを足す(種類ごとの個別実装に
+// 重複させない)。選ぶとすぐ保存・反映される(`handlers.onSetNodeMove`)。
+function buildMoveControl(core: HubNodeCore, handlers: InspectorHandlers): ReactNode {
+  const defaultMove = DEFAULT_NODE_MOVE[core.kind];
+  const current = core.move ?? defaultMove;
+  return (
+    <div className="hub-inspector-move">
+      <div className="hub-inspector-move-label">動き方</div>
+      <div className="hub-inspector-move-options" role="radiogroup" aria-label="動き方">
+        {NODE_MOVE_ORDER.map((move) => (
+          <label key={move} className="hub-inspector-move-option">
+            <input
+              type="radio"
+              name={`node-move-${core.kind}`}
+              checked={current === move}
+              onChange={() => handlers.onSetNodeMove(core, move)}
+            />
+            {NODE_MOVE_LABELS[move]}
+            {!core.moveOverridden && move === defaultMove ? "(既定)" : ""}
+          </label>
+        ))}
+      </div>
+      <button
+        type="button"
+        className="hub-inspector-move-reset"
+        onClick={() => handlers.onSetNodeMove(core, null)}
+        disabled={!core.moveOverridden}
+      >
+        既定に戻す
+      </button>
+    </div>
+  );
+}
+
 // ノードの `_core`(issue #109)からインスペクタの表示内容を組み立てる。
 // グラフ構築時に `_core` へ埋め込んだ値と、実行中セッションの一覧
 // (`running`。issue #408)だけを使い、ここから backend を呼ぶことはしない
 // (押されたときの処理は `handlers`)。ノード種別(issue #224・#229で
-// セッション以外も追加)ごとに表示内容を分ける。
+// セッション以外も追加)ごとに表示内容を分ける。「動き方」(issue #558)は
+// 種別を問わず共通のため、各 `build*InspectorContent` の結果に後から足す。
 function buildInspectorContent(
   core: HubNodeCore,
   handlers: InspectorHandlers,
   // セッションノードのとき、app が起動している実行中セッション(無ければ null)。
   running: RunningSessionSummaryDto | null,
 ): InspectorContent {
-  if (core.kind === "pc") return buildPcInspectorContent(core);
-  if (core.kind === "user") return buildUserInspectorContent(core);
-  if (core.kind === "profile") return buildProfileInspectorContent(core, handlers);
-  if (core.kind === "git-repository") return buildRepositoryInspectorContent(core, handlers);
-  if (core.kind === "git-branch") return buildBranchInspectorContent(core);
-  if (core.kind === "git-worktree") return buildWorktreeInspectorContent(core);
-  return buildSessionInspectorContent(core, handlers, running);
+  const base = ((): InspectorContent => {
+    if (core.kind === "pc") return buildPcInspectorContent(core);
+    if (core.kind === "user") return buildUserInspectorContent(core);
+    if (core.kind === "profile") return buildProfileInspectorContent(core, handlers);
+    if (core.kind === "git-repository") return buildRepositoryInspectorContent(core, handlers);
+    if (core.kind === "git-branch") return buildBranchInspectorContent(core);
+    if (core.kind === "git-worktree") return buildWorktreeInspectorContent(core);
+    return buildSessionInspectorContent(core, handlers, running);
+  })();
+  return {
+    ...base,
+    body: (
+      <>
+        {base.body}
+        {buildMoveControl(core, handlers)}
+      </>
+    ),
+  };
 }
 
 // Pc(issue #283)。`domain::Pc` のモデル属性(#182 当時の表示と同じ)。
@@ -1588,7 +1699,7 @@ function HubPage() {
       .then((next) => setLayout((prev) => prev ?? next))
       .catch((e) => {
         console.error(e);
-        setLayout((prev) => prev ?? { positions: {}, camera: null });
+        setLayout((prev) => prev ?? { positions: {}, camera: null, moves: {} });
       });
   }, []);
   if (!layout) return <div className="hub-page" />;
@@ -1964,51 +2075,6 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
     [runInspectorAction],
   );
 
-  const inspectorHandlers: InspectorHandlers = useMemo(
-    () => ({
-      onOpenProfile: openOrFocusProfile,
-      onOpenInViewer: handleOpenInViewer,
-      onStartResume: handleStartResume,
-      onStop: handleStopRunningSession,
-      onStartNew: handleStartNew,
-      onArchiveSession: handleArchiveSession,
-      onUnarchiveSession: handleUnarchiveSession,
-      startMode,
-      onStartModeChange: setStartMode,
-      startModel,
-      onStartModelChange: setStartModel,
-      startName,
-      onStartNameChange: setStartName,
-      startWorktreeKind,
-      onStartWorktreeKindChange: setStartWorktreeKind,
-      startWorktreeId,
-      onStartWorktreeIdChange: setStartWorktreeId,
-      startBranchName,
-      onStartBranchNameChange: setStartBranchName,
-      startInputIncomplete,
-      startError,
-      busy,
-    }),
-    [
-      openOrFocusProfile,
-      handleOpenInViewer,
-      handleStartResume,
-      handleStopRunningSession,
-      handleStartNew,
-      handleArchiveSession,
-      handleUnarchiveSession,
-      startMode,
-      startModel,
-      startName,
-      startWorktreeKind,
-      startWorktreeId,
-      startBranchName,
-      startInputIncomplete,
-      startError,
-      busy,
-    ],
-  );
-
   // ノードのドラッグ固定位置(issue #121)。起動時に読み込んだ値(`HubPage` が
   // 渡す `initialLayout`)から始め、ドラッグのたびに更新する。キーは
   // `positionKey`(`buildGraphData` 参照)。`positionsRef`/`cameraRef` は、
@@ -2019,24 +2085,42 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
   const positionsRef = useRef<Record<string, NodePositionDto>>(initialLayout.positions);
   const cameraRef = useRef<CameraDto | null>(initialLayout.camera);
 
+  // ノードごとの動き方の上書き(issue #558)。位置と同じ流儀(初期値から始め、
+  // 変えるたびに更新・デバウンス保存)。キーは `nodeIdOfCore` と同じ(セッションは
+  // `session:<session_id>`、それ以外は positionKey)。
+  const [savedMoves, setSavedMoves] = useState<Record<string, NodeMoveDto>>(
+    initialLayout.moves,
+  );
+  const movesRef = useRef<Record<string, NodeMoveDto>>(initialLayout.moves);
+
   // `buildGraphData` が直近に払い出した positionKey の集合(issue #121)。
   // 保存時、既に存在しないノードの位置情報をここでフィルタして落とす
   // (`save_hub_layout` はマージではなく丸ごと置き換えのため、呼び出し側で
   // 現在有効な分だけに絞る必要がある)。ref にしているのは、保存タイミング
   // (ドラッグ終了時・デバウンス後)で常に最新の集合を参照したいため。
   const validPositionKeysRef = useRef<Set<string>>(new Set());
+  // 同じ理由で、動き方の上書き(issue #558)に実在するノードのIDの集合。
+  // `positionKeys` と違いセッションも含む(位置は保存しないが動き方の上書きは
+  // 持てるため)。
+  const validMoveKeysRef = useRef<Set<string>>(new Set());
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ノード位置と視点(パン・ズーム。issue #268)をまとめて保存する
-  // (`save_hub_layout` は丸ごと置き換えのため、どちらか一方だけの保存で
-  // もう一方を消さないよう、常に最新の両方を渡す)。
+  // ノード位置・視点(パン・ズーム。issue #268)・動き方の上書き(issue #558)を
+  // まとめて保存する(`save_hub_layout` は丸ごと置き換えのため、どれか1つだけの
+  // 保存で他を消さないよう、常に最新の全部を渡す)。
   const saveHubLayoutNow = useCallback(() => {
     saveTimerRef.current = null;
-    const validKeys = validPositionKeysRef.current;
-    const filtered = Object.fromEntries(
-      Object.entries(positionsRef.current).filter(([key]) => validKeys.has(key)),
+    const validPositionKeys = validPositionKeysRef.current;
+    const filteredPositions = Object.fromEntries(
+      Object.entries(positionsRef.current).filter(([key]) => validPositionKeys.has(key)),
     );
-    saveHubLayout(filtered, cameraRef.current).catch((e) => console.error(e));
+    const validMoveKeys = validMoveKeysRef.current;
+    const filteredMoves = Object.fromEntries(
+      Object.entries(movesRef.current).filter(([key]) => validMoveKeys.has(key)),
+    );
+    saveHubLayout(filteredPositions, cameraRef.current, filteredMoves).catch((e) =>
+      console.error(e),
+    );
   }, []);
 
   const scheduleSaveHubLayout = useCallback(() => {
@@ -2068,6 +2152,73 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
       scheduleSaveHubLayout();
     },
     [scheduleSaveHubLayout],
+  );
+
+  // インスペクタから動き方を変えたとき(issue #558)。`move` が `null` は
+  // 「既定に戻す」(上書きを外す)。キーが決まらないノード(通常は無い)は
+  // 何もしない。
+  const handleSetNodeMove = useCallback(
+    (core: HubNodeCore, move: NodeMoveDto | null) => {
+      const key = nodeIdOfCore(core);
+      if (!key) return;
+      const next = { ...movesRef.current };
+      if (move) {
+        next[key] = move;
+      } else {
+        delete next[key];
+      }
+      movesRef.current = next;
+      setSavedMoves(next);
+      scheduleSaveHubLayout();
+    },
+    [scheduleSaveHubLayout],
+  );
+
+  const inspectorHandlers: InspectorHandlers = useMemo(
+    () => ({
+      onOpenProfile: openOrFocusProfile,
+      onOpenInViewer: handleOpenInViewer,
+      onStartResume: handleStartResume,
+      onStop: handleStopRunningSession,
+      onStartNew: handleStartNew,
+      onArchiveSession: handleArchiveSession,
+      onUnarchiveSession: handleUnarchiveSession,
+      onSetNodeMove: handleSetNodeMove,
+      startMode,
+      onStartModeChange: setStartMode,
+      startModel,
+      onStartModelChange: setStartModel,
+      startName,
+      onStartNameChange: setStartName,
+      startWorktreeKind,
+      onStartWorktreeKindChange: setStartWorktreeKind,
+      startWorktreeId,
+      onStartWorktreeIdChange: setStartWorktreeId,
+      startBranchName,
+      onStartBranchNameChange: setStartBranchName,
+      startInputIncomplete,
+      startError,
+      busy,
+    }),
+    [
+      openOrFocusProfile,
+      handleOpenInViewer,
+      handleStartResume,
+      handleStopRunningSession,
+      handleStartNew,
+      handleArchiveSession,
+      handleUnarchiveSession,
+      handleSetNodeMove,
+      startMode,
+      startModel,
+      startName,
+      startWorktreeKind,
+      startWorktreeId,
+      startBranchName,
+      startInputIncomplete,
+      startError,
+      busy,
+    ],
   );
 
   // Rectum(命令的API)は初回に一度だけ生成し、以後は同じインスタンスを
@@ -2127,11 +2278,19 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
   // 走った場合でも、`Colon.data()` は selector 未設定なら描画せず値を保持
   // するだけなので、後から selector が設定された時点で自動的に初回描画される。
   // `savedPositions` はGitRepository/GitBranchノードの位置(issue #224)に
-  // 反映するため依存に含める。
+  // 反映するため依存に含める。`savedMoves`(issue #558)も同様、変えたら
+  // すぐグラフに反映するため含める。
   // 実行中セッションの状態(issue #408)はセッションノードの枠に出るため、
   // 変わったら描き直す。アーカイブ済みの表示切り替え(issue #496)も、表示する
   // ノード自体が変わるため含める。
-  const dataKey = JSON.stringify({ pc, profiles, runningSessions, savedPositions, showArchived });
+  const dataKey = JSON.stringify({
+    pc,
+    profiles,
+    runningSessions,
+    savedPositions,
+    savedMoves,
+    showArchived,
+  });
   useEffect(() => {
     // NOTE: `@yanqirenshi/d3.network` の `Edges.js`(`draw()`)には、IDが
     // 一致した既存の辺要素(本来は「更新」として残すべきもの)まで無条件に
@@ -2150,15 +2309,17 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
       const datum = (el as Element & { __data__?: NodeDatum }).__data__;
       if (datum) currentPositions.set(datum.id, { x: datum.x, y: datum.y });
     });
-    const { nodes, edges, positionKeys } = buildGraphData(
+    const { nodes, edges, positionKeys, moveKeys } = buildGraphData(
       pc,
       profiles,
       runningBySessionId,
       showArchived,
       savedPositions,
       currentPositions,
+      savedMoves,
     );
     validPositionKeysRef.current = positionKeys;
+    validMoveKeysRef.current = moveKeys;
     rectum.data({ nodes, edges });
     // 辺ごとの色・ノードの透明度はライブラリが読まないため、描いた直後に
     // 上書きする(issue #438・#496)。

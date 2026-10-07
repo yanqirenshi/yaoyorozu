@@ -5,13 +5,13 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// ハブグラフのノード位置(`HubLayout`)をJSONファイルとして永続化する。
-/// `settings.json` とは別ファイル(`hub-layout.json`)に保存する低重要度
-/// データであり、まだv1のみでマイグレーションは無いため `FileSettingsStore`
-/// より単純(issue #121)。native.md §2 に準拠: 書き込みはアトミック
-/// (`*.tmp` へ書く → fsync → rename)、読み込み失敗時はプロセスを落とさず
-/// デフォルト値へフォールバックする(壊れたファイルは `*.corrupt.<timestamp>`
-/// へ退避)。
+/// ハブグラフのノード位置・視点・動き方(`HubLayout`)をJSONファイルとして
+/// 永続化する。`settings.json` とは別ファイル(`hub-layout.json`)に保存する
+/// 低重要度データであり、マイグレーションも版ごとに増えた項目を空・既定で
+/// 埋めるだけなので `FileSettingsStore` より単純(issue #121)。native.md §2 に
+/// 準拠: 書き込みはアトミック(`*.tmp` へ書く → fsync → rename)、読み込み
+/// 失敗時はプロセスを落とさずデフォルト値へフォールバックする(壊れた
+/// ファイルは `*.corrupt.<timestamp>` へ退避)。
 pub struct FileHubLayoutStore {
     path: PathBuf,
 }
@@ -57,15 +57,30 @@ impl HubLayoutStore for FileHubLayoutStore {
 
         match layout.version {
             CURRENT_HUB_LAYOUT_VERSION => Ok(layout),
-            // v1 -> v2(issue #268): 視点(`camera`)が増えただけ。v1 のファイルは
-            // 視点を持たない(`None`)ので、positions はそのままバージョンだけ
-            // 上げ、すぐに書き戻す(`FileSettingsStore` と同じ流儀)。書き戻しに
-            // 失敗しても、読み込んだ内容は使える。
+            // v1 -> v3: 視点(`camera`。v2・issue #268)も動き方の上書き
+            // (`moves`。v3・issue #558)も v1 は持たないので、どちらも既定
+            // (`None`/空)のままバージョンだけ現行まで上げ、すぐに書き戻す
+            // (`FileSettingsStore` と同じ流儀)。書き戻しに失敗しても、
+            // 読み込んだ内容は使える。
             1 => {
                 let migrated = HubLayout {
                     version: CURRENT_HUB_LAYOUT_VERSION,
                     positions: layout.positions,
                     camera: None,
+                    moves: std::collections::HashMap::new(),
+                };
+                let _ = self.save(&migrated);
+                Ok(migrated)
+            }
+            // v2 -> v3(issue #558): ノードごとの動き方の上書き(`moves`)が
+            // 増えただけ。v2 のファイルは `moves` を持たない(空)ので、
+            // positions/camera はそのままバージョンだけ上げ、すぐに書き戻す。
+            2 => {
+                let migrated = HubLayout {
+                    version: CURRENT_HUB_LAYOUT_VERSION,
+                    positions: layout.positions,
+                    camera: layout.camera,
+                    moves: std::collections::HashMap::new(),
                 };
                 let _ = self.save(&migrated);
                 Ok(migrated)
@@ -117,7 +132,7 @@ impl HubLayoutStore for FileHubLayoutStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use domain::{Camera, NodePosition};
+    use domain::{Camera, NodeMove, NodePosition};
     use std::collections::HashMap;
 
     #[test]
@@ -137,6 +152,8 @@ mod tests {
 
         let mut positions = HashMap::new();
         positions.insert("cwd:proj1".to_string(), NodePosition { x: 12.5, y: -3.0 });
+        let mut moves = HashMap::new();
+        moves.insert("session:s1".to_string(), NodeMove::Freeze);
         let layout = HubLayout {
             version: CURRENT_HUB_LAYOUT_VERSION,
             positions,
@@ -145,6 +162,7 @@ mod tests {
                 y: -40.0,
                 k: 1.5,
             }),
+            moves,
         };
 
         store.save(&layout).expect("should save");
@@ -206,7 +224,7 @@ mod tests {
     }
 
     #[test]
-    fn load_migrates_v1_layout_keeping_positions_and_persisting_v2() {
+    fn load_migrates_v1_layout_keeping_positions_and_persisting_current_version() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("hub-layout.json");
         fs::write(
@@ -220,6 +238,7 @@ mod tests {
 
         assert_eq!(loaded.version, CURRENT_HUB_LAYOUT_VERSION);
         assert_eq!(loaded.camera, None, "v1 は視点を持たない");
+        assert!(loaded.moves.is_empty(), "v1 は動き方の上書きを持たない");
         assert_eq!(
             loaded.positions.get("git-branch:b1"),
             Some(&NodePosition { x: 1.5, y: 2.5 }),
@@ -229,7 +248,41 @@ mod tests {
         assert!(path.is_file());
         assert!(fs::read_to_string(&path)
             .unwrap()
-            .contains("\"version\": 2"));
+            .contains(&format!("\"version\": {CURRENT_HUB_LAYOUT_VERSION}")));
+        assert_eq!(store.load().expect("should load again"), loaded);
+    }
+
+    #[test]
+    fn load_migrates_v2_layout_keeping_positions_and_camera_and_persisting_current_version() {
+        // issue #558: v2(`moves` を持たない)を読んでも壊れず、positions・
+        // camera は不変で `moves` は空になり、現行バージョンへ書き戻る。
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hub-layout.json");
+        fs::write(
+            &path,
+            r#"{"version":2,"positions":{"git-branch:b1":{"x":1.5,"y":2.5}},"camera":{"x":1.0,"y":2.0,"k":1.0}}"#,
+        )
+        .unwrap();
+        let store = FileHubLayoutStore::new(path.clone());
+
+        let loaded = store.load().expect("should migrate");
+
+        assert_eq!(loaded.version, CURRENT_HUB_LAYOUT_VERSION);
+        assert_eq!(
+            loaded.camera,
+            Some(Camera {
+                x: 1.0,
+                y: 2.0,
+                k: 1.0
+            }),
+            "camera は不変"
+        );
+        assert_eq!(
+            loaded.positions.get("git-branch:b1"),
+            Some(&NodePosition { x: 1.5, y: 2.5 }),
+            "positions は不変"
+        );
+        assert!(loaded.moves.is_empty(), "v2 は動き方の上書きを持たない");
         assert_eq!(store.load().expect("should load again"), loaded);
     }
 }

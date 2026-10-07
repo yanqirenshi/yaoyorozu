@@ -15,6 +15,7 @@ import type {
   HubLayoutDto,
   HubTuningDto,
   MessageImageDto,
+  NodeMoveDto,
   NodePositionDto,
   PcDto,
   AddressedProgressDto,
@@ -86,6 +87,7 @@ export type {
   HubTuningDto,
   MessageDto,
   MessageImageDto,
+  NodeMoveDto,
   NodePositionDto,
   PcDto,
   ProfileSummaryDto,
@@ -468,13 +470,15 @@ export function getHubLayout(): Promise<HubLayoutDto> {
   return invoke<HubLayoutDto>("get_hub_layout");
 }
 
-// ハブグラフのノード位置を丸ごと置き換えて保存する(issue #121)。マージ
-// ではなく置き換えなので、呼び出し側は現在有効な全ノード分の位置を渡すこと。
+// ハブグラフのノード位置・動き方の上書きを丸ごと置き換えて保存する
+// (issue #121・#558)。マージではなく置き換えなので、呼び出し側は現在有効な
+// 全ノード分の位置・動き方を渡すこと。
 export function saveHubLayout(
   positions: Record<string, NodePositionDto>,
   camera: CameraDto | null,
+  moves: Record<string, NodeMoveDto>,
 ): Promise<void> {
-  return invoke<void>("save_hub_layout", { positions, camera });
+  return invoke<void>("save_hub_layout", { positions, camera, moves });
 }
 
 // ハブグラフの調整値(issue #249)を取得する。保存値が無い/壊れている場合は

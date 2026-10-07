@@ -1,14 +1,16 @@
-use crate::{Camera, NodePosition};
+use crate::{Camera, NodeMove, NodePosition};
 
 /// `HubLayout` の現在のスキーマバージョン。`Settings` と同じ流儀で、
 /// マイグレーションが必要になったら上げ、infra 側で旧バージョンからの変換を
 /// 行う(issue #121)。
 /// v1 -> v2: 視点(`camera`)を追加(issue #268)。v1 は視点を持たないので
 /// `None` とし、`positions` は変えない。
-pub const CURRENT_HUB_LAYOUT_VERSION: u32 = 2;
+/// v2 -> v3: ノードごとの動き方の上書き(`moves`)を追加(issue #558)。v2 は
+/// `moves` を持たないので空とし、`positions`/`camera` は変えない。
+pub const CURRENT_HUB_LAYOUT_VERSION: u32 = 3;
 
-/// ハブのグラフの見た目の状態の永続化(issue #121・#268)。`settings.json` とは
-/// 別ファイル(`hub-layout.json`)に保存する。ノードIDはドラッグのたびに
+/// ハブのグラフの見た目の状態の永続化(issue #121・#268・#558)。`settings.json`
+/// とは別ファイル(`hub-layout.json`)に保存する。ノードIDはドラッグのたびに
 /// 上書きされる高頻度・低重要度データであり、設定本体のスキーマ・
 /// マイグレーション履歴を汚さないため分離した。キーはノードの安定ID
 /// (`app::save_hub_layout` の呼び出し元がグラフ構築時の識別子と対応させる)。
@@ -23,6 +25,12 @@ pub struct HubLayout {
     /// するため。
     #[serde(default)]
     pub camera: Option<Camera>,
+    /// ノードごとの動き方の上書き(issue #558)。キーは `positions` と同じ
+    /// 安定ID。無いノードは画面側の既定(セッションは `will`、それ以外は
+    /// `support`)を使う。`#[serde(default)]` は v1/v2 のJSON(このフィールドを
+    /// 持たない)を読めるようにするため。
+    #[serde(default)]
+    pub moves: std::collections::HashMap<String, NodeMove>,
 }
 
 impl Default for HubLayout {
@@ -31,6 +39,7 @@ impl Default for HubLayout {
             version: CURRENT_HUB_LAYOUT_VERSION,
             positions: std::collections::HashMap::new(),
             camera: None,
+            moves: std::collections::HashMap::new(),
         }
     }
 }
