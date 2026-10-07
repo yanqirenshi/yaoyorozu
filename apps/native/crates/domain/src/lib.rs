@@ -24,6 +24,7 @@ mod log_line;
 mod message;
 mod message_image;
 mod message_kind;
+mod node_move;
 mod node_position;
 mod observed_git_state;
 mod parsed_session;
@@ -94,6 +95,7 @@ pub use message::{
 };
 pub use message_image::{extract_message_images, MessageImage};
 pub use message_kind::MessageKind;
+pub use node_move::NodeMove;
 pub use node_position::NodePosition;
 pub use observed_git_state::{ObservedGitState, ObservedWorktree};
 pub use parsed_session::ParsedSession;

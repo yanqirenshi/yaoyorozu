@@ -767,11 +767,45 @@ impl From<CameraDto> for domain::Camera {
     }
 }
 
+/// ハブのグラフ上でのノードの動き方(issue #558)。`domain::NodeMove` と1対1。
+/// `@yanqirenshi/d3.network` の `move` 属性にそのまま渡せる文字列
+/// (`rename_all = "lowercase"`)でシリアライズ・デシリアライズする。
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum NodeMoveDto {
+    Will,
+    Support,
+    Freeze,
+}
+
+impl From<domain::NodeMove> for NodeMoveDto {
+    fn from(value: domain::NodeMove) -> Self {
+        match value {
+            domain::NodeMove::Will => Self::Will,
+            domain::NodeMove::Support => Self::Support,
+            domain::NodeMove::Freeze => Self::Freeze,
+        }
+    }
+}
+
+impl From<NodeMoveDto> for domain::NodeMove {
+    fn from(dto: NodeMoveDto) -> Self {
+        match dto {
+            NodeMoveDto::Will => Self::Will,
+            NodeMoveDto::Support => Self::Support,
+            NodeMoveDto::Freeze => Self::Freeze,
+        }
+    }
+}
+
 /// `get_hub_layout` の戻り値。`version` はフロントで使わないため含めない。
 #[derive(Serialize, Clone)]
 pub struct HubLayoutDto {
     pub positions: std::collections::HashMap<String, NodePositionDto>,
     pub camera: Option<CameraDto>,
+    /// ノードごとの動き方の上書き(issue #558)。無いノードはキーを持たない
+    /// (画面側が種類ごとの既定値を使う)。
+    pub moves: std::collections::HashMap<String, NodeMoveDto>,
 }
 
 impl From<domain::HubLayout> for HubLayoutDto {
@@ -783,6 +817,11 @@ impl From<domain::HubLayout> for HubLayoutDto {
                 .map(|(key, position)| (key, NodePositionDto::from(position)))
                 .collect(),
             camera: layout.camera.map(CameraDto::from),
+            moves: layout
+                .moves
+                .into_iter()
+                .map(|(key, value)| (key, NodeMoveDto::from(value)))
+                .collect(),
         }
     }
 }

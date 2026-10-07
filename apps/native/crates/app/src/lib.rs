@@ -5,8 +5,8 @@ use domain::{
     repositories_from_profiles, sort_claude_dir_entries, sort_projects_by_recency,
     sort_sessions_newest_first, validate_image_attachment, validate_image_count, Camera,
     ClaudeDirEntry, ClaudeDirPage, ClaudeMdFile, ClaudeSettingsFile, Conversation, GitLedger,
-    GitRepositoryLedger, HubLayout, HubTuning, LogLine, Message, MessageImage, NodePosition,
-    ParsedSession, Project, RuleSummary, SessionSummary, Settings, SkillSummary,
+    GitRepositoryLedger, HubLayout, HubTuning, LogLine, Message, MessageImage, NodeMove,
+    NodePosition, ParsedSession, Project, RuleSummary, SessionSummary, Settings, SkillSummary,
     CURRENT_GIT_LEDGER_VERSION, CURRENT_HUB_LAYOUT_VERSION, CURRENT_HUB_TUNING_VERSION,
 };
 use std::collections::HashMap;
@@ -1124,17 +1124,20 @@ pub fn save_hub_tuning(store: &dyn HubTuningStore, tuning: HubTuning) -> Result<
     })
 }
 
-/// ハブグラフのノード位置を丸ごと置き換えて保存する。マージではなく置き換え
-/// にすることで、既に存在しないノードの位置が自然に消える(issue #121)。
+/// ハブグラフのノード位置・動き方の上書きを丸ごと置き換えて保存する。マージ
+/// ではなく置き換えにすることで、既に存在しないノードの位置・動き方が自然に
+/// 消える(issue #121・#558)。
 pub fn save_hub_layout(
     store: &dyn HubLayoutStore,
     positions: HashMap<String, NodePosition>,
     camera: Option<Camera>,
+    moves: HashMap<String, NodeMove>,
 ) -> Result<(), AppError> {
     let layout = HubLayout {
         version: CURRENT_HUB_LAYOUT_VERSION,
         positions,
         camera,
+        moves,
     };
     store.save(&layout)
 }
@@ -3925,6 +3928,7 @@ mod tests {
             version: CURRENT_HUB_LAYOUT_VERSION,
             positions,
             camera: None,
+            moves: HashMap::new(),
         };
         let store = FakeHubLayoutStore::new(layout.clone());
 
@@ -3993,7 +3997,8 @@ mod tests {
             k: 2.0,
         };
 
-        save_hub_layout(&store, HashMap::new(), Some(camera)).expect("should save hub layout");
+        save_hub_layout(&store, HashMap::new(), Some(camera), HashMap::new())
+            .expect("should save hub layout");
 
         let saved = store.saved.borrow();
         assert_eq!(saved[0].version, CURRENT_HUB_LAYOUT_VERSION);
@@ -4008,16 +4013,41 @@ mod tests {
             version: CURRENT_HUB_LAYOUT_VERSION,
             positions: initial_positions,
             camera: None,
+            moves: HashMap::new(),
         });
 
         let mut new_positions = HashMap::new();
         new_positions.insert("cwd:fresh".to_string(), NodePosition { x: 9.0, y: 9.0 });
-        save_hub_layout(&store, new_positions.clone(), None).expect("should save hub layout");
+        save_hub_layout(&store, new_positions.clone(), None, HashMap::new())
+            .expect("should save hub layout");
 
         let saved = store.saved.borrow();
         assert_eq!(saved.len(), 1);
         assert_eq!(saved[0].version, CURRENT_HUB_LAYOUT_VERSION);
         assert_eq!(saved[0].positions, new_positions);
+    }
+
+    #[test]
+    fn save_hub_layout_replaces_moves_wholesale_instead_of_merging() {
+        // issue #558: 消えたノードの動き方の上書きが残り続けないこと
+        // (positions と同じ「丸ごと置き換え」の扱い)。
+        let mut initial_moves = HashMap::new();
+        initial_moves.insert("session:stale".to_string(), NodeMove::Freeze);
+        let store = FakeHubLayoutStore::new(HubLayout {
+            version: CURRENT_HUB_LAYOUT_VERSION,
+            positions: HashMap::new(),
+            camera: None,
+            moves: initial_moves,
+        });
+
+        let mut new_moves = HashMap::new();
+        new_moves.insert("session:fresh".to_string(), NodeMove::Will);
+        save_hub_layout(&store, HashMap::new(), None, new_moves.clone())
+            .expect("should save hub layout");
+
+        let saved = store.saved.borrow();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].moves, new_moves);
     }
 
     struct FakeLayoutStore {

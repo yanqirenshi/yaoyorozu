@@ -250,11 +250,18 @@ export type CameraDto = {
   k: number;
 };
 
+// ハブのグラフ上でのノードの動き方(issue #558)。`@yanqirenshi/d3.network` の
+// ノード属性 `move` にそのまま渡せる値。`saveHubLayout` の引数にも `getHubLayout`
+// の戻り値にも使う。
+export type NodeMoveDto = "will" | "support" | "freeze";
+
 // `getHubLayout` の戻り値。キーはノードの安定ID(positionKey)。`camera` は保存された
-// 視点(`null` はまだ動かしていない)。
+// 視点(`null` はまだ動かしていない)。`moves` は動き方の上書き(無いノードは
+// キーを持たない。画面側が種類ごとの既定値を使う。issue #558)。
 export type HubLayoutDto = {
   positions: Record<string, NodePositionDto>;
   camera: CameraDto | null;
+  moves: Record<string, NodeMoveDto>;
 };
 
 // `GitRepository.branches` の1件分(オブジェクトモデル実装 第3弾。

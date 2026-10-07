@@ -312,6 +312,57 @@ body,
   overflow-wrap: anywhere;
 }
 
+/* 「動き方」の切り替え(issue #558)。ノード種別を問わず共通で足す
+   (`buildMoveControl`)ため、他の body の内容と並ぶ1ブロックとして最後に置く。 */
+.hub-inspector-move {
+  flex-shrink: 0;
+  margin: 0 16px 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-default);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hub-inspector-move-label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.hub-inspector-move-options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.hub-inspector-move-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+}
+
+.hub-inspector-move-reset {
+  align-self: flex-start;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  font-family: inherit;
+  color: var(--text-secondary);
+  background: none;
+  cursor: pointer;
+}
+
+.hub-inspector-move-reset:hover {
+  background: var(--state-hover);
+}
+
+.hub-inspector-move-reset:disabled {
+  color: var(--text-disabled);
+  cursor: not-allowed;
+}
+
 .hub-inspector-form-row select,
 .hub-inspector-form-row input {
   border: 1px solid var(--border-default);
