@@ -1,19 +1,31 @@
 ---
 name: tm
-description: apps/web の /tm(ドメインモデルのデータモデル)を編集する。TM(T字形ER)の規則に沿ってモノと関係を起こし、src/data/tm.ts に反映して描画まで検証する。TM図・データモデル・エンティティ・個体指定子の追加や修正を頼まれたときに使用。
+description: /{リポジトリ名}/tm(ドメインモデルのデータモデル)を編集する。TM(T字形ER)の規則に沿ってモノと関係を起こし、{リポジトリ}/yyz/spec/tm.json と tm.md に反映して描画まで検証する。TM図・データモデル・エンティティ・個体指定子の追加や修正を頼まれたときに使用。
 ---
 
 # /tm
 
-apps/web の TM(データモデル)を編集する。担当は「デザイン (ドメイン:Data)」セッション。
+`/{リポジトリ名}/tm`(いまは `/yaoyorozu/tm`)の TM(データモデル)を編集する。
+担当は「デザイン (ドメイン:Data)」セッション。
 
-- **モデルの編集対象**は [tm.ts](../../../apps/web/src/data/tm.ts)。表示側
-  ([TmTab.tsx](../../../apps/web/src/app/tabs/TmTab.tsx))は、図の見せ方そのものを変える
-  依頼(ドラッグ位置の保存など)でなければ触らない。
+- **モデルの編集対象は2つ**(#543 の最終段で `apps/web/src/data/tm.ts` から移した。#590)。
+  - [yyz/spec/tm.json](../../../yyz/spec/tm.json) … 語彙・箱・線。**資料に書いてあることだけ**を
+    物理名で持つ。ID は持たない(読み込み側が配列順から機械的に決める)。
+  - [yyz/spec/tm.md](../../../yyz/spec/tm.md) … **判断の記録**。スコープ、入れなかったものと
+    その理由、関係の検証の網羅性など、横断する判断を書く。
+  - 迷ったら「その項目を消したとき、この文章も一緒に消えるか」で決める。一緒に消えるなら
+    JSON の `description`、残るなら Markdown。
+- 読み込みと組み立ては [lib/tm.ts](../../../apps/web/src/lib/tm.ts)。ID の採番・`(R)` の解決・
+  レイアウト保存のキー・検証(語彙の参照漏れ、保存キーの重複など)はここにある。
+  **JSON を直すだけでは足りない変更**(新しい種別の受け入れなど)はここも見る。
+- 表示側([RepoTmTab.tsx](../../../apps/web/src/app/tabs/RepoTmTab.tsx))は、図の見せ方そのものを
+  変える依頼(ドラッグ位置の保存など)でなければ触らない。
 - 記法は TM(T字形ER)に従う。出典は佐藤正美/SDI「モデル作成の手続き」。
-  同資料は複写・転写が禁止されているため、**本スキルにも tm.ts にも文面を転記しない**(手順として書き下したものだけを置く)。
-- [web.md](../../../.claude/rules/web.md) の規約に従う(`src/data/*.ts` が SSoT、規約を逸脱する場合は理由をコメントに残す)。
-- 現在のスコープと次段の候補は tm.ts 冒頭のコメントに書いてある。まずそこを読む。
+  同資料は複写・転写が禁止されているため、**本スキルにも tm.json / tm.md にも文面を転記しない**
+  (手順として書き下したものだけを置く)。
+- [web.md](../../../.claude/rules/web.md) の規約に従う(移行済みの画面は
+  `{リポジトリ}/yyz/spec/*.json` が SSoT。規約を逸脱する場合は理由をコメントに残す)。
+- 現在のスコープと次段の候補は `tm.md` の冒頭に書いてある。まずそこを読む。
 - **段階を切って進める**。一度に全部描くと、オブジェクトモデル(`/class-diagram`)と同じ密度になりデータモデルとしての可読性を失う。
 
 ## 1. モデルを起こす(この順序を守る)
@@ -151,12 +163,19 @@ apps/web の TM(データモデル)を編集する。担当は「デザイン (�
   文字列を渡すと `physical` 側に入り、`logical` が空になる。
 - `description` は保持されるだけで描画されない。モデルの根拠を残す場所として使う。
 
-## 3. tm.ts の書き方
+## 3. tm.json / tm.md の書き方
 
-- MUST: 型を `export type` で明示し、データと分離する(web.md §2)。
-- MUST: ID は物理名をキーにした定義から**機械的に採番する**。手で採番した番号はズレて壊れる。
+- MUST: `tm.json` に **ID を書かない**。数値 ID と保存キーは `lib/tm.ts` が配列順から決める
+  (手で採番すると並べ替えでずれる)。
 - MUST: `physical` は資料上のフィールド名、`logical` は日本語。`(R)` `(D)` は `logical` に付ける。
 - MUST: エンティティの `description` にモデルの根拠(一次資料の該当節、分類の理由)を書く。
+  語彙(`identifiers` / `attributes`)と結線にも `description` を置ける。
+- MUST: サブセットの区分コードは `subsetCodes` に定義し、結線からは `subset: "<code>"` と
+  **名前で参照する**。綴りが違うと d3.ter が別の木として描くため、`lib/tm.ts` が照合する。
+- MUST: `tm.md` は「。」ごとに改行し、見出しは `##` から始める(CLAUDE.md の文章ルール)。
+  節は**時系列**(第1弾 → Phase → 第2弾…)に並べる。あとから読む人が
+  「いつ、何を根拠にそう決めたか」をたどるため。
+- MUST: 判断の記録を**要約しない**。情報量が価値なので、整形はしても内容は削らない。
 - 同じ物理名で意味が違う語彙は**別の属性に分ける**(例: 設定ファイルの `updatedAt`
   (手配の更新日)と、実行中セッションの `updatedAt`(記録の更新日時))。
   1つにまとめると誤ったモデルになる。
@@ -173,8 +192,14 @@ npm run web:build
 作業ツリーから自分で開発サーバを起動して確認する。他セッションが動かしている
 サーバは既定では使わない)。
 
+ただし **データは worktree から読まれない**。Web アプリは app に登録されたリポジトリの
+パス(= main の作業フォルダ)から `yyz/spec/` を読むため、worktree で開発サーバを立てても
+main 側のファイルを見る。`tm.json` / `tm.md` を直した内容で確認したいときは、**確認の間だけ**
+main の作業フォルダへコピーし、**終わったら必ず消す**(`trap` で終了時に消すのが確実)。
+消し忘れると、マージ後に main で `git pull` が止まりリリース作業も止まる。
+
 ```bash
-npm run web:check-diagram -- tm --expect-count=32
+npm run web:check-diagram -- tm --expect-count=36
 ```
 
 Microsoft Edge を headless で起動し、CDP(Chrome DevTools Protocol)で `/tm` を開いて
@@ -207,12 +232,15 @@ Desktop のブラウザのペイン(preview_start / javascript_tool / read_conso
   ([tmLayoutStorage.ts](../../../apps/web/src/data/tmLayoutStorage.ts))。開発時専用の
   保存API(`POST /api/layout/tm`)経由で書き込む。web.md §2 の規定であり、
   **localStorage への保存は NEVER**(旧方式は廃止済み)。
-  - ファイルの形は `{ entities, ports }`。エンティティ位置は**物理名をキー**にした
-    上書きで、`tm.ts` の `position` より優先される。
-  - そのため「tm.ts を直したのに図が変わらない」ときは、まず `tm.json` を疑う。
-  - web.md §2 のとおり、調整が固まったら値を tm.ts に反映し、`tm.json` は空に戻す。
+  - ファイルの形は `{ entities, ports, camera }`。エンティティ位置は**物理名をキー**にした
+    上書きで、`yyz/spec/tm.json` の `position` より優先される。
+  - そのため「定義を直したのに図が変わらない」ときは、まずこのレイアウトファイルを疑う。
+  - web.md §2 のとおり、調整が固まったら値を `yyz/spec/tm.json` に反映し、レイアウト
+    ファイルは空に戻す。
+  - **レイアウトは yyz/ へ移していない**(#587 の判断)。保存 API が apps/web 配下に書く
+    作りで、動かすと別の設計が要るため。置き場所は `apps/web/src/data/layout/tm.json` のまま。
   - 保存は開発サーバーでしか通らない(本番ビルドでは 405)。成否はスナックバーに出る。
-- d3.ter にはドラッグ完了を知らせるコールバックが無い。TmTab は window の capture
+- d3.ter にはドラッグ完了を知らせるコールバックが無い。RepoTmTab は window の capture
   フェーズで mousedown/mouseup を拾い、`g.entity` の `__data__.position` を前後で
   比較して変化したものだけ保存している(SitemapTab と同じ方式)。
 - エンティティの**右クリックでインスペクタ**(Colonoscope)が開く。種別・物理名・
@@ -229,7 +257,8 @@ Desktop のブラウザのペイン(preview_start / javascript_tool / read_conso
   ドット区切りの path に埋めると Colonoscope の `getByPath` が辿れなくなる。
 - ポート角度も同じ `tm.json` の `ports` に入る。キーは
   `<from物理名>-><to物理名>[#ラベル]:<from|to>` で、同じ端点の組が複数ある場合だけ
-  ラベルで区別する(ログ行 × 再帰表 が親・子の2本)。重複したら `tm.ts` が例外を投げる。
+  ラベルで区別する(ログ行 × 再帰表 が親・子の2本)。重複したら `lib/tm.ts` がエラーを返し、
+  画面にその旨が出る(移行前は例外を投げていたが、実行時に読む形になったため)。
   - 保存APIはファイルを丸ごと置き換えるため、**位置だけ・角度だけを書かない**。
     `buildLayoutFile(entities, ports)` で必ず両方を含めて保存する
     (片方だけ書くともう片方が消える)。
