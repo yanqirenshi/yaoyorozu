@@ -5,9 +5,13 @@ import path from "node:path";
 // #543/#544: 複数リポジトリの仕様データを、実行時に `{repository_path}/yyz/spec/{doc}.json`
 // から読んで返す唯一の口。クライアントはリポジトリ名・ドキュメント名だけを渡し、
 // パスはこのサーバ側でだけ組み立てる(web.md・native.md §4 と同じ考え方)。
+// #587: 同じ場所の `{doc}.md`(判断の記録。データ本体とは別に、なぜそう決めたかを
+// 書く)も、`?format=md` クエリで返せるようにした。`doc` の意味(許可リストで縛る
+// 論理名)は変えず、既存の `[repo]/[doc]` ルートのまま拡張できるため、新しいルート
+// ファイル(`/api/spec/{repo}/{doc}.md` 等)は作らなかった。
 
 /** 現時点で読めるドキュメント名の許可リスト。増やすときはここへ足す。 */
-const SPEC_DOCS = ["wbs", "deployment", "unchi"] as const;
+const SPEC_DOCS = ["wbs", "deployment", "unchi", "sitemap", "classes", "tm"] as const;
 type SpecDoc = (typeof SPEC_DOCS)[number];
 function isSpecDoc(value: string): value is SpecDoc {
   return (SPEC_DOCS as readonly string[]).includes(value);
@@ -67,10 +71,11 @@ async function resolveRepoPath(repo: string): Promise<ResolveResult> {
 }
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ repo: string; doc: string }> },
 ) {
   const { repo, doc } = await params;
+  const format = request.nextUrl.searchParams.get("format");
 
   if (!isSpecDoc(doc)) {
     return NextResponse.json({ error: `未知のドキュメントです: ${doc}` }, { status: 404 });
@@ -91,6 +96,22 @@ export async function GET(
       { error: `リポジトリ "${repo}" が app の設定に見つかりません。` },
       { status: 404 },
     );
+  }
+
+  if (format === "md") {
+    const mdPath = path.join(resolved.repoPath, "yyz", "spec", `${doc}.md`);
+    try {
+      const raw = await readFile(/* turbopackIgnore: true */ mdPath, "utf-8");
+      return new NextResponse(raw, {
+        headers: { "Content-Type": "text/markdown; charset=utf-8" },
+      });
+    } catch {
+      // 判断の記録(.md)が無いのは異常ではない(サイトマップ等、記録が少ない図も
+      // ありうる)。JSON 側の「仕様データが無い」404(= 本体が無い異常)とは意味が
+      // 違うので、204(内容なし)で区別する。クライアント(useSpecMarkdown)は
+      // これを「記録なし」として扱い、エラー表示をしない。
+      return new NextResponse(null, { status: 204 });
+    }
   }
 
   const filePath = path.join(resolved.repoPath, "yyz", "spec", `${doc}.json`);
