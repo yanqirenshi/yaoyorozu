@@ -95,6 +95,10 @@ const INVISIBLE_NODE_CIRCLE = {
 const COLOR_KINCHA_500 = "#e58b25"; // 金茶(動いている)
 const COLOR_KINCHA_700 = "#a46114"; // 金茶の濃い方(権限待ち)
 const COLOR_SUMI_400 = "#a3a3a3"; // 墨(待機)
+// GitWorktree → GitBranch(チェックアウト中。issue #569)の線の色。台帳どおりの
+// 所有関係(薄い灰色。COLOR_BORDER)とも、実行中セッション→worktree の金茶
+// (COLOR_KINCHA_500。#438)とも紛れないよう、まだ線に使っていない草色にする。
+const COLOR_KUSAIRO_500 = "#9cb257"; // 草色(worktree がチェックアウトしているブランチ)
 const RUNNING_STROKE_WIDTH = 3;
 const AWAITING_PERMISSION_STROKE_WIDTH = 6;
 function sessionNodeCircleStyle(running: RunningSessionSummaryDto | null) {
@@ -205,26 +209,31 @@ const HUB_TUNING_SAVE_DEBOUNCE_MS = 500;
 // (`rectum.simulation.simulation`)を直接再開する。alphaTarget はライブラリの
 // 既定値(0.6 の `Simulation.js` の `DEFAULT_OPTIONS.alpha.target` = 0.002)に
 // 戻し、alpha は再描画のたびにノードが大きく動き回らない程度の小さな値にする。
-// 実行中セッション → worktree の線(issue #438)の印。d3.network 0.6.1 の
+// 色を特別に区別したい辺(issue #438・#569)の印。d3.network 0.6.1 の
 // `Edges.js`(`makeDataLine`)は辺ごとの `line.color` を読まず、Rectum に渡した
 // 既定色で全部の辺を塗る(ライブラリ側に「本来はデータに持たせるべき」という
 // TODO コメントがある)。そのため、描いた直後にこの印の付いた辺だけ stroke を
-// 上書きする(`applyRunningWorktreeEdgeColor`)。`tick` は色に触らないので、
-// 上書きはシミュレーションが動いても消えない。
-const RUNNING_WORKTREE_RELATION = "running-worktree";
+// 上書きする(`applyCustomEdgeColors`)。`tick` は色に触らないので、上書きは
+// シミュレーションが動いても消えない。
+const RUNNING_WORKTREE_RELATION = "running-worktree"; // 実行中セッション → worktree(#438)
+const WORKTREE_BRANCH_RELATION = "worktree-branch"; // worktree → チェックアウト中のブランチ(#569)
+const CUSTOM_EDGE_COLOR_RELATIONS: ReadonlySet<string> = new Set([
+  RUNNING_WORKTREE_RELATION,
+  WORKTREE_BRANCH_RELATION,
+]);
 
-function applyRunningWorktreeEdgeColor(container: HTMLElement | null): void {
+function applyCustomEdgeColors(container: HTMLElement | null): void {
   container?.querySelectorAll("path.ng-edge").forEach((el) => {
     const core = (el as Element & { __data__?: { _core?: Record<string, unknown> } }).__data__
       ?._core;
-    if (core?.relation !== RUNNING_WORKTREE_RELATION) return;
-    const line = core.line as { color?: string } | undefined;
+    if (!CUSTOM_EDGE_COLOR_RELATIONS.has(core?.relation as string)) return;
+    const line = core?.line as { color?: string } | undefined;
     if (line?.color) el.setAttribute("stroke", line.color);
   });
 }
 
 // アーカイブ済みのセッション(issue #496)を表示 ON のとき薄く描く。d3.network
-// はノードの透明度を扱わないため、辺の色の上書き(`applyRunningWorktreeEdgeColor`)
+// はノードの透明度を扱わないため、辺の色の上書き(`applyCustomEdgeColors`)
 // と同じ要領で、描いた直後に `g.ng-node` の `opacity` 属性を直接書き換える。
 // 既定では描かない(非表示 OFF の間はノード自体が存在しないため対象が無い)。
 const ARCHIVED_NODE_OPACITY = "0.35";
@@ -749,6 +758,27 @@ function buildGraphData(
         target: worktreeNodeId,
         line: { width: 2, color: COLOR_BORDER },
       });
+
+      // GitWorktree → GitBranch(issue #569。この worktree がチェックアウト
+      // しているブランチを示す線。台帳どおり: `worktree.checked_out_branch` は
+      // ブランチの個体指定子(ID)なので、そのIDのブランチが現存するときだけ
+      // 引く。detached HEAD(`checked_out_branch` が null。実機で
+      // `claudemd-wt`・`jovial-maxwell-cc4800` が該当)は対応するブランチが
+      // 無いので自然に線を引かない(フォールバックは作らない。#224 と同じ
+      // 割り切り)。実行中セッション→worktree の金茶の線(#438)・台帳の所有の
+      // 薄い灰色の線のどちらとも紛れないよう、草色にして区別する。
+      const checkedOutBranch = repo.branches.find(
+        (branch) => branch.branch_id === worktree.checked_out_branch,
+      );
+      if (checkedOutBranch) {
+        edges.push({
+          id: `e${edgeSeq++}`,
+          source: worktreeNodeId,
+          target: gitBranchNodeId(checkedOutBranch.branch_id),
+          line: { width: 2, color: COLOR_KUSAIRO_500 },
+          relation: WORKTREE_BRANCH_RELATION,
+        });
+      }
     });
 
     // GitRepository → GitBranch(所有。台帳どおり。issue #224)。
@@ -2471,8 +2501,8 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
     validMoveKeysRef.current = moveKeys;
     rectum.data({ nodes, edges });
     // 辺ごとの色・ノードの透明度はライブラリが読まないため、描いた直後に
-    // 上書きする(issue #438・#496)。
-    applyRunningWorktreeEdgeColor(hubPageRef.current);
+    // 上書きする(issue #438・#496・#569)。
+    applyCustomEdgeColors(hubPageRef.current);
     applyArchivedNodeOpacity(hubPageRef.current);
     restartSimulation(rectum);
     // 開いているインスペクタの中身を、描き直したノードの値で更新する
