@@ -15,6 +15,38 @@ pub(crate) const DESKTOP_LINEAGE_ENV_VARS: &[&str] = &[
     "CLAUDE_PID",
 ];
 
+/// `claude_executable()` が実行ファイルをどう決めたか(issue #583)。起動失敗の文面
+/// (`map_spawn_error`)に「解決できたパスで起動した」か「PATH から見つけられず名前の
+/// まま OS の解決に委ねた」かを残すために持つ(以前は両方とも `String` で返していて
+/// 区別が付かなかった)。`Command::new` にはどちらの場合も中身の値をそのまま渡す。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ClaudeProgram {
+    /// `PATH` × `PATHEXT` の自前の走査(Windows のみ)で見つかった実行ファイルのフルパス。
+    Resolved(std::path::PathBuf),
+    /// 見つけられなかった(Windows)、またはそもそも自前の走査をしない(非Windows。
+    /// 従来どおり OS 自身の `PATH` 解決に委ねる)。
+    Unresolved { name: String },
+}
+
+impl ClaudeProgram {
+    /// `Command::new` に渡す値。
+    pub(crate) fn as_os_str(&self) -> &std::ffi::OsStr {
+        match self {
+            Self::Resolved(path) => path.as_os_str(),
+            Self::Unresolved { name } => std::ffi::OsStr::new(name),
+        }
+    }
+
+    /// `CliNotFound`/`CwdMissing` の文面にこれまでどおり使う表示用の値(issue #583で
+    /// この2つの文面は変えない。従来 `self.program: String` だったときの値と同じ)。
+    fn display_value(&self) -> String {
+        match self {
+            Self::Resolved(path) => path.display().to_string(),
+            Self::Unresolved { name } => name.clone(),
+        }
+    }
+}
+
 /// 起動する `claude` 実行ファイル。参照箇所をこの1関数に閉じておく(Lab (PM)からの
 /// 申し送り。issue #345)。アプリが起動する `claude` の解決方法を差し替える可能性がある
 /// ため、呼び出し元は必ずこの関数経由にすること(直接 `"claude"` を書かない)。
@@ -26,16 +58,18 @@ pub(crate) const DESKTOP_LINEAGE_ENV_VARS: &[&str] = &[
 /// `"claude"` をそのまま返し、従来どおり `Command::new` の `ErrorKind::NotFound` 起点の
 /// `CliNotFound`([`map_spawn_error`])に委ねる。
 /// 非Windows は従来どおり`PATH`解決をOSに任せる(`"claude"`を返すだけ)。
-pub(crate) fn claude_executable() -> String {
+pub(crate) fn claude_executable() -> ClaudeProgram {
     #[cfg(windows)]
     {
         if let Some(path) = windows_path_resolution::resolve("claude") {
             // 秘匿情報ではない。次に同種の問題を調べやすくするため起動時に1回出す(issue #556)。
             eprintln!("claude の実行ファイルを解決しました: {}", path.display());
-            return path.display().to_string();
+            return ClaudeProgram::Resolved(path);
         }
     }
-    "claude".to_string()
+    ClaudeProgram::Unresolved {
+        name: "claude".to_string(),
+    }
 }
 
 #[cfg(windows)]
@@ -66,8 +100,26 @@ mod windows_path_resolution {
                 // 一致しないことがあるが、ファイルシステムは大文字小文字を区別しないため
                 // `Command::new` に渡す実行には影響しない。
                 let candidate = dir.join(format!("{name}{ext}"));
-                if candidate.is_file() {
-                    return Some(candidate);
+                // `Path::is_file()` は内部で `fs::metadata` のエラーを `false` として
+                // 飲み込む(無かった場合も読めなかった場合も区別が付かない)。issue #583:
+                // 「そこに無かった」(`NotFound`。探索を続けるだけでよい)と「あったが
+                // 読めなかった」(それ以外のエラー。原因が記録に残らないと#576のような
+                // 調査で詰まる)を区別するため、`fs::metadata` を自分で呼ぶ。
+                match std::fs::metadata(&candidate) {
+                    Ok(meta) if meta.is_file() => return Some(candidate),
+                    // 存在はするがファイルではない(ディレクトリ等)。次の候補へ。
+                    Ok(_) => {}
+                    // 無かっただけ。想定内なので黙って次の候補へ。
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    // それ以外(権限・パスの形式など)。秘匿情報ではないので候補パスと
+                    // 理由を残す(#556 の `eprintln!` と同じ扱い)。探索の順序・対象は
+                    // 変えない(cmd.exe と同じ順序のまま次の候補へ進む)。
+                    Err(e) => {
+                        eprintln!(
+                            "claude の候補 {} を確認できませんでした: {e}",
+                            candidate.display()
+                        );
+                    }
                 }
             }
         }
@@ -153,6 +205,25 @@ mod windows_path_resolution {
                 "空のPATHEXTでは何も試さない(呼び出し側が既定値を渡す)"
             );
         }
+
+        #[test]
+        fn a_candidate_that_cannot_be_read_does_not_stop_the_search() {
+            // issue #583: `fs::metadata` が `NotFound` 以外のエラーを返す候補があっても、
+            // 探索を止めずに後続の候補・ディレクトリへ進むこと。埋め込み NUL は Windows の
+            // API が確実に拒否する(`ErrorKind::InvalidInput` 相当)ため、ACL 操作なしで
+            // 決定的に「読めない」状況を再現できる。
+            let base = tempfile::tempdir().unwrap();
+            let broken_dir = base.path().join("claude\u{0}broken");
+            let second_dir = base.path().join("second");
+            fs::create_dir_all(&second_dir).unwrap();
+            touch(&second_dir.join("claude.exe"));
+            let path_var = std::env::join_paths([broken_dir, second_dir.clone()]).unwrap();
+
+            let found = resolve_in(&path_var, ".COM;.EXE;.BAT;.CMD", "claude")
+                .expect("1番目のディレクトリで読めなくても、2番目で見つかるはず");
+
+            assert_same_path(&found, &second_dir.join("claude.exe"));
+        }
     }
 }
 
@@ -164,7 +235,23 @@ mod windows_path_resolution {
 /// 無い」とは解釈しない。呼び出し側(`ClaudeCliProcessLauncher::start`)は spawn の前に
 /// `cwd.is_dir()` を確かめて `CwdMissing` を返しているが、確認と実際の spawn の間に
 /// ディレクトリが削除される競合もあり得るため、ここでも確かめて正しく分類し直す。
-pub(crate) fn map_spawn_error(program: &str, cwd: &std::path::Path, e: std::io::Error) -> AppError {
+///
+/// `NotFound` 以外(`Io` に落ちる経路)の文面には、実行ファイルをどう決めたか
+/// (解決できたフルパス、またはPATHから見つけられず名前のまま起動したこと)と作業
+/// ディレクトリを入れる(issue #583)。`#576` の調査で、この情報が無かったために
+/// 原因の切り分けにユーザーとの往復が何度も必要になった。`CliNotFound`/`CwdMissing`
+/// は既に具体的なので文面を変えない。
+///
+/// PATH から解決できなかった場合は、「app を起動し直すと直ることがある」旨も添える。
+/// `#576` の実際の原因は、app(とその親の Explorer プロセス)の起動後に winget で
+/// `claude` を入れたため、起動済みプロセスの PATH に新しい実行ファイルの場所が
+/// 反映されていなかったことだった。Windows のプロセスは起動後に外部で行われた PATH の
+/// 変更を認識しないため、app を再起動して PATH を読み直すことが直接の対処になる。
+pub(crate) fn map_spawn_error(
+    program: &ClaudeProgram,
+    cwd: &std::path::Path,
+    e: std::io::Error,
+) -> AppError {
     if e.kind() == std::io::ErrorKind::NotFound {
         if !cwd.is_dir() {
             return AppError::CwdMissing(format!(
@@ -172,11 +259,26 @@ pub(crate) fn map_spawn_error(program: &str, cwd: &std::path::Path, e: std::io::
                 cwd.display()
             ));
         }
+        let program = program.display_value();
         AppError::CliNotFound(format!(
             "{program} コマンドが見つかりません。インストールされているか確認してください。"
         ))
     } else {
-        AppError::Io(format!("{program} の起動に失敗しました: {e}"))
+        let resolution_note = match program {
+            ClaudeProgram::Resolved(_) => String::new(),
+            ClaudeProgram::Unresolved { name } => {
+                format!(
+                    "(PATH から {name} を見つけられなかったため、名前のまま起動しました。\
+                     app の起動後に {name} をインストールした場合、PATH の変更はこの app の\
+                     プロセスには反映されません。app を起動し直すと解決することがあります)"
+                )
+            }
+        };
+        AppError::Io(format!(
+            "{} の起動に失敗しました: {e}{resolution_note}。作業ディレクトリ: {}",
+            program.display_value(),
+            cwd.display()
+        ))
     }
 }
 
@@ -190,9 +292,15 @@ mod tests {
         std::io::Error::new(ErrorKind::NotFound, "not found")
     }
 
+    fn unresolved() -> ClaudeProgram {
+        ClaudeProgram::Unresolved {
+            name: "claude".to_string(),
+        }
+    }
+
     #[test]
     fn not_found_with_a_missing_cwd_is_reported_as_cwd_missing() {
-        let error = map_spawn_error("claude", &PathBuf::from("Z:/no/such/dir"), not_found());
+        let error = map_spawn_error(&unresolved(), &PathBuf::from("Z:/no/such/dir"), not_found());
 
         assert!(matches!(error, AppError::CwdMissing(_)), "{error:?}");
     }
@@ -201,18 +309,86 @@ mod tests {
     fn not_found_with_an_existing_cwd_is_reported_as_cli_not_found() {
         let dir = tempfile::tempdir().unwrap();
 
-        let error = map_spawn_error("claude", dir.path(), not_found());
+        let error = map_spawn_error(&unresolved(), dir.path(), not_found());
 
         assert!(matches!(error, AppError::CliNotFound(_)), "{error:?}");
+        // issue #583: CliNotFound の文面は変えない(従来どおり program の表示値のみ)。
+        let AppError::CliNotFound(message) = error else {
+            unreachable!()
+        };
+        assert_eq!(
+            message,
+            "claude コマンドが見つかりません。インストールされているか確認してください。"
+        );
     }
 
     #[test]
-    fn other_errors_are_reported_as_io_regardless_of_cwd() {
+    fn other_errors_with_an_unresolved_program_say_so_and_include_the_cwd() {
+        // issue #583: 解決できなかった(PATHから見つけられなかった)ことを文面に明示する。
+        // これが分かれば #576 のような調査で最初の報告だけで済む。
         let dir = tempfile::tempdir().unwrap();
-        let error = std::io::Error::new(ErrorKind::PermissionDenied, "denied");
+        let error = std::io::Error::new(ErrorKind::PermissionDenied, "denied (os error 448)");
 
-        let error = map_spawn_error("claude", dir.path(), error);
+        let error = map_spawn_error(&unresolved(), dir.path(), error);
 
         assert!(matches!(error, AppError::Io(_)), "{error:?}");
+        let AppError::Io(message) = error else {
+            unreachable!()
+        };
+        assert!(
+            message.contains("PATH から claude を見つけられなかったため、名前のまま起動しました"),
+            "{message}"
+        );
+        assert!(
+            message.contains(&dir.path().display().to_string()),
+            "{message}"
+        );
+        assert!(message.contains("os error 448"), "{message}");
+    }
+
+    #[test]
+    fn other_errors_with_an_unresolved_program_also_suggest_restarting_the_app() {
+        // issue #583 への追記(#576 の原因確定後): app の起動後に winget 等で claude を
+        // 入れた場合、起動済みの app プロセスの PATH には反映されない。app を起動し直すと
+        // PATH を読み直して直ることがある旨を、解決できなかったときの文面に添える。
+        let dir = tempfile::tempdir().unwrap();
+        let error = std::io::Error::new(ErrorKind::PermissionDenied, "denied (os error 448)");
+
+        let error = map_spawn_error(&unresolved(), dir.path(), error);
+
+        let AppError::Io(message) = error else {
+            unreachable!("{error:?}")
+        };
+        assert!(
+            message.contains("app を起動し直すと解決することがあります"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn other_errors_with_a_resolved_program_show_the_resolved_path_and_the_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let resolved_path = dir.path().join("claude.cmd");
+        let program = ClaudeProgram::Resolved(resolved_path.clone());
+        let error = std::io::Error::new(ErrorKind::PermissionDenied, "denied");
+
+        let error = map_spawn_error(&program, dir.path(), error);
+
+        assert!(matches!(error, AppError::Io(_)), "{error:?}");
+        let AppError::Io(message) = error else {
+            unreachable!()
+        };
+        assert!(
+            message.contains(&resolved_path.display().to_string()),
+            "{message}"
+        );
+        assert!(
+            message.contains(&dir.path().display().to_string()),
+            "{message}"
+        );
+        assert!(
+            !message.contains("見つけられなかった"),
+            "解決できているので「見つけられなかった」とは書かない: {message}"
+        );
     }
 }
