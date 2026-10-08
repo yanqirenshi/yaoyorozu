@@ -221,6 +221,7 @@ mod tests {
                 agent_type: Some("Explore".to_string()),
                 description: Some("調べる".to_string()),
                 spawn_depth: Some(1),
+                tool_use_id: Some("toolu_1".to_string()),
             }),
         }];
 
@@ -233,6 +234,7 @@ mod tests {
         assert_eq!(meta.agent_type.as_deref(), Some("Explore"));
         assert_eq!(meta.description.as_deref(), Some("調べる"));
         assert_eq!(meta.spawn_depth, Some(1));
+        assert_eq!(meta.tool_use_id.as_deref(), Some("toolu_1"));
         assert_eq!(
             user.sessions[0].subagent_files[0].modified_at_ms,
             Some(12345)

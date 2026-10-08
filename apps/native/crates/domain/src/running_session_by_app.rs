@@ -16,6 +16,13 @@ pub struct RunningSessionByApp {
     pub process_state_at: u64,
     /// まだ答えていない権限の問い合わせ(届いた順。0..*)。
     pub permission_requests: Vec<PermissionRequest>,
+    /// 開始したが結果がまだ来ていないツール呼び出しの ID(issue #570)。サブエージェントの
+    /// `.meta.json` の `tool_use_id` と突き合わせて、いま動いているサブエージェントを
+    /// 見分けるのに使う。`Agent` ツールに絞らずすべてのツールを対象にする(絞ると
+    /// サブエージェント以外の用途(例: 他のツールの実行中表示)に使えなくなるため。
+    /// issue #570 の実装時判断)。ターンの終了・プロセスの終了で必ず空にする
+    /// (`apply`参照。残り続けると「ずっと実行中」に見える)。
+    pub running_tool_use_ids: Vec<String>,
     /// いま送るときに使われるモデル(TM: 現在のモデル。issue #407)。CLI の `system/init` の
     /// `model` か、`set_model` の結果。起動直後は CLI が最初のターンで `init` を出すまで分からない
     /// (`None`)。モデル名は版で変わるので文字列のまま持つ。
@@ -52,6 +59,7 @@ impl RunningSessionByApp {
             process_state: ProcessState::Starting,
             process_state_at: at_time,
             permission_requests: Vec::new(),
+            running_tool_use_ids: Vec::new(),
             current_model: None,
             current_permission_mode: None,
             repository_path,
@@ -91,6 +99,13 @@ impl RunningSessionByApp {
     pub fn apply(&mut self, trigger: ProcessTrigger, at_time: u64) {
         use ProcessState as S;
         use ProcessTrigger as T;
+        // ターンの終了・プロセスの終了では、進行中のツール呼び出し(issue #570)を必ず
+        // 空にする。中断(`interrupt`)は `TurnFinished { succeeded: false }` として届く
+        // (#382 のレポート参照)ため、ここで一緒に扱える。結果が来ないまま終わった
+        // ツール呼び出しが「ずっと実行中」に見え続けることを防ぐ。
+        if matches!(trigger, T::TurnFinished | T::Exited) {
+            self.running_tool_use_ids.clear();
+        }
         let next = match (self.process_state, trigger) {
             (S::Exited, _) => S::Exited,
             (_, T::Exited) => S::Exited,
@@ -106,6 +121,19 @@ impl RunningSessionByApp {
             self.process_state = next;
             self.process_state_at = at_time;
         }
+    }
+
+    /// ツールの実行が始まった(issue #570)。同じ `tool_use_id` は重複して足さない。
+    pub fn start_tool(&mut self, tool_use_id: String) {
+        if !self.running_tool_use_ids.contains(&tool_use_id) {
+            self.running_tool_use_ids.push(tool_use_id);
+        }
+    }
+
+    /// ツールの結果が届いた(issue #570)。列に無ければ何もしない(ターンの終了等で
+    /// 既に空にされていることもある)。
+    pub fn finish_tool(&mut self, tool_use_id: &str) {
+        self.running_tool_use_ids.retain(|id| id != tool_use_id);
     }
 
     /// 権限の問い合わせを受け取る。答え待ちの列に足し(同じ `request_id` は足さない)、
@@ -392,5 +420,60 @@ mod tests {
         assert_eq!(s.process_state, ProcessState::Exited);
         assert_eq!(s.process_state_at, 40);
         assert!(s.permission_requests.is_empty());
+    }
+
+    // ---- 進行中のツール呼び出し(issue #570) ----
+
+    #[test]
+    fn starting_a_tool_adds_its_id_and_does_not_duplicate() {
+        let mut s = in_state(Running);
+        s.start_tool("toolu_1".to_string());
+        s.start_tool("toolu_2".to_string());
+        s.start_tool("toolu_1".to_string());
+
+        assert_eq!(s.running_tool_use_ids, vec!["toolu_1", "toolu_2"]);
+    }
+
+    #[test]
+    fn finishing_a_tool_removes_only_that_id() {
+        let mut s = in_state(Running);
+        s.start_tool("toolu_1".to_string());
+        s.start_tool("toolu_2".to_string());
+
+        s.finish_tool("toolu_1");
+
+        assert_eq!(s.running_tool_use_ids, vec!["toolu_2"]);
+    }
+
+    #[test]
+    fn finishing_an_id_that_was_never_started_does_nothing() {
+        let mut s = in_state(Running);
+        s.start_tool("toolu_1".to_string());
+
+        s.finish_tool("nope");
+
+        assert_eq!(s.running_tool_use_ids, vec!["toolu_1"]);
+    }
+
+    #[test]
+    fn turn_finished_clears_running_tools_even_if_a_result_never_arrived() {
+        // 中断(interrupt)は TurnFinished{succeeded:false} として届く(#382 レポート)。
+        // 結果が来ないまま終わったツール呼び出しが残り続けないことを確かめる。
+        let mut s = in_state(Running);
+        s.start_tool("toolu_1".to_string());
+
+        s.apply(TurnFinished, 50);
+
+        assert!(s.running_tool_use_ids.is_empty());
+    }
+
+    #[test]
+    fn exit_clears_running_tools_too() {
+        let mut s = in_state(Running);
+        s.start_tool("toolu_1".to_string());
+
+        s.exit(60);
+
+        assert!(s.running_tool_use_ids.is_empty());
     }
 }

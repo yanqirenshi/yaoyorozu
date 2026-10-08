@@ -992,6 +992,10 @@ pub struct SessionFileDto {
     pub agent_type: Option<String>,
     pub description: Option<String>,
     pub spawn_depth: Option<u32>,
+    /// このサブエージェントを起こした `Agent` ツール呼び出しの ID(issue #570)。
+    /// `RunningSessionSummaryDto.running_tool_use_ids` と突き合わせて、実行中かどうかを
+    /// 見分けるのに使う。会話ファイルと、`.meta.json` に無い(古い)サブエージェントでは `null`。
+    pub tool_use_id: Option<String>,
 }
 
 impl From<domain::SessionFile> for SessionFileDto {
@@ -1008,6 +1012,7 @@ impl From<domain::SessionFile> for SessionFileDto {
             agent_type: meta.as_ref().and_then(|m| m.agent_type.clone()),
             description: meta.as_ref().and_then(|m| m.description.clone()),
             spawn_depth: meta.as_ref().and_then(|m| m.spawn_depth),
+            tool_use_id: meta.as_ref().and_then(|m| m.tool_use_id.clone()),
         }
     }
 }
@@ -1579,6 +1584,9 @@ pub struct RunningSessionSummaryDto {
     pub cli_version: Option<String>,
     pub peer_messaging: Option<bool>,
     pub name: Option<String>,
+    /// 開始したが結果がまだ来ていないツール呼び出しの ID(issue #570)。ハブがサブエージェント
+    /// の `SessionFileDto.tool_use_id` と突き合わせて実行中かどうかを見分けるのに使う。
+    pub running_tool_use_ids: Vec<String>,
 }
 
 impl From<app::RunningSessionSummary> for RunningSessionSummaryDto {
@@ -1595,6 +1603,7 @@ impl From<app::RunningSessionSummary> for RunningSessionSummaryDto {
             cli_version: summary.cli_version,
             peer_messaging: summary.peer_messaging,
             name: summary.name,
+            running_tool_use_ids: summary.running_tool_use_ids,
         }
     }
 }

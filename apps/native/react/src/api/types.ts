@@ -299,8 +299,10 @@ export type GitRepositoryDto = {
 // `Session.conversation_files`/`subagent_files` の1件分(オブジェクトモデル
 // 実装 第5弾。issue #208)。`lines_loaded`/`line_count` は `LogLine` が
 // 遅延読み込みであることの可視化用(未読み込みの間は常に `false`/`0`)。
-// `modified_at_ms`/`agent_type`/`description`/`spawn_depth` はハブのグラフ
-// 表示用の表示補助データ(issue #567)。会話ファイルでは常に `null`。
+// `modified_at_ms`/`agent_type`/`description`/`spawn_depth`/`tool_use_id` は
+// ハブのグラフ表示用の表示補助データ(issue #567・#570)。会話ファイルでは常に
+// `null`。`tool_use_id` は `RunningSessionSummaryDto.running_tool_use_ids` と
+// 突き合わせて、サブエージェントが実行中かどうかを見分けるのに使う。
 export type SessionFileDto = {
   file_path: string;
   lines_loaded: boolean;
@@ -309,6 +311,7 @@ export type SessionFileDto = {
   agent_type: string | null;
   description: string | null;
   spawn_depth: number | null;
+  tool_use_id: string | null;
 };
 
 // `User.sessions` の1件分(オブジェクトモデル実装 第4弾。issue #197)。
@@ -537,6 +540,9 @@ export type RunningSessionSummaryDto = {
   cli_version: string | null;
   peer_messaging: boolean | null;
   name: string | null;
+  // 開始したが結果がまだ来ていないツール呼び出しの ID(issue #570)。サブエージェントの
+  // SessionFileDto.tool_use_id と突き合わせて実行中かどうかを見分けるのに使う。
+  running_tool_use_ids: string[];
 };
 
 // running-session:changed のペイロード(宛先付き。軽量。データ本体は getRunningSession /

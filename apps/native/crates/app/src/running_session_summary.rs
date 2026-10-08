@@ -84,6 +84,9 @@ pub struct RunningSessionSummary {
     /// 起動時に付けた表示名(`--name`)。会話ファイルができる前(新規作成の直後)は、会話の
     /// タイトルがまだ無いので、一覧はこれを名前に使える(申し送り(e)への追加。issue #407)。
     pub name: Option<String>,
+    /// 開始したが結果がまだ来ていないツール呼び出しの ID(issue #570)。ハブがサブエージェント
+    /// の `.meta.json` の `tool_use_id` と突き合わせて、実行中かどうかを見分けるのに使う。
+    pub running_tool_use_ids: Vec<String>,
 }
 
 /// [`RunningSessionByApp`] から一覧項目を作る(純粋な変換)。
@@ -104,6 +107,7 @@ pub fn summarize(session: &RunningSessionByApp) -> RunningSessionSummary {
             .as_deref()
             .and_then(crate::supports_peer_messaging),
         name: session.base.name.clone(),
+        running_tool_use_ids: session.running_tool_use_ids.clone(),
     }
 }
 
@@ -164,6 +168,7 @@ mod tests {
         s.receive_permission_request(request("b"), 9);
         s.current_model = Some("claude-opus-4-7".to_string());
         s.current_permission_mode = Some("plan".to_string());
+        s.start_tool("toolu_1".to_string());
 
         let summary = summarize(&s);
 
@@ -178,6 +183,7 @@ mod tests {
         assert_eq!(summary.name.as_deref(), Some("調査"));
         assert_eq!(summary.cli_version, None);
         assert_eq!(summary.peer_messaging, None, "版が分からなければ分からない");
+        assert_eq!(summary.running_tool_use_ids, vec!["toolu_1"]);
     }
 
     #[test]
