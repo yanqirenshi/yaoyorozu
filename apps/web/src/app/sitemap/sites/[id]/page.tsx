@@ -1,19 +1,12 @@
-import { SITEMAP_SITES } from "@/data/sitemap";
-import SitemapSiteTab from "../../../tabs/SitemapSiteTab";
+import { redirect } from "next/navigation";
 
-// サイトマップは静的データ(src/data/sitemap.ts)なので、全サイトをビルド時に
-// 生成し、存在しない id は 404 にする。
-export const dynamicParams = false;
-
-export async function generateStaticParams() {
-  return SITEMAP_SITES.map((site) => ({ id: String(site.id) }));
-}
-
+// #588: サイトの詳細ページも /{リポジトリ名}/sitemap/sites/{id} へ移した。
+// 図の下位にあるものは URL でも下位に置く(判断の記録は yyz/spec/sitemap.md)。
 export default async function SitemapSitePage({
   params,
 }: {
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  return <SitemapSiteTab siteId={Number(id)} />;
+  redirect(`/yaoyorozu/sitemap/sites/${id}`);
 }

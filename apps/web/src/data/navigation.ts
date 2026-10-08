@@ -9,7 +9,7 @@ export const NAV_MENU_ITEMS: NavMenuItem[] = [
   { label: "WBS", path: "/yaoyorozu/wbs" },
   { label: "構成図", path: "/yaoyorozu/deployment-diagram" },
   { label: "UI", path: "/ui" },
-  { label: "サイトマップ", path: "/sitemap" },
+  { label: "サイトマップ", path: "/yaoyorozu/sitemap" },
   { label: "Classes", path: "/yaoyorozu/class-diagram" },
   { label: "TM", path: "/tm" },
   { label: "ポンチ絵", path: "/yaoyorozu/unchi" },

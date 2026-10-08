@@ -4,11 +4,6 @@ import type { ReactNode } from "react";
 import NextLink from "next/link";
 import MuiLink from "@mui/material/Link";
 
-/** サイトの詳細ページ(/sitemap/sites/:id)のパス。 */
-export function siteHref(id: number): string {
-  return `/sitemap/sites/${id}`;
-}
-
 /**
  * サイトマップの画面で使うテキストリンク。基本デザイン「リンクテキスト」
  * (uiLinkText.ts)のステートに従う。

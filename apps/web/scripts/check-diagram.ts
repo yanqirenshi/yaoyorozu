@@ -362,7 +362,7 @@ const DIAGRAMS: Record<DiagramName, DiagramSpec> = {
     countKey: "count",
   },
   sitemap: {
-    path: "/sitemap",
+    path: "/yaoyorozu/sitemap",
     readySelector: "g.node",
     measure: measureSitemap,
     countKey: "count",
