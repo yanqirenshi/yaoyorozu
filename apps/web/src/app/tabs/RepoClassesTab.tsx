@@ -3,11 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ClassDiagram, type RelationshipInput } from "@yanqirenshi/d3.classes";
 import { ARCHITECTURE_LAYER_BY_KEY } from "@/data/classArchitecture";
-import {
-  CLASS_DIAGRAM_DATA,
-  CLASS_FILE_PATHS,
-  CLASS_LAYERS,
-} from "@/data/classes";
+import Alert from "@mui/material/Alert";
+import LoadingIcon from "@/components/parts/LoadingIcon";
+import { useSpecDoc } from "@/lib/useSpecDoc";
+import { toDiagram, type ClassesDiagram, type ClassesSpec } from "@/data/classesSpec";
 import {
   applyLayoutOverrides,
   applyPortOverrides,
@@ -87,7 +86,37 @@ function buildPorts(
   return ports;
 }
 
-export default function ClassesTab() {
+/**
+ * `/{リポジトリ名}/class-diagram`(#589)。ビルド時の import ではなく、実行時に
+ * `GET /api/spec/{repo}/classes` を叩いてデータを取る(#543 の最終段)。
+ * レイアウト(位置の手調整・視点)の保存先は apps/web のまま(#587 に記録がある)。
+ */
+export default function RepoClassesTab({ repo }: { repo: string }) {
+  const state = useSpecDoc<ClassesSpec>(repo, "classes");
+
+  if (state.status === "loading") {
+    return (
+      <div className="flex min-h-0 w-full flex-1 items-center gap-2 p-4 text-sm text-zinc-500">
+        <LoadingIcon size="small" label={`${repo} のクラス図を読み込み中`} />
+        読み込み中…
+      </div>
+    );
+  }
+
+  if (state.status === "error") {
+    return (
+      <div className="p-4">
+        <Alert severity="error">{state.message}</Alert>
+      </div>
+    );
+  }
+
+  // データが揃ってから描き始める(描画は useEffect で命令的に行うため、
+  // 読み込み中に空の図を作らないよう、ここで内側の部品へ渡す)。
+  return <ClassesCanvas diagram={toDiagram(state.data)} />;
+}
+
+function ClassesCanvas({ diagram: spec }: { diagram: ClassesDiagram }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const diagramRef = useRef<ClassDiagram | null>(null);
   const overridesRef = useRef<LayoutOverrides>(loadLayoutOverrides());
@@ -124,10 +153,10 @@ export default function ClassesTab() {
     // 箱はヘッダ(クラス名の行)だけをクリーンアーキテクチャの層で塗り分ける。
     // 本体は d3.classes の既定(白・黒枠)のまま。
     const classes = applyLayoutOverrides(
-      CLASS_DIAGRAM_DATA.classes,
+      spec.classes,
       overridesRef.current,
     ).map((c) => {
-      const layerKey = CLASS_LAYERS[c.name.physical];
+      const layerKey = spec.layers[c.name.physical];
       if (!layerKey) return c;
       const layer = ARCHITECTURE_LAYER_BY_KEY[layerKey];
       return {
@@ -136,12 +165,12 @@ export default function ClassesTab() {
       };
     });
     const relationships = applyPortOverrides(
-      CLASS_DIAGRAM_DATA.relationships,
+      spec.relationships,
       portOverridesRef.current,
     );
     relationshipsRef.current = relationships;
 
-    // クラスの id は物理名(classDiagram.ts の defineDiagram で付与)。DOM の data-id もこれになる。
+    // クラスの id は物理名(classes.json の id)。DOM の data-id もこれになる。
     const classById = new Map(classes.map((c) => [c.name.physical, c]));
 
     // 背景のグリッド線は出さない(図の内容だけを見せる)。
@@ -225,9 +254,9 @@ export default function ClassesTab() {
         stereotype: cls.stereotype ?? "",
         position: { ...cls.position },
         ports: buildPorts(cls.name.physical, relationshipsRef.current),
-        filePath: CLASS_FILE_PATHS[cls.name.physical],
-        layer: CLASS_LAYERS[cls.name.physical]
-          ? ARCHITECTURE_LAYER_BY_KEY[CLASS_LAYERS[cls.name.physical]]
+        filePath: spec.filePaths[cls.name.physical],
+        layer: spec.layers[cls.name.physical]
+          ? ARCHITECTURE_LAYER_BY_KEY[spec.layers[cls.name.physical]]
           : undefined,
       });
     };
@@ -250,7 +279,7 @@ export default function ClassesTab() {
       container.innerHTML = "";
       diagramRef.current = null;
     };
-  }, [save, applyCamera, cameraRef]);
+  }, [spec, save, applyCamera, cameraRef]);
 
   // インスペクタ幅の伸縮。ハンドルを掴んでいるあいだ window で追う。
   useEffect(() => {
@@ -296,7 +325,7 @@ export default function ClassesTab() {
         ...values.ports,
       };
       const nextRelationships = applyPortOverrides(
-        CLASS_DIAGRAM_DATA.relationships,
+        spec.relationships,
         nextPorts,
       );
       // 接続辺を変えた関係線だけ付け替える(setConnection はその場で描き直す)。
@@ -314,7 +343,7 @@ export default function ClassesTab() {
       save(buildLayoutFile(nextLayout, nextPorts, cameraRef.current));
       setSelected(null);
     },
-    [selected, save, cameraRef],
+    [selected, spec.relationships, save, cameraRef],
   );
 
   return (
