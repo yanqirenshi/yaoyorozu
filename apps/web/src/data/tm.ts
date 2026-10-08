@@ -37,9 +37,9 @@
  *     あるため多値(MO)になる見込み。追って追加する。
  *
  * 【第1弾のスコープ】セッションと行の骨格まで。
- * メッセージ本体のうち コンテンツブロックとツール呼び出し は第2弾(1/3。#579)で
- * 片付けた。残るのは トークン使用量(#581)、`system` 4種 / `attachment` 23種の詳細
- * (#580)、`pr-link` と GitHub の関係(第3弾以降)。
+ * メッセージ本体のうち コンテンツブロックとツール呼び出し は第2弾(1/3。#579)で、
+ * 行種別(`system` 4種 / `attachment` 23種)は第2弾(2/3。#580)で片付けた。
+ * 残るのは トークン使用量(#581)と、`pr-link` と GitHub の関係(第3弾以降)。
  * ファイルは本来サブエージェント(第3弾)の語彙と一緒に立てる予定だったが、セッションIDが
  * ファイルを識別しないことが判明したためモノとして先に立てた。ファイル種別によるサブ
  * セットへの展開、エージェントID、meta.json(agentType / name / toolUseId)は第3弾で扱う。
@@ -113,6 +113,40 @@
  *   右側に置き、値が増えたら区分コードを検討する。資料に無い値を推測で足さない。
  * - トークン使用量(message.usage)は メッセージ の属性になる(#581)。
  *
+ * 【第2弾(2/3): 行種別の展開】
+ * イシュー #580。資料 §3 / §4.3〜§4.11 / §5 の型定義に基づく判断の記録。
+ * 23種を全部箱にすると図が読めなくなるため、**右側の語彙が変わるものだけ切る**を
+ * 基準にした。切らなかったものは区分コードの値として名前だけ残す。
+ *
+ * - system の4種のうち stop_hook_summary / api_error / compact_boundary を切った。
+ *   それぞれ固有の語彙(フックの数と実行記録 / エラーと再試行 / 圧縮の契機と前後の
+ *   トークン数)を持つ。informational は内容だけで親の語彙に収まるため切らず、
+ *   subtype の値として残す。内容は compact_boundary にもあるので親に置いた。
+ * - attachment の23種は切らない。資料の型定義が
+ *   `attachment: { type: string; [key: string]: unknown }` で種別ごとの構造を
+ *   定義しておらず、23種の表も「意味は推定」と明記されている。確実に言えるのは
+ *   区分が23値あることまでなので、推定を構造にしない。
+ *   例外は hook_additional_context だけで、ツール使用IDを持つことが §4.10 の実例
+ *   (推定ではない)で確認でき、ツール呼び出しと関係を構成するため切った。
+ *   「他のモノと関係を構成する語彙を持つものだけ切る」という基準である。
+ * - model_changed は切らない。観測例は
+ *   `{"type":"model_changed","cache_missed_input_tokens":23610}` だけで(PoC #382
+ *   レポート §6.2)、uuid も記録日時も記載が無く、ログ行の個体指定子を持つか確認
+ *   できない。持つ語彙も1つでトークン関連のため、#581 で扱う余地がある。
+ *   Phase 2 で「行種別の展開は第2弾の課題」と残した宿題の結論。
+ * - atis-latch はモデルに入れない。資料に「用途不明」とあり、値は全件空文字列(§3)。
+ *   用途が分からないものを推測でモノにしない。セッションメタ系(parentUuid を持たない)
+ *   なのでセッションの属性になりうるが、値が無いので置く意味もない。
+ * - file-history-snapshot も切らない。観測例に uuid・parentUuid の記載が無く、ログ行の
+ *   サブセットに入れられるか確認できない(§4.11)。messageId を持つが UUID 形式で、
+ *   メッセージの個体指定子(msg_… )とは形式が違うため同じものと断定できない。
+ * - 圧縮境界の logicalParentUuid はログ行を指すが、関係は張らない。再帰表
+ *   (ログ行．ログ行)は parentUuid の親子関係を表すもので、圧縮の論理的な親子は
+ *   別の経路になる。重ねて張らず右側の属性に置いた。
+ * - セッションメタ系(custom-title / ai-title / mode / last-prompt / pr-link)は
+ *   第1弾の方針どおりセッションの属性として扱い、行としては立てない。pr-link と
+ *   GitHub の関係は第3弾以降。
+ *
  * 【Phase 2(複数セッション・ハブ・モード切替・新規作成)】
  * イシュー #403。Phase 1 の続きとして、語彙の要否を判断した記録。
  *
@@ -176,19 +210,15 @@
  * (フォルダ名(D))は置かない。
  *
  * 【関係の検証(モノ × モノ の網羅性)】
- * 32エンティティの全496ペアを確認した。直接の結線があるのは31ペア(32本)で、
+ * 36エンティティの全630ペアを確認した。直接の結線があるのは37ペア(38本)で、
  * 対照表・対応表とその親の10ペアは垂下(mapping)でつながる。
- * 残る455ペアのうち、以下12ペアは「語彙は存在するが今は関係を構成していない」ものであり、
+ * 残る583ペアのうち、以下10ペアは「語彙は存在するが今は関係を構成していない」ものであり、
  * 見落としではなく判断の記録として残す。
  *
  * - ログ行 × 入力キュー / 入力キュー × ユーザー行
  *   queue-operation は直後の user 行に対応するはずだが、queue-operation 側は
  *   operation / timestamp / sessionId / content しか持たず、uuid も promptId も無い
  *   (報告書 §4.3)。個体指定子で結べないため関係を構成しない。
- * - システム行 × ツール呼び出し / 付帯情報行 × ツール呼び出し
- *   stop_hook_summary と hook_additional_context が持つ toolUseID は tool_use ブロックを
- *   指す(報告書 §4.10、§5)。第2弾(1/3)で ツール呼び出し をモノにしたので結べる
- *   ようになったが、システム行・付帯情報行の中身の展開は #580 の範囲なのでそこで結ぶ。
  * - ユーザー行 × AI応答行
  *   sourceToolAssistantUUID(tool_use を発行した AI応答行の uuid)は資料に存在するが、
  *   ツール呼び出し経由で同じ先にたどり着く(導出できる)ため、第2弾(1/3)で結線を
@@ -219,10 +249,15 @@
  *   リポジトリパス(R) で Gitリポジトリと直接結んでいたが、Phase 3 で worktree を選ぶ
  *   ようになったため、ワーキングツリー経由に置き換えた(worktree が決まればリポジトリも
  *   決まるので、導出できる関係を重ねて張らない)。
-
- * 他の443ペアは直接の関係を構成しないのが正しい。内訳は、サブセットが親(ログ行・
- * 実行中セッション)から個体指定子を継承しており親で張った関係がそのまま効くもの
- * 16ペア、対応する語彙がそもそも存在しないもの427ペア。
+ *
+ * 他の573ペアは直接の関係を構成しないのが正しい。内訳は、サブセットが先祖(ログ行・
+ * システム行・付帯情報行・実行中セッション)から個体指定子を継承しており、先祖で張った
+ * 関係がそのまま効くもの28ペア、対応する語彙がそもそも存在しないもの545ペア。
+ * 第2弾(2/3)でシステム行・付帯情報行の下にサブセットを足したため、親だけでなく
+ * 祖父(ログ行)からの継承も数えている。数え方は使い捨てのスクリプトで機械的に
+ * 確かめた(全ペアから、直接の結線・垂下・先祖からの継承を除いた残りを語彙の有無で
+ * 分ける)。32エンティティの時点で同じ定義で数えると16ペアになり、従来の数字と
+ * 一致することも確認している。
  *
  * R-R・E-E は対照表・対応表で構成するが、図の上では親どうしを1本の線で結び、その
  * 中点の○から表をぶら下げる(垂下。d3.ter 0.1.24 の `relationship.mapping`)。
@@ -435,6 +470,38 @@ const ATTRIBUTE_DEFS: TmName[] = [
   { physical: "subtype", logical: "システム副種別" },
   { physical: "level", logical: "重要度" },
   { physical: "attachmentType", logical: "付帯情報種別" },
+  // 第2弾(2/3。#580)。システム行の4種(報告書 §4.9)。内容 は compact_boundary と
+  // informational が持つ。入力キューの 入力テキスト とは意味が違うので別の語彙にする。
+  { physical: "systemContent", logical: "内容" },
+  // stop_hook_summary。フックの実行記録・エラーは配列なので本来は多値(MO)だが、
+  // この段では属性に置く(多値への展開は次段)。フックの停止理由 は メッセージ の
+  // 停止理由(stop_reason)と意味が違うため別の語彙にする。
+  { physical: "hookCount", logical: "フック数" },
+  { physical: "hookInfos", logical: "フックの実行記録" },
+  { physical: "hookErrors", logical: "フックのエラー" },
+  { physical: "preventedContinuation", logical: "継続の中断" },
+  { physical: "hookStopReason", logical: "フックの停止理由" },
+  { physical: "hasOutput", logical: "出力の有無" },
+  // api_error。error の入れ子は message / formatted までを置く。connection・
+  // isNetworkDown・rateLimits は構造が深く、必要になった段で足す。
+  { physical: "errorMessage", logical: "エラーメッセージ" },
+  { physical: "errorFormatted", logical: "整形済みエラー" },
+  { physical: "retryInMs", logical: "再試行までの待ち" },
+  { physical: "retryAttempt", logical: "再試行回数" },
+  { physical: "maxRetries", logical: "再試行上限" },
+  { physical: "errorSource", logical: "エラーの発生元" },
+  // compact_boundary。論理上の親の行UUID は圧縮前の末尾の行を指すが、関係は張らない
+  // (冒頭の【第2弾(2/3)】を参照)。preservedSegment・preservedMessages は uuid の
+  // 集合なので持たない。
+  { physical: "logicalParentUuid", logical: "論理上の親の行UUID" },
+  { physical: "compactTrigger", logical: "圧縮の契機" },
+  { physical: "preTokens", logical: "圧縮前のトークン数" },
+  { physical: "postTokens", logical: "圧縮後のトークン数" },
+  { physical: "compactDurationMs", logical: "圧縮の所要時間" },
+  // hook_additional_context(報告書 §4.10)。追加文脈は配列。
+  { physical: "hookName", logical: "フック名" },
+  { physical: "hookEvent", logical: "フックの契機" },
+  { physical: "hookContent", logical: "追加文脈" },
   { physical: "linkKind", logical: "チェーン種別" },
   { physical: "enqueuedAt", logical: "投入日時" },
   { physical: "content", logical: "入力テキスト" },
@@ -764,16 +831,16 @@ const ENTITY_DEFS: EntityDef[] = [
     name: { physical: "SystemLine", logical: "システム行" },
     type: "EVENT-SUBSET",
     description:
-      "行種別による相違のサブセット(×行種別)。type = system。subtype で stop_hook_summary / api_error / compact_boundary / informational の4種にさらに切れる(報告書 §4.9)。第4弾で扱う。",
+      "行種別による相違のサブセット(×行種別)。type = system。subtype で4種に分かれる(報告書 §4.9)。第2弾(2/3)で、固有の語彙を持つ stop_hook_summary / api_error / compact_boundary を相違のサブセットに切った。informational は内容だけで親の語彙に収まるため切らず、subtype の値として残す。内容は compact_boundary と informational の両方が持つのでここに置く。",
     position: { x: 2450, y: 760 },
     identifiers: ["uuid"],
-    attributes: ["type", "subtype", "level"],
+    attributes: ["type", "subtype", "level", "systemContent"],
   },
   {
     name: { physical: "AttachmentLine", logical: "付帯情報行" },
     type: "EVENT-SUBSET",
     description:
-      "行種別による相違のサブセット(×行種別)。type = attachment。実行環境が会話に注入した情報で、attachment.type で23種にさらに切れる(報告書 §4.10)。第4弾で扱う。",
+      "行種別による相違のサブセット(×行種別)。type = attachment。実行環境が会話に注入した情報で、attachment.type が23値ある(報告書 §4.10)。第2弾(2/3)で切ったのは hook_additional_context だけ。資料の型定義は attachment を `{ type: string; [key: string]: unknown }` としており種別ごとの構造を定義しておらず、23種の表も「意味は推定」と明記されているため、確実に言えるのは区分が23値あることまで。その中で hook_additional_context だけは ツール使用ID を持つことが実例で確認でき、ツール呼び出しと関係を構成するので切った(冒頭の【第2弾(2/3)】を参照)。",
     position: { x: 2750, y: 760 },
     identifiers: ["uuid"],
     attributes: ["type", "attachmentType"],
@@ -912,6 +979,70 @@ const ENTITY_DEFS: EntityDef[] = [
     attributes: ["suggestionType", "suggestionDestination", "suggestionContent"],
   },
 
+  // ============ システム行・付帯情報行のサブセット(第2弾 2/3。#580) ============
+  {
+    name: {
+      physical: "StopHookSummaryLine",
+      logical: "システム行(フック結果)",
+    },
+    type: "EVENT-SUBSET",
+    description:
+      "システム行の相違のサブセット(×システム副種別)。subtype = stop_hook_summary。ターン終了時に実行されたフックの結果(報告書 §4.9)。フックの数・実行記録・エラー・継続の中断など固有の語彙を持つため切った。ツール使用IDを持つ行があり(§5 の型定義では任意)、ツール呼び出しと結ぶ。フックの実行記録・エラーは配列なので本来は多値(MO)だが、この段では属性に置く。追加文脈の配列は、同じ内容が 付帯情報行(フックの追加文脈)にも現れるためここでは持たない。",
+    position: { x: 1550, y: 3100 },
+    identifiers: ["uuid", "toolUseId(R)"],
+    attributes: [
+      "hookCount",
+      "hookInfos",
+      "hookErrors",
+      "preventedContinuation",
+      "hookStopReason",
+      "hasOutput",
+    ],
+  },
+  {
+    name: { physical: "ApiErrorLine", logical: "システム行(APIエラー)" },
+    type: "EVENT-SUBSET",
+    description:
+      "システム行の相違のサブセット(×システム副種別)。subtype = api_error。API 呼び出しの失敗とリトライ(報告書 §4.9)。エラーの内容と再試行の語彙を持つため切った。level は常に error。error の入れ子のうち connection・isNetworkDown・rateLimits は構造が深いので、必要になった段で足す。",
+    position: { x: 2650, y: 3100 },
+    identifiers: ["uuid"],
+    attributes: [
+      "errorMessage",
+      "errorFormatted",
+      "retryInMs",
+      "retryAttempt",
+      "maxRetries",
+      "errorSource",
+    ],
+  },
+  {
+    name: { physical: "CompactBoundaryLine", logical: "システム行(圧縮境界)" },
+    type: "EVENT-SUBSET",
+    description:
+      "システム行の相違のサブセット(×システム副種別)。subtype = compact_boundary。/compact による履歴圧縮の境界で、圧縮後の新しいチェーンの起点になる(報告書 §4.9)。parentUuid が null に戻り、代わりに logicalParentUuid が圧縮前の末尾を指す。圧縮の契機・前後のトークン数という固有の語彙を持つため切った。論理上の親の行UUID はログ行を指すが、再帰表(ログ行．ログ行)は parentUuid の親子関係を表すものなので、別の経路として重ねて張らず右側の属性に置く。preservedSegment・preservedMessages は uuid の集合なので持たない。",
+    position: { x: 3200, y: 3100 },
+    identifiers: ["uuid"],
+    attributes: [
+      "logicalParentUuid",
+      "compactTrigger",
+      "preTokens",
+      "postTokens",
+      "compactDurationMs",
+    ],
+  },
+  {
+    name: {
+      physical: "HookAdditionalContextLine",
+      logical: "付帯情報行(フックの追加文脈)",
+    },
+    type: "EVENT-SUBSET",
+    description:
+      "付帯情報行の相違のサブセット(×付帯情報種別)。attachment.type = hook_additional_context。PostToolUse などのフックが返した追加の文脈(報告書 §4.10)。23種のうちこれだけを切ったのは、ツール使用IDを持つことが実例で確認でき、ツール呼び出しと関係を構成するため。他の22種は資料の型定義が汎用で、表も「意味は推定」なので区分コードの値として名前だけ残す。追加文脈は配列なので本来は多値(MO)だが、この段では属性に置く。",
+    position: { x: 2100, y: 3100 },
+    identifiers: ["uuid", "toolUseId(R)"],
+    attributes: ["hookName", "hookEvent", "hookContent"],
+  },
+
   // ============ 再帰 ============
   {
     name: { physical: "ChainLineRecursion", logical: "ログ行．ログ行" },
@@ -1001,6 +1132,25 @@ const LINE_TYPE_SUBSET: TmSubset = { kind: "different", code: "行種別" };
  * プロセスの状態と権限の問い合わせを持つため、属性構成が異なる相違のサブセットになる。
  */
 const LAUNCHED_BY_SUBSET: TmSubset = { kind: "different", code: "起動元" };
+
+/**
+ * システム行を副種別で切る区分コード(第2弾 2/3。#580)。stop_hook_summary /
+ * api_error / compact_boundary は固有の語彙を持つため相違のサブセットになる。
+ * informational は内容だけで親の語彙に収まるため切らない。
+ */
+const SYSTEM_SUBTYPE_SUBSET: TmSubset = {
+  kind: "different",
+  code: "システム副種別",
+};
+
+/**
+ * 付帯情報行を種別で切る区分コード(第2弾 2/3。#580)。23値のうち、他のモノと関係を
+ * 構成する語彙(ツール使用ID)を持つ hook_additional_context だけを切る。
+ */
+const ATTACHMENT_TYPE_SUBSET: TmSubset = {
+  kind: "different",
+  code: "付帯情報種別",
+};
 
 const RELATIONSHIP_DEFS: RelationshipDef[] = [
   // ---- 実行環境(PC / ユーザー / Gitリポジトリ)----
@@ -1246,6 +1396,77 @@ const RELATIONSHIP_DEFS: RelationshipDef[] = [
   {
     from: { entity: "ToolUse", position: 160, cardinality: 1, optionality: 0 },
     to: { entity: "UserLine", position: 0, cardinality: 1, optionality: 0 },
+  },
+  // 第2弾(2/3。#580)。システム行のサブセット。固有の語彙を持つ3種だけを切る
+  // (×システム副種別)。下辺から角度をずらして出す。
+  {
+    from: { entity: "SystemLine", position: 30, cardinality: 1, optionality: 1 },
+    to: {
+      entity: "StopHookSummaryLine",
+      position: 180,
+      cardinality: 1,
+      optionality: 0,
+    },
+    subset: SYSTEM_SUBTYPE_SUBSET,
+  },
+  {
+    from: { entity: "SystemLine", position: 350, cardinality: 1, optionality: 1 },
+    to: {
+      entity: "ApiErrorLine",
+      position: 180,
+      cardinality: 1,
+      optionality: 0,
+    },
+    subset: SYSTEM_SUBTYPE_SUBSET,
+  },
+  {
+    from: { entity: "SystemLine", position: 330, cardinality: 1, optionality: 1 },
+    to: {
+      entity: "CompactBoundaryLine",
+      position: 180,
+      cardinality: 1,
+      optionality: 0,
+    },
+    subset: SYSTEM_SUBTYPE_SUBSET,
+  },
+  // 第2弾(2/3。#580)。付帯情報行のサブセット(×付帯情報種別)。23値のうち、
+  // ツール呼び出しと関係を構成する hook_additional_context だけを切る。
+  {
+    from: {
+      entity: "AttachmentLine",
+      position: 30,
+      cardinality: 1,
+      optionality: 1,
+    },
+    to: {
+      entity: "HookAdditionalContextLine",
+      position: 180,
+      cardinality: 1,
+      optionality: 0,
+    },
+    subset: ATTACHMENT_TYPE_SUBSET,
+  },
+  // 第2弾(2/3。#580)。E-R。ツール呼び出し 1 : システム行(フック結果) 複数または
+  // 値なし。ツール使用IDは §5 の型定義では任意で、持たない行もある。
+  {
+    from: { entity: "ToolUse", position: 0, cardinality: 1, optionality: 0 },
+    to: {
+      entity: "StopHookSummaryLine",
+      position: 200,
+      cardinality: 3,
+      optionality: 0,
+    },
+  },
+  // 第2弾(2/3。#580)。E-R。ツール呼び出し 1 : 付帯情報行(フックの追加文脈)
+  // 複数または値なし。追加文脈は必ず1つの呼び出しを指す。
+  {
+    from: { entity: "ToolUse", position: 350, cardinality: 1, optionality: 1 },
+    to: {
+      entity: "HookAdditionalContextLine",
+      position: 160,
+      cardinality: 3,
+      optionality: 0,
+    },
   },
   // 第2弾(1/3。#579)。E-R。ツール呼び出し 1 : 権限の問い合わせ 1件または値なし。
   // 既に許可されているツールでは問い合わせが来ない。
