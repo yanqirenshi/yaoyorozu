@@ -5,7 +5,9 @@
 //! [`RunningSessionEventSink`] へ流す(順序どおり)。標準入力を閉じると約1秒で終了する。
 //! 応答が無ければ kill する(kill だと `~/.claude/sessions/<PID>.json` が残るので最後の手段)。
 
-use crate::claude_cli::{claude_executable, map_spawn_error, DESKTOP_LINEAGE_ENV_VARS};
+use crate::claude_cli::{
+    claude_executable, map_spawn_error, ClaudeProgram, DESKTOP_LINEAGE_ENV_VARS,
+};
 use crate::claude_stream_json::{
     build_args, build_initialize_line, build_interrupt_line, build_permission_response_line,
     build_set_model_line, build_set_permission_mode_line, build_user_message_line, map_wire_line,
@@ -42,7 +44,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// `claude` を起動する [`RunningSessionLauncher`] の実装。
 #[derive(Debug, Clone)]
 pub struct ClaudeCliProcessLauncher {
-    program: String,
+    program: ClaudeProgram,
     /// `program` の直後に置く引数(テストで `node fake_claude.cjs` のような差し替えに使う)。
     leading_args: Vec<String>,
 }
@@ -55,10 +57,13 @@ impl ClaudeCliProcessLauncher {
         }
     }
 
-    /// 実行ファイルと先頭の引数を差し替える(テスト用)。
+    /// 実行ファイルと先頭の引数を差し替える(テスト用)。明示指定なので「解決の有無」の
+    /// 区別は無く `Unresolved` として扱う(この経路は実機の起動失敗の文面には関わらない)。
     pub fn with_command(program: &str, leading_args: &[&str]) -> Self {
         Self {
-            program: program.to_string(),
+            program: ClaudeProgram::Unresolved {
+                name: program.to_string(),
+            },
             leading_args: leading_args.iter().map(|s| s.to_string()).collect(),
         }
     }
@@ -72,7 +77,7 @@ impl Default for ClaudeCliProcessLauncher {
 
 impl RunningSessionLauncher for ClaudeCliProcessLauncher {
     fn cli_version(&self) -> Option<String> {
-        let mut command = Command::new(&self.program);
+        let mut command = Command::new(self.program.as_os_str());
         command.args(&self.leading_args).arg("--version");
         for var in DESKTOP_LINEAGE_ENV_VARS {
             command.env_remove(var);
@@ -106,7 +111,7 @@ impl RunningSessionLauncher for ClaudeCliProcessLauncher {
             )));
         }
 
-        let mut command = Command::new(&self.program);
+        let mut command = Command::new(self.program.as_os_str());
         command.args(&self.leading_args);
         command.args(build_args(request));
         command.current_dir(request.cwd());
