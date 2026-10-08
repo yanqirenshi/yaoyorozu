@@ -2,10 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import D3Ter, { Rectum } from "@yanqirenshi/d3.ter";
-import TmInspector, {
-  type TmInspectorPort,
+import Colonoscope, { type ColonoscopeValues } from "@yanqirenshi/colonoscope";
+import {
+  buildInspectorTabs,
+  buildInspectorTarget,
+  hasBasicValues,
+  readChangedPorts,
+  readPosition,
   type TmInspectorTarget,
-} from "./tm/TmInspector";
+} from "./tm/tmInspector";
 import {
   TM_DATA,
   TM_ENTITY_KEY_BY_ID,
@@ -19,7 +24,6 @@ import {
   loadLayoutOverrides,
   loadPortOverrides,
   migrateLegacyLayoutIfNeeded,
-  portOverrideKey,
   type CameraTransform,
   type LayoutOverrides,
   type PortOverrides,
@@ -79,52 +83,6 @@ function sameCamera(a: CameraTransform, b: CameraTransform): boolean {
   );
 }
 
-function clampWidth(value: number) {
-  return Math.min(INSPECTOR_WIDTH.max, Math.max(INSPECTOR_WIDTH.min, value));
-}
-
-/**
- * 指定エンティティに繋がる結線を、そのエンティティ側の端点として並べる。
- * 相手側の角度はここには出さない(相手を選べばそちらから編集できる)。
- */
-function buildPorts(
-  entityId: number,
-  overrides: PortOverrides,
-): TmInspectorPort[] {
-  const ports: TmInspectorPort[] = [];
-
-  for (const relationship of TM_DATA.relationships) {
-    const relationshipKey = TM_RELATIONSHIP_KEY_BY_ID[relationship.id];
-    if (!relationshipKey) continue;
-
-    const ends: ("from" | "to")[] = [];
-    if (relationship.from.entity === entityId) ends.push("from");
-    if (relationship.to.entity === entityId) ends.push("to");
-
-    for (const end of ends) {
-      const counterpartId =
-        end === "from" ? relationship.to.entity : relationship.from.entity;
-      const key = portOverrideKey(relationshipKey, end);
-      const base =
-        end === "from"
-          ? relationship.from.position
-          : relationship.to.position;
-
-      ports.push({
-        key,
-        counterpart:
-          TM_DATA.entities.find((entity) => entity.id === counterpartId)?.name ??
-          "",
-        label: relationship.label,
-        outgoing: end === "from",
-        angle: overrides[key] ?? base,
-      });
-    }
-  }
-
-  return ports;
-}
-
 export default function TmTab() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   // 図の再構築に使う値。ドラッグでは更新せず(DOM 側が既に正しいため)、
@@ -156,10 +114,6 @@ export default function TmTab() {
   });
   const [version, setVersion] = useState(0);
   const [selected, setSelected] = useState<TmInspectorTarget | null>(null);
-  const [inspectorWidth, setInspectorWidth] = useState<number>(
-    INSPECTOR_WIDTH.initial,
-  );
-  const [resizing, setResizing] = useState(false);
   const { state: saveState, save, close: closeSaveStatus } =
     useLayoutSaveStatus("tm");
 
@@ -255,16 +209,14 @@ export default function TmTab() {
       const core = TM_DATA.entities.find((entity) => entity.id === datum._id);
       if (!core) return;
 
-      setSelected({
-        id: datum._id,
-        key: TM_ENTITY_KEY_BY_ID[datum._id] ?? "",
-        name: core.name,
-        type: core.type,
-        description: core.description,
-        // ドラッグ後の実値を見せる(TM_DATA の初期値ではない)。
-        position: { ...datum.position },
-        ports: buildPorts(datum._id, portOverridesRef.current),
-      });
+      setSelected(
+        buildInspectorTarget(
+          core,
+          TM_ENTITY_KEY_BY_ID[datum._id] ?? "",
+          datum.position,
+          portOverridesRef.current,
+        ),
+      );
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -424,42 +376,30 @@ export default function TmTab() {
       }
     };
   }, [save, rectum]);
-  // インスペクタ幅の伸縮。ハンドルを掴んでいるあいだ window で追う。
-  useEffect(() => {
-    if (!resizing) return;
-
-    const handleMouseMove = (event: MouseEvent) => {
-      const container = containerRef.current;
-      if (!container) return;
-      // パネルは右端に貼り付くので、コンテナ右端からの距離がそのまま幅になる。
-      const right = container.getBoundingClientRect().right;
-      setInspectorWidth(clampWidth(right - event.clientX));
-    };
-    const stop = () => setResizing(false);
-
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", stop);
-    return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", stop);
-    };
-  }, [resizing]);
+  const inspectorTabs = useMemo(
+    () => (selected ? buildInspectorTabs(selected) : []),
+    [selected],
+  );
 
   const handleApply = useCallback(
-    (values: {
-      position: { x: number; y: number };
-      ports: Record<string, number>;
-    }) => {
+    (values: ColonoscopeValues) => {
       if (!selected) return;
 
+      // Colonoscope のタブモードは表示中のタブの値だけを通知する。位置の項目が
+      // 来たときだけ位置を書き換える(タブが増えたときに、関係のない「適用」で
+      // 位置のオーバーライドを書かないため)。
       // ドラッグで保存済みの分を落とさないよう、常に ref を土台にする。
-      const nextLayout: LayoutOverrides = {
-        ...overridesRef.current,
-        [selected.key]: { x: values.position.x, y: values.position.y },
-      };
+      let nextLayout: LayoutOverrides = overridesRef.current;
+      if (hasBasicValues(values)) {
+        nextLayout = {
+          ...nextLayout,
+          [selected.key]: readPosition(values, selected),
+        };
+      }
+      // 角度は変わったものだけを拾う。
       const nextPorts: PortOverrides = {
         ...portOverridesRef.current,
-        ...values.ports,
+        ...readChangedPorts(values, selected),
       };
 
       overridesRef.current = nextLayout;
@@ -477,38 +417,22 @@ export default function TmTab() {
   );
 
   return (
-    <div
-      ref={containerRef}
-      className="relative flex min-h-0 w-full flex-1"
-      style={{
-        // 伸縮中はテキスト選択で掴んだ感触が濁るため止める。
-        userSelect: resizing ? "none" : undefined,
-      }}
-    >
+    <div ref={containerRef} className="relative flex min-h-0 w-full flex-1">
       <D3Ter key={version} id="d3-ter-graph" rectum={rectum} />
 
-      {selected && (
-        <div
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="インスペクタの幅を変更"
-          onMouseDown={(event) => {
-            event.preventDefault();
-            setResizing(true);
-          }}
-          className="absolute top-0 bottom-0 z-20 w-1.5 cursor-col-resize hover:bg-zinc-300"
-          style={{ right: inspectorWidth - 3 }}
-        />
-      )}
-
-      {selected && (
-        <TmInspector
-          target={selected}
-          width={inspectorWidth}
-          onApply={handleApply}
-          onClose={() => setSelected(null)}
-        />
-      )}
+      {/* 幅は Colonoscope が左端のハンドルで受け持つ(0.4.0)。初期値だけ渡し、
+          以後のドラッグはパネル側が持つ(保存はしない)。 */}
+      <Colonoscope
+        target={selected}
+        title={(target: TmInspectorTarget) => target.name}
+        subtitle={(target: TmInspectorTarget) => target.type}
+        tabs={inspectorTabs}
+        onApply={handleApply}
+        onClose={() => setSelected(null)}
+        width={INSPECTOR_WIDTH.initial}
+        minWidth={INSPECTOR_WIDTH.min}
+        maxWidth={INSPECTOR_WIDTH.max}
+      />
 
       <LayoutSaveStatusSnackbar state={saveState} onClose={closeSaveStatus} />
     </div>
