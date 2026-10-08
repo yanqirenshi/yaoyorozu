@@ -174,7 +174,7 @@ npm run web:build
 サーバは既定では使わない)。
 
 ```bash
-npm run web:check-diagram -- tm --expect-count=30
+npm run web:check-diagram -- tm --expect-count=32
 ```
 
 Microsoft Edge を headless で起動し、CDP(Chrome DevTools Protocol)で `/tm` を開いて
@@ -220,19 +220,28 @@ Desktop のブラウザのペイン(preview_start / javascript_tool / read_conso
   contextmenu のコールバックも無いため、コンテナへの委譲で拾っている。
 - インスペクタの「適用」は `key` を変えて D3Ter を貼り替える。rectum を作り直す
   だけでは再描画されないため。
-- インスペクタの中身は **基本 / 説明** の2タブ([TmInspector.tsx](../../../apps/web/src/app/tabs/tm/TmInspector.tsx))。
+- インスペクタの中身は **基本 / 説明** の2タブ。スキーマを組むのは
+  [tmInspector.tsx](../../../apps/web/src/app/tabs/tm/tmInspector.tsx)。
   基本は物理名・X・Y と**そのエンティティに繋がる結線の一覧**(相手の名前・ラベル・
   このエンティティ側のポート角度)、説明は `description` を出す。幅は左端のハンドルで
   伸縮できる(初期 444px / 最小 222px / 最大 888px)。
+  結線の角度の `path` は `ports.<添字>.angle` を使う。保存キーは記号・日本語を含むため、
+  ドット区切りの path に埋めると Colonoscope の `getByPath` が辿れなくなる。
 - ポート角度も同じ `tm.json` の `ports` に入る。キーは
   `<from物理名>-><to物理名>[#ラベル]:<from|to>` で、同じ端点の組が複数ある場合だけ
   ラベルで区別する(ログ行 × 再帰表 が親・子の2本)。重複したら `tm.ts` が例外を投げる。
   - 保存APIはファイルを丸ごと置き換えるため、**位置だけ・角度だけを書かない**。
     `buildLayoutFile(entities, ports)` で必ず両方を含めて保存する
     (片方だけ書くともう片方が消える)。
-- **TM のインスペクタは Colonoscope を使っていない**(Classes / サイトマップは使用中)。
-  Colonoscope の項目は平らな1枚リストでタブに分けられず、幅も 300px 固定だったため
-  MUI で自前に置き換えた。パッケージ側にタブと幅の受け口が入ったら戻すことを検討する
-  (幅は Foolsgolds/Assholes#21 で起票済み)。
-- 対象を切り替えてもタブの選択は保つ(説明を読み比べられるように)。入力欄の差し替えは
-  レンダー中の setState で行う。effect で書くと `react-hooks/set-state-in-effect` に当たる。
+- インスペクタは **Colonoscope**(`@yanqirenshi/colonoscope`)の `tabs` モードを使う。
+  0.4.0 でタブと幅の受け口が入ったため、自前実装(旧 `TmInspector.tsx`)をやめた(#572)。
+  サイトマップも同じ部品を使う([sitemapInspector.ts](../../../apps/web/src/app/tabs/sitemap/sitemapInspector.ts)
+  が先例)。Classes は使っていない(結線の一覧を置けず自前に戻した経緯がある)。
+- 対象を切り替えてもタブの選択は保たれる(説明を読み比べられるように)。「適用」は
+  変更が無いと押せず、編集する項目の無いタブ(説明)にはフッタごと出ない。いずれも
+  Colonoscope 側の挙動なので、こちらで作り込まない。
+- 視点(パン・ズーム)は `D3Svg` の `onZoom` で受け取って保存する(#571)。復元は
+  `svg.__zoom` を差し替えている(d3.svg に視点を設定する API が無いため。要望は
+  Foolsgolds/Assholes#124)。**描画は等倍で行わせ、そのあとで視点を当てる**こと。
+  `Rectum` に `transform`(ズーム初期値)を渡すと、縮小された状態で箱の寸法が
+  計算されて幅が変わる(#571 で実測。セッションが 381 → 393 に広がった)。

@@ -37,8 +37,9 @@
  *     あるため多値(MO)になる見込み。追って追加する。
  *
  * 【第1弾のスコープ】セッションと行の骨格まで。
- * メッセージ本体(コンテンツブロック・ツール・トークン使用量)、`system` 4種 /
- * `attachment` 23種の詳細、`pr-link` と GitHub の関係は次段以降で追加する。
+ * メッセージ本体のうち コンテンツブロックとツール呼び出し は第2弾(1/3。#579)で
+ * 片付けた。残るのは トークン使用量(#581)、`system` 4種 / `attachment` 23種の詳細
+ * (#580)、`pr-link` と GitHub の関係(第3弾以降)。
  * ファイルは本来サブエージェント(第3弾)の語彙と一緒に立てる予定だったが、セッションIDが
  * ファイルを識別しないことが判明したためモノとして先に立てた。ファイル種別によるサブ
  * セットへの展開、エージェントID、meta.json(agentType / name / toolUseId)は第3弾で扱う。
@@ -82,6 +83,35 @@
  * - 表示名は既存の会話タイトル(custom-title)で足りる。--name を付けると台帳の name に
  *   も入る(§6.1)。同時に書かれる agent-name 行はサブエージェントの語彙なので第3弾で扱う。
  * - --replay-user-messages で返る uuid は既存の行UUIDそのもの(§7.3)。新しい語彙は要らない。
+ *
+ * 【第2弾(1/3): メッセージ本体とツール呼び出し】
+ * イシュー #579。資料 §4.1 / §4.2 / §6 と §5 の型定義に基づく判断の記録。
+ *
+ * - message.id を メッセージ としてモノに立てた。1回のAPI応答が複数ブロックを含むと
+ *   ブロックごとに別行になり同じ message.id を共有するため(§4.2)、行とメッセージは
+ *   1対1ではない。立てたことで、応答ごとに1つしかない値(モデルID・停止理由、#581 の
+ *   トークン使用量)を1か所に置ける。行に置くと同じ値が複数行に重複する。
+ *   リソースにした。メッセージ自体の日付は資料に無く(日付は記録した行の記録日時に
+ *   帰属する)、資料に存在しない日付を補って分類を変えないため。資料で message の中に
+ *   あるフィールド(model / stop_reason / usage)をメッセージへ、行のトップレベルに
+ *   あるフィールド(requestId)を行に残す、という線で分けた。
+ * - コンテンツブロックのうち tool_use だけを ツール呼び出し としてモノに立てた。
+ *   id(toolu_…)という個体指定子を持つのはこれだけで、text / thinking / image は
+ *   持たない(§5 の型定義)。個体指定子が無いものはモノにしない。ブロック種別は行の
+ *   右側の属性に置いた。実測では1行1ブロックが基本(§4.2)なので多値にしていない。
+ * - 呼び出しと実行結果は別のイベントにしない。tool_use も tool_result もブロックで
+ *   あり、ブロック自体に日付が無いため。日付を持つイベントは既にある AI応答行 と
+ *   ユーザー行 で、その間に ツール呼び出し(リソース)が入る形にした。第1弾で
+ *   権限の問い合わせ / 権限の応答 を2つのイベントに分けたのは、どちらも
+ *   control_request / control_response という独自の日付(問い合わせ日時・応答日時)を
+ *   持つためで、こことは条件が違う。
+ * - ユーザー行の sourceToolAssistantUUID は外した。tool_use を発行した AI応答行の
+ *   uuid だが、ツール呼び出し経由で同じ先にたどり着く(導出できる)。導出できる関係を
+ *   重ねて張らないため、関係も属性も持たない。第1弾の注記どおりの組み替え。
+ * - caller は区分コードにしない。資料で確認できる値は direct だけで(§5 の型も
+ *   `caller?: { type: string }`)、切る先が無い。呼び出し元種別として ツール呼び出し の
+ *   右側に置き、値が増えたら区分コードを検討する。資料に無い値を推測で足さない。
+ * - トークン使用量(message.usage)は メッセージ の属性になる(#581)。
  *
  * 【Phase 2(複数セッション・ハブ・モード切替・新規作成)】
  * イシュー #403。Phase 1 の続きとして、語彙の要否を判断した記録。
@@ -146,20 +176,23 @@
  * (フォルダ名(D))は置かない。
  *
  * 【関係の検証(モノ × モノ の網羅性)】
- * 30エンティティの全435ペアを確認した。直接の結線があるのは28ペア(29本)で、
+ * 32エンティティの全496ペアを確認した。直接の結線があるのは31ペア(32本)で、
  * 対照表・対応表とその親の10ペアは垂下(mapping)でつながる。
- * 残る397ペアのうち、以下12ペアは「語彙は存在するが今は関係を構成していない」ものであり、
+ * 残る455ペアのうち、以下12ペアは「語彙は存在するが今は関係を構成していない」ものであり、
  * 見落としではなく判断の記録として残す。
  *
  * - ログ行 × 入力キュー / 入力キュー × ユーザー行
  *   queue-operation は直後の user 行に対応するはずだが、queue-operation 側は
  *   operation / timestamp / sessionId / content しか持たず、uuid も promptId も無い
  *   (報告書 §4.3)。個体指定子で結べないため関係を構成しない。
- * - AI応答行 × システム行 / AI応答行 × 付帯情報行
+ * - システム行 × ツール呼び出し / 付帯情報行 × ツール呼び出し
  *   stop_hook_summary と hook_additional_context が持つ toolUseID は tool_use ブロックを
- *   指す(報告書 §4.10、§5)。第2弾で「ツール呼び出し」をモノにした時点で、そちらに
- *   対する関係として立つ。その際、現在 sourceToolAssistantUUID で直接張っている
- *   ユーザー行 × AI応答行 の関係も、ツール呼び出し経由に組み替わる可能性がある。
+ *   指す(報告書 §4.10、§5)。第2弾(1/3)で ツール呼び出し をモノにしたので結べる
+ *   ようになったが、システム行・付帯情報行の中身の展開は #580 の範囲なのでそこで結ぶ。
+ * - ユーザー行 × AI応答行
+ *   sourceToolAssistantUUID(tool_use を発行した AI応答行の uuid)は資料に存在するが、
+ *   ツール呼び出し経由で同じ先にたどり着く(導出できる)ため、第2弾(1/3)で結線を
+ *   外した(冒頭の【第2弾(1/3)】を参照)。
  * - ログ行 × Gitブランチ
  *   ログ行は gitBranch(ブランチ名)を右側の属性として持つが、関係では結ばない。
  *   ログに記録されるのは名前だけで新設した GitブランチID は無く、行が持つのは cwd で
@@ -186,14 +219,10 @@
  *   リポジトリパス(R) で Gitリポジトリと直接結んでいたが、Phase 3 で worktree を選ぶ
  *   ようになったため、ワーキングツリー経由に置き換えた(worktree が決まればリポジトリも
  *   決まるので、導出できる関係を重ねて張らない)。
- * - 権限の問い合わせ × AI応答行
- *   ツール使用ID(tool_use_id)は AI応答行の中の tool_use ブロックを指す(PoC #382
- *   レポート §2.1)。ブロックは第2弾で「ツール呼び出し」としてモノにする予定で、
- *   そのときに結ぶ。
- *
- * 他の385ペアは直接の関係を構成しないのが正しい。内訳は、サブセットが親(ログ行・
+
+ * 他の443ペアは直接の関係を構成しないのが正しい。内訳は、サブセットが親(ログ行・
  * 実行中セッション)から個体指定子を継承しており親で張った関係がそのまま効くもの
- * 16ペア、対応する語彙がそもそも存在しないもの369ペア。
+ * 16ペア、対応する語彙がそもそも存在しないもの427ペア。
  *
  * R-R・E-E は対照表・対応表で構成するが、図の上では親どうしを1本の線で結び、その
  * 中点の○から表をぶら下げる(垂下。d3.ter 0.1.24 の `relationship.mapping`)。
@@ -342,9 +371,12 @@ const IDENTIFIER_DEFS: TmName[] = [
   // 部品表の例と同じく両方とも `行UUID(R)` と書く。
   { physical: "parentUuid", logical: "行UUID(R)" },
   { physical: "childUuid", logical: "行UUID(R)" },
-  // ツール実行結果の行が、その tool_use を発行した AI応答行を指す(E-E の先行・後続)。
-  // 役割は結線のラベルで示すため、箱の中は `行UUID(R)` と書く。
-  { physical: "sourceToolAssistantUUID", logical: "行UUID(R)" },
+  // 第2弾(1/3。#579)。1回のAPI応答の ID。複数の行が同じ値を共有する(報告書 §4.2)
+  // ため、行とは別のモノ(メッセージ)の個体指定子になる。
+  { physical: "messageId", logical: "APIメッセージID" },
+  // 第2弾(1/3。#579)。tool_use ブロックの ID(toolu_…)。呼び出しを記録した AI応答行、
+  // 結果を記録したユーザー行、権限の問い合わせが、この値で同じ呼び出しを指す。
+  { physical: "toolUseId", logical: "ツール使用ID" },
 ];
 
 const ATTRIBUTE_DEFS: TmName[] = [
@@ -391,9 +423,15 @@ const ATTRIBUTE_DEFS: TmName[] = [
   { physical: "promptId", logical: "入力ID" },
   { physical: "permissionMode", logical: "権限モード" },
   { physical: "requestId", logical: "APIリクエストID" },
-  { physical: "messageId", logical: "APIメッセージID" },
+  // モデルID・停止理由は資料で message の中のフィールドなので、第2弾(1/3。#579)で
+  // メッセージの属性にした(行のトップレベルにある APIリクエストID は行に残す)。
   { physical: "model", logical: "モデルID" },
   { physical: "stopReason", logical: "停止理由" },
+  // 第2弾(1/3。#579)。コンテンツブロック(資料 §6)と tool_use の付随情報。
+  // ブロック種別は行の右側に置く(実測で1行1ブロックが基本のため多値にしない)。
+  { physical: "blockType", logical: "ブロック種別" },
+  { physical: "isError", logical: "エラー区分" },
+  { physical: "callerType", logical: "呼び出し元種別" },
   { physical: "subtype", logical: "システム副種別" },
   { physical: "level", logical: "重要度" },
   { physical: "attachmentType", logical: "付帯情報種別" },
@@ -428,14 +466,13 @@ const ATTRIBUTE_DEFS: TmName[] = [
   { physical: "processState", logical: "プロセス状態" },
   { physical: "processStateAt", logical: "プロセス状態の更新日時" },
   // Phase 2。set_model / set_permission_mode で途中から変わる、いま送るときに使われる
-  // 値(レポート §6.2)。ログ側の モデルID(AI応答行)・権限モード(ユーザー行)は
+  // 値(レポート §6.2)。ログ側の モデルID(メッセージ)・権限モード(ユーザー行)は
   // 記録された当時の値で意味が違うため、別の属性に分ける。
   { physical: "currentModel", logical: "現在のモデル" },
   { physical: "currentPermissionMode", logical: "現在の権限モード" },
   // 権限の問い合わせ(control_request / can_use_tool。レポート §2.1)。
   { physical: "toolName", logical: "ツール名" },
   { physical: "displayName", logical: "表示名" },
-  { physical: "toolUseId", logical: "ツール使用ID" },
   { physical: "toolInput", logical: "入力" },
   { physical: "blockedPath", logical: "拒否されたパス" },
   { physical: "requestedAt", logical: "問い合わせ日時" },
@@ -666,6 +703,26 @@ const ENTITY_DEFS: EntityDef[] = [
     attributes: [],
   },
 
+  // ============ メッセージとツール呼び出し(第2弾 1/3。#579) ============
+  {
+    name: { physical: "Message", logical: "メッセージ" },
+    type: "RESOURCE",
+    description:
+      "1回のAPI応答(message.id)。1回の応答が複数のブロックを含むとブロックごとに別行として記録され、同じ message.id を共有する(報告書 §4.2)ため、行とメッセージは1対1ではない。応答ごとに1つしかない値(モデルID・停止理由、#581 のトークン使用量)をここに置くと、行に置いた場合に生じる複数行への重複が無くなる。資料で message の中にあるフィールドをここへ、行のトップレベルにあるフィールド(APIリクエストID)を行に残す、という線で分けた。メッセージ自体の日付は資料に無く(日付は記録した行の記録日時に帰属する)、資料に存在しない日付を補って分類を変えないためリソースとする(冒頭の【第2弾(1/3)】を参照)。",
+    position: { x: 2250, y: 2650 },
+    identifiers: ["messageId"],
+    attributes: ["model", "stopReason"],
+  },
+  {
+    name: { physical: "ToolUse", logical: "ツール呼び出し" },
+    type: "RESOURCE",
+    description:
+      "tool_use ブロック(報告書 §4.2、§6)。個体指定子は id(toolu_…)。呼び出しを記録した AI応答行、結果を記録したユーザー行(tool_result.tool_use_id)、権限の問い合わせ(tool_use_id)がこの値で同じ呼び出しを指すため、3者をつなぐ位置に立つ。コンテンツブロックのうち個体指定子を持つのはこれだけで、text / thinking / image は持たないためモノにしない(報告書 §5 の型定義)。呼び出し元種別は caller.type で、資料で確認できる値は direct のみ。値が増えたら区分コードにできるが、資料に無い値を推測で足さない。ツールを呼ぶのは CLI でこのアプリではなく、ブロック自体に日付も無い(日付は記録した行に帰属する)ためリソースとする。",
+    position: { x: 1550, y: 2650 },
+    identifiers: ["toolUseId"],
+    attributes: ["toolName", "toolInput", "callerType"],
+  },
+
   // ============ イベント ============
   {
     name: { physical: "ChainLine", logical: "ログ行" },
@@ -689,19 +746,19 @@ const ENTITY_DEFS: EntityDef[] = [
     name: { physical: "UserLine", logical: "ユーザー行" },
     type: "EVENT-SUBSET",
     description:
-      "行種別による相違のサブセット(×行種別)。type = user。人間の入力(content が文字列)とツール実行結果(content が配列)の両方を含み、実測では約9割がツール実行結果(報告書 §4.1)。ツール実行結果の行は sourceToolAssistantUUID で tool_use を発行した AI応答行を指す(E-E の先行・後続)。",
+      "行種別による相違のサブセット(×行種別)。type = user。人間の入力(content が文字列)とツール実行結果(content が配列)の両方を含み、実測では約9割がツール実行結果(報告書 §4.1)。ツール実行結果の行は tool_result.tool_use_id で呼び出しを指すため、第2弾(1/3)で ツール使用ID(R) で ツール呼び出し と結ぶようにした。資料にある sourceToolAssistantUUID(発行元の AI応答行の uuid)でも同じ先にたどり着くが、ツール呼び出し経由で求まる導出なので持たない。ブロック種別は資料 §6 の tool_result / text / image と、文字列の content(人間の入力)。エラー区分は tool_result.is_error。",
     position: { x: 1770, y: 760 },
-    identifiers: ["uuid", "sourceToolAssistantUUID"],
-    attributes: ["type", "promptId", "permissionMode"],
+    identifiers: ["uuid", "toolUseId(R)"],
+    attributes: ["type", "promptId", "permissionMode", "blockType", "isError"],
   },
   {
     name: { physical: "AssistantLine", logical: "AI応答行" },
     type: "EVENT-SUBSET",
     description:
-      "行種別による相違のサブセット(×行種別)。type = assistant。1回のAPI応答が複数ブロックを含む場合はブロックごとに別行となり、同じ messageId を共有する(報告書 §4.2)。messageId は「1回のAPI応答」の個体指定子とみなせるため、第2弾でモノとして切り出す候補。",
+      "行種別による相違のサブセット(×行種別)。type = assistant。1回のAPI応答が複数ブロックを含む場合はブロックごとに別行となり、同じ messageId を共有する(報告書 §4.2)。第2弾(1/3)でその messageId を メッセージ として切り出したため、ここは APIメッセージID(R) で結ぶ(モデルID・停止理由もメッセージへ移した)。APIリクエストID は message の中ではなく行のトップレベルのフィールドなので行に残す。tool_use ブロックの行は ツール使用ID(R) で ツール呼び出し を指す(text / thinking の行は持たないので「1件または値なし」)。ブロック種別は資料 §6 の text / thinking / tool_use。実測では1行1ブロックが基本のため多値にしていない。",
     position: { x: 2150, y: 760 },
-    identifiers: ["uuid"],
-    attributes: ["type", "requestId", "messageId", "model", "stopReason"],
+    identifiers: ["uuid", "messageId(R)", "toolUseId(R)"],
+    attributes: ["type", "requestId", "blockType"],
   },
   {
     name: { physical: "SystemLine", logical: "システム行" },
@@ -808,14 +865,19 @@ const ENTITY_DEFS: EntityDef[] = [
     name: { physical: "PermissionRequest", logical: "権限の問い合わせ" },
     type: "EVENT",
     description:
-      "CLI から届く control_request(subtype: can_use_tool)。ツールを使ってよいかを app に尋ねる(レポート §2.1)。個体指定子は request_id と、尋ねてきた実行中セッションの値(R)。AskUserQuestion(選択肢)と ExitPlanMode(計画の承認)も同じ形で届く(レポート §2.4)ため、tool_name から求まる問い合わせ種別(D)で区別し、画面の出し分けに使う。入力は渡された引数、提案は「今後も許可」の候補(多値に分ける)。拒否されたパスは Bash のときに付く。ツール使用IDは AI応答行の中の tool_use ブロックを指すが、ブロックは第2弾でモノにするため今は結ばない。",
+      "CLI から届く control_request(subtype: can_use_tool)。ツールを使ってよいかを app に尋ねる(レポート §2.1)。個体指定子は request_id と、尋ねてきた実行中セッションの値(R)。AskUserQuestion(選択肢)と ExitPlanMode(計画の承認)も同じ形で届く(レポート §2.4)ため、tool_name から求まる問い合わせ種別(D)で区別し、画面の出し分けに使う。入力は渡された引数、提案は「今後も許可」の候補(多値に分ける)。拒否されたパスは Bash のときに付く。ツール使用IDは tool_use ブロックを指す。第2弾(1/3)でブロックを ツール呼び出し としてモノにしたため、ツール使用ID(R) で結ぶ。ツール名・入力は control_request が独自に渡す別の記録で(問い合わせ種別(D)の導出元でもある)、問い合わせの時点で会話ログに tool_use の行が書かれているとは限らないため、右側に残す。",
     position: { x: 350, y: 2450 },
-    identifiers: ["requestId", "pidDomain(R)", "pid(R)", "startedAt(R)"],
+    identifiers: [
+      "requestId",
+      "pidDomain(R)",
+      "pid(R)",
+      "startedAt(R)",
+      "toolUseId(R)",
+    ],
     attributes: [
       "toolName",
       "displayName",
       "description",
-      "toolUseId",
       "toolInput",
       "blockedPath",
       "requestedAt",
@@ -1157,12 +1219,44 @@ const RELATIONSHIP_DEFS: RelationshipDef[] = [
     label: "子",
   },
 
-  // E-E(先行・後続): tool_use を発行した AI応答行 → その結果を記録したユーザー行。
-  // どちらの側も「1件または値なし」。
+  // 第2弾(1/3。#579)。E-R。メッセージ 1 : AI応答行 1以上。1回の応答が複数ブロックに
+  // 分かれると、同じ messageId の行が複数になる(報告書 §4.2)。
   {
-    from: { entity: "AssistantLine", position: 90, cardinality: 1, optionality: 0 },
-    to: { entity: "UserLine", position: 270, cardinality: 1, optionality: 0 },
-    label: "ツール発行元",
+    from: { entity: "Message", position: 180, cardinality: 1, optionality: 1 },
+    to: {
+      entity: "AssistantLine",
+      position: 330,
+      cardinality: 3,
+      optionality: 1,
+    },
+  },
+  // 第2弾(1/3。#579)。E-R。ツール呼び出し 1 : AI応答行 1。呼び出しは必ず1つの行に
+  // 記録される。行の側は tool_use ブロックの行だけが持つので「1件または値なし」。
+  {
+    from: { entity: "ToolUse", position: 200, cardinality: 1, optionality: 0 },
+    to: {
+      entity: "AssistantLine",
+      position: 30,
+      cardinality: 1,
+      optionality: 1,
+    },
+  },
+  // 第2弾(1/3。#579)。E-R。ツール呼び出し 1 : ユーザー行 1件または値なし。実測では
+  // tool_use 16,323 に対し tool_result 16,321 で、結果の無い呼び出しが2件ある(§6)。
+  {
+    from: { entity: "ToolUse", position: 160, cardinality: 1, optionality: 0 },
+    to: { entity: "UserLine", position: 0, cardinality: 1, optionality: 0 },
+  },
+  // 第2弾(1/3。#579)。E-R。ツール呼び出し 1 : 権限の問い合わせ 1件または値なし。
+  // 既に許可されているツールでは問い合わせが来ない。
+  {
+    from: { entity: "ToolUse", position: 90, cardinality: 1, optionality: 1 },
+    to: {
+      entity: "PermissionRequest",
+      position: 300,
+      cardinality: 1,
+      optionality: 0,
+    },
   },
 ];
 
