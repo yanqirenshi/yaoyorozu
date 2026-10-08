@@ -2192,7 +2192,7 @@ mod tests {
             slug: None,
             last_prompt: None,
             conversation_file_path: PathBuf::from(format!("/tmp/{session_id}.jsonl")),
-            subagent_file_paths: Vec::new(),
+            subagent_files: Vec::new(),
             modified_at_ms: 0,
             cwd: None,
             git_branch: None,

@@ -82,6 +82,8 @@ mod tests {
         session.conversation_files.push(SessionFile {
             file_path: PathBuf::from("/p/s1.jsonl"),
             lines: Vec::new(),
+            modified_at_ms: None,
+            subagent_meta: None,
         });
 
         assert!(session.has_conversation_file());

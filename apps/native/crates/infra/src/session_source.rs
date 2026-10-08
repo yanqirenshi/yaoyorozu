@@ -1,7 +1,7 @@
 use app::{AppError, FileFingerprint, SessionContent, SessionSource};
 use domain::{
     extract_cwd, resolve_session_title, AgentKind, ParsedSession, Project, ScannedLine,
-    SessionSummary,
+    SessionFile, SessionSummary, SubagentMeta,
 };
 use notify::RecursiveMode;
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
@@ -133,7 +133,7 @@ impl FileSystemRepository {
     /// ディレクトリ列挙と `fs::metadata` のみで、**ファイルの中身は読まない**
     /// (中身を読むのは `parse_session_file`)。サブエージェントのファイルは
     /// 会話ファイルの従属物のため列挙しない(走査時に
-    /// `list_subagent_file_paths` が解決する)。
+    /// `list_subagent_files` が解決する)。
     pub fn enumerate_session_file_refs(&self) -> Result<Vec<SessionFileRef>, AppError> {
         let entries = fs::read_dir(&self.projects_dir).map_err(|e| {
             AppError::Io(format!(
@@ -610,7 +610,7 @@ impl SessionSource for FileSystemRepository {
 fn build_parsed_session(project_dir: &Path, path: &Path) -> Result<ParsedSession, AppError> {
     let modified_at_ms = to_millis(fs::metadata(path).and_then(|m| m.modified()));
     let scanned = cached_or_scanned_summary(path, modified_at_ms)?;
-    let subagent_file_paths = list_subagent_file_paths(project_dir, &scanned.id);
+    let subagent_files = list_subagent_files(project_dir, &scanned.id);
     Ok(ParsedSession {
         session_id: scanned.id,
         custom_title: scanned.custom_title,
@@ -619,7 +619,7 @@ fn build_parsed_session(project_dir: &Path, path: &Path) -> Result<ParsedSession
         slug: scanned.slug,
         last_prompt: scanned.last_prompt,
         conversation_file_path: path.to_path_buf(),
-        subagent_file_paths,
+        subagent_files,
         modified_at_ms,
         // ハブのグラフ表示用の表示補助データ(issue #224)。走査キャッシュ
         // (`CachedSessionSummary`)に既に抽出済みの値をそのまま使う
@@ -629,10 +629,13 @@ fn build_parsed_session(project_dir: &Path, path: &Path) -> Result<ParsedSession
     })
 }
 
-/// `<project_dir>/<session_id>/subagents/agent-*.jsonl` を列挙する
-/// (issue #208)。ディレクトリが無ければ空(サブエージェントを使わなかった
-/// セッションが大半のため、通常のケース)。順序を安定させるためソートする。
-fn list_subagent_file_paths(project_dir: &Path, session_id: &str) -> Vec<PathBuf> {
+/// `<project_dir>/<session_id>/subagents/agent-*.jsonl` を列挙し、対で置かれる
+/// `.meta.json`(`agent-*.meta.json`。無ければ`None`)を読んで`SessionFile`に
+/// する(issue #208・#567)。ディレクトリが無ければ空(サブエージェントを
+/// 使わなかったセッションが大半のため、通常のケース)。順序を安定させるため
+/// ソートする。`.meta.json`自体は`.jsonl`ではないため列挙に含めない
+/// (会話ファイルとして数えない。issue #567本文の確認依頼)。
+fn list_subagent_files(project_dir: &Path, session_id: &str) -> Vec<SessionFile> {
     let subagents_dir = project_dir.join(session_id).join("subagents");
     let Ok(entries) = fs::read_dir(&subagents_dir) else {
         return Vec::new();
@@ -644,6 +647,44 @@ fn list_subagent_file_paths(project_dir: &Path, session_id: &str) -> Vec<PathBuf
         .collect();
     paths.sort();
     paths
+        .into_iter()
+        .map(|file_path| {
+            let modified_at_ms = Some(to_millis(
+                fs::metadata(&file_path).and_then(|m| m.modified()),
+            ));
+            let subagent_meta = read_subagent_meta(&file_path);
+            SessionFile {
+                file_path,
+                lines: Vec::new(),
+                modified_at_ms,
+                subagent_meta,
+            }
+        })
+        .collect()
+}
+
+/// `agent-<ID>.jsonl` に対して `agent-<ID>.meta.json` を読む(issue #567)。
+/// 無い・読めない・JSONとして壊れている場合は`None`(会話ファイルの一覧からは
+/// 落とさない。古いサブエージェントには無いこともある、という issue 本文の指示)。
+/// 個々のフィールドが欠けていても、そのフィールドだけ`None`になる
+/// (`#[serde(default)]`。将来フィールドが増えても古い`.meta.json`を読める)。
+fn read_subagent_meta(jsonl_path: &Path) -> Option<SubagentMeta> {
+    #[derive(serde::Deserialize, Default)]
+    #[serde(rename_all = "camelCase", default)]
+    struct MetaJson {
+        agent_type: Option<String>,
+        description: Option<String>,
+        spawn_depth: Option<u32>,
+    }
+
+    let meta_path = jsonl_path.with_extension("meta.json");
+    let content = fs::read_to_string(&meta_path).ok()?;
+    let meta: MetaJson = serde_json::from_str(&content).ok()?;
+    Some(SubagentMeta {
+        agent_type: meta.agent_type,
+        description: meta.description,
+        spawn_depth: meta.spawn_depth,
+    })
 }
 
 /// `(ファイルパス, mtime)` をキーにしたタイトル抽出結果のキャッシュ。
@@ -1454,7 +1495,7 @@ mod tests {
             sessions[0].conversation_file_path,
             project_dir.join("s1.jsonl")
         );
-        assert!(sessions[0].subagent_file_paths.is_empty());
+        assert!(sessions[0].subagent_files.is_empty());
     }
 
     #[test]
@@ -1496,11 +1537,16 @@ mod tests {
             .expect("should list parsed sessions");
 
         assert_eq!(sessions.len(), 1);
+        let paths: Vec<&PathBuf> = sessions[0]
+            .subagent_files
+            .iter()
+            .map(|f| &f.file_path)
+            .collect();
         assert_eq!(
-            sessions[0].subagent_file_paths,
+            paths,
             vec![
-                subagents_dir.join("agent-a.jsonl"),
-                subagents_dir.join("agent-b.jsonl"),
+                &subagents_dir.join("agent-a.jsonl"),
+                &subagents_dir.join("agent-b.jsonl"),
             ]
         );
     }
@@ -1518,7 +1564,78 @@ mod tests {
             .expect("should list parsed sessions");
 
         assert_eq!(sessions.len(), 1);
-        assert!(sessions[0].subagent_file_paths.is_empty());
+        assert!(sessions[0].subagent_files.is_empty());
+    }
+
+    #[test]
+    fn list_parsed_sessions_reads_subagent_meta_json_and_does_not_count_it_as_a_conversation_file()
+    {
+        // issue #567: `.meta.json`はサブエージェントの`.jsonl`と対で置かれるが、
+        // 会話ファイルとしては数えない(件数が実際の2倍にならない)こと、かつ
+        // 中身(agentType/description/spawnDepth)を読めることを確認する。
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        write_session_file(&project_dir, "s1", &project_dir);
+        let subagents_dir = project_dir.join("s1").join("subagents");
+        fs::create_dir_all(&subagents_dir).unwrap();
+        fs::write(subagents_dir.join("agent-a.jsonl"), "").unwrap();
+        fs::write(
+            subagents_dir.join("agent-a.meta.json"),
+            r#"{"agentType":"Explore","description":"設定の読み書きを調べる","spawnDepth":1}"#,
+        )
+        .unwrap();
+        // .meta.json を持たないサブエージェント(古いものを想定)。
+        fs::write(subagents_dir.join("agent-b.jsonl"), "").unwrap();
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let sessions = repo
+            .list_parsed_sessions("proj")
+            .expect("should list parsed sessions");
+
+        assert_eq!(sessions.len(), 1);
+        // .meta.json を会話ファイルとして数えていない(2件のまま。4件になっていない)。
+        assert_eq!(sessions[0].subagent_files.len(), 2);
+
+        let a = sessions[0]
+            .subagent_files
+            .iter()
+            .find(|f| f.file_path == subagents_dir.join("agent-a.jsonl"))
+            .expect("agent-a should be present");
+        let meta = a.subagent_meta.as_ref().expect("agent-a has a .meta.json");
+        assert_eq!(meta.agent_type.as_deref(), Some("Explore"));
+        assert_eq!(meta.description.as_deref(), Some("設定の読み書きを調べる"));
+        assert_eq!(meta.spawn_depth, Some(1));
+
+        let b = sessions[0]
+            .subagent_files
+            .iter()
+            .find(|f| f.file_path == subagents_dir.join("agent-b.jsonl"))
+            .expect("agent-b should be present");
+        assert_eq!(
+            b.subagent_meta, None,
+            ".meta.json が無ければ None(落とさない)"
+        );
+    }
+
+    #[test]
+    fn list_parsed_sessions_tolerates_a_corrupt_subagent_meta_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        write_session_file(&project_dir, "s1", &project_dir);
+        let subagents_dir = project_dir.join("s1").join("subagents");
+        fs::create_dir_all(&subagents_dir).unwrap();
+        fs::write(subagents_dir.join("agent-a.jsonl"), "").unwrap();
+        fs::write(subagents_dir.join("agent-a.meta.json"), "not json").unwrap();
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let sessions = repo
+            .list_parsed_sessions("proj")
+            .expect("should not fail on a corrupt .meta.json");
+
+        assert_eq!(sessions[0].subagent_files.len(), 1);
+        assert_eq!(sessions[0].subagent_files[0].subagent_meta, None);
     }
 
     #[test]
@@ -1936,6 +2053,49 @@ mod tests {
                 first_done.lock().unwrap().unwrap_or_default().as_secs_f64()
             );
         }
+    }
+
+    /// `.meta.json` の読み取り(issue #567)が全走査にどれだけ乗るかを実データで
+    /// 確かめる。実データに依存するため通常は走らせない:
+    /// `cargo test -p infra --release -- --ignored --nocapture real_data_subagent_meta`
+    #[test]
+    #[ignore]
+    fn real_data_subagent_meta_scan_timing() {
+        let root = FileSystemRepository::default_projects_dir().expect("projects dir");
+        let repo = FileSystemRepository::new(root.clone());
+        let refs = repo.enumerate_session_file_refs().expect("enumerate");
+        for r in &refs {
+            let _ = fs::read(&r.file_path);
+        }
+
+        session_summary_cache()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+
+        let mut subagent_count = 0usize;
+        // 同じ(session_id の)`.meta.json` 読み取りを `parse_session_file` の外で
+        // もう一度だけ呼び、その分の所要時間を切り出して見る(全体に対する
+        // 割合の見積もり。1回分なので全体の計測を汚さない)。
+        let mut subagent_only_elapsed = std::time::Duration::ZERO;
+        let started_total = std::time::Instant::now();
+        for r in &refs {
+            let parsed = repo.parse_session_file(r).expect("should parse");
+            subagent_count += parsed.subagent_files.len();
+            let project_dir = root.join(&r.project);
+            let started = std::time::Instant::now();
+            let _ = list_subagent_files(&project_dir, &parsed.session_id);
+            subagent_only_elapsed += started.elapsed();
+        }
+        let total_elapsed = started_total.elapsed();
+
+        eprintln!(
+            "conversation_files={} subagent_files={} total={:.3}s subagent_meta_only={:.3}s",
+            refs.len(),
+            subagent_count,
+            total_elapsed.as_secs_f64(),
+            subagent_only_elapsed.as_secs_f64()
+        );
     }
 
     #[test]

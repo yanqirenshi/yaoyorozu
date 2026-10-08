@@ -299,10 +299,16 @@ export type GitRepositoryDto = {
 // `Session.conversation_files`/`subagent_files` の1件分(オブジェクトモデル
 // 実装 第5弾。issue #208)。`lines_loaded`/`line_count` は `LogLine` が
 // 遅延読み込みであることの可視化用(未読み込みの間は常に `false`/`0`)。
+// `modified_at_ms`/`agent_type`/`description`/`spawn_depth` はハブのグラフ
+// 表示用の表示補助データ(issue #567)。会話ファイルでは常に `null`。
 export type SessionFileDto = {
   file_path: string;
   lines_loaded: boolean;
   line_count: number;
+  modified_at_ms: number | null;
+  agent_type: string | null;
+  description: string | null;
+  spawn_depth: number | null;
 };
 
 // `User.sessions` の1件分(オブジェクトモデル実装 第4弾。issue #197)。

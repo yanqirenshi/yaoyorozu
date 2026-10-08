@@ -42,6 +42,7 @@ import type {
   RunningSessionRefDto,
   RunningSessionSummaryDto,
   SessionDto,
+  SessionFileDto,
   StartModelDto,
   WorktreeSpecDto,
 } from "../api";
@@ -160,6 +161,11 @@ const SESSION_GRID_CELL_HEIGHT = 110;
 // セッションノードのラベルの最大文字数(issue #214)。格子の横幅に 12px の
 // 文字が収まる長さにする(日本語でも隣のラベルと重なりにくい)。
 const SESSION_LABEL_MAX_CHARS = 16;
+// サブエージェントのノード(issue #567)。数が多くなりうるため、セッション
+// (円の半径20・ラベル12px)より小さく控えめにする(ユーザー指示)。
+const SUBAGENT_NODE_RADIUS = 10;
+const SUBAGENT_LABEL_FONT_SIZE = 10;
+const SUBAGENT_LABEL_MAX_CHARS = 20;
 // インスペクタの見出しに使うタイトルの最大文字数。
 const SESSION_TITLE_MAX_CHARS = 40;
 // session_id から表示名を作るときの桁数(既存のタイトル解決と同じ。issue #33)。
@@ -265,7 +271,8 @@ type HubNodeCore = {
     | "git-repository"
     | "git-branch"
     | "git-worktree"
-    | "profile";
+    | "profile"
+    | "subagent";
   // ドラッグ位置の永続化(issue #121)に使う安定キー。位置を保存する
   // ノードにのみ設定する(セッションノードは force シミュレーションに委ねる
   // ため保存しない。issue #226)。GitRepository/GitBranch ノード(issue #224)は
@@ -302,6 +309,16 @@ type HubNodeCore = {
   // フォルダにできるケースに対応するため)。並びは更新時刻の古い順。
   conversationFiles?: { filePath: string; linesLoaded: boolean; lineCount: number }[];
   subagentFileCount?: number;
+  // subagent(`SessionFileDto`。issue #567)。親セッションのノードから線で
+  // つないだ、サブエージェント1件分のノードだけが持つ。
+  subagentAgentType?: string | null;
+  subagentDescription?: string | null;
+  subagentSpawnDepth?: number | null;
+  subagentModifiedAtMs?: number | null;
+  subagentLinesLoaded?: boolean;
+  subagentLineCount?: number;
+  subagentParentSessionId?: string;
+  subagentParentSessionTitle?: string;
   // セッション→ブランチの対応付けに使った表示補助データ(issue #224)。
   // `domain::Session`の属性ではない(`SessionDto.cwd`/`git_branch`参照)。
   cwd?: string | null;
@@ -451,6 +468,24 @@ function gitBranchNodeId(branchId: string): string {
 
 function gitWorktreeNodeId(worktreeId: string): string {
   return `git-worktree:${worktreeId}`;
+}
+
+// サブエージェントの会話ファイルのパス(`.../subagents/agent-<エージェントID>.jsonl`)
+// から、安定IDに使うエージェントID部分(拡張子を除いたファイル名)を取り出す
+// (issue #567)。
+function subagentIdFromFilePath(filePath: string): string {
+  const base = filePath.split(/[\\/]/).pop() ?? filePath;
+  return base.replace(/\.jsonl$/, "");
+}
+
+function subagentNodeId(parentSessionId: string, filePath: string): string {
+  return `subagent:${parentSessionId}/${subagentIdFromFilePath(filePath)}`;
+}
+
+// サブエージェントのノードの表示名(issue #567)。依頼内容(description)を
+// 優先し、無ければ種類(agentType)、それも無ければファイル名由来のID。
+function subagentDisplayName(file: SessionFileDto): string {
+  return file.description || file.agent_type || subagentIdFromFilePath(file.file_path);
 }
 
 // 起動のダイアログで選ぶ worktree の選択肢(issue #438)。パスは渡さない
@@ -963,6 +998,57 @@ function buildGraphData(
       runningWorktreeName: runningWorktree?.worktree_name,
     });
 
+    // サブエージェントのノード(issue #567)。常に全部描く(トグルでの出し
+    // 分けはしない。ユーザー判断)。セッションより小さく控えめにし、move の
+    // 既定は will(力学で親の周りに集まる)。positionKey/moveKeys に載せて
+    // 位置・動き方を保存できるようにする(#558 の上書きも効く)。
+    session.subagent_files.forEach((file, subagentIndex) => {
+      const subNodeId = subagentNodeId(session.session_id, file.file_path);
+      positionKeys.add(subNodeId);
+      moveKeys.add(subNodeId);
+      // 既定位置は親セッションの周りに小さく散らす(move が will なら、どの
+      // みち力学シミュレーションが寄せるので初期値はおおよそでよい)。
+      const angle =
+        (subagentIndex / Math.max(session.subagent_files.length, 1)) * Math.PI * 2;
+      const subagentPosition = resolvePosition(
+        subNodeId,
+        position.x + Math.cos(angle) * 40,
+        position.y + Math.sin(angle) * 40,
+      );
+      nodes.push({
+        id: subNodeId,
+        x: subagentPosition.x,
+        y: subagentPosition.y,
+        move: resolveMove(subNodeId, "will"),
+        moveOverridden: isMoveOverridden(subNodeId),
+        label: {
+          text: truncate(subagentDisplayName(file), SUBAGENT_LABEL_MAX_CHARS),
+          fill: COLOR_SUMI,
+          font: { size: SUBAGENT_LABEL_FONT_SIZE },
+          y: labelYBelowCircle(SUBAGENT_NODE_RADIUS),
+        },
+        circle: { r: SUBAGENT_NODE_RADIUS, ...INVISIBLE_NODE_CIRCLE },
+        icon: { url: HUB_NODE_ICON_URIS.session },
+        kind: "subagent",
+        positionKey: subNodeId,
+        subagentAgentType: file.agent_type,
+        subagentDescription: file.description,
+        subagentSpawnDepth: file.spawn_depth,
+        subagentModifiedAtMs: file.modified_at_ms,
+        subagentLinesLoaded: file.lines_loaded,
+        subagentLineCount: file.line_count,
+        subagentParentSessionId: session.session_id,
+        subagentParentSessionTitle: title,
+      });
+      // 親(セッション) → 子(サブエージェント)の向き(issue #567)。
+      edges.push({
+        id: `e${edgeSeq++}`,
+        source: sessionNodeId,
+        target: subNodeId,
+        line: { width: 1, color: COLOR_BORDER },
+      });
+    });
+
     // セッション → GitBranch(issue #224。クラス図に無い導出関係。ログ行の
     // cwd/git_branchから求めた表示補助のエッジであり、`Session`のモデル上の
     // 関連ではない)。対応が取れないセッションは線を引かない
@@ -1106,6 +1192,8 @@ type InspectorHandlers = {
   onStartNew: (core: HubNodeCore) => void;
   // ノードの動き方を変える(issue #558)。`move` が `null` は「既定に戻す」。
   onSetNodeMove: (core: HubNodeCore, move: NodeMoveDto | null) => void;
+  // IDでノードを選び直す(issue #567。サブエージェントの「親を選ぶ」用)。
+  onSelectNode: (nodeId: string) => void;
   // アーカイブ・アーカイブ解除(issue #496)。project/sessionId が無いノード
   // (仮ノード等)では呼べないため、呼び出し側(buildSessionInspectorContent)で
   // ボタンを無効にする。
@@ -1272,10 +1360,11 @@ const MIN_PEER_MESSAGING_VERSION = "2.1.268";
 const RESUME_NAME_NOTE = "表示名を変えると、この会話のタイトルも変わります";
 
 // ノードの種類ごとの動き方の既定値(issue #558)。画面に固定していた値
-// (`buildGraphData` 参照)と同じ: セッションは自動で動き、それ以外はドラッグで
-// 動かせる。
+// (`buildGraphData` 参照)と同じ: セッション・サブエージェント(issue #567)は
+// 自動で動き、それ以外はドラッグで動かせる。
 const DEFAULT_NODE_MOVE: Record<HubNodeCore["kind"], NodeMoveDto> = {
   session: "will",
+  subagent: "will",
   pc: "support",
   user: "support",
   profile: "support",
@@ -1345,6 +1434,7 @@ function buildInspectorContent(
     if (core.kind === "git-repository") return buildRepositoryInspectorContent(core, handlers);
     if (core.kind === "git-branch") return buildBranchInspectorContent(core);
     if (core.kind === "git-worktree") return buildWorktreeInspectorContent(core);
+    if (core.kind === "subagent") return buildSubagentInspectorContent(core, handlers);
     return buildSessionInspectorContent(core, handlers, running);
   })();
   return {
@@ -1651,6 +1741,45 @@ function buildWorktreeInspectorContent(core: HubNodeCore): InspectorContent {
       { label: "created_at_time", value: String(core.worktreeCreatedAtTime ?? "") },
     ],
     action: null,
+  };
+}
+
+// サブエージェント(issue #567)。`.meta.json`から読んだ種類・依頼内容と、
+// 親セッション・更新日時・行数(未読み込みなら「未読み込み」)を出す。
+// 「親を選ぶ」で親セッションのノードへ選択を切り替えられる。
+function buildSubagentInspectorContent(
+  core: HubNodeCore,
+  handlers: InspectorHandlers,
+): InspectorContent {
+  const title = core.subagentDescription || core.subagentAgentType || "サブエージェント";
+  const parentSessionId = core.subagentParentSessionId;
+  return {
+    title: truncate(title, SESSION_TITLE_MAX_CHARS),
+    fields: [
+      { label: "種類", value: core.subagentAgentType || "(不明)" },
+      { label: "依頼内容", value: core.subagentDescription || "(不明)" },
+      {
+        label: "入れ子の深さ",
+        value: core.subagentSpawnDepth != null ? String(core.subagentSpawnDepth) : "(不明)",
+      },
+      { label: "親セッション", value: core.subagentParentSessionTitle ?? "(不明)" },
+      {
+        label: "更新日時",
+        value: core.subagentModifiedAtMs
+          ? new Date(core.subagentModifiedAtMs).toLocaleString()
+          : "(不明)",
+      },
+      {
+        label: "行数",
+        value: core.subagentLinesLoaded ? String(core.subagentLineCount ?? 0) : "(未読み込み)",
+      },
+    ],
+    action: parentSessionId
+      ? {
+          label: "親を選ぶ",
+          onClick: () => handlers.onSelectNode(`session:${parentSessionId}`),
+        }
+      : null,
   };
 }
 
@@ -2154,6 +2283,24 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
     [scheduleSaveHubLayout],
   );
 
+  // 選んでいるノード(issue #109)。右クリックでの選択(下の useEffect)と、
+  // 「親を選ぶ」(issue #567)等のIDからの選び直しの両方で使うため、関連する
+  // 他の useCallback より前で宣言する。
+  const [inspectorCore, setInspectorCore] = useState<HubNodeCore | null>(null);
+  const hubPageRef = useRef<HTMLDivElement>(null);
+
+  // インスペクタの「親を選ぶ」(issue #567)など、IDで対象ノードを選び直す。
+  // 描画中のDOMから`_core`を引く(右クリック選択と同じ取り方)。見つからなければ
+  // 何もしない(消えている場合)。
+  const handleSelectNodeById = useCallback((nodeId: string) => {
+    const groups = Array.from(hubPageRef.current?.querySelectorAll("g.ng-node") ?? []);
+    const hit = groups.find(
+      (el) => (el as Element & { __data__?: NodeDatum }).__data__?.id === nodeId,
+    ) as (Element & { __data__?: NodeDatum }) | undefined;
+    const core = hit?.__data__?._core as HubNodeCore | undefined;
+    if (core) setInspectorCore(core);
+  }, []);
+
   // インスペクタから動き方を変えたとき(issue #558)。`move` が `null` は
   // 「既定に戻す」(上書きを外す)。キーが決まらないノード(通常は無い)は
   // 何もしない。
@@ -2184,6 +2331,7 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
       onArchiveSession: handleArchiveSession,
       onUnarchiveSession: handleUnarchiveSession,
       onSetNodeMove: handleSetNodeMove,
+      onSelectNode: handleSelectNodeById,
       startMode,
       onStartModeChange: setStartMode,
       startModel,
@@ -2209,6 +2357,7 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
       handleArchiveSession,
       handleUnarchiveSession,
       handleSetNodeMove,
+      handleSelectNodeById,
       startMode,
       startModel,
       startName,
@@ -2351,9 +2500,6 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
   // された要素の祖先から `g.ng-node` を辿ればノードの生データ(`_core` を
   // 含む)が取れる)。`.hub-page` 自体はデータが変わっても作り直されない
   // ため、委任先の要素は安定しており、購読はマウント時の1回だけでよい。
-  const [inspectorCore, setInspectorCore] = useState<HubNodeCore | null>(null);
-  const hubPageRef = useRef<HTMLDivElement>(null);
-
   useEffect(() => {
     const container = hubPageRef.current;
     if (!container) return;
