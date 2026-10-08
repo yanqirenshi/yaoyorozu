@@ -52,7 +52,8 @@ src/types/                 型定義を同梱しない外部パッケージの�
   - データは `{リポジトリ}/yyz/spec/<doc>.json` に**計算を含まない素の値**だけで置く。日付の整形などの計算は Web アプリ側のコード(`src/lib/`)に書く。表示の定義(列・順序などの画面の設定)は仕様データではないので JSON に入れず Web アプリ側に残す。デザイントークンの参照(色など)も同じ理由で**生の値を JSON に焼き込まず**、役割名(トークンのキー)を JSON に持たせて `src/lib/` で解決する(`lib/unchi.ts` の `colorRole` が例)。
   - Route Handler はリポジトリ名を**App の `settings.json`(native.md §7 と同じ `app_data_dir` の読み方)のプロファイル `repository_path` から解決**する。フロントから実パスを受け取らない。ドキュメント名はサーバ側の許可リストで検証する。
   - App の設定が読めない・指定のリポジトリが無い・JSON が無い場合は、黙って空にせず分かるエラーを返す(`src/lib/useSpecDoc.ts` が読み込み中・エラー・成功の3状態を共通化している)。
-  - 移行済み: `/{repo}/wbs`(#544)、`/{repo}/deployment-diagram`・`/{repo}/unchi`(#548)。旧 URL(`/wbs` 等)は当面リダイレクトとして残す。
+  - 移行済み: `/{repo}/wbs`(#544)、`/{repo}/deployment-diagram`・`/{repo}/unchi`(#548)、`/{repo}/sitemap`・`/{repo}/sitemap/sites/{id}`(#588)。旧 URL(`/wbs` 等)は当面リダイレクトとして残す。
+  - 【#588】下位ページを持つ画面は、URL も下位に置く(`/{repo}/sitemap/sites/{id}`)。データがリポジトリの外にあり、ビルド時に id を列挙できないため `generateStaticParams` は使わず、実行時に引いて無ければその旨をページの本文に出す(404 ページにしない。どのリポジトリを見ているかも出す)。
   - 【#587】同じ場所の `{doc}.md`(**判断の記録**。コメントとして書かれていた、なぜそう決めたかの理由)は `GET /api/spec/<repo>/<doc>?format=md` で読む。無いのは正常(記録の少ない図もある)なので、サーバは 404 ではなく **204** を返し、`src/lib/useSpecMarkdown.ts` がこれを「記録なし」として区別する(エラー表示をしない)。描画は `src/components/parts/Markdown.tsx`(`react-markdown` + `remark-gfm`。依存が2つ増える判断の理由は同ファイルの冒頭コメントを参照)。
 
 ## 3. UI 状態

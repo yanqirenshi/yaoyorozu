@@ -1,7 +1,7 @@
 /**
  * 画面のワイヤーフレーム(d3.wireframe で描く)。サイトマップのサイトごとに
  * `<サイトの id>.ts` を置き、下の WIREFRAMES に登録する。サイトの詳細ページ
- * (/sitemap/sites/:id)に描く。
+ * (/{リポジトリ名}/sitemap/sites/{id})に描く。
  *
  * データは画面から取り出す(scripts/wireframe/extract-web.js)。取り出すのは画面の
  * 大きな区切り(ナビゲーション・メイン・メニュー・タブ・図の領域)まで。色や文字の

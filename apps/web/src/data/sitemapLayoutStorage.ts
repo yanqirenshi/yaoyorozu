@@ -6,10 +6,9 @@
 //   - ノードの位置・サイズ(ドラッグ移動・インスペクタでの数値指定。ノード id がキー)
 //   - 結線の端点の角度(結線がノードのどの向きから出入りするか。
 //     `<結線 id>:<from|to>` がキー)
-//   - 視点(パン/ズーム)。表示のための値なので、sitemap.ts へは書き写さない
+//   - 視点(パン/ズーム)。表示のための値なので、仕様データへは書き写さない
 import layoutFile from "./layout/sitemap.json";
 import { saveLayoutToApi, type CameraTransform } from "./layoutSaveApi";
-import { SITEMAP_DATA } from "./sitemap";
 
 // 旧方式(localStorage)からの一時的な移行処理で使うキーとバージョン。
 // 全環境の移行が済んだら READ_LEGACY 関連ごと削除してよい。
@@ -17,7 +16,7 @@ const LEGACY_STORAGE_KEY = "yaoyorozu:sitemap:layout";
 const LEGACY_STORAGE_VERSION = 2;
 
 export type NodeLayout = {
-  // children の位置は「親からの相対座標」。SITEMAP_DATA と同じ座標系で持つ
+  // children の位置は「親からの相対座標」。仕様データと同じ座標系で持つ
   // (d3.sitemap の fitting() が描画時に親の絶対座標を加算するため)。
   position: { x: number; y: number };
   // サイズはインスペクタで指定したときだけ持つ。ドラッグでは変わらないうえ、
@@ -53,22 +52,36 @@ export function portOverrideKey(edgeId: number, end: PortEnd): string {
   return `${edgeId}:${end}`;
 }
 
-// 今の sitemap.ts に存在する結線の端点だけを角度の保存キーとして認める。
+/**
+ * 仕様データに存在する結線の端点の保存キー。#588 でサイトマップのデータが
+ * 実行時読み込み(`yyz/spec/sitemap.json`)になったため、モジュールの先頭では
+ * 作れない。読み込んだ画面がこれで作って渡す。
+ */
+export function portKeysOf(edges: { id: number }[]): Set<string> {
+  return new Set(
+    edges.flatMap((edge) => [
+      portOverrideKey(edge.id, "from"),
+      portOverrideKey(edge.id, "to"),
+    ]),
+  );
+}
+
+// 存在する結線の端点だけを角度の保存キーとして認める。
 // 開いたままのページは読み込んだ時点の角度を丸ごと持ち、保存のたびにファイル
 // 全体として書き戻すため、読み込み時だけでなく書き込み時(buildLayoutFile)にも
 // 落とす(TM の buildLayoutFile と同じ理由)。実際、開発中の差し込み更新で
 // 新旧のコードが混ざったページが視点 {x, y, k} を ports に書いたことがある。
-const KNOWN_PORT_KEYS = new Set(
-  SITEMAP_DATA.edges.flatMap((edge) => [
-    portOverrideKey(edge.id, "from"),
-    portOverrideKey(edge.id, "to"),
-  ]),
-);
-
-function pickKnownPorts(ports: PortOverrides): PortOverrides {
+//
+// キーの一覧が渡されないときは、値の形(数であること)だけを見る。知らない結線を
+// 落とせないが、渡し忘れで保存済みの角度を全部消すより安全なため、こちらに倒す。
+function pickKnownPorts(
+  ports: PortOverrides,
+  knownPortKeys?: Set<string>,
+): PortOverrides {
   return Object.fromEntries(
     Object.entries(ports).filter(
-      ([key, angle]) => KNOWN_PORT_KEYS.has(key) && Number.isFinite(angle),
+      ([key, angle]) =>
+        Number.isFinite(angle) && (knownPortKeys?.has(key) ?? true),
     ),
   );
 }
@@ -111,8 +124,8 @@ export function loadLayoutOverrides(): LayoutOverrides {
 }
 
 /** 保存済みの角度。存在しない結線の端点や数でない値の項目は使わない。 */
-export function loadPortOverrides(): PortOverrides {
-  return pickKnownPorts(fileLayout.ports ?? {});
+export function loadPortOverrides(knownPortKeys?: Set<string>): PortOverrides {
+  return pickKnownPorts(fileLayout.ports ?? {}, knownPortKeys);
 }
 
 /**
@@ -129,14 +142,15 @@ export function loadCameraTransform(): CameraTransform | null {
 /**
  * 保存APIへ渡す1つのオブジェクトにまとめる。サーバはファイルを丸ごと置き換えるので、
  * どの手調整を保存するときも、保存済みのほかの値(角度・視点を含む)を一緒に渡すこと。
- * 今の sitemap.ts に存在しない結線の端点の角度はここで落とす。
+ * 仕様データに存在しない結線の端点の角度はここで落とす(`portKeysOf` を渡したとき)。
  */
 export function buildLayoutFile(
   nodes: LayoutOverrides,
   ports: PortOverrides,
   camera?: CameraTransform,
+  knownPortKeys?: Set<string>,
 ): SitemapLayoutFile {
-  const knownPorts = pickKnownPorts(ports);
+  const knownPorts = pickKnownPorts(ports, knownPortKeys);
   return camera
     ? { nodes, ports: knownPorts, camera }
     : { nodes, ports: knownPorts };
@@ -191,7 +205,7 @@ type EdgeLike = {
 /**
  * 保存済みの角度を反映した結線の配列を返す。d3.sitemap は端点の角度を
  * 入力データ(`edge.from.position` / `edge.to.position`)からそのまま読むため、
- * 角度を変えた結線だけ新しいオブジェクトにして SITEMAP_DATA を汚さない。
+ * 角度を変えた結線だけ新しいオブジェクトにして、読み込んだ仕様データを汚さない。
  */
 export function applyPortOverrides<T extends EdgeLike>(
   edges: T[],
@@ -208,27 +222,4 @@ export function applyPortOverrides<T extends EdgeLike>(
       to: { ...edge.to, position: to ?? edge.to.position },
     };
   });
-}
-
-/**
- * ノードIDから親ノードIDを引くマップを作る。
- *
- * 描画データ(`<g class="node">` の `__data__`)の位置は children も絶対座標に
- * なっているため、保存時に親の絶対座標を引いて相対座標へ戻すのに使う。
- * ルートノードはマップに含めない(相対化の必要がない)。
- */
-export function buildParentIdMap<T extends SitemapNode>(
-  nodes: T[],
-): Map<number, number> {
-  const map = new Map<number, number>();
-  const walk = (children: SitemapNode[], parentId: number) => {
-    for (const child of children) {
-      map.set(child.id, parentId);
-      if (child.children) walk(child.children, child.id);
-    }
-  };
-  for (const node of nodes) {
-    if (node.children) walk(node.children, node.id);
-  }
-  return map;
 }

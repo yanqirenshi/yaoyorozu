@@ -1,0 +1,446 @@
+{
+  "nodes": [
+    {
+      "id": 1,
+      "label": "YAOYOROZU",
+      "description": "AIを利用したITプロダクト開発をサポートするアプリ。ネイティブアプリとWebアプリの2つからなり、両者の役割・機能は分けている。",
+      "wbsIds": [
+        13
+      ],
+      "position": {
+        "x": 2965,
+        "y": 0
+      }
+    },
+    {
+      "id": 2,
+      "label": "ネイティブアプリ",
+      "description": "Claude Code などのAIコーディングエージェントをラップし、GitHub を使ったタスク管理を行うデスクトップアプリ(Tauri)。1ウィンドウで1つのプロファイルを扱い、複数のプロファイルは別ウィンドウで開く。",
+      "wbsIds": [
+        11
+      ],
+      "position": {
+        "x": 1590,
+        "y": 260
+      }
+    },
+    {
+      "id": 3,
+      "label": "Webアプリ",
+      "browsable": true,
+      "description": "プロダクトの情報(仕様・WBS・各種図)を管理するドキュメンテーションツール(Next.js)。AIと人のコミュニケーションに使い、情報を断片化させないための場。",
+      "wbsIds": [
+        12
+      ],
+      "position": {
+        "x": 4340,
+        "y": 260
+      }
+    },
+    {
+      "id": 4,
+      "label": "ハブ",
+      "path": "/",
+      "description": "起点の画面(ハブ)。このPCのプロファイルとセッションを、PC → プロファイル → 作業ディレクトリ → ブランチ → セッションの階層のグラフで一覧する。プロファイル以下のノードを押すと、そのプロファイルのビューアのウィンドウを開く(開いていれば前面に出す)。ノードを右クリックすると詳細をインスペクタに表示する。",
+      "position": {
+        "x": 0,
+        "y": 520
+      }
+    },
+    {
+      "id": 5,
+      "label": "ビューア",
+      "path": "/profiles/:id?",
+      "description": "1つのプロファイルの作業画面(ビューア)。左ペインに対象フォルダのセッションの一覧、右ペインに会話・GitHub プロジェクト・Claude Code の設定ファイルをタブで切り替えて表示する。表示するプロファイルはパスの id で決まる(省略時はアクティブなプロファイル)。",
+      "position": {
+        "x": 320,
+        "y": 520
+      },
+      "children": [
+        {
+          "id": 8,
+          "label": "会話",
+          "description": "選択中のセッションの会話を表示し、AIにメッセージを送る。",
+          "position": {
+            "x": 30,
+            "y": 70
+          }
+        },
+        {
+          "id": 9,
+          "label": "GitHub Project",
+          "description": "プロファイルに設定した GitHub プロジェクトをかんばんで表示する。カードをドラッグしてステータスを変える。",
+          "position": {
+            "x": 250,
+            "y": 70
+          }
+        },
+        {
+          "id": 10,
+          "label": "CLAUDE.md",
+          "description": "選択中のフォルダ(プロジェクト)の CLAUDE.md を表示・編集する。",
+          "position": {
+            "x": 470,
+            "y": 70
+          }
+        },
+        {
+          "id": 11,
+          "label": "Rules",
+          "description": "`.claude/rules/*.md` を一覧・表示する(編集はしない)。",
+          "position": {
+            "x": 690,
+            "y": 70
+          }
+        },
+        {
+          "id": 12,
+          "label": "Skills",
+          "description": "`.claude/skills/<名前>/SKILL.md` を一覧・表示する(編集はしない)。",
+          "position": {
+            "x": 910,
+            "y": 70
+          }
+        },
+        {
+          "id": 13,
+          "label": "settings.json",
+          "description": "`.claude/settings.json` を JSON として表示・編集する。",
+          "position": {
+            "x": 1130,
+            "y": 70
+          }
+        },
+        {
+          "id": 14,
+          "label": "settings.local.json",
+          "description": "`.claude/settings.local.json` を JSON として表示・編集する。",
+          "position": {
+            "x": 1350,
+            "y": 70
+          }
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "label": "設定",
+      "path": "/settings",
+      "description": "プロファイルとその設定を管理する画面(設定)。左ペインでプロファイルを追加・名前変更・削除し、別ウィンドウで開ける。右側のタブで、アクティブなプロファイルの対象リポジトリ・GitHub・Claude・CLAUDE.md を設定する。",
+      "position": {
+        "x": 1970,
+        "y": 520
+      },
+      "children": [
+        {
+          "id": 15,
+          "label": "対象リポジトリ",
+          "description": "プロファイルの対象リポジトリを設定する。実際の画面では、タブの見出しにプロファイル名が出る。",
+          "position": {
+            "x": 30,
+            "y": 70
+          }
+        },
+        {
+          "id": 16,
+          "label": "GitHub",
+          "description": "GitHub の認証と、かんばんに使う GitHub プロジェクト(オーナー・番号)を設定する。",
+          "position": {
+            "x": 250,
+            "y": 70
+          }
+        },
+        {
+          "id": 17,
+          "label": "Claude",
+          "description": "セッションのルートディレクトリと、ビューアに一覧を出す対象フォルダを設定する。",
+          "position": {
+            "x": 470,
+            "y": 70
+          }
+        },
+        {
+          "id": 18,
+          "label": "CLAUDE.md",
+          "description": "対象リポジトリの CLAUDE.md を表示・編集する(先にリポジトリの選択が必要)。",
+          "position": {
+            "x": 690,
+            "y": 70
+          }
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "label": "Claude",
+      "path": "/claude",
+      "description": "`~/.claude` の内容を管理する画面。今は settings.json の表示・編集だけを行う。",
+      "position": {
+        "x": 2960,
+        "y": 520
+      }
+    },
+    {
+      "id": 19,
+      "label": "WBS",
+      "path": "/yaoyorozu/wbs",
+      "description": "プロダクトの WBS(作業分解構成)を表で一覧する。",
+      "wbsIds": [
+        21
+      ],
+      "position": {
+        "x": 3380,
+        "y": 520
+      }
+    },
+    {
+      "id": 20,
+      "label": "構成図",
+      "path": "/yaoyorozu/deployment-diagram",
+      "description": "システムの構成図を表示する。「WBS」タブにはシステム構成の WBS を出す。",
+      "wbsIds": [
+        22,
+        10
+      ],
+      "position": {
+        "x": 3700,
+        "y": 520
+      }
+    },
+    {
+      "id": 21,
+      "label": "UI",
+      "path": "/ui",
+      "description": "UI のデザインシステムを定義・公開する。基本デザイン(カラー・タイポグラフィ・余白など)、デザインシステム(デザイントークン・用語集)、コンポーネント(レイアウト・パーツ)を左のメニューで切り替える。",
+      "wbsIds": [
+        23,
+        50,
+        60
+      ],
+      "position": {
+        "x": 4020,
+        "y": 520
+      }
+    },
+    {
+      "id": 22,
+      "label": "サイトマップ",
+      "path": "/yaoyorozu/sitemap",
+      "description": "アプリの画面構成(ページ・タブと、そのつながり)を図で表示する。ノードの配置・結線の角度・視点は保存される。ノードを右クリックすると、位置・サイズ・結線の角度を調整するインスペクタを開く。",
+      "wbsIds": [
+        24
+      ],
+      "position": {
+        "x": 4340,
+        "y": 520
+      }
+    },
+    {
+      "id": 23,
+      "label": "Classes",
+      "path": "/class-diagram",
+      "description": "ドメインモデルのオブジェクトモデルをクラス図で表示する。「クラス図の書き方」タブに記法をまとめている。",
+      "wbsIds": [
+        25,
+        30
+      ],
+      "position": {
+        "x": 4660,
+        "y": 520
+      }
+    },
+    {
+      "id": 24,
+      "label": "TM",
+      "path": "/tm",
+      "description": "ドメインモデルのデータモデルを TM(T字形ER)で表示する。",
+      "wbsIds": [
+        26,
+        40
+      ],
+      "position": {
+        "x": 4980,
+        "y": 520
+      }
+    },
+    {
+      "id": 25,
+      "label": "ポンチ絵",
+      "path": "/yaoyorozu/unchi",
+      "description": "アーキテクチャ図(ポンチ絵)を d3.unchi で表示する。ネイティブアプリ・Webアプリと、AIコーディングエージェント・GitHub との関係を描く。",
+      "position": {
+        "x": 5300,
+        "y": 520
+      }
+    },
+    {
+      "id": 50,
+      "label": "サイトの詳細",
+      "path": "/yaoyorozu/sitemap/sites/:id",
+      "description": "サイトマップの1サイト(ノード)の詳細を表示する。画面の説明・関連する WBS と、図の上での位置づけ(上位・下位・親ページ・タブ)を並べる。サイトマップのインスペクタの「詳細」から開く。",
+      "wbsIds": [
+        24
+      ],
+      "position": {
+        "x": -1617,
+        "y": 437
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": 100,
+      "from": {
+        "id": 1,
+        "angle": 0
+      },
+      "to": {
+        "id": 2,
+        "angle": 180
+      }
+    },
+    {
+      "id": 101,
+      "from": {
+        "id": 1,
+        "angle": 0
+      },
+      "to": {
+        "id": 3,
+        "angle": 180
+      }
+    },
+    {
+      "id": 102,
+      "from": {
+        "id": 2,
+        "angle": 0
+      },
+      "to": {
+        "id": 4,
+        "angle": 180
+      }
+    },
+    {
+      "id": 103,
+      "from": {
+        "id": 2,
+        "angle": 0
+      },
+      "to": {
+        "id": 5,
+        "angle": 180
+      }
+    },
+    {
+      "id": 104,
+      "from": {
+        "id": 2,
+        "angle": 0
+      },
+      "to": {
+        "id": 6,
+        "angle": 180
+      }
+    },
+    {
+      "id": 105,
+      "from": {
+        "id": 2,
+        "angle": 0
+      },
+      "to": {
+        "id": 7,
+        "angle": 180
+      }
+    },
+    {
+      "id": 130,
+      "from": {
+        "id": 3,
+        "angle": 0
+      },
+      "to": {
+        "id": 19,
+        "angle": 180
+      }
+    },
+    {
+      "id": 131,
+      "from": {
+        "id": 3,
+        "angle": 0
+      },
+      "to": {
+        "id": 20,
+        "angle": 180
+      }
+    },
+    {
+      "id": 132,
+      "from": {
+        "id": 3,
+        "angle": 0
+      },
+      "to": {
+        "id": 21,
+        "angle": 180
+      }
+    },
+    {
+      "id": 133,
+      "from": {
+        "id": 3,
+        "angle": 0
+      },
+      "to": {
+        "id": 22,
+        "angle": 180
+      }
+    },
+    {
+      "id": 134,
+      "from": {
+        "id": 3,
+        "angle": 0
+      },
+      "to": {
+        "id": 23,
+        "angle": 180
+      }
+    },
+    {
+      "id": 135,
+      "from": {
+        "id": 3,
+        "angle": 0
+      },
+      "to": {
+        "id": 24,
+        "angle": 180
+      }
+    },
+    {
+      "id": 136,
+      "from": {
+        "id": 3,
+        "angle": 0
+      },
+      "to": {
+        "id": 25,
+        "angle": 180
+      }
+    },
+    {
+      "id": 150,
+      "from": {
+        "id": 22,
+        "angle": 90
+      },
+      "to": {
+        "id": 50,
+        "angle": 270
+      }
+    }
+  ]
+}
