@@ -9,7 +9,7 @@
  * 色は `COLOR_PALETTE`(`uiDesign.ts`)のトーンスケールを、生成された `tokens.css` の
  * カスタムプロパティ経由で参照する(hex は直書きしない)。
  */
-import type { ArchitectureLayer } from "./classDiagram";
+import type { ArchitectureLayer } from "./classesSpec";
 
 export type ArchitectureLayerDef = {
   key: ArchitectureLayer;

@@ -349,7 +349,8 @@ function measureSitemap(): MeasureResult {
 
 const DIAGRAMS: Record<DiagramName, DiagramSpec> = {
   "class-diagram": {
-    path: "/class-diagram",
+    // #589 で /{リポジトリ名}/class-diagram へ移した。
+    path: "/yaoyorozu/class-diagram",
     readySelector: "g.class-box",
     measure: measureClassDiagram,
     countKey: "boxCount",

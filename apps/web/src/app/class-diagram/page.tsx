@@ -1,16 +1,7 @@
-import DiagramPage from "../DiagramPage";
-import ClassesTab from "../tabs/ClassesTab";
-import ClassGuideTab from "../tabs/classes/ClassGuideTab";
+import { redirect } from "next/navigation";
 
+// #589: /class-diagram は /{リポジトリ名}/class-diagram(いまは yaoyorozu 固定)へ移した。
+// #544 の /wbs・#548 の /unchi・#588 の /sitemap と同じ扱い(navigation.ts を参照)。
 export default function ClassDiagramPage() {
-  return (
-    <DiagramPage
-      wbsStartId={25}
-      extraTabs={[
-        { key: "guide", label: "クラス図の書き方", content: <ClassGuideTab /> },
-      ]}
-    >
-      <ClassesTab />
-    </DiagramPage>
-  );
+  redirect("/yaoyorozu/class-diagram");
 }
