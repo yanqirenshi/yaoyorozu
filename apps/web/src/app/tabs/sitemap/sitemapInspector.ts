@@ -3,11 +3,7 @@ import type {
   ColonoscopeTab,
   ColonoscopeValues,
 } from "@yanqirenshi/colonoscope";
-import {
-  SITEMAP_DATA,
-  findSitemapSite,
-  parentPaddingOf,
-} from "@/data/sitemap";
+import type { SitemapModel } from "@/lib/sitemap";
 import {
   portOverrideKey,
   type PortOverrides,
@@ -16,13 +12,13 @@ import {
 /**
  * サイトマップのインスペクタ(Colonoscope)に渡す対象。
  *
- * ノードをクリックしたときに1回だけ作り、state に持つこと。Colonoscope は対象の
+ * ノードを右クリックしたときに1回だけ作り、state に持つこと。Colonoscope は対象の
  * オブジェクトが替わると入力欄を作り直すため、描画のたびに作ると入力途中の値が消える。
  */
 export type SitemapInspectorTarget = {
   id: number;
   label: { contents: string };
-  /** children は親からの相対座標(SITEMAP_DATA と同じ座標系)。 */
+  /** children は親からの相対座標(仕様データ・保存値と同じ座標系)。 */
   position: { x: number; y: number };
   size: { w: number; h: number };
   /**
@@ -33,7 +29,7 @@ export type SitemapInspectorTarget = {
   /** 角度の目安。Colonoscope の readonly 項目は対象から値を読むため、ここに置く。 */
   angleGuide: string;
   /**
-   * 画面のパス(sitemap.ts の SITE_DETAILS)。固有のパスを持たないアプリ・タブは空。
+   * 画面のパス(仕様データの path)。固有のパスを持たないアプリ・タブは空。
    * 角度の目安と同じく、readonly 項目に見せるため対象に持たせる。
    */
   sitePath: string;
@@ -58,44 +54,31 @@ const BASIC_FIELDS: ColonoscopeField[] = [
   { path: "size.h", label: "高さ", type: "number" },
 ];
 
-type SitemapNodeTree = {
-  id: number;
-  label: { contents: string };
-  children: SitemapNodeTree[];
-};
-
-// 結線の相手を名前で見せるため、children を含む全ノードの表示名を引けるようにする。
-const NODE_LABEL_BY_ID = new Map<number, string>();
-(function collect(nodes: SitemapNodeTree[]) {
-  for (const node of nodes) {
-    NODE_LABEL_BY_ID.set(node.id, node.label.contents);
-    collect(node.children);
-  }
-})(SITEMAP_DATA.nodes);
-
 type PortEntry = {
   /** 保存キー(`<結線 id>:<from|to>`)。 */
   key: string;
   /** 項目名。`→ 相手`(このノードが起点)/ `← 相手`(このノードが終点)。 */
   label: string;
-  /** sitemap.ts に書かれた角度。 */
+  /** 仕様データに書かれた角度。 */
   base: number;
 };
 
-function portEntries(nodeId: number): PortEntry[] {
+/** 結線の相手は名前で見せる(入れ子のタブも含め、全ノードの名前を引ける)。 */
+function portEntries(nodeId: number, model: SitemapModel): PortEntry[] {
+  const nameOf = (id: number) => model.siteById.get(id)?.label ?? String(id);
   const entries: PortEntry[] = [];
-  for (const edge of SITEMAP_DATA.edges) {
+  for (const edge of model.edges) {
     if (edge.from.id === nodeId) {
       entries.push({
         key: portOverrideKey(edge.id, "from"),
-        label: `→ ${NODE_LABEL_BY_ID.get(edge.to.id) ?? edge.to.id}`,
+        label: `→ ${nameOf(edge.to.id)}`,
         base: edge.from.position,
       });
     }
     if (edge.to.id === nodeId) {
       entries.push({
         key: portOverrideKey(edge.id, "to"),
-        label: `← ${NODE_LABEL_BY_ID.get(edge.from.id) ?? edge.from.id}`,
+        label: `← ${nameOf(edge.from.id)}`,
         base: edge.to.position,
       });
     }
@@ -106,24 +89,26 @@ function portEntries(nodeId: number): PortEntry[] {
 export function buildInspectorTarget(
   core: NodeCore,
   portOverrides: PortOverrides,
+  model: SitemapModel,
 ): SitemapInspectorTarget {
   // core は描画用に整えた値(renderNodes.ts の toRenderNodes)。名前には別タブの
   // 印(↗)が付き、children の位置は親の余白の内側が起点になっているため、名前は
   // サイトの情報から引き、位置は保存値と同じ「親の左上」起点へ戻して見せる。
-  const padding = parentPaddingOf(core.id);
+  const site = model.siteById.get(core.id);
+  const padding = model.paddingByChildId.get(core.id) ?? 0;
   return {
     id: core.id,
-    label: { contents: findSitemapSite(core.id)?.label ?? core.label.contents },
+    label: { contents: site?.label ?? core.label.contents },
     position: { x: core.position.x + padding, y: core.position.y + padding },
     size: { ...core.size },
     ports: Object.fromEntries(
-      portEntries(core.id).map((entry) => [
+      portEntries(core.id, model).map((entry) => [
         entry.key,
         portOverrides[entry.key] ?? entry.base,
       ]),
     ),
     angleGuide: ANGLE_GUIDE,
-    sitePath: findSitemapSite(core.id)?.path ?? "",
+    sitePath: site?.path ?? "",
   };
 }
 
@@ -142,8 +127,9 @@ const PATH_FIELD: ColonoscopeField = {
  */
 export function buildInspectorTabs(
   nodeId: number,
+  model: SitemapModel,
 ): ColonoscopeTab<SitemapInspectorTarget>[] {
-  const hasPath = Boolean(findSitemapSite(nodeId)?.path);
+  const hasPath = Boolean(model.siteById.get(nodeId)?.path);
   const tabs: ColonoscopeTab<SitemapInspectorTarget>[] = [
     {
       key: "basic",
@@ -152,7 +138,7 @@ export function buildInspectorTabs(
     },
   ];
 
-  const entries = portEntries(nodeId);
+  const entries = portEntries(nodeId, model);
   if (entries.length > 0) {
     tabs.push({
       key: "ports",
