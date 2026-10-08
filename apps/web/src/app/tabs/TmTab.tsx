@@ -45,31 +45,31 @@ type Position = { x: number; y: number };
 const INSPECTOR_WIDTH = { initial: 444, min: 222, max: 888 } as const;
 
 // --- 視点(パン/ズーム)の保存 ---
-// d3.svg の zoom は g.layer の transform 属性を書き換えるだけで、変更を知らせる
-// コールバックが配線されていない(D3Svg.zoomed は _callbacks.zoom を呼ばない)。
-// そのため transform 属性の変化を MutationObserver で監視して保存する。
-// また svg が作り直されるたび(初回マウント・インスペクタ「適用」での再構築)に
-// ライブラリが transform を初期値へ戻すため、「直近に svg 上のユーザー入力が
-// あったか」でユーザー操作とライブラリ初期化を見分け、後者は保存済みの視点へ戻す。
+// 保存は D3Svg の onZoom(d3.svg 0.4.1)で受け取る。パン・ズームのたびに現在の
+// 変換 {k, x, y} が渡されるため、属性を自前で監視する必要はない。
+// 復元は、描画が済んだところで layer の transform と d3-zoom の現在値を書き戻す。
+// d3.svg には視点を設定する API が無いため、ここだけライブラリの内部に触っている
+// (設定の API を足す要望は Foolsgolds/Assholes#124)。
 // 保存はパン中(svg 上で左ボタンを押している間)には行わず、離したときに書く。
 // 開発時は保存でレイアウトファイルが書き換わるたびに再コンパイルと Fast Refresh が
 // 走り、それが操作の途中にかかると視点移動が途切れるため。
 
-/** この時間内に svg 上の入力があった transform 変化だけをユーザー操作とみなす。 */
-const CAMERA_INPUT_WINDOW_MS = 500;
 /** 視点は連続的に変わるため、落ち着いてから保存する。 */
 const CAMERA_SAVE_DEBOUNCE_MS = 800;
 
-/** d3-zoom が書く "translate(x,y) scale(k)" を読み取る。 */
-function parseLayerTransform(el: Element): CameraTransform | null {
-  const attr = el.getAttribute("transform");
-  if (!attr) return null;
-  const m = attr.match(
-    /translate\(([-\d.eE+]+)[,\s]+([-\d.eE+]+)\)\s*scale\(([-\d.eE+]+)/,
-  );
-  if (!m) return null;
-  return { x: Number(m[1]), y: Number(m[2]), k: Number(m[3]) };
-}
+/**
+ * 視点の通知を受け取るための口。rectum.d3svg() が返す D3Svg が onZoom を持つ。
+ * d3.ter の型定義は利用側が触る代表的なメンバーだけを載せており、この2つは
+ * 含まれていないため、ここで必要な形だけを宣言して使う。
+ */
+type TerZoomHost = {
+  /** 描画先が決まるまで null。決まる前に d3svg() を呼ぶと setting() に入って落ちる。 */
+  d3Element: () => unknown;
+  d3svg: () => {
+    onZoom: (fn: (transform: CameraTransform) => void) => unknown;
+  };
+};
+
 
 function sameCamera(a: CameraTransform, b: CameraTransform): boolean {
   return (
@@ -147,10 +147,8 @@ export default function TmTab() {
   );
   // 視点の保存判定に使う入力の状態。開発時は保存のたびに Fast Refresh がかかり、
   // useEffect が作り直される。effect の中の変数に置くとそのたびに初期値へ戻り、
-  // パン途中の動きをライブラリの初期化と取り違えるため、ref に置いて持ち越す。
+  // パンの途中かどうかを見失うため、ref に置いて持ち越す。
   const cameraInputRef = useRef({
-    /** 最後に svg 上の入力(ホイール・押下・押したままの移動)があった時刻 */
-    lastInputAt: 0,
     /** svg 上で左ボタンを押している間(パン中)は true */
     pointerDown: false,
     /** パン中に保存の時機が来たため、ボタンを離すまで保存を待っている */
@@ -287,7 +285,7 @@ export default function TmTab() {
     };
   }, [save]);
 
-  // 視点(パン/ズーム)の監視と保存・復元。冒頭のコメント(CAMERA_* 定数)を参照。
+  // 視点(パン/ズーム)の保存。冒頭のコメントを参照。
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -315,19 +313,6 @@ export default function TmTab() {
       saveCamera();
     };
 
-    // 「svg 上の入力があったか」の判定材料。ズーム(ホイール)とパン
-    // (svg 上でのドラッグ)だけを数え、インスペクタ等の操作は含めない。
-    const isOnSvg = (event: Event) =>
-      Boolean((event.target as Element).closest?.("svg"));
-    const handleWheel = (event: WheelEvent) => {
-      if (isOnSvg(event)) input.lastInputAt = Date.now();
-    };
-    const handleMouseDown = (event: MouseEvent) => {
-      if (!isOnSvg(event)) return;
-      input.lastInputAt = Date.now();
-      if (event.button === 0) input.pointerDown = true;
-    };
-
     let saveTimer: number | null = null;
     const scheduleSave = () => {
       if (saveTimer !== null) window.clearTimeout(saveTimer);
@@ -337,6 +322,13 @@ export default function TmTab() {
       }, CAMERA_SAVE_DEBOUNCE_MS);
     };
 
+    // パン中かどうかだけを見る。対象は図の上での左ドラッグで、インスペクタ等の
+    // 操作は含めない。
+    const handleMouseDown = (event: MouseEvent) => {
+      if (event.button !== 0) return;
+      if (!(event.target as Element).closest?.("svg")) return;
+      input.pointerDown = true;
+    };
     const handleMouseUp = () => {
       if (!input.pointerDown) return;
       input.pointerDown = false;
@@ -350,19 +342,31 @@ export default function TmTab() {
       if (input.savePending) saveOrDefer();
     };
     const handleMouseMove = (event: MouseEvent) => {
-      if (event.buttons & 1) {
-        // パン中(左ボタン押下でのドラッグ)だけ延長する。
-        if (isOnSvg(event)) input.lastInputAt = Date.now();
-      } else if (input.pointerDown) {
-        // ウィンドウの外で離して mouseup を取り逃がした場合の後始末。
-        handleMouseUp();
-      }
+      // ウィンドウの外で離して mouseup を取り逃がした場合の後始末。
+      if (!(event.buttons & 1) && input.pointerDown) handleMouseUp();
     };
 
-    // 保存済みの視点をライブラリの管理下ごと書き戻す。属性だけ変えると次の
-    // ズーム操作が初期値から始まってしまうため、d3-zoom が svg 要素に持たせて
-    // いる現在値(__zoom)も差し替える。ZoomTransform クラスは export されて
-    // いないので、既存インスタンスの constructor から作り直す。
+    // ライブラリから渡されるのは持ち回しのオブジェクトで、次のズームで書き換わる
+    // ため、値をコピーして持つ。
+    const handleZoom = (transform: CameraTransform) => {
+      const next = { k: transform.k, x: transform.x, y: transform.y };
+      // 復元のために設定した値がそのまま返ってくることがある(settingZoom の
+      // zoom.transform() が zoom イベントを起こす)。同じ値なら保存しない。
+      if (sameCamera(next, cameraRef.current)) return;
+      cameraRef.current = next;
+      scheduleSave();
+    };
+
+    // 保存済みの視点を書き戻す。layer の属性だけを変えると次のズーム操作が初期値
+    // から始まるため、d3-zoom が svg 要素に持たせている現在値(__zoom)も差し替える。
+    // ZoomTransform は export されていないので、既存インスタンスの constructor から
+    // 作り直す。d3.svg に視点を設定する API が入ったら、この一帯は置き換えられる
+    // (要望は Foolsgolds/Assholes#124)。
+    //
+    // Rectum のコンストラクタに transform(ズーム初期値)を渡す手もあるが、採らない。
+    // 縮小された状態で箱の寸法が計算されて幅が変わってしまう(実測で「セッション」が
+    // 381 → 393 に広がり、隣の対応表と重なった)。描画は等倍で行わせ、そのあとで
+    // 視点を当てる。
     const applyCamera = (svg: SVGSVGElement) => {
       const camera = cameraRef.current;
       const holder = svg as unknown as { __zoom?: object };
@@ -382,48 +386,28 @@ export default function TmTab() {
       });
     };
 
-    const observer = new MutationObserver((mutations) => {
-      for (const mutation of mutations) {
-        const target = mutation.target;
-        if (!(target instanceof SVGGElement) || !target.matches("g.layer"))
-          continue;
-
-        const parsed = parseLayerTransform(target);
-        if (!parsed || sameCamera(parsed, cameraRef.current)) continue;
-
-        // ボタンを押している間(パン中)は、押したまま止まっていた時間に
-        // 関係なくユーザー操作とみなす。d3-zoom は window の capture で動きを
-        // 受けるため、ここへの通知は lastInputAt の更新より先に届くことがある。
-        const byUser =
-          input.pointerDown ||
-          Date.now() - input.lastInputAt < CAMERA_INPUT_WINDOW_MS;
-        if (byUser) {
-          cameraRef.current = parsed;
-          scheduleSave();
-        } else if (target.ownerSVGElement) {
-          // ライブラリによる初期化(svg 作り直し等)。保存済みの視点へ戻す。
-          // この書き戻しも mutation を起こすが、次回は parsed が一致して
-          // 素通りするためループしない。
-          applyCamera(target.ownerSVGElement);
-        }
-        // 複数レイヤは同時に同じ値へ動くので、1バッチにつき先頭だけ見ればよい。
-        break;
+    // onZoom の登録先(D3Svg)へは rectum.d3svg() で届くが、描画先が決まる前に
+    // 呼ぶと落ちる。描画先を設定するのは D3Ter(子)の effect で、親である
+    // ここより後に走るため、svg が出来るまで待ってから登録し、視点を当てる。
+    let raf = 0;
+    const host = rectum as unknown as TerZoomHost;
+    const register = () => {
+      const svg = container.querySelector("svg");
+      if (!svg || !host.d3Element()) {
+        raf = window.requestAnimationFrame(register);
+        return;
       }
-    });
-    observer.observe(container, {
-      subtree: true,
-      attributes: true,
-      attributeFilter: ["transform"],
-    });
+      host.d3svg().onZoom(handleZoom);
+      applyCamera(svg as SVGSVGElement);
+    };
+    register();
 
-    container.addEventListener("wheel", handleWheel, { capture: true });
     container.addEventListener("mousedown", handleMouseDown, { capture: true });
     container.addEventListener("mousemove", handleMouseMove, { capture: true });
     // 図の外で離すこともあるので window で拾う。
     window.addEventListener("mouseup", handleMouseUp, { capture: true });
     return () => {
-      observer.disconnect();
-      container.removeEventListener("wheel", handleWheel, { capture: true });
+      window.cancelAnimationFrame(raf);
       container.removeEventListener("mousedown", handleMouseDown, {
         capture: true,
       });
@@ -439,8 +423,7 @@ export default function TmTab() {
         saveOrDefer();
       }
     };
-  }, [save]);
-
+  }, [save, rectum]);
   // インスペクタ幅の伸縮。ハンドルを掴んでいるあいだ window で追う。
   useEffect(() => {
     if (!resizing) return;
