@@ -120,6 +120,20 @@ function sessionNodeCircleStyle(running: RunningSessionSummaryDto | null) {
   }
 }
 
+// サブエージェントのノードの枠(issue #570)。見た目の考え方はセッションと同じ
+// (#491 の金茶=動いている)。サブエージェントは「実行中かどうか」の2値しか
+// 持たない(権限待ちのような中間状態は無い)ため分岐は無く、半径が小さい
+// (`SUBAGENT_NODE_RADIUS`)ぶん枠も細くして(セッションの`RUNNING_STROKE_WIDTH`=3 に
+// 対して2)小さい円に対して太すぎないようにした。
+const SUBAGENT_RUNNING_STROKE_WIDTH = 2;
+function subagentNodeCircleStyle(isRunning: boolean) {
+  if (!isRunning) return INVISIBLE_NODE_CIRCLE;
+  return {
+    fill: "transparent",
+    stroke: { color: COLOR_KINCHA_500, width: SUBAGENT_RUNNING_STROKE_WIDTH },
+  };
+}
+
 // Pc/User/プロファイル/GitRepository/GitBranch ノードの配置(ハブ再構築
 // 第2〜4段。issue #224・#229・#283)。左から Pc 列・User 列・プロファイル列・
 // リポジトリ列・ブランチ列を縦に並べ、セッションのグリッドはその右側から
@@ -319,6 +333,10 @@ type HubNodeCore = {
   subagentLineCount?: number;
   subagentParentSessionId?: string;
   subagentParentSessionTitle?: string;
+  // 親セッションの進行中のツール呼び出し(`running_tool_use_ids`)に、この
+  // サブエージェントの `tool_use_id` があるか(issue #570)。`tool_use_id` が
+  // 無い(古い `.meta.json`)サブエージェントは常に `false`。
+  subagentRunning?: boolean;
   // セッション→ブランチの対応付けに使った表示補助データ(issue #224)。
   // `domain::Session`の属性ではない(`SessionDto.cwd`/`git_branch`参照)。
   cwd?: string | null;
@@ -1015,6 +1033,13 @@ function buildGraphData(
         position.x + Math.cos(angle) * 40,
         position.y + Math.sin(angle) * 40,
       );
+      // いま動いているサブエージェントか(issue #570)。親セッションの進行中のツール
+      // 呼び出し(`running_tool_use_ids`)に、この `.meta.json` の `tool_use_id` が
+      // あれば実行中。`tool_use_id` が無い(古い `.meta.json`)ものは判定しようが
+      // 無いので常に実行中にしない。
+      const isRunning = Boolean(
+        file.tool_use_id && running?.running_tool_use_ids.includes(file.tool_use_id),
+      );
       nodes.push({
         id: subNodeId,
         x: subagentPosition.x,
@@ -1027,7 +1052,7 @@ function buildGraphData(
           font: { size: SUBAGENT_LABEL_FONT_SIZE },
           y: labelYBelowCircle(SUBAGENT_NODE_RADIUS),
         },
-        circle: { r: SUBAGENT_NODE_RADIUS, ...INVISIBLE_NODE_CIRCLE },
+        circle: { r: SUBAGENT_NODE_RADIUS, ...subagentNodeCircleStyle(isRunning) },
         icon: { url: HUB_NODE_ICON_URIS.session },
         kind: "subagent",
         positionKey: subNodeId,
@@ -1039,6 +1064,7 @@ function buildGraphData(
         subagentLineCount: file.line_count,
         subagentParentSessionId: session.session_id,
         subagentParentSessionTitle: title,
+        subagentRunning: isRunning,
       });
       // 親(セッション) → 子(サブエージェント)の向き(issue #567)。
       edges.push({
@@ -1756,6 +1782,9 @@ function buildSubagentInspectorContent(
   return {
     title: truncate(title, SESSION_TITLE_MAX_CHARS),
     fields: [
+      // 実行中のときだけ出す(issue #570。「実行中」/表示なし)。終わったもの・
+      // 元から判定しようが無いもの(tool_use_id が無い古い.meta.json)は何も出さない。
+      ...(core.subagentRunning ? [{ label: "状態", value: "実行中" }] : []),
       { label: "種類", value: core.subagentAgentType || "(不明)" },
       { label: "依頼内容", value: core.subagentDescription || "(不明)" },
       {

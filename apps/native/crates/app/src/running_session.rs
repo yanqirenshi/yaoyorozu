@@ -841,11 +841,13 @@ pub fn stop_running_session(
 /// | `TurnStarted` | `TurnStarted`(issue #501。CLI 自身が始めたターンも「実行中」にする) |
 /// | `Configured` | 現在のモデル・権限モードを、報告された値で更新(欠けた項目は変えない) |
 /// | `SwitchApplied` | 切り替えた値を現在のモデル・権限モードに反映 |
-/// | `Progress(TurnFinished)` | `TurnFinished` |
+/// | `Progress(TurnFinished)` | `TurnFinished`(進行中のツール呼び出しも空にする。issue #570) |
+/// | `Progress(ToolStarted)` | 進行中のツール呼び出しに追加(issue #570) |
+/// | `Progress(ToolResultArrived)` | 進行中のツール呼び出しから除去(issue #570) |
 /// | `Progress`(それ以外) | なし(画面へ流すだけ) |
 /// | `PermissionRequested` | 答え待ちに足して `PermissionAsked` |
 /// | `PermissionCancelled` | 答え待ちから外し、無くなったら `PermissionSettled` |
-/// | `Exited` | 答え待ちを捨てて `Exited` |
+/// | `Exited` | 答え待ちと進行中のツール呼び出しを捨てて `Exited` |
 pub fn apply_running_session_event(
     session: &mut RunningSessionByApp,
     event: &RunningSessionEvent,
@@ -866,6 +868,15 @@ pub fn apply_running_session_event(
         },
         RunningSessionEvent::Progress(ProgressEvent::TurnFinished { .. }) => {
             session.apply(ProcessTrigger::TurnFinished, now)
+        }
+        // サブエージェントが実行中かどうかの判定に使う(issue #570)。`Agent` ツールに
+        // 絞らずすべてのツールを対象にする(`RunningSessionByApp.running_tool_use_ids`の
+        // ドキュメントコメント参照)。
+        RunningSessionEvent::Progress(ProgressEvent::ToolStarted { tool_use_id, .. }) => {
+            session.start_tool(tool_use_id.clone())
+        }
+        RunningSessionEvent::Progress(ProgressEvent::ToolResultArrived { tool_use_id, .. }) => {
+            session.finish_tool(tool_use_id)
         }
         RunningSessionEvent::ModelsListed(_) => {}
         RunningSessionEvent::Progress(_) => {}
@@ -2082,6 +2093,56 @@ mod tests {
         assert_eq!(session.current_model.as_deref(), Some("haiku"));
         assert_eq!(session.current_permission_mode.as_deref(), Some("auto"));
         assert_eq!(session.process_state, ProcessState::Idle);
+    }
+
+    // ---- 進行中のツール呼び出し(issue #570。サブエージェントが実行中かどうかの判定に使う) ----
+
+    #[test]
+    fn tool_started_and_tool_result_arrived_track_the_running_tool_use_ids() {
+        let (mut session, _) = started_in(ProcessState::Running);
+
+        apply_running_session_event(
+            &mut session,
+            &RunningSessionEvent::Progress(ProgressEvent::ToolStarted {
+                tool_use_id: "toolu_1".to_string(),
+                tool_name: "Task".to_string(),
+            }),
+            5,
+        );
+        assert_eq!(session.running_tool_use_ids, vec!["toolu_1"]);
+
+        apply_running_session_event(
+            &mut session,
+            &RunningSessionEvent::Progress(ProgressEvent::ToolResultArrived {
+                tool_use_id: "toolu_1".to_string(),
+                is_error: false,
+            }),
+            6,
+        );
+        assert!(session.running_tool_use_ids.is_empty());
+    }
+
+    #[test]
+    fn turn_finished_via_apply_running_session_event_clears_running_tools() {
+        // 結果が来ないまま中断・ターン終了したツール呼び出しが残り続けないこと
+        // (issue #570)。
+        let (mut session, _) = started_in(ProcessState::Running);
+        apply_running_session_event(
+            &mut session,
+            &RunningSessionEvent::Progress(ProgressEvent::ToolStarted {
+                tool_use_id: "toolu_1".to_string(),
+                tool_name: "Task".to_string(),
+            }),
+            5,
+        );
+
+        apply_running_session_event(
+            &mut session,
+            &RunningSessionEvent::Progress(ProgressEvent::TurnFinished { succeeded: false }),
+            7,
+        );
+
+        assert!(session.running_tool_use_ids.is_empty());
     }
 
     #[test]

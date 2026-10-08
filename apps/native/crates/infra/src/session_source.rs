@@ -675,6 +675,10 @@ fn read_subagent_meta(jsonl_path: &Path) -> Option<SubagentMeta> {
         agent_type: Option<String>,
         description: Option<String>,
         spawn_depth: Option<u32>,
+        // issue #570: このサブエージェントを起こした Agent ツール呼び出しの ID。
+        // 進行中のツール呼び出し(RunningSessionByApp.running_tool_use_ids)と
+        // 突き合わせて、実行中かどうかを見分けるのに使う。
+        tool_use_id: Option<String>,
     }
 
     let meta_path = jsonl_path.with_extension("meta.json");
@@ -684,6 +688,7 @@ fn read_subagent_meta(jsonl_path: &Path) -> Option<SubagentMeta> {
         agent_type: meta.agent_type,
         description: meta.description,
         spawn_depth: meta.spawn_depth,
+        tool_use_id: meta.tool_use_id,
     })
 }
 
@@ -1582,11 +1587,18 @@ mod tests {
         fs::write(subagents_dir.join("agent-a.jsonl"), "").unwrap();
         fs::write(
             subagents_dir.join("agent-a.meta.json"),
-            r#"{"agentType":"Explore","description":"設定の読み書きを調べる","spawnDepth":1}"#,
+            r#"{"agentType":"Explore","description":"設定の読み書きを調べる","spawnDepth":1,"toolUseId":"toolu_01ABC"}"#,
         )
         .unwrap();
         // .meta.json を持たないサブエージェント(古いものを想定)。
         fs::write(subagents_dir.join("agent-b.jsonl"), "").unwrap();
+        // issue #570: toolUseId を持たない古い形式の .meta.json。
+        fs::write(subagents_dir.join("agent-c.jsonl"), "").unwrap();
+        fs::write(
+            subagents_dir.join("agent-c.meta.json"),
+            r#"{"agentType":"Explore","description":"古い形式"}"#,
+        )
+        .unwrap();
 
         let repo = FileSystemRepository::new(dir.path().to_path_buf());
         let sessions = repo
@@ -1594,8 +1606,8 @@ mod tests {
             .expect("should list parsed sessions");
 
         assert_eq!(sessions.len(), 1);
-        // .meta.json を会話ファイルとして数えていない(2件のまま。4件になっていない)。
-        assert_eq!(sessions[0].subagent_files.len(), 2);
+        // .meta.json を会話ファイルとして数えていない(3件のまま。6件になっていない)。
+        assert_eq!(sessions[0].subagent_files.len(), 3);
 
         let a = sessions[0]
             .subagent_files
@@ -1606,6 +1618,7 @@ mod tests {
         assert_eq!(meta.agent_type.as_deref(), Some("Explore"));
         assert_eq!(meta.description.as_deref(), Some("設定の読み書きを調べる"));
         assert_eq!(meta.spawn_depth, Some(1));
+        assert_eq!(meta.tool_use_id.as_deref(), Some("toolu_01ABC"));
 
         let b = sessions[0]
             .subagent_files
@@ -1616,6 +1629,48 @@ mod tests {
             b.subagent_meta, None,
             ".meta.json が無ければ None(落とさない)"
         );
+
+        // issue #570: toolUseId を持たない古い形式の .meta.json では、その項目だけ
+        // None になる(他の項目は読める。実行中とは判定しないのはハブ側の責務)。
+        let c = sessions[0]
+            .subagent_files
+            .iter()
+            .find(|f| f.file_path == subagents_dir.join("agent-c.jsonl"))
+            .expect("agent-c should be present");
+        let meta_c = c.subagent_meta.as_ref().expect("agent-c has a .meta.json");
+        assert_eq!(meta_c.agent_type.as_deref(), Some("Explore"));
+        assert_eq!(meta_c.tool_use_id, None);
+    }
+
+    #[test]
+    fn a_running_subagent_with_an_empty_conversation_file_is_still_listed() {
+        // issue #570: 実行中のサブエージェントは会話ファイル(.jsonl)がまだ0行の
+        // ことがある(まだ応答していない)。それでも一覧から落ちない(ノードが
+        // 描けないと「動いているのに出ない」になるため)。.meta.json に toolUseId が
+        // あれば読める。
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        write_session_file(&project_dir, "s1", &project_dir);
+        let subagents_dir = project_dir.join("s1").join("subagents");
+        fs::create_dir_all(&subagents_dir).unwrap();
+        fs::write(subagents_dir.join("agent-a.jsonl"), "").unwrap();
+        fs::write(
+            subagents_dir.join("agent-a.meta.json"),
+            r#"{"agentType":"Explore","description":"調査中","toolUseId":"toolu_running"}"#,
+        )
+        .unwrap();
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let sessions = repo
+            .list_parsed_sessions("proj")
+            .expect("should list parsed sessions");
+
+        assert_eq!(sessions[0].subagent_files.len(), 1);
+        let file = &sessions[0].subagent_files[0];
+        assert!(file.lines.is_empty(), "行は未読み込みのまま(0行)");
+        let meta = file.subagent_meta.as_ref().expect("has a .meta.json");
+        assert_eq!(meta.tool_use_id.as_deref(), Some("toolu_running"));
     }
 
     #[test]
