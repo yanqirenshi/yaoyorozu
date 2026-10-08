@@ -981,15 +981,22 @@ impl From<domain::GitRepository> for GitRepositoryDto {
 /// 実装 第5弾。issue #208)。`lines_loaded`/`line_count`は`LogLine`が
 /// 遅延読み込みであることの可視化用(未読み込みの間は常に`false`/`0`。
 /// issue本文の「行の読み込み状態・行数程度」)。
+/// `modified_at_ms`/`agent_type`/`description`/`spawn_depth`はハブのグラフ
+/// 表示用の表示補助データ(issue #567)。会話ファイルでは常に`null`。
 #[derive(Serialize, Clone)]
 pub struct SessionFileDto {
     pub file_path: String,
     pub lines_loaded: bool,
     pub line_count: usize,
+    pub modified_at_ms: Option<u64>,
+    pub agent_type: Option<String>,
+    pub description: Option<String>,
+    pub spawn_depth: Option<u32>,
 }
 
 impl From<domain::SessionFile> for SessionFileDto {
     fn from(file: domain::SessionFile) -> Self {
+        let meta = file.subagent_meta;
         Self {
             file_path: file.file_path.display().to_string(),
             // `SessionFile`のドキュメントコメントのとおり、空Vecは
@@ -997,6 +1004,10 @@ impl From<domain::SessionFile> for SessionFileDto {
             // 済みで0行ということはありえない)。
             lines_loaded: !file.lines.is_empty(),
             line_count: file.lines.len(),
+            modified_at_ms: file.modified_at_ms,
+            agent_type: meta.as_ref().and_then(|m| m.agent_type.clone()),
+            description: meta.as_ref().and_then(|m| m.description.clone()),
+            spawn_depth: meta.as_ref().and_then(|m| m.spawn_depth),
         }
     }
 }

@@ -105,15 +105,10 @@ fn aggregate_session(session_id: String, group: Vec<ParsedSession>) -> Session {
         conversation_files.push(SessionFile {
             file_path: p.conversation_file_path,
             lines: Vec::new(),
+            modified_at_ms: Some(p.modified_at_ms),
+            subagent_meta: None,
         });
-        subagent_files.extend(
-            p.subagent_file_paths
-                .into_iter()
-                .map(|file_path| SessionFile {
-                    file_path,
-                    lines: Vec::new(),
-                }),
-        );
+        subagent_files.extend(p.subagent_files);
     }
 
     Session {
@@ -152,7 +147,7 @@ mod tests {
             slug: None,
             last_prompt: None,
             conversation_file_path: PathBuf::from(conversation_file),
-            subagent_file_paths: Vec::new(),
+            subagent_files: Vec::new(),
             modified_at_ms,
             cwd: None,
             git_branch: None,
@@ -187,9 +182,9 @@ mod tests {
     fn load_sessions_builds_subagent_files_from_paths() {
         let mut user = empty_user();
         let mut p = parsed("s1", r"C:\proj\s1.jsonl", 100);
-        p.subagent_file_paths = vec![
-            PathBuf::from(r"C:\proj\s1\subagents\agent-a.jsonl"),
-            PathBuf::from(r"C:\proj\s1\subagents\agent-b.jsonl"),
+        p.subagent_files = vec![
+            subagent_file(r"C:\proj\s1\subagents\agent-a.jsonl"),
+            subagent_file(r"C:\proj\s1\subagents\agent-b.jsonl"),
         ];
 
         user.load_sessions(vec![p]);
@@ -210,6 +205,38 @@ mod tests {
             .subagent_files
             .iter()
             .all(|f| f.lines.is_empty()));
+    }
+
+    #[test]
+    fn load_sessions_passes_subagent_meta_and_modified_at_through_unchanged() {
+        // issue #567: `.meta.json`の読み取り(infra側)で組み立てた`SessionFile`を
+        // そのまま運ぶだけで、domain側(aggregate_session)は加工しない。
+        let mut user = empty_user();
+        let mut p = parsed("s1", r"C:\proj\s1.jsonl", 100);
+        p.subagent_files = vec![SessionFile {
+            file_path: PathBuf::from(r"C:\proj\s1\subagents\agent-a.jsonl"),
+            lines: Vec::new(),
+            modified_at_ms: Some(12345),
+            subagent_meta: Some(crate::SubagentMeta {
+                agent_type: Some("Explore".to_string()),
+                description: Some("調べる".to_string()),
+                spawn_depth: Some(1),
+            }),
+        }];
+
+        user.load_sessions(vec![p]);
+
+        let meta = user.sessions[0].subagent_files[0]
+            .subagent_meta
+            .as_ref()
+            .expect("should carry the meta through unchanged");
+        assert_eq!(meta.agent_type.as_deref(), Some("Explore"));
+        assert_eq!(meta.description.as_deref(), Some("調べる"));
+        assert_eq!(meta.spawn_depth, Some(1));
+        assert_eq!(
+            user.sessions[0].subagent_files[0].modified_at_ms,
+            Some(12345)
+        );
     }
 
     #[test]
@@ -276,13 +303,22 @@ mod tests {
         );
     }
 
+    fn subagent_file(path: &str) -> SessionFile {
+        SessionFile {
+            file_path: PathBuf::from(path),
+            lines: Vec::new(),
+            modified_at_ms: None,
+            subagent_meta: None,
+        }
+    }
+
     #[test]
     fn load_sessions_aggregates_subagent_files_from_all_grouped_parsed_sessions() {
         let mut user = empty_user();
         let mut older = parsed("s1", r"C:\proj\s1.jsonl", 100);
-        older.subagent_file_paths = vec![PathBuf::from(r"C:\proj\s1\subagents\agent-a.jsonl")];
+        older.subagent_files = vec![subagent_file(r"C:\proj\s1\subagents\agent-a.jsonl")];
         let mut newer = parsed("s1", r"C:\worktree\s1.jsonl", 200);
-        newer.subagent_file_paths = vec![PathBuf::from(r"C:\worktree\s1\subagents\agent-b.jsonl")];
+        newer.subagent_files = vec![subagent_file(r"C:\worktree\s1\subagents\agent-b.jsonl")];
 
         user.load_sessions(vec![older, newer]);
 

@@ -56,6 +56,7 @@ mod session_summary;
 mod session_title;
 mod settings;
 mod skill_summary;
+mod subagent_meta;
 mod timestamp;
 mod user;
 mod validation;
@@ -128,6 +129,7 @@ pub use session_summary::{sort_sessions_newest_first, SessionSummary};
 pub use session_title::{excerpt, resolve_session_title};
 pub use settings::{effective_projects_dir, Settings, CURRENT_SETTINGS_VERSION};
 pub use skill_summary::SkillSummary;
+pub use subagent_meta::SubagentMeta;
 pub use timestamp::parse_iso_timestamp_to_epoch_ms;
 pub use user::User;
 pub use validation::{

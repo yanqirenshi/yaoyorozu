@@ -1,3 +1,4 @@
+use crate::SessionFile;
 use std::path::PathBuf;
 
 /// `User::load_sessions`(クラス図のメソッド`User.load_sessions`。
@@ -23,6 +24,11 @@ use std::path::PathBuf;
 /// `ParsedSession`はただの運搬型なのでここに載せてよい。走査キャッシュ
 /// (`infra::session_source`)が既に抽出済みの値をそのまま使うため、新たな
 /// ファイル読み直しは発生しない。
+///
+/// `subagent_files`(issue #567)は`.meta.json`の読み取りを含む`SessionFile`を
+/// infra側で組み立てたもの(`lines`は遅延読み込みのため常に空)。パスだけの
+/// 運搬だと純粋な`User::load_sessions`(domain)側で`.meta.json`を読めない
+/// (domainはファイルI/Oを持たない。native.md §1)ため、組み立て済みの型で渡す。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedSession {
     pub session_id: String,
@@ -32,7 +38,7 @@ pub struct ParsedSession {
     pub slug: Option<String>,
     pub last_prompt: Option<String>,
     pub conversation_file_path: PathBuf,
-    pub subagent_file_paths: Vec<PathBuf>,
+    pub subagent_files: Vec<SessionFile>,
     pub modified_at_ms: u64,
     pub cwd: Option<String>,
     pub git_branch: Option<String>,
