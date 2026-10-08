@@ -3,17 +3,24 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import D3Sitemap, { Rectum } from "@yanqirenshi/d3.sitemap";
 import Colonoscope from "@yanqirenshi/colonoscope";
+import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
-import { SITEMAP_DATA } from "@/data/sitemap";
+import LoadingIcon from "@/components/parts/LoadingIcon";
+import { useSpecDoc } from "@/lib/useSpecDoc";
+import {
+  buildSitemapModel,
+  siteHref,
+  type SitemapSpec,
+} from "@/lib/sitemap";
 import {
   applyLayoutOverrides,
   applyPortOverrides,
   buildLayoutFile,
-  buildParentIdMap,
   loadCameraTransform,
   loadLayoutOverrides,
   loadPortOverrides,
   migrateLegacyLayoutIfNeeded,
+  portKeysOf,
   type LayoutOverrides,
   type PortOverrides,
 } from "@/data/sitemapLayoutStorage";
@@ -22,7 +29,7 @@ import {
   LayoutSaveStatusSnackbar,
 } from "./layout/LayoutSaveStatus";
 import { useCameraPersistence } from "./layout/useCameraPersistence";
-import SiteLink, { siteHref } from "./sitemap/SiteLink";
+import SiteLink from "./sitemap/SiteLink";
 import { toRenderNodes } from "./sitemap/renderNodes";
 // 文字の大きさ・太さは基本デザインのテキストスタイルから引く(規約 §4)。
 import { textStyle } from "./UiDesign/tokens";
@@ -33,8 +40,6 @@ import {
   readChangedPorts,
   type SitemapInspectorTarget,
 } from "./sitemap/sitemapInspector";
-
-const PARENT_ID_BY_NODE_ID = buildParentIdMap(SITEMAP_DATA.nodes);
 
 type SitemapNodeCore = {
   id: number;
@@ -61,29 +66,65 @@ function toNumber(value: string, fallback: number) {
   return Number.isNaN(parsed) ? fallback : parsed;
 }
 
-export default function SitemapTab() {
+/**
+ * `/{repo}/sitemap`(#588)。ビルド時の import ではなく、実行時に
+ * `GET /api/spec/{repo}/sitemap` を叩いてデータを取る(#543 の最終段)。
+ *
+ * 図の手調整(位置・結線の角度・視点)は #588 では移さず、これまでどおり
+ * `apps/web/src/data/layout/sitemap.json` に保存する(理由は #587)。
+ */
+export default function RepoSitemapTab({ repo }: { repo: string }) {
+  const state = useSpecDoc<SitemapSpec>(repo, "sitemap");
+
+  if (state.status === "loading") {
+    return (
+      <div className="flex min-h-0 w-full flex-1 items-center gap-2 p-4 text-sm text-zinc-500">
+        <LoadingIcon size="small" label={`${repo} のサイトマップを読み込み中`} />
+        読み込み中…
+      </div>
+    );
+  }
+
+  if (state.status === "error") {
+    return (
+      <div className="p-4">
+        <Alert severity="error">{state.message}</Alert>
+      </div>
+    );
+  }
+
+  // データが揃ってから中身を作る(フックの数を読み込み状態で変えないため、
+  // 描画と手調整は別のコンポーネントに置く)。
+  return <SitemapDiagram repo={repo} spec={state.data} />;
+}
+
+function SitemapDiagram({ repo, spec }: { repo: string; spec: SitemapSpec }) {
+  const model = useMemo(() => buildSitemapModel(spec), [spec]);
+  // 保存済みの角度のうち、いま存在する結線の端点だけを使う(読み書きの両方で)。
+  const portKeys = useMemo(() => portKeysOf(model.edges), [model]);
+
   const [version, setVersion] = useState(0);
-  const [selected, setSelected] = useState<SitemapInspectorTarget | null>(
-    null,
-  );
+  const [selected, setSelected] = useState<SitemapInspectorTarget | null>(null);
   const [overrides, setOverrides] = useState<LayoutOverrides>(() =>
     loadLayoutOverrides(),
   );
   // 結線の端点の角度。ドラッグでは変わらず、インスペクタの「適用」でだけ変わる。
-  const [portOverrides, setPortOverrides] =
-    useState<PortOverrides>(loadPortOverrides);
+  const [portOverrides, setPortOverrides] = useState<PortOverrides>(() =>
+    loadPortOverrides(portKeys),
+  );
   const containerRef = useRef<HTMLDivElement | null>(null);
   const overridesRef = useRef(overrides);
   // ドラッグ・視点の保存と右クリックでのインスペクタ表示は effect の中から
-  // 呼ばれるため、最新の角度を ref でも持つ。
+  // 呼ばれるため、最新の角度・モデルを ref でも持つ。
   const portOverridesRef = useRef(portOverrides);
+  const modelRef = useRef(model);
   const { state: saveState, save, close: closeSaveStatus } =
     useLayoutSaveStatus("sitemap");
-  // 視点(パン/ズーム)。変わるたびに、ノードの手調整・角度と一緒に sitemap.json へ
-  // 保存する。d3.sitemap は d3.svg の zoom を使い、ズーム・パンで g.layer
-  // (background / foreground)の transform を書き換える(TM と同じ)。図の再構築
-  // (初回描画・インスペクタの「適用」)でライブラリが等倍・原点へ戻すと、フックが
-  // 保存済みの視点へ戻す。
+  // 視点(パン/ズーム)。変わるたびに、ノードの手調整・角度と一緒に
+  // layout/sitemap.json へ保存する。d3.sitemap は d3.svg の zoom を使い、
+  // ズーム・パンで g.layer(background / foreground)の transform を書き換える
+  // (TM と同じ)。図の再構築(初回描画・インスペクタの「適用」)でライブラリが
+  // 等倍・原点へ戻すと、フックが保存済みの視点へ戻す。
   // d3.svg には初期視点を渡す口(options.transform)もあるが、
   // zoomIdentity.scale(k).translate(x, y) の順で組み立てるため x・y が k 倍に
   // ずれる。使わずにフックの書き戻しに任せる。
@@ -93,13 +134,22 @@ export default function SitemapTab() {
     initial: loadCameraTransform(),
     onSave: (camera) =>
       save(
-        buildLayoutFile(overridesRef.current, portOverridesRef.current, camera),
+        buildLayoutFile(
+          overridesRef.current,
+          portOverridesRef.current,
+          camera,
+          portKeys,
+        ),
       ),
   });
 
   useEffect(() => {
     overridesRef.current = overrides;
   }, [overrides]);
+
+  useEffect(() => {
+    modelRef.current = model;
+  }, [model]);
 
   // 旧方式(localStorage)からの一時的な自己移行。全環境の移行が済んだら削除してよい。
   useEffect(() => {
@@ -116,7 +166,7 @@ export default function SitemapTab() {
 
     // d3.sitemap の fitting() は描画前に children の position を
     // 「親の絶対座標 + 相対座標」へ書き換えるため、`<g class="node">` の
-    // __data__ が持つ位置は children も絶対座標である。一方 SITEMAP_DATA と
+    // __data__ が持つ位置は children も絶対座標である。一方、仕様データと
     // オーバーライドは children を相対座標で持つ(そのまま絶対座標で保存すると
     // 次回描画時に fitting() が親の座標を二重に加算してずれる)。そこで保存前に
     // 親の絶対座標を引いて相対座標へ戻す。
@@ -125,14 +175,13 @@ export default function SitemapTab() {
     const snapshotPositions = () => {
       const absolute = new Map<number, { x: number; y: number }>();
       container.querySelectorAll<SVGGElement>("g.node").forEach((el) => {
-        const datum = (el as unknown as { __data__?: SitemapDatum })
-          .__data__;
+        const datum = (el as unknown as { __data__?: SitemapDatum }).__data__;
         if (datum) absolute.set(datum._id, { ...datum.position });
       });
 
       const relative = new Map<number, { x: number; y: number }>();
       absolute.forEach((position, id) => {
-        const parentId = PARENT_ID_BY_NODE_ID.get(id);
+        const parentId = modelRef.current.parentIdByChildId.get(id);
         const parent =
           parentId === undefined ? undefined : absolute.get(parentId);
         relative.set(
@@ -179,9 +228,16 @@ export default function SitemapTab() {
       // 視点の保存はこの ref を読むので、再描画を待たずに先に更新しておく。
       overridesRef.current = next;
       setOverrides(next);
-      // 同じ sitemap.json に角度・視点も入るため、保存済みの値を必ず一緒に書く
-      // (ノードの手調整だけを書くとほかが消える)。
-      save(buildLayoutFile(next, portOverridesRef.current, cameraRef.current));
+      // 同じ layout/sitemap.json に角度・視点も入るため、保存済みの値を必ず
+      // 一緒に書く(ノードの手調整だけを書くとほかが消える)。
+      save(
+        buildLayoutFile(
+          next,
+          portOverridesRef.current,
+          cameraRef.current,
+          portKeys,
+        ),
+      );
     };
 
     window.addEventListener("mousedown", handleMouseDown, { capture: true });
@@ -190,11 +246,9 @@ export default function SitemapTab() {
       window.removeEventListener("mousedown", handleMouseDown, {
         capture: true,
       });
-      window.removeEventListener("mouseup", handleMouseUp, {
-        capture: true,
-      });
+      window.removeEventListener("mouseup", handleMouseUp, { capture: true });
     };
-  }, [save, cameraRef]);
+  }, [save, cameraRef, portKeys]);
 
   // 右クリックでインスペクタを開く(TM・ハブと同じ流儀)。d3.sitemap には
   // contextmenu のコールバックが無いため、コンテナへの委譲で拾う。空白部の
@@ -211,7 +265,13 @@ export default function SitemapTab() {
         ? (target as unknown as { __data__?: SitemapDatum }).__data__?._core
         : undefined;
       setSelected(
-        core ? buildInspectorTarget(core, portOverridesRef.current) : null,
+        core
+          ? buildInspectorTarget(
+              core,
+              portOverridesRef.current,
+              modelRef.current,
+            )
+          : null,
       );
     };
 
@@ -233,16 +293,20 @@ export default function SitemapTab() {
     instance.data({
       // 保存値は「親の左上」起点のまま重ね、d3.sitemap へ渡す直前に描画用へ整える
       // (親の余白の分を引く・ノード名とパスのリンク化。renderNodes.ts)。
-      nodes: toRenderNodes(applyLayoutOverrides(SITEMAP_DATA.nodes, overrides)),
-      edges: applyPortOverrides(SITEMAP_DATA.edges, portOverrides),
+      nodes: toRenderNodes(
+        applyLayoutOverrides(model.nodes, overrides),
+        model,
+        repo,
+      ),
+      edges: applyPortOverrides(model.edges, portOverrides),
     });
     return instance;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [overrides, portOverrides, version]);
+  }, [model, repo, overrides, portOverrides, version]);
 
   const inspectorTabs = useMemo(
-    () => (selected ? buildInspectorTabs(selected.id) : []),
-    [selected],
+    () => (selected ? buildInspectorTabs(selected.id, model) : []),
+    [selected, model],
   );
 
   const handleApply = (values: Record<string, string>) => {
@@ -276,8 +340,8 @@ export default function SitemapTab() {
     portOverridesRef.current = nextPorts;
     setOverrides(nextNodes);
     setPortOverrides(nextPorts);
-    // ノードの手調整・角度・視点は同じ sitemap.json に入るので、1回の保存でまとめて書く。
-    save(buildLayoutFile(nextNodes, nextPorts, cameraRef.current));
+    // ノードの手調整・角度・視点は同じファイルに入るので、1回の保存でまとめて書く。
+    save(buildLayoutFile(nextNodes, nextPorts, cameraRef.current, portKeys));
     setSelected(null);
     // rectum を作り直しただけでは再描画されないため、D3Sitemap を貼り替える。
     setVersion((v) => v + 1);
@@ -321,7 +385,7 @@ export default function SitemapTab() {
           }}
         >
           <SiteLink
-            href={siteHref(selected.id)}
+            href={siteHref(repo, selected.id)}
             ariaLabel={`${selected.label.contents} の詳細ページを開く`}
           >
             詳細

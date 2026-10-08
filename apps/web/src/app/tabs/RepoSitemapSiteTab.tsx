@@ -1,11 +1,24 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
+import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
-import { findSitemapSite, type SitemapSite } from "@/data/sitemap";
+import LoadingIcon from "@/components/parts/LoadingIcon";
+import { useSpecDoc } from "@/lib/useSpecDoc";
+import type { WbsSource } from "@/lib/wbs";
+import {
+  buildSitemapModel,
+  isOpenable,
+  resolveWbsNames,
+  siteHref,
+  sitemapHref,
+  type SitemapModel,
+  type SitemapSite,
+  type SitemapSpec,
+} from "@/lib/sitemap";
 // 文字の大きさ・太さは基本デザインのテキストスタイルから引く(規約 §4)。
 import { textStyle } from "./UiDesign/tokens";
-import SiteLink, { siteHref } from "./sitemap/SiteLink";
+import SiteLink from "./sitemap/SiteLink";
 import SiteWireframe from "./sitemap/SiteWireframe";
 import { findWireframe } from "@/data/wireframes";
 
@@ -38,11 +51,6 @@ const RELATIONS: Relation[] = [
     ids: (site) => site.childIds,
   },
 ];
-
-const APP_LABEL: Record<NonNullable<SitemapSite["app"]>, string> = {
-  native: "ネイティブアプリ",
-  web: "Webアプリ",
-};
 
 function Section({
   title,
@@ -92,9 +100,7 @@ const LIST_SX = {
 } as const;
 
 function DescriptionSection({ site }: { site: SitemapSite }) {
-  // Webアプリの画面で、パスに引数(:id 等)を含まないものだけ、その画面を開ける。
-  const openable =
-    site.app === "web" && site.path !== null && !site.path.includes(":");
+  const openable = isOpenable(site);
 
   return (
     <Section title="説明">
@@ -114,7 +120,7 @@ function DescriptionSection({ site }: { site: SitemapSite }) {
           <Box component="span" sx={textStyle("Mono-14N-150")}>
             {site.path}
           </Box>
-          {site.app && (
+          {site.appLabel && (
             <Box
               component="span"
               sx={{
@@ -122,7 +128,7 @@ function DescriptionSection({ site }: { site: SitemapSite }) {
                 color: "var(--text-secondary)",
               }}
             >
-              {APP_LABEL[site.app]}の画面
+              {site.appLabel}の画面
             </Box>
           )}
           {openable && (
@@ -149,18 +155,43 @@ function WireframeSection({ site }: { site: SitemapSite }) {
   );
 }
 
-function WbsSection({ site }: { site: SitemapSite }) {
+/**
+ * 関連する WBS。項目名は WBS の仕様データ(`yyz/spec/wbs.json`)から引くため、
+ * そちらの読み込み状態もここで扱う(サイトマップが読めていればページは出す)。
+ */
+function WbsSection({
+  site,
+  wbs,
+}: {
+  site: SitemapSite;
+  wbs: ReturnType<typeof useSpecDoc<WbsSource>>;
+}) {
+  const items =
+    wbs.status === "ready" ? resolveWbsNames(wbs.data, site.wbsIds) : [];
+
   return (
     <Section
-      title={`関連する WBS(${site.wbs.length})`}
+      title={`関連する WBS(${site.wbsIds.length})`}
       note="この画面・アプリに対応する WBS の項目"
     >
-      {site.wbs.length === 0 ? (
+      {site.wbsIds.length === 0 ? (
         <Empty />
+      ) : wbs.status === "loading" ? (
+        <Box sx={{ ...textStyle("Body-14N-170"), color: "var(--text-secondary)" }}>
+          項目名を読み込み中…
+        </Box>
+      ) : wbs.status === "error" ? (
+        <Alert severity="warning">
+          WBS を読めなかったため、項目名を出せません(ID{" "}
+          {site.wbsIds.join(", ")})。{wbs.message}
+        </Alert>
       ) : (
         <Box component="ul" sx={LIST_SX}>
-          {site.wbs.map((w) => (
-            <li key={w.id} className="flex min-h-6 flex-wrap items-baseline gap-2">
+          {items.map((w) => (
+            <li
+              key={w.id}
+              className="flex min-h-6 flex-wrap items-baseline gap-2"
+            >
               <span>{w.names.join(" > ")}</span>
               <Box
                 component="span"
@@ -182,13 +213,17 @@ function WbsSection({ site }: { site: SitemapSite }) {
 function RelationSection({
   relation,
   site,
+  model,
+  repo,
 }: {
   relation: Relation;
   site: SitemapSite;
+  model: SitemapModel;
+  repo: string;
 }) {
   const related = relation
     .ids(site)
-    .map((id) => findSitemapSite(id))
+    .map((id) => model.siteById.get(id))
     .filter((s): s is SitemapSite => s !== undefined);
 
   return (
@@ -202,7 +237,7 @@ function RelationSection({
         <Box component="ul" sx={LIST_SX}>
           {related.map((s) => (
             <li key={s.id} className="flex min-h-6 items-center">
-              <SiteLink href={siteHref(s.id)}>{s.label}</SiteLink>
+              <SiteLink href={siteHref(repo, s.id)}>{s.label}</SiteLink>
             </li>
           ))}
         </Box>
@@ -211,9 +246,28 @@ function RelationSection({
   );
 }
 
-/** サイトの詳細ページ(/sitemap/sites/:id)。 */
-export default function SitemapSiteTab({ siteId }: { siteId: number }) {
-  const site = findSitemapSite(siteId);
+/**
+ * サイトの詳細ページ(`/{repo}/sitemap/sites/{id}`。#588)。
+ *
+ * データはリポジトリの外(`{リポジトリ}/yyz/spec/sitemap.json`)にあるため、
+ * ビルド時に id を列挙できない。実行時に読んで id を引き、無ければその旨を出す
+ * (以前は generateStaticParams で全 id を静的生成し、未知の id を 404 にしていた)。
+ */
+export default function RepoSitemapSiteTab({
+  repo,
+  siteId,
+}: {
+  repo: string;
+  siteId: number;
+}) {
+  const sitemap = useSpecDoc<SitemapSpec>(repo, "sitemap");
+  const wbs = useSpecDoc<WbsSource>(repo, "wbs");
+  const model = useMemo(
+    () => (sitemap.status === "ready" ? buildSitemapModel(sitemap.data) : null),
+    [sitemap],
+  );
+
+  const site = model?.siteById.get(siteId);
 
   return (
     <Box
@@ -224,10 +278,24 @@ export default function SitemapSiteTab({ siteId }: { siteId: number }) {
       }}
     >
       <Box sx={textStyle("UI-14M-100")}>
-        <SiteLink href="/sitemap">サイトマップに戻る</SiteLink>
+        <SiteLink href={sitemapHref(repo)}>サイトマップに戻る</SiteLink>
       </Box>
 
-      {site ? (
+      {sitemap.status === "loading" ? (
+        <Box className="mt-6 flex items-center gap-2">
+          <LoadingIcon
+            size="small"
+            label={`${repo} のサイトマップを読み込み中`}
+          />
+          <Box sx={{ ...textStyle("Body-14N-170"), color: "var(--text-secondary)" }}>
+            読み込み中…
+          </Box>
+        </Box>
+      ) : sitemap.status === "error" ? (
+        <Box className="mt-6">
+          <Alert severity="error">{sitemap.message}</Alert>
+        </Box>
+      ) : site && model ? (
         <>
           <Box component="h1" sx={{ ...textStyle("Head-24B-150"), mt: "24px" }}>
             {site.label}
@@ -244,18 +312,20 @@ export default function SitemapSiteTab({ siteId }: { siteId: number }) {
 
           <DescriptionSection site={site} />
           <WireframeSection site={site} />
-          <WbsSection site={site} />
+          <WbsSection site={site} wbs={wbs} />
           {RELATIONS.map((relation) => (
             <RelationSection
               key={relation.title}
               relation={relation}
               site={site}
+              model={model}
+              repo={repo}
             />
           ))}
         </>
       ) : (
         <Box component="p" sx={{ ...textStyle("Body-16N-170"), mt: "24px" }}>
-          このサイトはサイトマップにありません。
+          ID {siteId} のサイトは、{repo} のサイトマップにありません。
         </Box>
       )}
     </Box>
