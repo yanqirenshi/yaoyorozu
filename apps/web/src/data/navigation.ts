@@ -4,8 +4,8 @@ export type NavMenuItem = {
 };
 
 export const NAV_MENU_ITEMS: NavMenuItem[] = [
-  // #544・#548: WBS・構成図・ポンチ絵は、実行時にリポジトリの yyz/ から読む新しい
-  // URL へ先行して移した(いまは yaoyorozu 固定)。残りは #543 の後の段で順に移す。
+  // #543: 実行時にリポジトリの yyz/ から読む新しい URL へ移行済み(いまは
+  // yaoyorozu 固定)。UI は対象外(リポジトリに依存しないため /ui のまま)。
   { label: "WBS", path: "/yaoyorozu/wbs" },
   { label: "構成図", path: "/yaoyorozu/deployment-diagram" },
   { label: "UI", path: "/ui" },

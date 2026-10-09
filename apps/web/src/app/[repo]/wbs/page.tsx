@@ -1,4 +1,4 @@
-import RepoWbsTab from "../../tabs/RepoWbsTab";
+import WbsTab from "../../tabs/WbsTab";
 
 export default async function RepoWbsPage({
   params,
@@ -6,5 +6,5 @@ export default async function RepoWbsPage({
   params: Promise<{ repo: string }>;
 }) {
   const { repo } = await params;
-  return <RepoWbsTab repo={repo} />;
+  return <WbsTab repo={repo} />;
 }
