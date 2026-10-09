@@ -356,7 +356,7 @@ const DIAGRAMS: Record<DiagramName, DiagramSpec> = {
     countKey: "boxCount",
   },
   tm: {
-    path: "/tm",
+    path: "/yaoyorozu/tm",
     readySelector: "g.entity",
     measure: measureTm,
     countKey: "count",

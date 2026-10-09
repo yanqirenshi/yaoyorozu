@@ -11,6 +11,6 @@ export const NAV_MENU_ITEMS: NavMenuItem[] = [
   { label: "UI", path: "/ui" },
   { label: "サイトマップ", path: "/yaoyorozu/sitemap" },
   { label: "Classes", path: "/yaoyorozu/class-diagram" },
-  { label: "TM", path: "/tm" },
+  { label: "TM", path: "/yaoyorozu/tm" },
   { label: "ポンチ絵", path: "/yaoyorozu/unchi" },
 ];

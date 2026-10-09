@@ -3,7 +3,7 @@ import type {
   ColonoscopeTab,
   ColonoscopeValues,
 } from "@yanqirenshi/colonoscope";
-import { TM_DATA, TM_RELATIONSHIP_KEY_BY_ID } from "@/data/tm";
+import type { TmModel } from "@/lib/tm";
 import { portOverrideKey, type PortOverrides } from "@/data/tmLayoutStorage";
 
 /**
@@ -54,19 +54,25 @@ const BASIC_FIELDS: ColonoscopeField[] = [
   { path: "position.y", label: "Y", type: "number" },
 ];
 
-const ENTITY_NAME_BY_ID = new Map(
-  TM_DATA.entities.map((entity) => [entity.id, entity.name]),
-);
-
-/** 指定エンティティに繋がる結線を、そのエンティティ側の端点として並べる。 */
+/**
+ * 指定エンティティに繋がる結線を、そのエンティティ側の端点として並べる。
+ *
+ * モデルは引数で受け取る。移行前は `tm.ts` を import してモジュールの読み込み時に
+ * 対応表を作っていたが、定義が実行時に読む JSON になったため(#590)、組み立て済みの
+ * モデルを渡してもらう形にした。
+ */
 function portsOf(
+  model: TmModel,
   entityId: number,
   overrides: PortOverrides,
 ): TmInspectorPort[] {
+  const nameById = new Map(
+    model.data.entities.map((entity) => [entity.id, entity.name]),
+  );
   const ports: TmInspectorPort[] = [];
 
-  for (const relationship of TM_DATA.relationships) {
-    const relationshipKey = TM_RELATIONSHIP_KEY_BY_ID[relationship.id];
+  for (const relationship of model.data.relationships) {
+    const relationshipKey = model.relationshipKeyById[relationship.id];
     if (!relationshipKey) continue;
 
     const ends: ("from" | "to")[] = [];
@@ -82,7 +88,7 @@ function portsOf(
       const base = outgoing
         ? relationship.from.position
         : relationship.to.position;
-      const counterpart = ENTITY_NAME_BY_ID.get(counterpartId) ?? "";
+      const counterpart = nameById.get(counterpartId) ?? "";
       const note = relationship.label ? `(${relationship.label})` : "";
 
       ports.push({
@@ -96,7 +102,7 @@ function portsOf(
   return ports;
 }
 
-/** `TM_DATA.entities` の要素のうち、インスペクタが使う分だけ。 */
+/** 組み立て済みモデルの `data.entities` の要素のうち、インスペクタが使う分だけ。 */
 type EntityCore = {
   id: number;
   name: string;
@@ -105,10 +111,11 @@ type EntityCore = {
 };
 
 export function buildInspectorTarget(
+  model: TmModel,
   core: EntityCore,
-  /** 物理名(`TM_ENTITY_KEY_BY_ID`)。 */
+  /** 物理名(`model.entityKeyById`)。 */
   key: string,
-  /** ドラッグ後の実値を見せる(`TM_DATA` の初期値ではない)。 */
+  /** ドラッグ後の実値を見せる(定義の初期値ではない)。 */
   position: { x: number; y: number },
   portOverrides: PortOverrides,
 ): TmInspectorTarget {
@@ -120,7 +127,7 @@ export function buildInspectorTarget(
     description: core.description,
     position: { ...position },
     angleGuide: ANGLE_GUIDE,
-    ports: portsOf(core.id, portOverrides),
+    ports: portsOf(model, core.id, portOverrides),
   };
 }
 

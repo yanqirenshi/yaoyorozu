@@ -2,9 +2,15 @@
  * TM 図(`/tm`)のレイアウト手調整の保存先。
  *
  * web.md §2 により、開発時専用の保存API経由でリポジトリ内ファイル
- * (`src/data/layout/tm.json`)に保存する。モデルの本体は `tm.ts` が
- * 唯一の真実であり、調整結果が安定したら `tm.ts` の `position` へ
- * 反映してリポジトリへ戻すこと。
+ * (`src/data/layout/tm.json`)に保存する。モデルの本体は
+ * `{リポジトリ}/yyz/spec/tm.json` が唯一の真実であり、調整結果が安定したら
+ * そちらの `position` へ反映してリポジトリへ戻すこと。
+ *
+ * **レイアウトは #543 の移行対象ではない**(#587 の判断)。モデルを yyz/spec へ
+ * 移したあともこのファイルは `apps/web/src/data/layout/tm.json` に書く。保存API
+ * (`/api/layout/[diagram]`)が apps/web 配下に書く作りで、移すと「どのリポジトリの
+ * レイアウトをどこに置くか」という別の設計が要るため。いま図を持つのは yaoyorozu
+ * だけなので、実害が出てから考える。
  *
  * TM は他の図と違い、調整対象が2種類ある。
  *   - エンティティの位置(物理名がキー)
@@ -13,19 +19,19 @@
  * (`{ entities, ports }`)。
  *
  * キーはいずれも**物理名から組み立てる**。図から読めるのは配列順で採番された
- * `_id` だけだが、`tm.ts` の定義を並べ替えると `_id` がずれてしまうため、
- * `TM_ENTITY_KEY_BY_ID` / `TM_RELATIONSHIP_KEY_BY_ID` で変換してから保存する。
+ * `_id` だけだが、`tm.json` の定義を並べ替えると `_id` がずれてしまうため、
+ * `lib/tm.ts` が組み立てる対応表(`entityKeyById` / `relationshipKeyById`)で
+ * 変換してから保存する。
  *
- * 保存のたびに、今の `tm.ts` に存在しないエンティティ・結線の項目を落とす
+ * 保存のたびに、今の定義に存在しないエンティティ・結線の項目を落とす
  * (`buildLayoutFile`)。開いたままのページは読み込んだ時点の配置を丸ごと持ち、
  * 保存のたびにファイル全体として書き戻すため、定義から消したものが何度でも
- * 戻ってくるからである(作業中に何度も戻った)。`tm.ts` が変わると開発サーバの
- * 差し込み更新でこのモジュールも最新の定義を読み直すので、リロードしていない
- * ページからの保存でも無効な項目は書き込まれない。
+ * 戻ってくるからである(作業中に何度も戻った)。移行前は `tm.ts` を import して
+ * いたが、定義が実行時に読む JSON になったため、**有効なキーの一覧を呼び出し側から
+ * 受け取る**形にした(`buildLayoutFile` の `known`)。
  */
 import layoutFile from "./layout/tm.json";
 import { saveLayoutToApi } from "./layoutSaveApi";
-import { TM_ENTITY_KEY_BY_ID, TM_RELATIONSHIP_KEY_BY_ID } from "./tm";
 
 // 旧方式(localStorage)からの一時的な移行処理で使うキー。
 // 全環境の移行が済んだら READ_LEGACY 関連ごと削除してよい。
@@ -94,19 +100,26 @@ export function loadCameraTransform(): CameraTransform | null {
   return fileLayout.camera ?? null;
 }
 
+/** 今の定義に存在する保存キー。`lib/tm.ts` の対応表から呼び出し側が渡す。 */
+export type KnownLayoutKeys = {
+  entityKeys: string[];
+  relationshipKeys: string[];
+};
+
 /**
- * 保存APIへ渡す1つのオブジェクトにまとめる。今の `tm.ts` に存在しない
- * エンティティの位置と結線のポート角度はここで落とす(冒頭のコメントを参照)。
+ * 保存APIへ渡す1つのオブジェクトにまとめる。今の定義に存在しないエンティティの
+ * 位置と結線のポート角度はここで落とす(冒頭のコメントを参照)。
  * 視点(camera)はエンティティに依らないのでそのまま残す。
  */
 export function buildLayoutFile(
+  known: KnownLayoutKeys,
   entities: LayoutOverrides,
   ports: PortOverrides,
   camera?: CameraTransform,
 ): TmLayoutFile {
-  const knownEntities = new Set(Object.values(TM_ENTITY_KEY_BY_ID));
+  const knownEntities = new Set(known.entityKeys);
   const knownPorts = new Set(
-    Object.values(TM_RELATIONSHIP_KEY_BY_ID).flatMap((key) => [
+    known.relationshipKeys.flatMap((key) => [
       portOverrideKey(key, "from"),
       portOverrideKey(key, "to"),
     ]),
@@ -133,12 +146,12 @@ function pickKnown<T>(
  * レイアウトファイルが空で、かつ localStorage に旧データが残っている場合、
  * それを保存APIへ送ってファイル化し、成功したら旧キーを削除する。
  */
-export function migrateLegacyLayoutIfNeeded(): void {
+export function migrateLegacyLayoutIfNeeded(known: KnownLayoutKeys): void {
   if (hasFileOverrides) return;
   const legacy = readLegacyOverrides();
   if (!legacy || Object.keys(legacy).length === 0) return;
 
-  saveLayoutToApi("tm", buildLayoutFile(legacy, {})).then(({ ok }) => {
+  saveLayoutToApi("tm", buildLayoutFile(known, legacy, {})).then(({ ok }) => {
     if (ok) window.localStorage.removeItem(LEGACY_STORAGE_KEY);
   });
 }

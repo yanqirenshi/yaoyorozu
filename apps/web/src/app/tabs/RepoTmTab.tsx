@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import D3Ter, { Rectum } from "@yanqirenshi/d3.ter";
 import Colonoscope, { type ColonoscopeValues } from "@yanqirenshi/colonoscope";
+import Alert from "@mui/material/Alert";
+import LoadingIcon from "@/components/parts/LoadingIcon";
+import { useSpecDoc } from "@/lib/useSpecDoc";
 import {
   buildInspectorTabs,
   buildInspectorTarget,
@@ -12,10 +15,10 @@ import {
   type TmInspectorTarget,
 } from "./tm/tmInspector";
 import {
-  TM_DATA,
-  TM_ENTITY_KEY_BY_ID,
-  TM_RELATIONSHIP_KEY_BY_ID,
-} from "@/data/tm";
+  buildTmModel,
+  type TmModel,
+  type TmSpec,
+} from "@/lib/tm";
 import {
   applyLayoutOverrides,
   applyPortOverrides,
@@ -25,6 +28,7 @@ import {
   loadPortOverrides,
   migrateLegacyLayoutIfNeeded,
   type CameraTransform,
+  type KnownLayoutKeys,
   type LayoutOverrides,
   type PortOverrides,
 } from "@/data/tmLayoutStorage";
@@ -83,7 +87,58 @@ function sameCamera(a: CameraTransform, b: CameraTransform): boolean {
   );
 }
 
-export default function TmTab() {
+/**
+ * `/{repo}/tm`(#590)。ビルド時の import ではなく、実行時に
+ * `GET /api/spec/{repo}/tm` を叩いて定義を取る(#543 の最終段)。
+ *
+ * 取得と組み立ての3状態(読み込み中・エラー・成功)はここで扱い、図の描画は
+ * `TmDiagram` に渡す。hooks は条件分岐の前に呼ばなければならないため、
+ * 「モデルが揃ってから図を作る」ことをコンポーネントの境界で表している。
+ */
+export default function RepoTmTab({ repo }: { repo: string }) {
+  const state = useSpecDoc<TmSpec>(repo, "tm");
+
+  // 組み立ての検証(語彙の参照漏れ・保存キーの重複など)はここで結果を受け取る。
+  // 移行前はビルド時に例外を投げていたが、実行時に読む形になったため、投げると
+  // ページが白くなる(lib/tm.ts の buildTmModel を参照)。
+  const built = useMemo(
+    () => (state.status === "ready" ? buildTmModel(state.data) : null),
+    [state],
+  );
+
+  if (state.status === "loading") {
+    return (
+      <div className="flex min-h-0 w-full flex-1 items-center gap-2 p-4 text-sm text-zinc-500">
+        <LoadingIcon size="small" label={`${repo} の TM を読み込み中`} />
+        読み込み中…
+      </div>
+    );
+  }
+
+  if (state.status === "error") {
+    return (
+      <div className="p-4">
+        <Alert severity="error">{state.message}</Alert>
+      </div>
+    );
+  }
+
+  if (!built || !built.ok) {
+    return (
+      <div className="p-4">
+        <Alert severity="error">
+          {built?.ok === false
+            ? `tm.json を読めません: ${built.message}`
+            : "tm.json を読めません"}
+        </Alert>
+      </div>
+    );
+  }
+
+  return <TmDiagram model={built.model} />;
+}
+
+function TmDiagram({ model }: { model: TmModel }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   // 図の再構築に使う値。ドラッグでは更新せず(DOM 側が既に正しいため)、
   // インスペクタの「適用」でのみ更新して version と一緒に作り直す。
@@ -117,28 +172,48 @@ export default function TmTab() {
   const { state: saveState, save, close: closeSaveStatus } =
     useLayoutSaveStatus("tm");
 
+  // 保存のときに「今の定義にあるキー」で絞るために渡す(定義から消したものが
+  // 開いたままのページから書き戻るのを防ぐ。tmLayoutStorage の冒頭を参照)。
+  const known: KnownLayoutKeys = useMemo(
+    () => ({
+      entityKeys: Object.values(model.entityKeyById),
+      relationshipKeys: Object.values(model.relationshipKeyById),
+    }),
+    [model],
+  );
+  // 右クリックのハンドラは deps 空の effect の中にあり state を読めないため、
+  // モデルと有効なキーを ref に写しておく(portOverridesRef と同じ流儀)。
+  const modelRef = useRef(model);
+  useEffect(() => {
+    modelRef.current = model;
+  }, [model]);
+  const knownRef = useRef(known);
+  useEffect(() => {
+    knownRef.current = known;
+  }, [known]);
+
   // 旧方式(localStorage)からの一時的な自己移行。全環境の移行が済んだら削除してよい。
   useEffect(() => {
-    migrateLegacyLayoutIfNeeded();
-  }, []);
+    migrateLegacyLayoutIfNeeded(known);
+  }, [known]);
 
   const rectum = useMemo(() => {
     const instance = new Rectum({ callbacks: {} });
     instance.data({
-      ...TM_DATA,
+      ...model.data,
       entities: applyLayoutOverrides(
-        TM_DATA.entities,
-        TM_ENTITY_KEY_BY_ID,
+        model.data.entities,
+        model.entityKeyById,
         overrides,
       ),
       relationships: applyPortOverrides(
-        TM_DATA.relationships,
-        TM_RELATIONSHIP_KEY_BY_ID,
+        model.data.relationships,
+        model.relationshipKeyById,
         portOverrides,
       ),
     });
     return instance;
-  }, [overrides, portOverrides]);
+  }, [model, overrides, portOverrides]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -177,7 +252,7 @@ export default function TmTab() {
         const prev = beforePositions.get(id);
         if (!prev || (prev.x === position.x && prev.y === position.y)) return;
 
-        const key = TM_ENTITY_KEY_BY_ID[id];
+        const key = modelRef.current.entityKeyById[id];
         if (!key) return;
 
         next[key] = { x: position.x, y: position.y };
@@ -188,7 +263,14 @@ export default function TmTab() {
       overridesRef.current = next;
       // 同じ tm.json にポート角度・視点も入るため、保存済みの値を必ず一緒に書く
       // (エンティティ位置だけを書くと他が消える)。
-      save(buildLayoutFile(next, portOverridesRef.current, cameraRef.current));
+      save(
+        buildLayoutFile(
+          knownRef.current,
+          next,
+          portOverridesRef.current,
+          cameraRef.current,
+        ),
+      );
     };
 
     // 右クリックでインスペクタを開く(issue #109 と同じ流儀)。d3.ter に
@@ -206,13 +288,17 @@ export default function TmTab() {
         return;
       }
 
-      const core = TM_DATA.entities.find((entity) => entity.id === datum._id);
+      const current = modelRef.current;
+      const core = current.data.entities.find(
+        (entity) => entity.id === datum._id,
+      );
       if (!core) return;
 
       setSelected(
         buildInspectorTarget(
+          current,
           core,
-          TM_ENTITY_KEY_BY_ID[datum._id] ?? "",
+          current.entityKeyById[datum._id] ?? "",
           datum.position,
           portOverridesRef.current,
         ),
@@ -247,6 +333,7 @@ export default function TmTab() {
     const saveCamera = () =>
       save(
         buildLayoutFile(
+          knownRef.current,
           overridesRef.current,
           portOverridesRef.current,
           cameraRef.current,
@@ -405,7 +492,7 @@ export default function TmTab() {
       overridesRef.current = nextLayout;
       portOverridesRef.current = nextPorts;
       // 位置・角度・視点は同じ tm.json に入るので、1回の保存でまとめて書く。
-      save(buildLayoutFile(nextLayout, nextPorts, cameraRef.current));
+      save(buildLayoutFile(known, nextLayout, nextPorts, cameraRef.current));
       setOverrides(nextLayout);
       setPortOverrides(nextPorts);
 
@@ -413,7 +500,7 @@ export default function TmTab() {
       setVersion((v) => v + 1);
       setSelected(null);
     },
-    [selected, save],
+    [selected, save, known],
   );
 
   return (
