@@ -18,6 +18,8 @@ export type DiagramPageTab = {
 };
 
 type DiagramPageProps = {
+  /** WBS タブ(spec API)が読むリポジトリ名。#543・#594。 */
+  repo: string;
   children: ReactNode;
   wbsStartId?: number;
   extraTabs?: DiagramPageTab[];
@@ -32,6 +34,7 @@ export default function DiagramPage(props: DiagramPageProps) {
 }
 
 function DiagramPageContent({
+  repo,
   children,
   wbsStartId,
   extraTabs = [],
@@ -65,7 +68,7 @@ function DiagramPageContent({
       </Box>
       <div className="flex min-h-0 flex-1 overflow-auto">
         {current === TAB_WBS ? (
-          <WbsTab startId={wbsStartId} />
+          <WbsTab repo={repo} startId={wbsStartId} />
         ) : extra ? (
           extra.content
         ) : (

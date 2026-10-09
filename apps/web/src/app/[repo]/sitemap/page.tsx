@@ -10,6 +10,7 @@ export default async function RepoSitemapPage({
   const { repo } = await params;
   return (
     <DiagramPage
+      repo={repo}
       wbsStartId={24}
       // 判断の記録(yyz/spec/sitemap.md)は図と同じ画面のタブに出す(#588)。
       extraTabs={[

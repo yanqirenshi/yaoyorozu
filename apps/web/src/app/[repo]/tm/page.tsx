@@ -16,6 +16,7 @@ export default async function RepoTmPage({
   const { repo } = await params;
   return (
     <DiagramPage
+      repo={repo}
       wbsStartId={26}
       extraTabs={[
         {

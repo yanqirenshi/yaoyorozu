@@ -8,7 +8,7 @@ export default async function RepoDeploymentDiagramPage({
 }) {
   const { repo } = await params;
   return (
-    <DiagramPage wbsStartId={10}>
+    <DiagramPage repo={repo} wbsStartId={10}>
       <RepoDeploymentTab repo={repo} />
     </DiagramPage>
   );
