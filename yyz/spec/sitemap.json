@@ -238,7 +238,7 @@
     {
       "id": 23,
       "label": "Classes",
-      "path": "/class-diagram",
+      "path": "/yaoyorozu/class-diagram",
       "description": "ドメインモデルのオブジェクトモデルをクラス図で表示する。「クラス図の書き方」タブに記法をまとめている。",
       "wbsIds": [
         25,
@@ -252,7 +252,7 @@
     {
       "id": 24,
       "label": "TM",
-      "path": "/tm",
+      "path": "/yaoyorozu/tm",
       "description": "ドメインモデルのデータモデルを TM(T字形ER)で表示する。",
       "wbsIds": [
         26,
