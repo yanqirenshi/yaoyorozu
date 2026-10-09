@@ -1,4 +1,4 @@
-import type { ComponentPropsWithoutRef } from "react";
+import { createElement, type ComponentPropsWithoutRef } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { roleColor } from "@/data/uiDesign";
@@ -28,24 +28,31 @@ const TEXT_SECONDARY = roleColor("text.secondary");
 const bodyStyle = textStyle("Body-16N-170");
 const monoStyle = textStyle("Mono-14N-150");
 
-function heading(name: string) {
-  return function Heading(props: ComponentPropsWithoutRef<"h1">) {
-    return (
-      <p
-        {...props}
-        style={{ ...textStyle(name), color: TEXT_PRIMARY, margin: "1.2em 0 0.4em" }}
-      />
-    );
+// 以前は見た目をトークンで当てれば十分として <p> を返していたが、400行超の
+// 記録(classes.md・tm.md 等)では見出しへジャンプできず実用上困る(#596)。
+// h1〜h6 のまま返し、見た目はこれまでと同じく style で上書きする。
+//
+// id(アンカーリンク用)は振らない。`style` で全プロパティを明示しているため
+// 見た目には影響しないが、見出しへジャンプする機能(目次等)を使う画面はまだ
+// 無い。必要になった時点で rehype-slug 等の導入を検討する(先回りしない)。
+type HeadingTag = "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
+
+function heading(tag: HeadingTag, name: string) {
+  return function Heading(props: ComponentPropsWithoutRef<HeadingTag>) {
+    return createElement(tag, {
+      ...props,
+      style: { ...textStyle(name), color: TEXT_PRIMARY, margin: "1.2em 0 0.4em" },
+    });
   };
 }
 
 const components: Components = {
-  h1: heading("Head-24B-150"),
-  h2: heading("Head-20B-150"),
-  h3: heading("Head-18B-150"),
-  h4: heading("Head-16B-150"),
-  h5: heading("Head-16B-150"),
-  h6: heading("Head-16B-150"),
+  h1: heading("h1", "Head-24B-150"),
+  h2: heading("h2", "Head-20B-150"),
+  h3: heading("h3", "Head-18B-150"),
+  h4: heading("h4", "Head-16B-150"),
+  h5: heading("h5", "Head-16B-150"),
+  h6: heading("h6", "Head-16B-150"),
   p: (props) => (
     <p {...props} style={{ ...bodyStyle, color: TEXT_PRIMARY, margin: "0.6em 0" }} />
   ),
