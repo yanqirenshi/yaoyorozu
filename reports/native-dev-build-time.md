@@ -149,3 +149,118 @@ sccache と同じく初回にしか効かないので採らない。
 場面は (a) `target` 削除後 → (c) 変更なし → (b) `tauri/src/lib.rs` 末尾にコメント 1 行追記 → `git checkout --` → (b') `crates/domain/src/lib.rs` に同じ → `git checkout --` → (c') 変更なし。
 `--timings` の HTML から `UNIT_DATA` を読み、`native` の bin ユニットをリンク時間、それ以外の自分のクレートをコンパイル時間とした。
 スクリプトと HTML は Lab (PM) の手元(`C:\Users\yanqi\tmp\poc559`)にあり、リポジトリには入れていない。
+
+---
+
+# 第 2 部: 実際に待たされているのは何か(#602)
+
+Issue: [#602](https://github.com/yanqirenshi/yaoyorozu/issues/602)。
+実施: Lab (PM)、2026-10-11。第 1 部(#559)で `line-tables-only` と `target` の掃除を入れた後も「まだ遅い」とユーザーが感じている件。
+調査のみ。他セッションのプロセスは止めておらず、`target` を消したのは私の一時フォルダだけ。
+
+## 結論
+
+**待たされているのは 1 行変更の `cargo build` ではなく、PR の前に走らせている `cargo test --workspace` → `cargo clippy --all-targets` → `npm run native:build`(release)の一連**だった。
+会話ファイル(10/1〜10/11)の集計で、native の実装セッションの待ち時間の 9 割がこの 3 つで、1 行変更の build は 1 割に満たない。
+しかもこの 3 つのうち、規約(`.claude/rules/native.md` §8)が MUST にしているのは `cargo fmt` と `cargo clippy -D warnings` だけで、**`cargo test --workspace` と `native:build` は規約が求めていないのにイシューの確認項目として毎回書かれていた**(デザイン (全体) が確認)。
+
+| 検証コマンド | 10 日間の回数 | 追加で捕まえた失敗 | 1 回の時間(lab 実測、変更あり) |
+|---|---|---|---|
+| `cargo test --workspace` | 59 | **0**(失敗 9 回はすべて開発中の `-p` 実行で捕まっている) | 20〜27 秒(実セッションでは 70〜91 秒) |
+| `cargo test -p domain -p app` | — | — | **3.5〜5 秒** |
+| `cargo clippy --all-targets -- -D warnings` | 36 | 3(実際の lint 違反。MUST として機能) | 4〜5 秒(初回だけ 22 秒) |
+| `npm run native:build`(release) | 12 | **0** | **3 分 49 秒〜4 分 13 秒**(初回 13 分 36 秒) |
+| web `npm run build` | 136 | 0(失敗 2 回は `.next` の古いキャッシュ。`rm -rf .next` で通った) | 34 秒(中央値) |
+
+**効く手は、ビルド設定ではなく手順**: 開発中は `cargo test -p domain -p app`(3.5 秒)と `clippy`(4 秒)、`--workspace` は PR 直前に 1 回、`native:build` はフロントの依存やビルド設定を触ったときだけ。
+これで実装:APP (共通) の 4 日間の待ち 35 分のうち、test 21 分の大半と release 5 分がそのまま消える(A〜D のビルド設定の変更は不要)。
+
+## 1. 現状の実測(lab 作業ツリー、`line-tables-only` 入り、他のビルド無しの時間帯)
+
+| 場面 | 時間 | 備考 |
+|---|---|---|
+| 1 行変更の `cargo build`(tauri 層) | **11.0〜18.3 秒**(4 回: 18.3 / 11.0 / 14.0 / 12.7) | 前回の 14.9 秒と同じ水準。`-j 4` でも 10.6 秒(遅くならない) |
+| まっさらからのフルビルド(dev) | 5 分 20 秒 | 前回と同じ |
+| `[profile.dev]` を変えた直後の初回 | 5 分 42 秒 | 10/7 の `line-tables-only` 導入で、**全ツリーが 1 回ずつフルビルドになった**(lab で実測。設定変更の代償) |
+| `cargo test --workspace`(domain 1 行変更後) | 27 秒(cargo 16.7 秒 + テスト実行 10 秒。infra のテストが 5.6 秒) | 変更なしなら 12 秒(実行だけ) |
+| `cargo test -p domain -p app`(domain 1 行変更後) | **3.5〜5 秒**(初回だけ 34 秒) | テスト 447 件。`--workspace` が追加するのは infra 268 件(15 件 ignored)と native_lib 2 件、doc-test は全クレート 0 件 |
+| `cargo clippy --all-targets -- -D warnings`(1 行変更後) | 4.1〜4.2 秒(初回 22 秒) | |
+| `cargo check`(初回) | 2 分 56 秒 | check 用の成果物を一から作るため。2 回目以降は数秒 |
+| `cargo build --release`(= `native:build` の Rust 部分)初回 | **13 分 36 秒** | 298 クレートを最適化ビルド |
+| 同・変更なし(初回の直後) | 4 分 13 秒 | 第 1 部 §2.1 と同じ「初回の直後に 1 回だけ `native_lib` が作り直される」が、release では `native_lib` 1 つで 4 分かかる |
+| 同・tauri 層 1 行変更 | **3 分 49 秒** | `native` だけの再コンパイル。release は増分コンパイルが無く、`native_lib` を毎回最適化し直す。実セッションで観測した 232 秒と一致 |
+
+### 1.1 `target` の肥大について
+
+impl-app の 7.1 GB の内訳は debug/deps 2.85 GB + incremental 1.75 GB + release 1.88 GB + テスト実行ファイルと pdb 0.4 GB。第 1 部で見つけた `.rcgu.o` の残骸は 0 個。
+**release ビルドとテストの成果物が乗っているだけで、残骸ではない**。
+`cargo sweep --dry-run --time 3` / `--installed` を lab の `target` に当てたところ「消すもの無し」だった(直前に全部作り直したため。古い成果物が溜まった `target` での効果は未測定)。掃除の優先度は下がった。
+
+## 2. 検証コマンドが実際に何を捕まえたか(会話ファイル 10/1〜10/11、全セッション)
+
+tool_use(Bash / PowerShell)とその tool_result を突き合わせ、出力に `FAILED` / `error[` / `Failed to compile` / `Type error` 等があるものを失敗とした。
+
+| 種別 | 回数 | 失敗 | 中身 |
+|---|---|---|---|
+| `cargo test --workspace` | 59 | 0 | (検出 2 件はコマンド文字列に "cargo test" を含む別コマンドの誤検出) |
+| `cargo test -p …` | 49 | 9 | テストコードのコンパイルエラー 5、テストの失敗 2、引数ミス 2。`-p infra …` の失敗 3 を含む |
+| `cargo clippy` | 36 | 3 | 実際の lint 違反・コンパイルエラー |
+| `npm run native:build` | 12 | 0 | |
+| web `npm run build` | 136 | 2 | どちらも `.next` の古いキャッシュ(消したページへの生成型 `.next/types/.../page.js` の参照、セミコロン欠落の型エラー)。直後に `rm -rf apps/web/.next` して通った。オブジェクトの回は直前の `npx tsc --noEmit` が通っている |
+| `tsc --noEmit` | 68 | 1(誤検出) | |
+| lint | 20 | 0 | |
+
+- `--workspace` で初めて落ちた回は無い。infra のテストは `-p infra …` で開発中に回されていて、そこで 3 回失敗を捕まえている
+- release で初めて見つかった失敗は無い
+- web の `npm run build` が tsc + lint の後に捕まえた「コードの」失敗は無い。データ/文書だけの PR(yyz/*.json と .md のみ)は 10/1 以降の web 系 23 件のうち 3 件(#598・#577・#536)で、残り 20 件はコードを含む
+- 補足: lab の計測中、infra の `keyring_token_store::tests::save_then_load_roundtrips` が 9 回中 1 回落ちた(Windows の資格情報ストアに触るテスト。再現せず)。`--workspace` を回すとこの種の環境依存の揺れに当たることがある
+
+## 3. 待ち時間の内訳(会話ファイル 10/7〜10/11、前景実行の tool_result まで)
+
+| 種別 | 回数 | 待ち合計 | 中央値 | 最大 |
+|---|---|---|---|---|
+| web `npm run build` | 43 | 26.7 分 | 34 秒 | 149 秒 |
+| `cargo test`(ほぼ `--workspace`) | 38 | 21.6 分 | 27 秒 | 149 秒(`--workspace` は 70〜91 秒) |
+| `cargo build`(Lab の計測を除くと 5 回) | 16 | 18.5 分(うち Lab 17.8) | 13 秒 | — |
+| `native:build` | 前景 1 回 232 秒 + 背景 6 回(時間は記録に出ない) | — | — | — |
+| `cargo clippy` | 13 | 5.9 分 | 16 秒 | 156 秒 |
+
+セッション別: **実装:APP (共通) 35 分**(test 21 / clippy 6 / release 5 / check 2 / build 0.5)、デザイン (ドメイン:Data / オブジェクト / 画面構成)各 6〜8 分(すべて web の `npm run build`)、実装:APP、画面:/ 2.5 分。
+`tauri dev` は背景実行なので待ちが記録に出ないが、中身は 1 行変更の build(13 秒)+ Vite の起動で、十数秒。
+
+## 4. 同時実行の取り合い(lab と一時フォルダの 2 つの `target` で同時に走らせた)
+
+| 組み合わせ | 単独 | 同時 | 倍率 |
+|---|---|---|---|
+| dev の 1 行変更 build × 2 | 12.7〜14.0 秒 | 14.3 秒 と **45.3 秒** | 片方が 3.4× |
+| dev の 1 行変更 build、裏で `cargo test --workspace` | 12.7 秒 | 28.8 秒(test 側は 49 秒、単独 20〜27 秒) | 2.2× / 2× |
+| `cargo test --workspace` × 2 | 19.8 秒 | 27.3 秒 と 27.1 秒 | 1.4× |
+| release の domain 1 行変更、裏で `cargo test --workspace` | (単独未測。tauri 層 1 行なら 3 分 49 秒) | **8 分 57 秒**(test 側は 44 秒) | 2× 前後 |
+| `cargo test --workspace` を `-j 7` / `-j 4` で単独 | 19.8 秒(`-j 14`) | 17.8 秒 / 14.4 秒 | **絞ったほうが速い**(1 回ずつの計測) |
+| dev の 1 行変更 build を `-j 4` で単独 | 12.7 秒 | 10.6 秒 | 同上 |
+
+- 2 本同時なら 1.4〜3.4 倍、release が走っている裏では 2 倍前後。**15 セッションのうち native を触るのは 4〜5 本なので、PR 前の一連(test → clippy → release で 6 分前後)が重なると 10 分を超える**。手順を絞れば重なる機会そのものが減る
+- `-j` を絞ると単独でも速い(1 行変更は `native_lib` 1 つのコンパイルが律速で並列度が要らず、test もリンクが律速)。ただし 1 回ずつの計測なので、入れるなら `CARGO_BUILD_JOBS=4〜7` を各セッションの環境で試してから
+
+## 5. 案 A〜D について
+
+| 案 | 結果 |
+|---|---|
+| A. Tauri 層を薄くする | **保留**。`native_lib` は 5,768 行(`lib.rs` 1,790、`dto.rs` 1,705 で DTO 70 型、コマンド 58 個)。1 行変更の 13 秒のうち `native_lib` のコンパイルは 8〜9 秒だが、§3 のとおり 1 行変更は待ち時間の 1 割未満。手順を絞った後にまだ遅ければ着手 |
+| B. `split-debuginfo` | MSVC では `unpacked` を指定しても受け付けるが(domain 単体で 22.3 秒 対 `packed` 15.8 秒)、デバッグ情報は `.pdb` に出るのは同じ。効果は見込めない。`codegen-units` / `incremental` は未測(1 行変更が主因でないため) |
+| C. 普段 `debug = 0`、追うときだけ行番号 | **できる**。`Cargo.toml` に `[profile.dev] debug = 0` と `[profile.dev-trace] inherits = "dev" debug = "line-tables-only"` を置き、追うときは `cargo build --profile dev-trace` / `cargo test --profile dev-trace`。`tauri dev` は `npm run tauri dev -- --profile dev-trace` で runner(cargo)に渡せる(`tauri dev --help` の `[ARGS]...`)。成果物は `target/debug` と `target/dev-trace` に分かれるので切り替えでの作り直しは無いが、`dev-trace` の初回は 5 分かかる。環境変数 `CARGO_PROFILE_DEV_DEBUG=line-tables-only` でも切り替えられるが、同じ `target/debug` を使うので切り替えるたびに自分のクレートが作り直される。効果は第 1 部の `debug = 0` の数字(1 行変更 −51 %)で、**今回の主因(test / release)には効かない** |
+| D. `cargo-sweep` | インストールして dry-run した(§1.1)。古い成果物が溜まった `target` での効果は未測定。優先度は下がった |
+
+## 6. 推奨(効果 ÷ 手間・副作用)
+
+1. **イシューの確認項目から `cargo test --workspace` と `npm run native:build` の無条件指定をやめる**(デザイン (全体) の管轄。既に着手)。開発中は `cargo test -p domain -p app`(3.5 秒)+ `cargo clippy --all-targets -- -D warnings`(4 秒)+ `cargo fmt`、`--workspace` は PR 直前に 1 回(27 秒)、`native:build` はフロントの依存・ビルド設定・Tauri の設定を触ったときだけ。**実装:APP (共通) の待ち時間の 7 割強が消える**見込み
+2. web の `npm run build`(web.md §6 の MUST)は、tsc + lint の後に捕まえたコードの失敗が 0 回で、失敗 2 回は `.next` のキャッシュだった。緩めるかはユーザーの判断。緩めるなら「コードを触った PR では 1 回、データ/文書だけなら不要」が事実に合う。1 回 34 秒 × 週 30 回前後
+3. 同時実行は手順を絞れば自然に減る。`CARGO_BUILD_JOBS` を絞る手は単独でも速かったが 1 回ずつの計測なので、入れるなら試してから
+
+## 付録 C. 第 2 部の測定の手順
+
+lab 作業ツリー(`session/lab`、main と同期、`line-tables-only` 入り)で、`cargo build` / `cargo test` / `cargo clippy` / `cargo build --release` を「変更なし → `tauri/src/lib.rs` または `crates/domain/src/lib.rs` に 1 行 → `git checkout --`」の順に実行し、経過秒と cargo の `Finished … in` を記録した。
+同時実行は一時フォルダ `target-dup` を同じソースから作り、同じ 1 行変更を 2 つの `target` で同時にビルドした。
+会話ファイルの集計は `~/.claude/projects/C--Users-yanqi-prj-yaoyorozu/*.jsonl` の `tool_use`(Bash / PowerShell)と `tool_result` の時刻差・出力から取った。
+`npm run build --prefix apps/native`(react のみ)は lab の `node_modules` に `loading-dev` が無く失敗したため、release は `cargo build --release` で測った(`tauri build` の Rust 部分と同じ)。
+スクリプトとログは `C:\Users\yanqi\tmp\poc602`(リポジトリには入れていない)。
