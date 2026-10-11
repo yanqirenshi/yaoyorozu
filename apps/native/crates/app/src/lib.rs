@@ -21,6 +21,7 @@ pub use worktree::{
     WorktreeIndex, WorktreeSpec, ORIGIN_MAIN,
 };
 mod archive_session;
+mod claude_usage;
 mod rename_session;
 mod restore_running_sessions;
 mod running_session;
@@ -28,6 +29,7 @@ mod running_session_summary;
 mod web_dev_server;
 mod yyz_scaffold;
 pub use archive_session::{archive_session, load_archived_sessions, unarchive_session};
+pub use claude_usage::{ClaudeUsage, ClaudeUsageSnapshot, ModelUsage, UsageLimit, UsageSeverity};
 pub use cli_version::{
     parse_cli_version, peer_messaging_warning, supports_peer_messaging, MIN_PEER_MESSAGING_VERSION,
 };

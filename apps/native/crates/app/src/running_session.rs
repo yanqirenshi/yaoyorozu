@@ -255,6 +255,10 @@ pub enum RunningSessionEvent {
     /// 選べるモデルの一覧(`initialize` の応答から。`account` など、ほかの項目は読まない)。
     /// 状態は動かさない(画面の選択肢にするだけ)。
     ModelsListed(Vec<AvailableModel>),
+    /// Claude.ai の利用状況(`get_usage` の応答。issue #613)。アカウント単位の値であり、
+    /// この会話(`RunningSessionByApp`)の状態は動かさない(tauri 層が `AppState` の
+    /// 専用フィールドへ反映する)。
+    UsageUpdated(crate::ClaudeUsage),
     /// 画面へ流す途中経過。
     Progress(ProgressEvent),
     /// ツール使用の問い合わせが届いた。
@@ -290,6 +294,10 @@ pub trait RunningProcess: Send + Sync {
     fn set_model(&self, model: &str) -> Result<(), AppError>;
     /// 権限モードの切り替えを要求する(`set_permission_mode`)。結果は上と同じ。
     fn set_permission_mode(&self, mode: RunningPermissionMode) -> Result<(), AppError>;
+    /// Claude.ai の利用状況を要求する(`get_usage`。issue #613)。応答は
+    /// [`RunningSessionEvent::UsageUpdated`] で届く(要求 ID は固定値を使うため、
+    /// `set_model` 等と違い対応づけの控えは要らない)。
+    fn get_usage(&self) -> Result<(), AppError>;
     /// 標準入力を閉じて終了を待つ(約1秒で終了する)。応答が無ければ強制終了する。
     /// 終了済みなら何もしない。
     fn stop(&self);
@@ -879,6 +887,8 @@ pub fn apply_running_session_event(
             session.finish_tool(tool_use_id)
         }
         RunningSessionEvent::ModelsListed(_) => {}
+        // アカウント単位の値で、この会話の状態ではない(tauri 層が反映する。issue #613)。
+        RunningSessionEvent::UsageUpdated(_) => {}
         RunningSessionEvent::Progress(_) => {}
         RunningSessionEvent::PermissionRequested(request) => {
             session.receive_permission_request(request.clone(), now)
@@ -915,6 +925,7 @@ mod tests {
         interrupts: Mutex<usize>,
         stopped: Mutex<usize>,
         switches: Mutex<Vec<RunningSessionSwitch>>,
+        usage_requests: Mutex<usize>,
         fail_send: bool,
         /// 0 のときは 4242。
         pid: u32,
@@ -965,6 +976,10 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(RunningSessionSwitch::PermissionMode(mode));
+            Ok(())
+        }
+        fn get_usage(&self) -> Result<(), AppError> {
+            *self.usage_requests.lock().unwrap() += 1;
             Ok(())
         }
         fn stop(&self) {

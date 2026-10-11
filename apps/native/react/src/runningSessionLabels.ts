@@ -4,6 +4,8 @@ import type {
   ProcessStateDto,
   RunningPermissionModeDto,
   StartModelDto,
+  UsageLimitDto,
+  UsageSeverityDto,
 } from "./api/types";
 
 // 実行中セッション(issue #392)の表示用の文言。値の意味(状態・モード)は backend が持ち、
@@ -160,4 +162,52 @@ export function describeSuggestion(suggestion: PermissionSuggestionDto): string 
     default:
       return `許可して、${suggestion.suggestion_type} を適用する(${where})`;
   }
+}
+
+// Claude.ai の利用状況(issue #613)。「セッション」と呼ばない(claude.ai は5時間枠を
+// 「現在のセッション」と呼ぶが、app の「セッション」は会話のことで意味が違う。
+// デザイン(全体)の指示)。アカウント全体の値であることが分かる文言にする。
+
+/**
+ * 危険度(`limits[].severity`)のバッジのトーン(意味で選ぶ。issue #411 の流儀)。
+ * 既存の4トーンの中から、危険度の意味に近いものを選ぶ: 順調 → done(緑)、注意 →
+ * running(金茶)、上限が近い → error(朱)、知らない値 → idle(灰)。
+ */
+export function usageSeverityTone(severity: UsageSeverityDto): BadgeTone {
+  switch (severity) {
+    case "normal":
+      return "done";
+    case "warning":
+      return "running";
+    case "critical":
+      return "error";
+    default:
+      return "idle";
+  }
+}
+
+/** 使用率のバッジの文字(「直近5時間 45%」のように、枠であることが分かる表記にする)。 */
+export function usageLimitLabel(frameLabel: string, limit: UsageLimitDto): string {
+  return `${frameLabel} ${limit.utilization_percent}%`;
+}
+
+/** リセット時刻をローカル時刻の短い文字にする(ツールチップ用。issue #613)。読めなければ undefined。 */
+export function usageResetsAtLabel(resetsAtMs: number | null): string | undefined {
+  if (resetsAtMs === null) return undefined;
+  const date = new Date(resetsAtMs);
+  if (Number.isNaN(date.getTime())) return undefined;
+  return date.toLocaleString(undefined, {
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+/** 取得時刻の短い文字(取得できていなければ null)。 */
+export function usageFetchedAtLabel(fetchedAtMs: number | null): string | null {
+  if (fetchedAtMs === null) return null;
+  const date = new Date(fetchedAtMs);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }

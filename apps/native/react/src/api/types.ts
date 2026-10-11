@@ -559,6 +559,38 @@ export type RunningSessionChangedEvent = {
 // 権限の問い合わせへの答えの種別。取り消し(CLI 側が決める)は選べない。
 export type PermissionBehaviorDto = "allow" | "deny";
 
+// 上限に対する危険度(issue #613)。`limits[].severity` の写し。知らない値は unknown。
+export type UsageSeverityDto = "normal" | "warning" | "critical" | "unknown";
+
+// 1つの枠(5時間 / 7日 / モデル別)の使用率(issue #613)。金額は含まない(native.md §4)。
+export type UsageLimitDto = {
+  utilization_percent: number;
+  // UTC epoch ms。ローカル時刻への変換は表示側(issue #613)。
+  resets_at_ms: number | null;
+  severity: UsageSeverityDto;
+};
+
+// モデル別の使用率(issue #613)。
+export type ModelUsageDto = {
+  display_name: string;
+  limit: UsageLimitDto;
+};
+
+// Claude.ai の利用状況(issue #613)。読めなかった枠は null/空。
+export type ClaudeUsageDto = {
+  five_hour: UsageLimitDto | null;
+  seven_day: UsageLimitDto | null;
+  model_scoped: ModelUsageDto[];
+};
+
+// app が最後に取得した利用状況と、取得した時刻(issue #613)。CLI が1つも動いていない間は
+// 更新されないため、`fetched_at_ms` を見て古さを示せる。getClaudeUsage の戻り値、および
+// claude-usage:updated イベントのペイロードを兼ねる。
+export type ClaudeUsageSnapshotDto = {
+  usage: ClaudeUsageDto | null;
+  fetched_at_ms: number | null;
+};
+
 // yyz/(issue #543)一式のうち1ファイルの状態(issue #547)。
 export type YyzScaffoldFileStatusDto = {
   relative_path: string;

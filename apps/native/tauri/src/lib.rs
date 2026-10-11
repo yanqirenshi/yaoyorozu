@@ -1721,6 +1721,7 @@ pub fn run() {
             running_session::interrupt_running_session,
             running_session::switch_running_session,
             running_session::stop_running_session,
+            running_session::get_claude_usage,
             running_session::archive_session,
             running_session::unarchive_session,
             running_session::rename_session,

@@ -3206,3 +3206,21 @@ button.claude-explorer-name {
   font-size: var(--text-dns-14n-150-size);
   color: var(--text-secondary);
 }
+
+/* Claude.ai の利用状況(issue #613)。アカウント全体の値で、この会話の値ではない。 */
+.running-bar-usage {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* CLI が1つも動いていないとき、最後に取れた値であることが伝わるよう薄くする
+   (「取得できません」より役に立つ。issue #613)。 */
+.running-bar-usage-stale {
+  opacity: 0.6;
+}
+
+.running-bar-usage-fetched-at {
+  font-size: var(--text-dns-14n-150-size);
+  color: var(--text-secondary);
+}

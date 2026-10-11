@@ -1620,6 +1620,98 @@ pub struct RunningSessionChangedEventDto {
     pub exit_code: Option<i32>,
 }
 
+/// 上限に対する危険度(issue #613)。`app::UsageSeverity` の写し。
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageSeverityDto {
+    Normal,
+    Warning,
+    Critical,
+    Unknown,
+}
+
+impl From<app::UsageSeverity> for UsageSeverityDto {
+    fn from(severity: app::UsageSeverity) -> Self {
+        match severity {
+            app::UsageSeverity::Normal => Self::Normal,
+            app::UsageSeverity::Warning => Self::Warning,
+            app::UsageSeverity::Critical => Self::Critical,
+            app::UsageSeverity::Unknown => Self::Unknown,
+        }
+    }
+}
+
+/// 1つの枠(5時間 / 7日 / モデル別)の使用率(issue #613)。金額は含まない(native.md §4)。
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct UsageLimitDto {
+    pub utilization_percent: u8,
+    pub resets_at_ms: Option<u64>,
+    pub severity: UsageSeverityDto,
+}
+
+impl From<app::UsageLimit> for UsageLimitDto {
+    fn from(limit: app::UsageLimit) -> Self {
+        Self {
+            utilization_percent: limit.utilization_percent,
+            resets_at_ms: limit.resets_at_ms,
+            severity: limit.severity.into(),
+        }
+    }
+}
+
+/// モデル別の使用率(issue #613)。
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct ModelUsageDto {
+    pub display_name: String,
+    pub limit: UsageLimitDto,
+}
+
+impl From<app::ModelUsage> for ModelUsageDto {
+    fn from(usage: app::ModelUsage) -> Self {
+        Self {
+            display_name: usage.display_name,
+            limit: usage.limit.into(),
+        }
+    }
+}
+
+/// Claude.ai の利用状況(issue #613)。`five_hour`/`seven_day` は読めなかった枠があれば
+/// `None`(`model_scoped` は空)。
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct ClaudeUsageDto {
+    pub five_hour: Option<UsageLimitDto>,
+    pub seven_day: Option<UsageLimitDto>,
+    pub model_scoped: Vec<ModelUsageDto>,
+}
+
+impl From<app::ClaudeUsage> for ClaudeUsageDto {
+    fn from(usage: app::ClaudeUsage) -> Self {
+        Self {
+            five_hour: usage.five_hour.map(Into::into),
+            seven_day: usage.seven_day.map(Into::into),
+            model_scoped: usage.model_scoped.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// app が最後に取得した利用状況と、取得した時刻(issue #613)。CLI が1つも動いていない間は
+/// 更新されないため、画面は `fetched_at_ms` を見て古さを示せる。`get_claude_usage` の戻り値、
+/// および `claude-usage:updated` イベントのペイロードを兼ねる。
+#[derive(Serialize, Clone, Debug, PartialEq, Default)]
+pub struct ClaudeUsageSnapshotDto {
+    pub usage: Option<ClaudeUsageDto>,
+    pub fetched_at_ms: Option<u64>,
+}
+
+impl From<app::ClaudeUsageSnapshot> for ClaudeUsageSnapshotDto {
+    fn from(snapshot: app::ClaudeUsageSnapshot) -> Self {
+        Self {
+            usage: snapshot.usage.map(Into::into),
+            fetched_at_ms: snapshot.fetched_at_ms,
+        }
+    }
+}
+
 /// 権限の問い合わせへの答えの種別。取り消し(Cancelled)は CLI 側が決めるので選べない。
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

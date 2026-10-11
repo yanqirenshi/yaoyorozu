@@ -7,12 +7,12 @@
 //! 捨てる(1行のせいで対話を止めない)。
 
 use app::{
-    AvailableModel, RunningPermissionMode, RunningSessionEvent, RunningSessionSwitch,
-    StartRunningSession,
+    AvailableModel, ClaudeUsage, ModelUsage, RunningPermissionMode, RunningSessionEvent,
+    RunningSessionSwitch, StartRunningSession, UsageLimit, UsageSeverity,
 };
 use domain::{
-    ImageAttachment, PermissionBehavior, PermissionRequest, PermissionResponse,
-    PermissionSuggestion, ProgressEvent,
+    parse_iso_timestamp_to_epoch_ms, ImageAttachment, PermissionBehavior, PermissionRequest,
+    PermissionResponse, PermissionSuggestion, ProgressEvent,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -156,6 +156,24 @@ pub(crate) fn build_set_permission_mode_line(request_id: &str, mode: &str) -> St
     )
 }
 
+/// Claude.ai の利用状況の要求の `request_id`(issue #613)。`initialize` と同じく固定値を使う:
+/// 応答(`rate_limits` 一式)がそれ自体で完結しており、`set_model` のように「何を要求したか」を
+/// 覚えておいて対応づける必要が無いため。`skip_behaviors: true` で、直近7日の会話ファイル走査
+/// (応答の `behaviors`。使わない)を省く。
+pub(crate) const GET_USAGE_REQUEST_ID: &str = "app-usage";
+
+/// 利用状況の要求。
+pub(crate) fn build_get_usage_line() -> String {
+    format!(
+        "{}\n",
+        json!({
+            "type": "control_request",
+            "request_id": GET_USAGE_REQUEST_ID,
+            "request": { "subtype": "get_usage", "skip_behaviors": true },
+        })
+    )
+}
+
 /// 送った切り替えの要求(`request_id` → 内容)。CLI の `control_response` は要求 ID しか
 /// 持たないので、受け入れられたときに何を切り替えたかを引く。要求 ID は infra が付ける
 /// (app の型には無い)。書き込みスレッドと読み取りスレッドで共有する。
@@ -270,24 +288,27 @@ pub(crate) fn map_wire_line(
                     Vec::new()
                 };
             }
-            let is_initialize_reply = response
-                .and_then(|r| r.get("request_id"))
+            let is_success = response
+                .and_then(|r| r.get("subtype"))
                 .and_then(Value::as_str)
-                == Some(INITIALIZE_REQUEST_ID)
-                && response
-                    .and_then(|r| r.get("subtype"))
-                    .and_then(Value::as_str)
-                    == Some("success");
-            if is_initialize_reply {
-                // 起動の合図に加えて、選べるモデルの一覧だけを読む(`account` などは読まない)。
-                let mut events = vec![RunningSessionEvent::Initialized];
-                let models = available_models(response);
-                if !models.is_empty() {
-                    events.push(RunningSessionEvent::ModelsListed(models));
+                == Some("success");
+            match request_id {
+                Some(INITIALIZE_REQUEST_ID) if is_success => {
+                    // 起動の合図に加えて、選べるモデルの一覧だけを読む(`account` などは読まない)。
+                    let mut events = vec![RunningSessionEvent::Initialized];
+                    let models = available_models(response);
+                    if !models.is_empty() {
+                        events.push(RunningSessionEvent::ModelsListed(models));
+                    }
+                    events
                 }
-                events
-            } else {
-                Vec::new()
+                Some(GET_USAGE_REQUEST_ID) if is_success => {
+                    parse_usage(response.and_then(|r| r.get("response")))
+                        .map(RunningSessionEvent::UsageUpdated)
+                        .into_iter()
+                        .collect()
+                }
+                _ => Vec::new(),
             }
         }
         Some("control_cancel_request") => value
@@ -332,6 +353,101 @@ fn available_models(response: Option<&Value>) -> Vec<AvailableModel> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// `limits[].severity`(`normal` / `warning` / `critical`)を読む。知らない値は `Unknown`
+/// (版で増える。issue #613)。
+fn usage_severity(value: &str) -> UsageSeverity {
+    match value {
+        "normal" => UsageSeverity::Normal,
+        "warning" => UsageSeverity::Warning,
+        "critical" => UsageSeverity::Critical,
+        _ => UsageSeverity::Unknown,
+    }
+}
+
+/// `rate_limits.limits[]` から、`kind`(と、モデル別なら `scope.model.display_name`)が一致する
+/// 要素の `severity` を探す。見つからなければ `Unknown`(5時間枠・7日枠・モデル別の使用率自体は
+/// `rate_limits.five_hour` 等から読めるので、`severity` が見つからなくても出す値は失わない)。
+fn severity_for(
+    limits: Option<&Vec<Value>>,
+    kind: &str,
+    model_name: Option<&str>,
+) -> UsageSeverity {
+    limits
+        .into_iter()
+        .flatten()
+        .find(|limit| {
+            limit.get("kind").and_then(Value::as_str) == Some(kind)
+                && match model_name {
+                    Some(name) => {
+                        limit
+                            .pointer("/scope/model/display_name")
+                            .and_then(Value::as_str)
+                            == Some(name)
+                    }
+                    None => true,
+                }
+        })
+        .and_then(|limit| limit.get("severity"))
+        .and_then(Value::as_str)
+        .map(usage_severity)
+        .unwrap_or(UsageSeverity::Unknown)
+}
+
+/// `rate_limits.five_hour` / `.seven_day` / `.model_scoped[]` の1項目(`utilization` /
+/// `resets_at`)を読む。`utilization` が欠けていれば `None`(この枠は出さない)。
+fn usage_limit(value: &Value, severity: UsageSeverity) -> Option<UsageLimit> {
+    let utilization = value.get("utilization")?.as_u64()?;
+    Some(UsageLimit {
+        utilization_percent: u8::try_from(utilization).unwrap_or(100),
+        resets_at_ms: value
+            .get("resets_at")
+            .and_then(Value::as_str)
+            .and_then(parse_iso_timestamp_to_epoch_ms),
+        severity,
+    })
+}
+
+/// `get_usage` の応答(`response.response`)を読む(issue #613)。金額の項目
+/// (`extra_usage`/`spend`/`limit_dollars`/`session.total_cost_usd` 等)は読まない
+/// (native.md §4)。欠けた項目・形の違う要素は捨てる(版で項目が増減する)。3項目すべて
+/// 読めなければ(応答の形が想定と違う)、`None` を返して画面の値を変えない。
+fn parse_usage(response: Option<&Value>) -> Option<ClaudeUsage> {
+    let rate_limits = response?.get("rate_limits")?;
+    let limits = rate_limits.get("limits").and_then(Value::as_array);
+    let five_hour = rate_limits
+        .get("five_hour")
+        .and_then(|v| usage_limit(v, severity_for(limits, "session", None)));
+    let seven_day = rate_limits
+        .get("seven_day")
+        .and_then(|v| usage_limit(v, severity_for(limits, "weekly_all", None)));
+    let model_scoped: Vec<ModelUsage> = rate_limits
+        .get("model_scoped")
+        .and_then(Value::as_array)
+        .map(|models| {
+            models
+                .iter()
+                .filter_map(|model| {
+                    let display_name = model.get("display_name")?.as_str()?.to_string();
+                    let severity = severity_for(limits, "weekly_scoped", Some(&display_name));
+                    let limit = usage_limit(model, severity)?;
+                    Some(ModelUsage {
+                        display_name,
+                        limit,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if five_hour.is_none() && seven_day.is_none() && model_scoped.is_empty() {
+        return None;
+    }
+    Some(ClaudeUsage {
+        five_hour,
+        seven_day,
+        model_scoped,
+    })
 }
 
 fn map_stream_event(value: &Value) -> Option<RunningSessionEvent> {
@@ -565,6 +681,90 @@ mod tests {
         ] {
             assert!(map_wire_line(line, 1).is_empty(), "{line}");
         }
+    }
+
+    // issue #613: Claude.ai の利用状況(`get_usage`)。応答の形は issue #613 本文の調査
+    // (CLI 2.1.268 で確認済み)に基づく固定データ。
+
+    const USAGE_REPLY: &str = r#"{"type":"control_response","response":{"subtype":"success","request_id":"app-usage","response":{"subscription_type":"max","rate_limits_available":true,"rate_limits":{"five_hour":{"utilization":45,"resets_at":"2026-10-12T03:09:59Z"},"seven_day":{"utilization":22,"resets_at":"2026-10-17T15:59:59Z"},"model_scoped":[{"display_name":"Fable","utilization":20,"resets_at":"2026-10-17T15:59:59Z"}],"limits":[{"kind":"session","percent":45,"severity":"normal","resets_at":"2026-10-12T03:09:59Z","is_active":true},{"kind":"weekly_all","percent":22,"severity":"warning","resets_at":"2026-10-17T15:59:59Z"},{"kind":"weekly_scoped","scope":{"model":{"display_name":"Fable"}},"percent":20,"severity":"critical","resets_at":"2026-10-17T15:59:59Z"}]},"session":{"total_cost_usd":1.23,"total_duration_ms":4567}}}}"#;
+
+    #[test]
+    fn a_successful_usage_response_maps_to_usage_updated_with_severity_from_limits() {
+        let RunningSessionEvent::UsageUpdated(usage) = only(USAGE_REPLY) else {
+            panic!("expected UsageUpdated");
+        };
+
+        assert_eq!(
+            usage.five_hour,
+            Some(UsageLimit {
+                utilization_percent: 45,
+                resets_at_ms: parse_iso_timestamp_to_epoch_ms("2026-10-12T03:09:59Z"),
+                severity: UsageSeverity::Normal,
+            })
+        );
+        assert_eq!(
+            usage.seven_day,
+            Some(UsageLimit {
+                utilization_percent: 22,
+                resets_at_ms: parse_iso_timestamp_to_epoch_ms("2026-10-17T15:59:59Z"),
+                severity: UsageSeverity::Warning,
+            })
+        );
+        assert_eq!(
+            usage.model_scoped,
+            vec![ModelUsage {
+                display_name: "Fable".to_string(),
+                limit: UsageLimit {
+                    utilization_percent: 20,
+                    resets_at_ms: parse_iso_timestamp_to_epoch_ms("2026-10-17T15:59:59Z"),
+                    severity: UsageSeverity::Critical,
+                },
+            }]
+        );
+    }
+
+    #[test]
+    fn usage_amounts_never_appear_in_the_mapped_event() {
+        // native.md §4: 金額(session.total_cost_usd 等)はフロントへ渡さない。
+        let events = map_wire_line(USAGE_REPLY, 1);
+        assert!(!format!("{events:?}").contains("1.23"), "{events:?}");
+    }
+
+    #[test]
+    fn an_unknown_severity_string_becomes_unknown_and_a_missing_resets_at_is_none() {
+        let reply = r#"{"type":"control_response","response":{"subtype":"success","request_id":"app-usage","response":{"rate_limits":{"five_hour":{"utilization":10}}}}}"#;
+
+        let RunningSessionEvent::UsageUpdated(usage) = only(reply) else {
+            panic!("expected UsageUpdated");
+        };
+        assert_eq!(
+            usage.five_hour,
+            Some(UsageLimit {
+                utilization_percent: 10,
+                resets_at_ms: None,
+                severity: UsageSeverity::Unknown,
+            })
+        );
+        assert_eq!(usage.seven_day, None);
+        assert!(usage.model_scoped.is_empty());
+    }
+
+    #[test]
+    fn a_usage_response_without_rate_limits_or_a_failed_subtype_is_dropped() {
+        for line in [
+            r#"{"type":"control_response","response":{"subtype":"success","request_id":"app-usage","response":{}}}"#,
+            r#"{"type":"control_response","response":{"subtype":"error","request_id":"app-usage","error":"x"}}"#,
+        ] {
+            assert!(map_wire_line(line, 1).is_empty(), "{line}");
+        }
+    }
+
+    #[test]
+    fn get_usage_line_matches_the_wire_shape_in_the_report() {
+        assert_eq!(
+            serde_json::from_str::<Value>(build_get_usage_line().trim_end()).unwrap(),
+            json!({"type":"control_request","request_id":"app-usage","request":{"subtype":"get_usage","skip_behaviors":true}})
+        );
     }
 
     #[test]
