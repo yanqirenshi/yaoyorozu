@@ -259,19 +259,8 @@ function applyCustomEdgeColors(container: HTMLElement | null): void {
 // はノードの透明度を扱わないため、辺の色の上書き(`applyCustomEdgeColors`)
 // と同じ要領で、描いた直後に `g.ng-node` の `opacity` 属性を直接書き換える。
 // 既定では描かない(非表示 OFF の間はノード自体が存在しないため対象が無い)。
+// 実際の書き換えは `applyNodeVisuals`(issue #606)にまとめた。
 const ARCHIVED_NODE_OPACITY = "0.35";
-
-function applyArchivedNodeOpacity(container: HTMLElement | null): void {
-  container?.querySelectorAll("g.ng-node").forEach((el) => {
-    const core = (el as Element & { __data__?: { _core?: Record<string, unknown> } }).__data__
-      ?._core;
-    if (core?.archived) {
-      el.setAttribute("opacity", ARCHIVED_NODE_OPACITY);
-    } else {
-      el.removeAttribute("opacity");
-    }
-  });
-}
 
 const SIMULATION_RESTART_ALPHA = 0.02;
 const SIMULATION_DEFAULT_ALPHA_TARGET = 0.002;
@@ -596,13 +585,20 @@ function findProfileForRepository(
 }
 
 // 描き直し effect(`HubGraphPage` の `dataKey`。issue #601)が「本当に描き直す
-// 必要があるか」を判定するための、ノードの集合・見た目(ラベル・枠の色)に
-// 影響する値だけを取り出す一群の関数。`pc`/`runningSessions` を丸ごと
-// `JSON.stringify` すると、会話ファイルの行数・更新時刻
-// (`SessionFileDto.line_count`/`modified_at_ms`)まで含まれ、会話が1行進む
-// だけで `.data()` が走ってしまう(そのたびに d3.network がノードを作り直し、
-// 速度がゼロへ戻って再開時に跳ねる。跳ねの揺れ幅自体は
-// `SIMULATION_RESTART_ALPHA` 側で下げている)。
+// 必要があるか」を判定するための、ノードの**集合**に影響する値だけを取り出す
+// 一群の関数。`pc`/`runningSessions` を丸ごと `JSON.stringify` すると、会話
+// ファイルの行数・更新時刻(`SessionFileDto.line_count`/`modified_at_ms`)まで
+// 含まれ、会話が1行進むだけで `.data()` が走ってしまう(そのたびに
+// d3.network がノードを作り直し、速度がゼロへ戻って再開時に跳ねる。跳ねの
+// 揺れ幅自体は `SIMULATION_RESTART_ALPHA` 側で下げている)。
+//
+// issue #606 で、ノードの**集合を変えない「見た目だけ」の値**
+// (実行中の枠の色・ラベルの文字・アーカイブの薄表示)もここから外した。
+// サブエージェントを多数抱えるセッションは `runningToolUseIds` が数秒おきに
+// 変わるため、絞ったあとの `dataKey` でもなお頻繁に変わってしまっていた
+// (枠の色が変わっただけで全ノードを作り直す必要は無い)。見た目だけの値は
+// `buildNodeVisuals`/`applyNodeVisuals`(下記)が `.data()` を呼ばずに直接
+// DOM 属性を書き換える。
 //
 // ノードを識別しない値(`mode`/`slug`/会話ファイルの一覧・行数・読み込み状態、
 // 実行中セッションの `target`/`pending_permission_count`/`current_model`/
@@ -612,49 +608,43 @@ function findProfileForRepository(
 // ので、次に本当の描き直しが起きたときには追いつく。判断に迷う値は、跳ねる
 // より古い表示が残る方を避けたいので含める側に倒した。
 
-// セッション1件分。ラベルは `resolveSessionTitle` の結果そのものを使う
-// (`custom_title`/`ai_title`/`last_prompt` の生の値ではなく)。こうすると、
-// 既にタイトルが確定している会話で `last_prompt` だけが変わっても(= 表示上の
-// タイトルは変わらない)キーが変わらない。
+// セッション1件分。ノードの**集合**に効く値だけ(issue #606)。タイトル・
+// アーカイブ(表示 ON 時)は見た目だけなので `buildNodeVisuals` に任せ、
+// ここには含めない。
 function sessionGraphKey(session: SessionDto) {
   return {
     id: session.session_id,
-    archived: session.archived,
     cwd: session.cwd,
     gitBranch: session.git_branch,
-    title: resolveSessionTitle(session),
-    // サブエージェントのノード(issue #567)。`file_path` がノードの集合、
-    // `toolUseId` が実行中かどうか(#570)、`agentType`/`description` が
-    // ラベル(`subagentDisplayName`)に効く。
-    subagents: session.subagent_files.map((file) => ({
-      filePath: file.file_path,
-      toolUseId: file.tool_use_id,
-      agentType: file.agent_type,
-      description: file.description,
-    })),
+    // サブエージェントのノード(issue #567)。`file_path` の集合がそのまま
+    // ノードの集合(1ファイル=1ノード)。`toolUseId`/`agentType`/`description`
+    // は実行中かどうか(#570)・ラベルの文字に効くだけなので外す。
+    subagentFilePaths: session.subagent_files.map((file) => file.file_path),
   };
 }
 
-// 実行中セッション1件分。`cwd`/`repositoryPath` は実行中 worktree の線
-// (#438)・仮ノードの所属リポジトリに、`processState` はセッションの枠の色に、
-// `runningToolUseIds` はサブエージェントの枠の色(#570)に、`name` は仮ノードの
-// ラベルに効く。
+// 実行中セッション1件分。ノードの**集合**に効く値だけ(issue #606)。
+// `cwd`/`repositoryPath` は実行中 worktree の線(#438)・仮ノードの所属
+// リポジトリに効く(worktree/線の有無が変わる)。`processState`(セッションの
+// 枠の色)・`runningToolUseIds`(サブエージェントの枠の色。#570)・`name`
+// (仮ノードのラベル)は見た目だけなので外す。
 function runningSessionGraphKey(running: RunningSessionSummaryDto) {
   return {
     sessionId: running.session_id,
-    processState: running.process_state,
     cwd: running.cwd,
     repositoryPath: running.repository_path,
-    name: running.name,
-    runningToolUseIds: running.running_tool_use_ids,
   };
 }
 
-// `pc` 全体のうち、ノードの集合・見た目に影響する部分だけ。`repositories`
+// `pc` 全体のうち、ノードの**集合**に影響する部分だけ。`repositories`
 // (ブランチ・worktree の台帳)は会話の進行では変わらない(`reconcile_git_state`
 // 等でしか変わらない)ため、絞らずそのまま使う。絞るべきは高頻度に変わる
 // `sessions` だけ。
-function buildGraphDataKey(pc: PcDto) {
+//
+// `archived` は `showArchived` の状態で分類が変わる(issue #606)。表示 ON
+// なら薄表示だけ(見た目。ノードは存在し続ける)なので外すが、OFF なら
+// アーカイブ済みのノード自体が図から消える(集合が変わる)ので含める。
+function buildGraphDataKey(pc: PcDto, showArchived: boolean) {
   const user = pc.users[0];
   return {
     pcName: pc.pc_name,
@@ -666,9 +656,118 @@ function buildGraphDataKey(pc: PcDto) {
           homeDirectory: user.home_directory,
           repositories: user.repositories,
           sessions: user.sessions.map(sessionGraphKey),
+          ...(showArchived
+            ? {}
+            : {
+                archivedFlags: user.sessions.map((session) => [
+                  session.session_id,
+                  session.archived,
+                ]),
+              }),
         }
       : null,
   };
+}
+
+// ノードの**集合**を変えずに「見た目だけ」が変わる値(issue #606)。
+// `sessionGraphKey`/`runningSessionGraphKey` から外した値(実行中の枠の色・
+// ラベルの文字・アーカイブの薄表示)をノードID単位でまとめる。`corePatch` は
+// インスペクタ(`HubNodeCore`)に積む差分で、開いている間に見た目だけの変化が
+// 来ても(`.data()` を待たずに)最新を表示できるようにする。
+type NodeVisualCircle = { fill: string; stroke: { color: string; width: number } };
+type NodeVisualPatch = {
+  circle: NodeVisualCircle;
+  labelText: string;
+  corePatch: Partial<HubNodeCore>;
+};
+
+function buildNodeVisuals(
+  pc: PcDto | null,
+  runningBySessionId: Map<string, RunningSessionSummaryDto>,
+): Map<string, NodeVisualPatch> {
+  const visuals = new Map<string, NodeVisualPatch>();
+  const user = pc?.users[0];
+  if (!user) return visuals;
+  const sessions = user.sessions;
+  const drawnSessionIds = new Set(sessions.map((session) => session.session_id));
+  sessions.forEach((session) => {
+    const running = runningBySessionId.get(session.session_id) ?? null;
+    const title = resolveSessionTitle(session);
+    visuals.set(`session:${session.session_id}`, {
+      circle: sessionNodeCircleStyle(running),
+      labelText: truncate(title, SESSION_LABEL_MAX_CHARS),
+      corePatch: { sessionTitle: title, archived: session.archived },
+    });
+    session.subagent_files.forEach((file) => {
+      const isRunning = Boolean(
+        file.tool_use_id && running?.running_tool_use_ids.includes(file.tool_use_id),
+      );
+      visuals.set(subagentNodeId(session.session_id, file.file_path), {
+        circle: subagentNodeCircleStyle(isRunning),
+        labelText: truncate(subagentDisplayName(file), SUBAGENT_LABEL_MAX_CHARS),
+        corePatch: {
+          subagentAgentType: file.agent_type,
+          subagentDescription: file.description,
+          subagentParentSessionTitle: title,
+          subagentRunning: isRunning,
+        },
+      });
+    });
+  });
+  // 仮のセッションノード(issue #424。`buildGraphData` 参照)。会話ファイルが
+  // まだ無い間は `running.name` がラベルになる。
+  runningBySessionId.forEach((running, sessionId) => {
+    if (drawnSessionIds.has(sessionId)) return;
+    const title = running.name ?? sessionId.slice(0, SESSION_ID_PREFIX_CHARS);
+    visuals.set(`session:${sessionId}`, {
+      circle: sessionNodeCircleStyle(running),
+      labelText: truncate(title, SESSION_LABEL_MAX_CHARS),
+      corePatch: { sessionTitle: title },
+    });
+  });
+  return visuals;
+}
+
+// `buildNodeVisuals` の結果を、描画済みの `g.ng-node` へ直接書き込む
+// (issue #606)。`.data()` を呼ばないので d3.network はノードを作り直さず、
+// 力学シミュレーションも揺らされない。d3.network の描画(`Nodes.js` の
+// `drawCircle`/`drawCircleLabel`)が読む SVG 属性(`circle.base` の
+// `fill`/`stroke`/`stroke-width`、`text.label` のテキスト)をそのまま
+// 上書きし、`__data__` 側(`circle`/`label.text`/`_core`)も合わせて更新する
+// (右クリックのインスペクタやドラッグが直後に `__data__` を読むため。
+// issue #226 と同じ取り方)。ラベルの文字は d3.network の寸法計算に使われない
+// (`drawCircleLabel` は `label.x`/`label.y` を円の半径から決めた固定値のまま
+// 使い、文字列の実測はしない)ため、テキストだけを書き換えれば箱の寸法とは
+// 無関係に安全に更新できる。戻り値は実際に何か書き換えたノードIDの集合
+// (開いているインスペクタの再描画判定に使う)。
+function applyNodeVisuals(
+  container: HTMLElement | null,
+  visuals: Map<string, NodeVisualPatch>,
+): Set<string> {
+  const touchedIds = new Set<string>();
+  container?.querySelectorAll("g.ng-node").forEach((el) => {
+    const datum = (el as Element & { __data__?: NodeDatum }).__data__;
+    if (!datum) return;
+    const patch = visuals.get(datum.id);
+    if (!patch) return;
+    touchedIds.add(datum.id);
+    const circleEl = el.querySelector("circle.base");
+    circleEl?.setAttribute("fill", patch.circle.fill);
+    circleEl?.setAttribute("stroke", patch.circle.stroke.color);
+    circleEl?.setAttribute("stroke-width", String(patch.circle.stroke.width));
+    datum.circle = { ...(datum.circle as Record<string, unknown>), ...patch.circle };
+    const labelEl = el.querySelector("text.label");
+    if (labelEl && labelEl.textContent !== patch.labelText) labelEl.textContent = patch.labelText;
+    const label = datum.label as Record<string, unknown> | undefined;
+    if (label) label.text = patch.labelText;
+    const core = datum._core as (HubNodeCore & Record<string, unknown>) | undefined;
+    if (core) {
+      Object.assign(core, patch.corePatch);
+      if (core.archived) el.setAttribute("opacity", ARCHIVED_NODE_OPACITY);
+      else el.removeAttribute("opacity");
+    }
+  });
+  return touchedIds;
 }
 
 // `pc`(`get_pc`)と settings のプロファイルから、Pc/User ノード(ハブ再構築
@@ -687,7 +786,8 @@ function buildGraphData(
   // session_id → app が起動している実行中セッション(issue #408)。
   runningBySessionId: Map<string, RunningSessionSummaryDto>,
   // アーカイブ済みのセッションも描くか(issue #496)。OFF(既定)なら
-  // ノード・線ごと図から除く。ON のときは `applyArchivedNodeOpacity` で薄く描く。
+  // ノード・線ごと図から除く。ON のときは `applyNodeVisuals` で薄く描く
+  // (issue #606)。
   showArchived: boolean,
   savedPositions: Record<string, NodePositionDto>,
   currentPositions: Map<string, NodePositionDto>,
@@ -1050,9 +1150,9 @@ function buildGraphData(
   });
 
   // アーカイブ済みは既定では図から除く(issue #496)。表示 ON のときは残し、
-  // 薄く描く(`archived` を core に積んでおき、描画後に `applyArchivedNodeOpacity`
-  // が参照する)。除いたセッションは `drawnSessionIds`(下記)には影響しない
-  // ので、仮ノードの重複判定は常に全件を見る。
+  // 薄く描く(`archived` を core に積んでおき、描画後に `applyNodeVisuals`
+  // が参照する。issue #606)。除いたセッションは `drawnSessionIds`(下記)には
+  // 影響しないので、仮ノードの重複判定は常に全件を見る。
   const visibleSessions = sessions.filter((session) => showArchived || !session.archived);
   const columns = Math.max(
     1,
@@ -1756,7 +1856,7 @@ function buildSessionInspectorContent(
     title: truncate(core.sessionTitle ?? "セッション", SESSION_TITLE_MAX_CHARS),
     fields: [
       // アーカイブ済み(issue #496)。表示 ON のときだけノードが見えるので
-      // (既定 OFF では描かれない)、ノードの薄さ(`applyArchivedNodeOpacity`)
+      // (既定 OFF では描かれない)、ノードの薄さ(`applyNodeVisuals`。issue #606)
       // だけに頼らず文字でも出す。
       ...(core.archived ? [{ label: "アーカイブ", value: "アーカイブ済み" }] : []),
       // 実行中セッション(issue #408)。ノードの枠(色・太さ)だけに頼らず、
@@ -2573,15 +2673,15 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
   // `savedPositions` はGitRepository/GitBranchノードの位置(issue #224)に
   // 反映するため依存に含める。`savedMoves`(issue #558)も同様、変えたら
   // すぐグラフに反映するため含める。
-  // 実行中セッションの状態(issue #408)はセッションノードの枠に出るため、
-  // 変わったら描き直す。アーカイブ済みの表示切り替え(issue #496)も、表示する
-  // ノード自体が変わるため含める。
   // `pc`/`runningSessions` は丸ごとではなく `buildGraphDataKey`/
   // `runningSessionGraphKey` で絞った値を使う(issue #601。理由は各関数の
-  // コメント参照)。`profiles`/`savedPositions`/`savedMoves`/`showArchived` は
-  // もともと小さく、会話の進行では変わらないためそのまま使う。
+  // コメント参照)。issue #606 で、ノードの集合を変えない「見た目だけ」の値
+  // (実行中の枠の色・ラベルの文字・アーカイブの薄表示)もここから外した。
+  // それらは下の `visualKey`/`applyNodeVisuals` が `.data()` を呼ばずに
+  // 直接 DOM 属性を書き換える。`profiles`/`savedPositions`/`savedMoves`/
+  // `showArchived` はもともと小さく、会話の進行では変わらないためそのまま使う。
   const dataKey = JSON.stringify({
-    pc: pc ? buildGraphDataKey(pc) : null,
+    pc: pc ? buildGraphDataKey(pc, showArchived) : null,
     profiles,
     runningSessions: runningSessions.map(runningSessionGraphKey),
     savedPositions,
@@ -2618,10 +2718,11 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
     validPositionKeysRef.current = positionKeys;
     validMoveKeysRef.current = moveKeys;
     rectum.data({ nodes, edges });
-    // 辺ごとの色・ノードの透明度はライブラリが読まないため、描いた直後に
-    // 上書きする(issue #438・#496・#569)。
+    // 辺の色はライブラリが読まないため、描いた直後に上書きする
+    // (issue #438・#569)。ノードの見た目(枠の色・ラベル・薄さ)も、
+    // 作り直した直後の値を揃えるため同じタイミングで書き込む(issue #606)。
     applyCustomEdgeColors(hubPageRef.current);
-    applyArchivedNodeOpacity(hubPageRef.current);
+    applyNodeVisuals(hubPageRef.current, buildNodeVisuals(pc, runningBySessionId));
     restartSimulation(rectum);
     // 開いているインスペクタの中身を、描き直したノードの値で更新する
     // (issue #424)。仮ノードが会話ファイルのできた通常のノードへ置き換わった
@@ -2640,6 +2741,51 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rectum, dataKey]);
+
+  // 見た目だけが変わったとき(issue #606)。`dataKey`(上)からは、ノードの
+  // 集合を変えない値(実行中の枠の色・ラベルの文字・アーカイブの薄表示)を
+  // 外した。ここでは `.data()` を呼ばず、該当ノードの属性だけを直接
+  // 書き換える(`applyNodeVisuals`)。サブエージェントを多数抱えるセッションは
+  // `runningToolUseIds` が数秒おきに変わるため、このeffectは `dataKey` より
+  // 高い頻度で走るが、`.data()` も `restartSimulation` も呼ばないので、
+  // 力学シミュレーションは揺らされない(跳ねない)。
+  const visualKey = JSON.stringify({
+    sessions:
+      pc?.users[0]?.sessions.map((session) => ({
+        id: session.session_id,
+        archived: session.archived,
+        title: resolveSessionTitle(session),
+        subagents: session.subagent_files.map((file) => ({
+          filePath: file.file_path,
+          toolUseId: file.tool_use_id,
+          agentType: file.agent_type,
+          description: file.description,
+        })),
+      })) ?? [],
+    runningSessions: runningSessions.map((running) => ({
+      sessionId: running.session_id,
+      processState: running.process_state,
+      name: running.name,
+      runningToolUseIds: running.running_tool_use_ids,
+    })),
+  });
+  useEffect(() => {
+    const touchedIds = applyNodeVisuals(
+      hubPageRef.current,
+      buildNodeVisuals(pc, runningBySessionId),
+    );
+    // 開いているインスペクタが、いま書き換えたノードを見ているなら更新する。
+    // `_core` はオブジェクトをそのまま書き換えている(`applyNodeVisuals`)ため、
+    // 浅いコピーを作って setState に渡さないと React が変化に気づかない
+    // (同じ参照のままだと再描画されない)。
+    setInspectorCore((prev) => {
+      if (!prev) return prev;
+      const id = nodeIdOfCore(prev);
+      if (!id || !touchedIds.has(id)) return prev;
+      return { ...prev };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rectum, visualKey]);
 
   // ノードの右クリックでインスペクタ(issue #109)を表示する。d3.network の
   // ノードAPI(node.click等)にcontextmenuの仕組みが無いため、描画後のDOMへ
