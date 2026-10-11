@@ -192,7 +192,9 @@ npm run tauri build
 
 - MUST: コミット前に `cargo fmt` と `cargo clippy --all-targets -- -D warnings` を通す。
 - MUST: 開発中のテストは `cargo test -p <触ったクレート>`(基本は `-p domain -p app`)。
-- MUST: **PR を出す直前に 1 回** `cargo test --workspace` を通す。**作業中の繰り返しでは走らせない**。
+- MUST: **Rust を触った PR では、出す直前に 1 回** `cargo test --workspace` を通す。**作業中の繰り返しでは走らせない**。
+  `react/` だけを触った PR では走らせない(Rust のテストが壊れようがない)。
+- MUST: `react/` を触ったら `npx tsc --noEmit -p apps/native/react/tsconfig.json` を通す。
 - `npm run tauri build`(release)は **PR の条件にしない**。リリース作業(`/release`)で必ず走るため、PR 前に走らせるのは同じことの前倒しになる。
   フロントの依存・ビルド設定・`tauri.conf.json` を触ったときだけ、各自の判断で走らせる。
 
