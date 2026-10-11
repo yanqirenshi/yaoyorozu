@@ -89,7 +89,16 @@ npm run tokens       # デザイントークンの CSS を再生成(dev/build �
 npm run lint --workspace=web
 ```
 
-- MUST: コミット前に `npm run web:build` が通ることを確認する。
+**検査は「軽いものは毎回、重いものは PR 直前に 1 回」**(2026-10-11 ユーザー決定。issue #602)。
+
+- MUST: コミット前に `npx tsc --noEmit -p apps/web/tsconfig.json` と `npm run lint --workspace=web` を通す。
+- MUST: **PR を出す直前に 1 回** `npm run web:build` を通す。**作業中の繰り返しでは走らせない**。
+
+`web:build` を毎回から PR 直前の 1 回に変えた根拠(#602 の実測。10/1〜10/11 の全セッションの会話ファイル):
+136 回実行して、**`tsc` と lint を通したあとに `web:build` で初めて見つかった「コードの」失敗は 0 回**。
+落ちた 2 回はどちらも `.next` の古いキャッシュが原因で、`rm -rf apps/web/.next` してから再実行すると通っている
+(消したページの生成型 `.next/types/.../page.js` を参照して `';' expected` になる)。
+**`web:build` が落ちたら、まず `.next` を消して再実行する。** それで通るならコードの欠陥ではない。
 
 ## 7. 将来の移行指針(アーキテクチャを先に大きくしない)
 

@@ -188,7 +188,18 @@ npm run tauri dev
 npm run tauri build
 ```
 
-- MUST: コミット前に `cargo fmt` と `cargo clippy -D warnings` を通す。
+**検査は「軽いものは毎回、重いものは PR 直前に 1 回」**(2026-10-11 ユーザー決定。issue #602)。
+
+- MUST: コミット前に `cargo fmt` と `cargo clippy --all-targets -- -D warnings` を通す。
+- MUST: 開発中のテストは `cargo test -p <触ったクレート>`(基本は `-p domain -p app`)。
+- MUST: **PR を出す直前に 1 回** `cargo test --workspace` を通す。**作業中の繰り返しでは走らせない**。
+- `npm run tauri build`(release)は **PR の条件にしない**。リリース作業(`/release`)で必ず走るため、PR 前に走らせるのは同じことの前倒しになる。
+  フロントの依存・ビルド設定・`tauri.conf.json` を触ったときだけ、各自の判断で走らせる。
+
+この線引きの根拠(#602 の実測。10/1〜10/11 の全セッションの会話ファイル):
+`cargo test --workspace` は 59 回実行して**実際の失敗 0 回**。失敗はすべて開発中の `cargo test -p …`(49 回中 9 回)で捕まっており、
+その後の `--workspace` で初めて落ちた回は無い。`npm run native:build`(release)は 12 回実行して**失敗 0 回**。
+一方 `clippy` は 36 回中 3 回、実際の違反・コンパイルエラーを捕まえている(MUST にふさわしく機能している)。
 - MUST: 動作確認用の exe は必ず `tauri dev --config`(別 identifier・別 Vite ポート・
   `YAOYOROZU_LOCAL_API_PORT`)で作る。**`cargo build` / `cargo run` を直接してできた exe を
   起動しない**。`tauri.conf.json` の既定値(本番の MSI 版と同じ identifier)が埋め込まれ、本番の
