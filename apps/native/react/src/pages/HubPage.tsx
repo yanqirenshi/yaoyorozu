@@ -223,6 +223,15 @@ const HUB_TUNING_SAVE_DEBOUNCE_MS = 500;
 // (`rectum.simulation.simulation`)を直接再開する。alphaTarget はライブラリの
 // 既定値(0.6 の `Simulation.js` の `DEFAULT_OPTIONS.alpha.target` = 0.002)に
 // 戻し、alpha は再描画のたびにノードが大きく動き回らない程度の小さな値にする。
+// alpha の値そのものは issue #601 でさらに下げた: `Rectum.data()` は
+// `Nodes.makeData()` で全ノードを新しいオブジェクトに作り直すため、`x`/`y` は
+// 引き継がれても速度(`vx`/`vy`)はゼロに戻る。そこへ 0.1 の強さで力
+// (`charge`/`collide`/`link`)を一斉にかけると、つり合いの誤差ぶん目に見えて
+// 動く(「跳ねる」)。15 セッションが動いていると描き直しがほぼ絶え間なく
+// 届くため、跳ねも連続する。0.1 → 0.02 にして揺れ幅を抑える(ライブラリ側で
+// ノードを使い回す案 [Foolsgolds/Assholes#125] が入れば、この値を見直す)。
+// 下げすぎると辺の形(`d`)を入れ直す tick が走らず、辺が描かれなくなる
+// (issue #226 の前提)ため、0 にはしない。
 // 色を特別に区別したい辺(issue #438・#569)の印。d3.network 0.6.1 の
 // `Edges.js`(`makeDataLine`)は辺ごとの `line.color` を読まず、Rectum に渡した
 // 既定色で全部の辺を塗る(ライブラリ側に「本来はデータに持たせるべき」という
@@ -264,7 +273,7 @@ function applyArchivedNodeOpacity(container: HTMLElement | null): void {
   });
 }
 
-const SIMULATION_RESTART_ALPHA = 0.1;
+const SIMULATION_RESTART_ALPHA = 0.02;
 const SIMULATION_DEFAULT_ALPHA_TARGET = 0.002;
 type D3SimulationLike = {
   alpha(value: number): D3SimulationLike;
@@ -584,6 +593,82 @@ function findProfileForRepository(
       normalizePathForComparison(profile.repositoryPath) ===
         normalizePathForComparison(repositoryPath),
   );
+}
+
+// 描き直し effect(`HubGraphPage` の `dataKey`。issue #601)が「本当に描き直す
+// 必要があるか」を判定するための、ノードの集合・見た目(ラベル・枠の色)に
+// 影響する値だけを取り出す一群の関数。`pc`/`runningSessions` を丸ごと
+// `JSON.stringify` すると、会話ファイルの行数・更新時刻
+// (`SessionFileDto.line_count`/`modified_at_ms`)まで含まれ、会話が1行進む
+// だけで `.data()` が走ってしまう(そのたびに d3.network がノードを作り直し、
+// 速度がゼロへ戻って再開時に跳ねる。跳ねの揺れ幅自体は
+// `SIMULATION_RESTART_ALPHA` 側で下げている)。
+//
+// ノードを識別しない値(`mode`/`slug`/会話ファイルの一覧・行数・読み込み状態、
+// 実行中セッションの `target`/`pending_permission_count`/`current_model`/
+// `current_permission_mode`/`cli_version`/`peer_messaging` 等)はインスペクタの
+// 表示にしか使わないため含めない。インスペクタの中身自体は、別の effect が
+// 描き直しのたびに最新のノードから取り直している(`setInspectorCore` 参照)
+// ので、次に本当の描き直しが起きたときには追いつく。判断に迷う値は、跳ねる
+// より古い表示が残る方を避けたいので含める側に倒した。
+
+// セッション1件分。ラベルは `resolveSessionTitle` の結果そのものを使う
+// (`custom_title`/`ai_title`/`last_prompt` の生の値ではなく)。こうすると、
+// 既にタイトルが確定している会話で `last_prompt` だけが変わっても(= 表示上の
+// タイトルは変わらない)キーが変わらない。
+function sessionGraphKey(session: SessionDto) {
+  return {
+    id: session.session_id,
+    archived: session.archived,
+    cwd: session.cwd,
+    gitBranch: session.git_branch,
+    title: resolveSessionTitle(session),
+    // サブエージェントのノード(issue #567)。`file_path` がノードの集合、
+    // `toolUseId` が実行中かどうか(#570)、`agentType`/`description` が
+    // ラベル(`subagentDisplayName`)に効く。
+    subagents: session.subagent_files.map((file) => ({
+      filePath: file.file_path,
+      toolUseId: file.tool_use_id,
+      agentType: file.agent_type,
+      description: file.description,
+    })),
+  };
+}
+
+// 実行中セッション1件分。`cwd`/`repositoryPath` は実行中 worktree の線
+// (#438)・仮ノードの所属リポジトリに、`processState` はセッションの枠の色に、
+// `runningToolUseIds` はサブエージェントの枠の色(#570)に、`name` は仮ノードの
+// ラベルに効く。
+function runningSessionGraphKey(running: RunningSessionSummaryDto) {
+  return {
+    sessionId: running.session_id,
+    processState: running.process_state,
+    cwd: running.cwd,
+    repositoryPath: running.repository_path,
+    name: running.name,
+    runningToolUseIds: running.running_tool_use_ids,
+  };
+}
+
+// `pc` 全体のうち、ノードの集合・見た目に影響する部分だけ。`repositories`
+// (ブランチ・worktree の台帳)は会話の進行では変わらない(`reconcile_git_state`
+// 等でしか変わらない)ため、絞らずそのまま使う。絞るべきは高頻度に変わる
+// `sessions` だけ。
+function buildGraphDataKey(pc: PcDto) {
+  const user = pc.users[0];
+  return {
+    pcName: pc.pc_name,
+    systemUuid: pc.system_uuid,
+    user: user
+      ? {
+          userId: user.user_id,
+          userName: user.user_name,
+          homeDirectory: user.home_directory,
+          repositories: user.repositories,
+          sessions: user.sessions.map(sessionGraphKey),
+        }
+      : null,
+  };
 }
 
 // `pc`(`get_pc`)と settings のプロファイルから、Pc/User ノード(ハブ再構築
@@ -2491,10 +2576,14 @@ function HubGraphPage({ initialLayout }: { initialLayout: HubLayoutDto }) {
   // 実行中セッションの状態(issue #408)はセッションノードの枠に出るため、
   // 変わったら描き直す。アーカイブ済みの表示切り替え(issue #496)も、表示する
   // ノード自体が変わるため含める。
+  // `pc`/`runningSessions` は丸ごとではなく `buildGraphDataKey`/
+  // `runningSessionGraphKey` で絞った値を使う(issue #601。理由は各関数の
+  // コメント参照)。`profiles`/`savedPositions`/`savedMoves`/`showArchived` は
+  // もともと小さく、会話の進行では変わらないためそのまま使う。
   const dataKey = JSON.stringify({
-    pc,
+    pc: pc ? buildGraphDataKey(pc) : null,
     profiles,
-    runningSessions,
+    runningSessions: runningSessions.map(runningSessionGraphKey),
     savedPositions,
     savedMoves,
     showArchived,
