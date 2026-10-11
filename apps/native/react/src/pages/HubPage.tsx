@@ -220,9 +220,8 @@ const HUB_TUNING_SAVE_DEBOUNCE_MS = 500;
 // 動かない。d3.network 0.6 で追加された `rectum.simulation.configure()` も
 // 再開はするが、常に `alpha(1)`(最大の強さ)で動かし直すため、再描画の
 // たびに全ノードが大きく動いてしまう。そこで内部の d3 シミュレーション
-// (`rectum.simulation.simulation`)を直接再開する。alphaTarget はライブラリの
-// 既定値(0.6 の `Simulation.js` の `DEFAULT_OPTIONS.alpha.target` = 0.002)に
-// 戻し、alpha は再描画のたびにノードが大きく動き回らない程度の小さな値にする。
+// (`rectum.simulation.simulation`)を直接再開する。alpha は再描画のたびに
+// ノードが大きく動き回らない程度の小さな値にする。
 // alpha の値そのものは issue #601 でさらに下げた: `Rectum.data()` は
 // `Nodes.makeData()` で全ノードを新しいオブジェクトに作り直すため、`x`/`y` は
 // 引き継がれても速度(`vx`/`vy`)はゼロに戻る。そこへ 0.1 の強さで力
@@ -232,6 +231,19 @@ const HUB_TUNING_SAVE_DEBOUNCE_MS = 500;
 // ノードを使い回す案 [Foolsgolds/Assholes#125] が入れば、この値を見直す)。
 // 下げすぎると辺の形(`d`)を入れ直す tick が走らず、辺が描かれなくなる
 // (issue #226 の前提)ため、0 にはしない。
+//
+// alphaTarget はこれまでライブラリの既定値(0.6 の `Simulation.js` の
+// `DEFAULT_OPTIONS.alpha.target` = 0.002)に戻していたが、issue #609 で
+// 0 にした。d3-force は `alpha` が `alphaMin`(既定 0.001)を下回ると
+// シミュレーションを止めるが、`alpha` は `alphaTarget` に向かって減衰する
+// ため、`alphaTarget` が 0.002 のままだと `alpha` は 0.001 を下回れず、
+// シミュレーションが永久に止まらなかった(issue #606 の実機確認で判明:
+// 全ノードに印を付けて `.data()` が1度も呼ばれていないことを確認した状態
+// でも、サブエージェントを60個超抱えるような密集部のノードが動き続けて
+// いた)。密な部分ではこの残留分でも力がつり合わず、見た目に動き続ける。
+// 止めても問題が無いことは issue #609 で実機確認済み(上記の懸念=ドラッグ
+// 後に辺が消える、は `restartSimulation` を描き直しのたびに明示的に呼んで
+// いるため再開できており、再発しない)。
 // 色を特別に区別したい辺(issue #438・#569)の印。d3.network 0.6.1 の
 // `Edges.js`(`makeDataLine`)は辺ごとの `line.color` を読まず、Rectum に渡した
 // 既定色で全部の辺を塗る(ライブラリ側に「本来はデータに持たせるべき」という
@@ -263,7 +275,7 @@ function applyCustomEdgeColors(container: HTMLElement | null): void {
 const ARCHIVED_NODE_OPACITY = "0.35";
 
 const SIMULATION_RESTART_ALPHA = 0.02;
-const SIMULATION_DEFAULT_ALPHA_TARGET = 0.002;
+const SIMULATION_DEFAULT_ALPHA_TARGET = 0;
 type D3SimulationLike = {
   alpha(value: number): D3SimulationLike;
   alphaTarget(value: number): D3SimulationLike;
