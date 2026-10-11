@@ -966,13 +966,12 @@ function buildGraphData(
         worktreeCheckedOutBranch: checkedOutBranchName(worktree, repo),
         worktreeCreatedAtTime: worktree.created_at_time,
       });
-      // GitRepository → GitWorktree(所有。台帳どおり)。
-      edges.push({
-        id: `e${edgeSeq++}`,
-        source: repositoryNodeId,
-        target: worktreeNodeId,
-        line: { width: 2, color: COLOR_BORDER },
-      });
+      // GitRepository → GitWorktree(所有)の線は issue #611 で削除した。
+      // worktree はチェックアウト中のブランチ経由でリポジトリにつながる
+      // (下の #569 の線 → #224 の GitRepository→GitBranch の線)ため、台帳の
+      // 構造は読み取れる。detached HEAD(下記)の worktree はどちらの経由も
+      // 無いため、実行中セッションが指していない限り孤立したノードになる
+      // (ユーザー指示での割り切り)。
 
       // GitWorktree → GitBranch(issue #569。この worktree がチェックアウト
       // しているブランチを示す線。台帳どおり: `worktree.checked_out_branch` は
