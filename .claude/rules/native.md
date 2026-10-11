@@ -200,6 +200,7 @@ npm run tauri build
 `cargo test --workspace` は 59 回実行して**実際の失敗 0 回**。失敗はすべて開発中の `cargo test -p …`(49 回中 9 回)で捕まっており、
 その後の `--workspace` で初めて落ちた回は無い。`npm run native:build`(release)は 12 回実行して**失敗 0 回**。
 一方 `clippy` は 36 回中 3 回、実際の違反・コンパイルエラーを捕まえている(MUST にふさわしく機能している)。
+
 - MUST: 動作確認用の exe は必ず `tauri dev --config`(別 identifier・別 Vite ポート・
   `YAOYOROZU_LOCAL_API_PORT`)で作る。**`cargo build` / `cargo run` を直接してできた exe を
   起動しない**。`tauri.conf.json` の既定値(本番の MSI 版と同じ identifier)が埋め込まれ、本番の
