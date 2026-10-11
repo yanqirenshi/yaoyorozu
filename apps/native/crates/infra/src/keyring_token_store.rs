@@ -62,6 +62,7 @@ impl TokenStore for KeyringTokenStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
 
     // 実キーチェーンを汚さないよう、テスト専用のサービス名(プロセスID込み)を
     // 使い、各テストの最後に必ず delete して片付ける。
@@ -69,8 +70,27 @@ mod tests {
         KeyringTokenStore::with_service(format!("yaoyorozu-test-{name}-{}", std::process::id()))
     }
 
+    // keyring クレートの README(Windows-native の節)は「Windows の資格情報
+    // ストアは呼び出しの順序を保証しないので、マルチスレッドアクセスに注意する
+    // こと」と明記している。このモジュールの4テストはキー名こそ別々だが、
+    // cargo test は既定で各テストを別スレッドで並行実行するため、ストア全体への
+    // 同時呼び出しが発生する。これが issue #604 でまれに観測された失敗
+    // (save_then_load_roundtrips が9回中1回失敗)の原因と見られるため、
+    // このモジュール内のテストは常に1本のスレッドからのみストアへアクセスする
+    // よう、このロックで直列化する。
+    static KEYCHAIN_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    // 他のテストがロック保持中にパニックしても(poisoned)直列化自体は続ける。
+    // ロックの中身は `()` で不変条件は無く、poison は無視してよい。
+    fn lock_keychain() -> std::sync::MutexGuard<'static, ()> {
+        KEYCHAIN_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[test]
     fn load_returns_none_when_nothing_saved() {
+        let _guard = lock_keychain();
         let store = test_store("load-none");
         let loaded = store.load().expect("should not error when entry is absent");
         assert_eq!(loaded, None);
@@ -78,6 +98,7 @@ mod tests {
 
     #[test]
     fn save_then_load_roundtrips() {
+        let _guard = lock_keychain();
         let store = test_store("roundtrip");
         store.save("secret-token").expect("should save");
 
@@ -89,6 +110,7 @@ mod tests {
 
     #[test]
     fn delete_then_load_returns_none() {
+        let _guard = lock_keychain();
         let store = test_store("delete");
         store.save("secret-token").expect("should save");
         store.delete().expect("should delete");
@@ -99,6 +121,7 @@ mod tests {
 
     #[test]
     fn delete_is_idempotent_when_nothing_saved() {
+        let _guard = lock_keychain();
         let store = test_store("delete-idempotent");
         store
             .delete()
