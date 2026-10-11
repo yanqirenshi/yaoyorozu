@@ -36,6 +36,7 @@ import type {
   SessionSummaryDto,
   ViewerTargetDto,
   AppWarningEvent,
+  ClaudeUsageSnapshotDto,
   SettingsCorruptedEvent,
   SettingsDto,
   SettingsInputDto,
@@ -72,6 +73,11 @@ export type {
   ClaudeDirPageDto,
   ClaudeMdDto,
   ClaudeSettingsDto,
+  ClaudeUsageDto,
+  ClaudeUsageSnapshotDto,
+  ModelUsageDto,
+  UsageLimitDto,
+  UsageSeverityDto,
   ConversationDto,
   DeviceCodeDto,
   GitBranchDto,
@@ -181,6 +187,12 @@ export function listRunningSessions(): Promise<RunningSessionSummaryDto[]> {
 // 実行中セッション1つの現在の状態(答え待ちの問い合わせを含む)。無ければ null。
 export function getRunningSession(target: RunningSessionRefDto): Promise<RunningSessionDto | null> {
   return invoke<RunningSessionDto | null>("get_running_session", { target });
+}
+
+// Claude.ai の利用状況(5時間枠・7日枠・モデル別)の、app が最後に取得した値(issue #613)。
+// CLI が1つも動いていない間は更新されないため、`fetched_at_ms` を見て古さを示すこと。
+export function getClaudeUsage(): Promise<ClaudeUsageSnapshotDto> {
+  return invoke<ClaudeUsageSnapshotDto>("get_claude_usage");
 }
 
 // 実行中セッションの途中経過を、この画面へ流し始める(Channel。画面ごとに購読する)。返る関数で
@@ -310,6 +322,17 @@ export function onRunningSessionChanged(
   callback: (event: RunningSessionChangedEvent) => void,
 ): Promise<() => void> {
   const unlisten = listen<RunningSessionChangedEvent>("running-session:changed", (event) => {
+    callback(event.payload);
+  });
+  return unlisten.then((fn) => fn);
+}
+
+// Claude.ai の利用状況が更新された(issue #613)。ペイロードは getClaudeUsage と同じ形
+// (ClaudeUsageSnapshotDto)で、取り直さずそのまま使ってよい。
+export function onClaudeUsageUpdated(
+  callback: (event: ClaudeUsageSnapshotDto) => void,
+): Promise<() => void> {
+  const unlisten = listen<ClaudeUsageSnapshotDto>("claude-usage:updated", (event) => {
     callback(event.payload);
   });
   return unlisten.then((fn) => fn);

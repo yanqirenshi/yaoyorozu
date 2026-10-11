@@ -18,9 +18,9 @@
 //!   app が求める。
 
 use crate::dto::{
-    AddressedProgressDto, AppErrorDto, AppWarningEventDto, PermissionBehaviorDto,
-    PermissionSuggestionDto, RunningSessionChangedEventDto, RunningSessionDto,
-    RunningSessionRefDto, RunningSessionSummaryDto, RunningSessionSwitchDto,
+    AddressedProgressDto, AppErrorDto, AppWarningEventDto, ClaudeUsageSnapshotDto,
+    PermissionBehaviorDto, PermissionSuggestionDto, RunningSessionChangedEventDto,
+    RunningSessionDto, RunningSessionRefDto, RunningSessionSummaryDto, RunningSessionSwitchDto,
     StartRunningSessionDto, WorktreeSpecDto,
 };
 use crate::state::{
@@ -47,6 +47,14 @@ pub const RUNNING_SESSION_CHANGED_EVENT: &str = "running-session:changed";
 
 /// 画面に出す軽い警告(復元できなかったセッションの理由など。native.md §3.2)。
 pub const APP_WARNING_EVENT: &str = "app:warning";
+
+/// Claude.ai の利用状況が更新されたことの通知(issue #613)。データ本体は
+/// `get_claude_usage` で取り直す(native.md §3.2。ペイロードはそのまま使えるが、
+/// 他のイベントと流儀を揃える)。
+pub const CLAUDE_USAGE_CHANGED_EVENT: &str = "claude-usage:updated";
+
+/// 利用状況の定期取得の間隔(issue #613。デザイン(全体)決定: 5分おき)。
+const USAGE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
 /// 前回動かしていた実行中セッションの控え(issue #459)。`app_data_dir` 直下に置く。
 fn restorable_running_sessions_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, AppError> {
@@ -172,6 +180,52 @@ fn find_slot_mut<'a>(
         .find(|slot| target.matches(&slot.session))
 }
 
+/// 利用状況を聞く相手(動いているもののうち、一覧の先頭。issue #613)。値はアカウント単位
+/// なので1つで足りる。選び方を決定的にする(毎回違う相手に聞くと、応答の遅いCLIに
+/// 当たったときの挙動が読みにくくなるため。デザイン(全体)の指示)。
+fn pick_usage_source(
+    running_sessions: &[RunningSessionSlot],
+) -> Option<Arc<dyn app::RunningProcess>> {
+    running_sessions
+        .iter()
+        .find(|slot| slot.session.process_state != ProcessState::Exited)
+        .map(|slot| slot.process.clone())
+}
+
+/// 利用状況を5分おきに取得し続ける(issue #613)。動いている実行中セッションが1つも
+/// 無くなったら `usage_polling_active` を偽に戻し、このループ自身も終える(「動いていないのに
+/// 走り続ける」ことがないよう明示的に止める。デザイン(全体)の指示)。次に実行中セッションが
+/// 起動したとき(`start_running_session`)、`usage_polling_active` が偽ならもう一度始める。
+///
+/// 取得した値は、聞いた先のプロセスの出来事( `RunningSessionEvent::UsageUpdated`)として
+/// `spawn_event_loop` に届き、そこで `AppState.claude_usage` へ反映される(ここでは
+/// 要求を書き込むだけ)。
+pub(crate) fn spawn_usage_polling(app_handle: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(USAGE_POLL_INTERVAL).await;
+            let process = {
+                let state = app_handle.state::<Mutex<AppState>>();
+                let mut guard = state.lock().await;
+                let process = pick_usage_source(&guard.running_sessions);
+                if process.is_none() {
+                    guard.usage_polling_active = false;
+                }
+                process
+            };
+            let Some(process) = process else {
+                break;
+            };
+            let result = tauri::async_runtime::spawn_blocking(move || process.get_usage())
+                .await
+                .unwrap_or_else(|_| Err(background_failed()));
+            if let Err(e) = result {
+                eprintln!("利用状況の定期取得に失敗しました: {e}");
+            }
+        }
+    });
+}
+
 fn changed_event(
     session: &RunningSessionByApp,
     exit_code: Option<i32>,
@@ -216,61 +270,101 @@ fn spawn_event_loop(
                 _ => None,
             };
 
-            let (notify, subscribers, exited_abnormally) = {
+            let (notify, subscribers, exited_abnormally, usage_payload, turn_finished_process) = {
                 let state = app_handle.state::<Mutex<AppState>>();
                 let mut guard = state.lock().await;
-                match find_slot_mut(&mut guard, &target) {
-                    Some(slot) => {
-                        let before = watched(&slot.session);
-                        // 起動直後の終了など、理由を画面に出す必要があるものは名前を控えておく
-                        // (ロックの外で emit するため)。
-                        let display_name = slot
-                            .session
-                            .base
-                            .name
-                            .clone()
-                            .unwrap_or_else(|| slot.session.base.session_id.clone());
-                        app::apply_running_session_event(
-                            &mut slot.session,
-                            &addressed.event,
-                            now_ms(),
-                        );
-                        // 選べるモデルの一覧が届いたら、画面が取り直せるよう知らせる。
-                        let models_listed = match &addressed.event {
-                            RunningSessionEvent::ModelsListed(models) => {
-                                slot.available_models = models.clone();
-                                true
+                // アカウント単位の値なので、この会話(`slot`)ではなく `AppState` 側へ直接反映する
+                // (issue #613)。対象の `slot` が無くなっていても(終了済みを忘れた等)反映する。
+                let usage_payload =
+                    if let RunningSessionEvent::UsageUpdated(usage) = &addressed.event {
+                        guard.claude_usage = app::ClaudeUsageSnapshot {
+                            usage: Some(usage.clone()),
+                            fetched_at_ms: Some(now_ms()),
+                        };
+                        Some(ClaudeUsageSnapshotDto::from(guard.claude_usage.clone()))
+                    } else {
+                        None
+                    };
+                let (notify, subscribers, exited_abnormally, turn_finished_process) =
+                    match find_slot_mut(&mut guard, &target) {
+                        Some(slot) => {
+                            let before = watched(&slot.session);
+                            // 起動直後の終了など、理由を画面に出す必要があるものは名前を控えておく
+                            // (ロックの外で emit するため)。
+                            let display_name = slot
+                                .session
+                                .base
+                                .name
+                                .clone()
+                                .unwrap_or_else(|| slot.session.base.session_id.clone());
+                            app::apply_running_session_event(
+                                &mut slot.session,
+                                &addressed.event,
+                                now_ms(),
+                            );
+                            // 選べるモデルの一覧が届いたら、画面が取り直せるよう知らせる。
+                            let models_listed = match &addressed.event {
+                                RunningSessionEvent::ModelsListed(models) => {
+                                    slot.available_models = models.clone();
+                                    true
+                                }
+                                _ => false,
+                            };
+                            let changed = before != watched(&slot.session)
+                                || exit_code.is_some()
+                                || models_listed;
+                            let subscribers = if addressed.as_progress().is_some() {
+                                slot.subscribers.clone()
+                            } else {
+                                Vec::new()
+                            };
+                            if matches!(addressed.event, RunningSessionEvent::Exited { .. }) {
+                                slot.subscribers.clear();
                             }
-                            _ => false,
-                        };
-                        let changed = before != watched(&slot.session)
-                            || exit_code.is_some()
-                            || models_listed;
-                        let subscribers = if addressed.as_progress().is_some() {
-                            slot.subscribers.clone()
-                        } else {
-                            Vec::new()
-                        };
-                        if matches!(addressed.event, RunningSessionEvent::Exited { .. }) {
-                            slot.subscribers.clear();
+                            let exited_abnormally = match &addressed.event {
+                                RunningSessionEvent::Exited { stderr_tail, .. }
+                                    if !stderr_tail.is_empty() =>
+                                {
+                                    Some((display_name, stderr_tail.clone()))
+                                }
+                                _ => None,
+                            };
+                            // ターンが終わったら、使った直後に数字が動くよう利用状況を取り直す
+                            // (issue #613。デザイン(全体)決定: ターン終了時 + 5分おき)。
+                            let turn_finished_process = matches!(
+                                addressed.event,
+                                RunningSessionEvent::Progress(
+                                    domain::ProgressEvent::TurnFinished { .. }
+                                )
+                            )
+                            .then(|| slot.process.clone());
+                            (
+                                changed.then(|| changed_event(&slot.session, exit_code)),
+                                subscribers,
+                                exited_abnormally,
+                                turn_finished_process,
+                            )
                         }
-                        let exited_abnormally = match &addressed.event {
-                            RunningSessionEvent::Exited { stderr_tail, .. }
-                                if !stderr_tail.is_empty() =>
-                            {
-                                Some((display_name, stderr_tail.clone()))
-                            }
-                            _ => None,
-                        };
-                        (
-                            changed.then(|| changed_event(&slot.session, exit_code)),
-                            subscribers,
-                            exited_abnormally,
-                        )
-                    }
-                    None => (None, Vec::new(), None),
-                }
+                        None => (None, Vec::new(), None, None),
+                    };
+                (
+                    notify,
+                    subscribers,
+                    exited_abnormally,
+                    usage_payload,
+                    turn_finished_process,
+                )
             };
+            if let Some(payload) = usage_payload {
+                let _ = app_handle.emit(CLAUDE_USAGE_CHANGED_EVENT, payload);
+            }
+            if let Some(process) = turn_finished_process {
+                tauri::async_runtime::spawn_blocking(move || {
+                    if let Err(e) = process.get_usage() {
+                        eprintln!("ターン終了時の利用状況の取得に失敗しました: {e}");
+                    }
+                });
+            }
             if let Some((name, stderr_tail)) = exited_abnormally {
                 // 起動直後の終了など、CLI 自身が理由を残して終わったときは画面にも出す
                 // (native.md §3.2。issue #504)。正常系(利用者の「停止」)では何も出ない
@@ -578,7 +672,7 @@ pub async fn start_running_session(
 
     let target = RunningSessionRef::of(&started.session);
     let remembered_project = resumed_project.clone();
-    let (dto, payload, remembered) = {
+    let (dto, payload, remembered, start_usage_polling) = {
         let mut guard = state.lock().await;
         release(&mut guard);
         // 同じ会話の終了済みは置き換え、終了済みが増えすぎないよう古いものを忘れる。
@@ -607,10 +701,18 @@ pub async fn start_running_session(
         let payload = changed_event(&slot.session, None);
         let remembered = slot.session.clone();
         guard.running_sessions.push(slot);
-        (dto, payload, remembered)
+        // 利用状況の定期取得(issue #613)は、動いている実行中セッションが1つも無いときは
+        // 止めている(`spawn_usage_polling`)。起動したことで無い状態から有る状態に変わった
+        // ときだけ、ここで改めて始める(動いている間は、既存のループがそのまま使われる)。
+        let start_usage_polling = !guard.usage_polling_active;
+        guard.usage_polling_active = true;
+        (dto, payload, remembered, start_usage_polling)
     };
     spawn_event_loop(app_handle.clone(), target, session_id.clone(), rx);
     let _ = app_handle.emit(RUNNING_SESSION_CHANGED_EVENT, payload);
+    if start_usage_polling {
+        spawn_usage_polling(app_handle.clone());
+    }
 
     // 次の app の起動で再開できるよう、指定を覚える(issue #459。ロックの外で書く)。
     let project = remembered_project;
@@ -655,6 +757,18 @@ pub async fn list_running_sessions(
         .collect();
     summaries.sort_by_key(|s| s.target.started_at);
     Ok(summaries.into_iter().map(Into::into).collect())
+}
+
+/// Claude.ai の利用状況(5時間枠・7日枠・モデル別)の、app が最後に取得した値(issue #613)。
+/// CLI が1つも動いていない間は更新されていないため、呼び出し側は `fetched_at_ms` を見て
+/// 古さを示すこと。取得そのものは `claude-usage:updated` イベント(ターン終了時・5分おき)が
+/// 契機となるため、この command は持っている値を返すだけ(新たに `get_usage` を要求しない)。
+#[tauri::command]
+pub async fn get_claude_usage(
+    state: tauri::State<'_, Mutex<AppState>>,
+) -> Result<ClaudeUsageSnapshotDto, AppErrorDto> {
+    let guard = state.lock().await;
+    Ok(guard.claude_usage.clone().into())
 }
 
 /// 実行中セッション1つの現在の状態(答え待ちの問い合わせを含む)。無ければ `None`。

@@ -140,6 +140,16 @@ pub struct AppState {
     /// 起動する。多重起動を防ぐため1つだけ持つ(利用者が手で起動したものはここに乗らず、
     /// 応答の確認だけで検知する)。app 終了時にはこれだけを止める(手動起動分は対象外)。
     pub web_dev_server: Option<WebDevServerSlot>,
+    /// Claude.ai の利用状況(5時間枠・7日枠・モデル別。issue #613)。アカウント単位の値で、
+    /// `github_login` と同じく外部から取得して持っているだけのランタイム状態(設定ファイルには
+    /// 保存しない)。CLI が1つも動いていない間は更新されないため、取得できた最後の値と
+    /// 取得時刻をそのまま持ち続ける(画面は古い値を薄く出す)。
+    pub claude_usage: app::ClaudeUsageSnapshot,
+    /// 利用状況の定期取得(5分おき)が動いているか(issue #613)。動いている実行中セッションが
+    /// 1つもなくなったら偽に戻し、ループ自身を終える([`crate::running_session::spawn_usage_polling`])。
+    /// 次に実行中セッションが起動したとき(`start_running_session`)、これが偽ならループを
+    /// 新たに起動する。
+    pub usage_polling_active: bool,
 }
 
 /// app が起動した Web アプリの開発サーバ1つ(issue #530)。
@@ -256,6 +266,8 @@ impl AppState {
                 session_scan_generation: 0,
                 session_rescan: app::RescanQueue::default(),
                 web_dev_server: None,
+                claude_usage: app::ClaudeUsageSnapshot::default(),
+                usage_polling_active: false,
             },
             recovered_from_corruption: loaded.recovered_from_corruption,
             evacuated: loaded.evacuated,

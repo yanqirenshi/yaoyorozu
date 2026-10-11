@@ -2,7 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import Badge from "./Badge";
 import LoadingIcon from "./LoadingIcon";
 import SelectButton from "./SelectButton";
-import type { RunningPermissionModeDto, RunningSessionDto, StartModelDto } from "./api/types";
+import type {
+  ClaudeUsageSnapshotDto,
+  RunningPermissionModeDto,
+  RunningSessionDto,
+  StartModelDto,
+} from "./api/types";
 import {
   PERMISSION_MODE_LABELS,
   MAX_SESSION_NAME_CHARS,
@@ -14,6 +19,10 @@ import {
   processStateLabel,
   processStateTone,
   selectableModeOf,
+  usageSeverityTone,
+  usageLimitLabel,
+  usageResetsAtLabel,
+  usageFetchedAtLabel,
 } from "./runningSessionLabels";
 
 // 会話ビューの上部に出す、実行中セッション(app が起動したままの claude)の状態表示
@@ -32,6 +41,13 @@ import {
 //   (既定 / fable / opus / sonnet / haiku)から選ばせる(自由入力にしない)。
 
 type MenuKey = "mode" | "model" | "start-model";
+
+/** 利用状況バッジのツールチップ(issue #613)。「見ようと思えば見られる形」でリセット時刻を
+ * ローカル時刻にして添える(常時表示はしない。場所が狭いため)。読めなければ枠名だけ。 */
+function resetsAtTitle(frameLabel: string, resetsAtMs: number | null): string {
+  const local = usageResetsAtLabel(resetsAtMs);
+  return local ? `${frameLabel}(リセット: ${local})` : frameLabel;
+}
 
 const MODES: RunningPermissionModeDto[] = ["default", "plan", "accept_edits", "auto"];
 
@@ -66,6 +82,11 @@ type Props = {
   sessionTitle: string;
   /** セッション名のボタンから呼ぶ(issue #524)。呼び出し側でモーダルを開く。 */
   onRenameSession: () => void;
+  /** Claude.ai の利用状況(issue #613)。アカウント全体の値で、この会話の値ではない。 */
+  claudeUsage: ClaudeUsageSnapshotDto;
+  /** 動いている実行中セッション(claude CLI)が1つ以上あるか。無ければ `claudeUsage` は
+   * 更新されないため、表示を薄くして古い値であることを示す(issue #613)。 */
+  claudeCliAlive: boolean;
 };
 
 export default function RunningSessionBar({
@@ -85,6 +106,8 @@ export default function RunningSessionBar({
   starting,
   sessionTitle,
   onRenameSession,
+  claudeUsage,
+  claudeCliAlive,
 }: Props) {
   const alive = running !== null && running.process_state !== "exited";
   const state = running?.process_state ?? null;
@@ -146,6 +169,55 @@ export default function RunningSessionBar({
       <span className="running-bar-status" role="status">
         <Badge tone={processStateTone(state)} label={processStateLabel(state)} size="small" />
       </span>
+
+      {/* Claude.ai の利用状況(issue #613)。アカウント全体の値であり、この会話の値ではない
+          ことが伝わるよう「セッション」は使わず、「5時間」「今週」の表記にする。CLI が1つも
+          動いていないとき(claudeCliAlive が偽)は、最後に取れた値を薄く出し取得時刻を添える
+          (「取得できません」より役に立つ。デザイン(全体)の指示)。一度も取れていなければ
+          何も出さない。 */}
+      {claudeUsage.usage && (
+        <span
+          className={`running-bar-usage${claudeCliAlive ? "" : " running-bar-usage-stale"}`}
+          role="status"
+          aria-label="Claude.ai の利用状況(アカウント全体)"
+        >
+          {claudeUsage.usage.five_hour && (
+            <span title={resetsAtTitle("直近5時間", claudeUsage.usage.five_hour.resets_at_ms)}>
+              <Badge
+                tone={usageSeverityTone(claudeUsage.usage.five_hour.severity)}
+                label={usageLimitLabel("直近5時間", claudeUsage.usage.five_hour)}
+                size="small"
+              />
+            </span>
+          )}
+          {claudeUsage.usage.seven_day && (
+            <span title={resetsAtTitle("今週(全モデル)", claudeUsage.usage.seven_day.resets_at_ms)}>
+              <Badge
+                tone={usageSeverityTone(claudeUsage.usage.seven_day.severity)}
+                label={usageLimitLabel("今週", claudeUsage.usage.seven_day)}
+                size="small"
+              />
+            </span>
+          )}
+          {claudeUsage.usage.model_scoped.map((model) => (
+            <span
+              key={model.display_name}
+              title={resetsAtTitle(`今週の${model.display_name}`, model.limit.resets_at_ms)}
+            >
+              <Badge
+                tone={usageSeverityTone(model.limit.severity)}
+                label={usageLimitLabel(`今週の${model.display_name}`, model.limit)}
+                size="small"
+              />
+            </span>
+          ))}
+          {!claudeCliAlive && (
+            <span className="running-bar-usage-fetched-at" title="claude が動いていないため更新していません">
+              {usageFetchedAtLabel(claudeUsage.fetched_at_ms) ?? "未取得"}取得
+            </span>
+          )}
+        </span>
+      )}
 
       <span className="running-bar-switch">
         <SelectButton

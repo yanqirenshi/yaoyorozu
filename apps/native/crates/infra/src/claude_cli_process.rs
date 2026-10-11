@@ -9,9 +9,9 @@ use crate::claude_cli::{
     claude_executable, map_spawn_error, ClaudeProgram, DESKTOP_LINEAGE_ENV_VARS,
 };
 use crate::claude_stream_json::{
-    build_args, build_initialize_line, build_interrupt_line, build_permission_response_line,
-    build_set_model_line, build_set_permission_mode_line, build_user_message_line, map_wire_line,
-    PendingSwitches,
+    build_args, build_get_usage_line, build_initialize_line, build_interrupt_line,
+    build_permission_response_line, build_set_model_line, build_set_permission_mode_line,
+    build_user_message_line, map_wire_line, PendingSwitches,
 };
 use app::{
     AppError, RunningPermissionMode, RunningProcess, RunningSessionEvent, RunningSessionEventSink,
@@ -390,6 +390,10 @@ impl RunningProcess for ClaudeCliProcess {
         self.write_switch(RunningSessionSwitch::PermissionMode(mode), |id| {
             build_set_permission_mode_line(id, mode.as_cli_value())
         })
+    }
+
+    fn get_usage(&self) -> Result<(), AppError> {
+        self.write_line(&build_get_usage_line())
     }
 
     fn stop(&self) {

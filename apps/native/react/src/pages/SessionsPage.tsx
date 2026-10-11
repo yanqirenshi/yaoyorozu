@@ -62,6 +62,7 @@ import {
   processStateLabel,
   selectableModeOf,
 } from "../runningSessionLabels";
+import { useClaudeUsage } from "../useClaudeUsage";
 import { useRunningSession } from "../useRunningSession";
 import { useRunningSessionList } from "../useRunningSessionList";
 import ViewerSideMenu from "../ViewerSideMenu";
@@ -531,6 +532,10 @@ function SessionsPage({ nav }: SessionsPageProps) {
   // 一覧(会話ファイルから作る)に無いもの。左の一覧に並べ、選ぶと空の会話として開く
   // (URL は `session` だけで `project` を持たない)。会話ファイルができたら通常の行になる。
   const runningList = useRunningSessionList();
+  // Claude.ai の利用状況(issue #613)。アカウント単位の値で、状態バー(会話ごとの表示域)に
+  // 出すが会話の値ではない。CLI が1つも動いていなければ `RunningSessionBar` が値を薄く出す。
+  const claudeUsage = useClaudeUsage();
+  const claudeCliAlive = runningList.some((s) => s.process_state !== "exited");
   const knownSessionIds = new Set(allSessions.map(({ session }) => session.id));
   const pendingSummaries = runningList.filter(
     (s) => s.process_state !== "exited" && !knownSessionIds.has(s.session_id),
@@ -1172,6 +1177,8 @@ function SessionsPage({ nav }: SessionsPageProps) {
                 starting={starting}
                 sessionTitle={selectedSummary?.title ?? ""}
                 onRenameSession={() => setRenameDialogOpen(true)}
+                claudeUsage={claudeUsage}
+                claudeCliAlive={claudeCliAlive}
               />
             )}
             {/* メッセージ入力欄・添付サムネイルは、選んでいる対象があるときだけ描く
