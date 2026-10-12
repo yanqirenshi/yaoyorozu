@@ -170,51 +170,62 @@ export default function RunningSessionBar({
         <Badge tone={processStateTone(state)} label={processStateLabel(state)} size="small" />
       </span>
 
-      {/* Claude.ai の利用状況(issue #613)。アカウント全体の値であり、この会話の値ではない
-          ことが伝わるよう「セッション」は使わず、「5時間」「今週」の表記にする。CLI が1つも
-          動いていないとき(claudeCliAlive が偽)は、最後に取れた値を薄く出し取得時刻を添える
-          (「取得できません」より役に立つ。デザイン(全体)の指示)。一度も取れていなければ
-          何も出さない。 */}
-      {claudeUsage.usage && (
+      {/* Claude.ai の利用状況(issue #613・#615)。アカウント全体の値であり、この会話の値では
+          ないことが伝わるよう「セッション」は使わず、「5時間」「今週」の表記にする。
+          - CLI が1つも動いていないとき(claudeCliAlive が偽)は、最後に取れた値を薄く出し
+            取得時刻を添える(「取得できません」より役に立つ。デザイン(全体)の指示)
+          - 一度も取れていない間も、CLI が動いているなら(これから取れるので)同じ場所に
+            控えめな「取得中」を出す(issue #615: 出さないと「機能があること自体に気づけない」)。
+            動いている CLI が無く、これから取れる見込みも無いときは、誤解を招く「取得中」を
+            出さず何も描かない。 */}
+      {(claudeUsage.usage || claudeCliAlive) && (
         <span
-          className={`running-bar-usage${claudeCliAlive ? "" : " running-bar-usage-stale"}`}
+          className={`running-bar-usage${
+            claudeUsage.usage && claudeCliAlive ? "" : " running-bar-usage-stale"
+          }`}
           role="status"
           aria-label="Claude.ai の利用状況(アカウント全体)"
         >
-          {claudeUsage.usage.five_hour && (
-            <span title={resetsAtTitle("直近5時間", claudeUsage.usage.five_hour.resets_at_ms)}>
-              <Badge
-                tone={usageSeverityTone(claudeUsage.usage.five_hour.severity)}
-                label={usageLimitLabel("直近5時間", claudeUsage.usage.five_hour)}
-                size="small"
-              />
-            </span>
-          )}
-          {claudeUsage.usage.seven_day && (
-            <span title={resetsAtTitle("今週(全モデル)", claudeUsage.usage.seven_day.resets_at_ms)}>
-              <Badge
-                tone={usageSeverityTone(claudeUsage.usage.seven_day.severity)}
-                label={usageLimitLabel("今週", claudeUsage.usage.seven_day)}
-                size="small"
-              />
-            </span>
-          )}
-          {claudeUsage.usage.model_scoped.map((model) => (
-            <span
-              key={model.display_name}
-              title={resetsAtTitle(`今週の${model.display_name}`, model.limit.resets_at_ms)}
-            >
-              <Badge
-                tone={usageSeverityTone(model.limit.severity)}
-                label={usageLimitLabel(`今週の${model.display_name}`, model.limit)}
-                size="small"
-              />
-            </span>
-          ))}
-          {!claudeCliAlive && (
-            <span className="running-bar-usage-fetched-at" title="claude が動いていないため更新していません">
-              {usageFetchedAtLabel(claudeUsage.fetched_at_ms) ?? "未取得"}取得
-            </span>
+          {claudeUsage.usage ? (
+            <>
+              {claudeUsage.usage.five_hour && (
+                <span title={resetsAtTitle("直近5時間", claudeUsage.usage.five_hour.resets_at_ms)}>
+                  <Badge
+                    tone={usageSeverityTone(claudeUsage.usage.five_hour.severity)}
+                    label={usageLimitLabel("直近5時間", claudeUsage.usage.five_hour)}
+                    size="small"
+                  />
+                </span>
+              )}
+              {claudeUsage.usage.seven_day && (
+                <span title={resetsAtTitle("今週(全モデル)", claudeUsage.usage.seven_day.resets_at_ms)}>
+                  <Badge
+                    tone={usageSeverityTone(claudeUsage.usage.seven_day.severity)}
+                    label={usageLimitLabel("今週", claudeUsage.usage.seven_day)}
+                    size="small"
+                  />
+                </span>
+              )}
+              {claudeUsage.usage.model_scoped.map((model) => (
+                <span
+                  key={model.display_name}
+                  title={resetsAtTitle(`今週の${model.display_name}`, model.limit.resets_at_ms)}
+                >
+                  <Badge
+                    tone={usageSeverityTone(model.limit.severity)}
+                    label={usageLimitLabel(`今週の${model.display_name}`, model.limit)}
+                    size="small"
+                  />
+                </span>
+              ))}
+              {!claudeCliAlive && (
+                <span className="running-bar-usage-fetched-at" title="claude が動いていないため更新していません">
+                  {usageFetchedAtLabel(claudeUsage.fetched_at_ms) ?? "未取得"}取得
+                </span>
+              )}
+            </>
+          ) : (
+            <span className="running-bar-usage-fetched-at">利用状況を取得中…</span>
           )}
         </span>
       )}
