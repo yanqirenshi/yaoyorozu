@@ -192,10 +192,12 @@ fn pick_usage_source(
         .map(|slot| slot.process.clone())
 }
 
-/// 利用状況を5分おきに取得し続ける(issue #613)。動いている実行中セッションが1つも
-/// 無くなったら `usage_polling_active` を偽に戻し、このループ自身も終える(「動いていないのに
-/// 走り続ける」ことがないよう明示的に止める。デザイン(全体)の指示)。次に実行中セッションが
-/// 起動したとき(`start_running_session`)、`usage_polling_active` が偽ならもう一度始める。
+/// 利用状況を取得し続ける(issue #613・#615)。**最初の1回は待たずに取得し、以後は5分おき**
+/// (issue #615: 起動直後に送信しないまま待つと、5分間ずっと何も出ず機能に気づけなかった)。
+/// 動いている実行中セッションが1つも無くなったら `usage_polling_active` を偽に戻し、この
+/// ループ自身も終える(「動いていないのに走り続ける」ことがないよう明示的に止める。デザイン
+/// (全体)の指示)。次に実行中セッションが起動したとき(`start_running_session`)、
+/// `usage_polling_active` が偽ならもう一度始める(= セッションが動き出した時点で1回取れる)。
 ///
 /// 取得した値は、聞いた先のプロセスの出来事( `RunningSessionEvent::UsageUpdated`)として
 /// `spawn_event_loop` に届き、そこで `AppState.claude_usage` へ反映される(ここでは
@@ -203,7 +205,6 @@ fn pick_usage_source(
 pub(crate) fn spawn_usage_polling(app_handle: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
-            tokio::time::sleep(USAGE_POLL_INTERVAL).await;
             let process = {
                 let state = app_handle.state::<Mutex<AppState>>();
                 let mut guard = state.lock().await;
@@ -220,8 +221,9 @@ pub(crate) fn spawn_usage_polling(app_handle: tauri::AppHandle) {
                 .await
                 .unwrap_or_else(|_| Err(background_failed()));
             if let Err(e) = result {
-                eprintln!("利用状況の定期取得に失敗しました: {e}");
+                eprintln!("利用状況の取得に失敗しました: {e}");
             }
+            tokio::time::sleep(USAGE_POLL_INTERVAL).await;
         }
     });
 }
