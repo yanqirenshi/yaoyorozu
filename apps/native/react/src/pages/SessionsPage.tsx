@@ -537,8 +537,19 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const claudeUsage = useClaudeUsage();
   const claudeCliAlive = runningList.some((s) => s.process_state !== "exited");
   const knownSessionIds = new Set(allSessions.map(({ session }) => session.id));
+  // 一覧に出す側だけ、このプロファイルのリポジトリのセッションに絞る(issue #618)。
+  // `useRunningSessionList()` は app が持つ実行中セッション全部(他プロファイルを含む)を
+  // 返すため、ここで絞らないと他プロファイルで起動した会話が一覧に混ざる。
+  // `repository_path` が空・一致しないもの(app の外で起動した等、プロファイルに紐づかない
+  // セッション)は出さない方に倒す(今回の訴えは「関係ないものが出る」であり、出し忘れより
+  // 安全側。issue #618 の判断)。`claudeCliAlive`(利用状況。issue #613)はアカウント単位の
+  // 値のため、ここでは絞らず `runningList` のまま使う。
   const pendingSummaries = runningList.filter(
-    (s) => s.process_state !== "exited" && !knownSessionIds.has(s.session_id),
+    (s) =>
+      s.process_state !== "exited" &&
+      !knownSessionIds.has(s.session_id) &&
+      !!repositoryPath &&
+      s.repository_path === repositoryPath,
   );
   // session_id → 実行中セッション(issue #491)。一覧の行の色分け・バッジ・区分(#506)に使う。
   // ハブの runningBySessionId(HubPage.tsx)と同じ作り: 終了したもの(一覧には残る)は
