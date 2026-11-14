@@ -46,6 +46,24 @@ const config = {
 
     // GitHub の個人用アクセストークン
     github: { token: process.env.REACT_APP_GITHU_PARSONAL_TOKEN },
+
+    // 図の設定
+    diagrams: {
+        // クラス図: 箱のヘッダーを、クリーンアーキテクチャの層 (classes[].layer) で塗り分ける。
+        // 色は apps/web のクラス図と同じ (apps/web/src/data/classArchitecture.ts の fill。値は apps/web/src/app/tokens.css)。
+        // SVG の属性に入るので、var(--…) ではなく実際の色を書く。
+        classes: {
+            header: {
+                by: 'layer',
+                colors: {
+                    enterprise:  '#e6c49e', // 企業のビジネスルール (金茶-300)
+                    application: '#d6adae', // アプリケーションのビジネスルール (蘇芳-300)
+                    adapter:     '#cbd3b1', // インターフェイスアダプター (草色-300)
+                    framework:   '#ceb6c7', // フレームワークとドライバ (京紫-300)
+                },
+            },
+        },
+    },
 };
 
 const root = ReactDOM.createRoot(document.getElementById('root'));

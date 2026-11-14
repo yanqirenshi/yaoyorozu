@@ -1,0 +1,1666 @@
+[
+    {
+        "id": "User->Pc",
+        "type": "composition",
+        "from": {
+            "classId": "User",
+            "point": 180
+        },
+        "to": {
+            "classId": "Pc",
+            "point": 0
+        },
+        "label": "users",
+        "fromMultiplicity": "1..*",
+        "notes": [
+            "TM: PC．ユーザー(対照表、属性なし)。1台に1人以上。",
+            "PC が User(その PC 上のアカウント)を所有するのでコンポジションにする(TM は多対多。",
+            "冒頭の【TM との違い・未決】を参照)。線は「部分 → 全体」の向き(◆が Pc 側に付く)で、",
+            "ラベルは全体側のフィールド名、多重度は部分側だけ書く。",
+            "Pc を User の真上に置き、縦向き(User の上辺 → Pc の下辺)につなぐ。"
+        ]
+    },
+    {
+        "id": "GitRepository->User",
+        "type": "composition",
+        "from": {
+            "classId": "GitRepository",
+            "point": "left"
+        },
+        "to": {
+            "classId": "User",
+            "point": 270
+        },
+        "label": "repositories",
+        "fromMultiplicity": "0..*",
+        "notes": [
+            "TM: PC．Gitリポジトリ(対照表、属性なし)。オブジェクトモデルでは PC ではなく User が",
+            "GitRepository を所有するコンポジションにする(TM との違いは冒頭の【TM との違い・未決】)。",
+            "1人に 0 件以上。GitRepository の左辺から User の右辺へ横につなぐ(User の上辺は",
+            "Pc への線、下辺は Session からの線で使っている)。"
+        ]
+    },
+    {
+        "id": "GitBranch->GitRepository",
+        "type": "composition",
+        "from": {
+            "classId": "GitBranch",
+            "point": "left"
+        },
+        "to": {
+            "classId": "GitRepository",
+            "point": 250
+        },
+        "label": "branches",
+        "fromMultiplicity": "0..*",
+        "notes": [
+            "TM: Gitリポジトリ 1 : Gitブランチ 0..*(E-R。ブランチ側の repositoryPath(R))。",
+            "GitRepository が所有するのでコンポジション。GitRepository の右辺はワーキングツリーと",
+            "分け合うので、上寄り(250°)で受ける。"
+        ]
+    },
+    {
+        "id": "GitWorktree->GitRepository",
+        "type": "composition",
+        "from": {
+            "classId": "GitWorktree",
+            "point": "left"
+        },
+        "to": {
+            "classId": "GitRepository",
+            "point": 290
+        },
+        "label": "worktrees",
+        "fromMultiplicity": "1..*",
+        "notes": [
+            "TM: Gitリポジトリ 1 : ワーキングツリー 1..*(E-R。リポジトリ本体が常に1つ目)。",
+            "GitRepository が所有するのでコンポジション。右辺の下寄り(290°)で受ける。",
+            "ワーキングツリーはブランチの真下に置く(画面上での手調整で決めた配置)。"
+        ]
+    },
+    {
+        "id": "GitWorktree->GitBranch",
+        "type": "association",
+        "from": {
+            "classId": "GitWorktree",
+            "point": "top"
+        },
+        "to": {
+            "classId": "GitBranch",
+            "point": "bottom"
+        },
+        "label": "checked_out_branch",
+        "fromMultiplicity": "0..1",
+        "toMultiplicity": "0..1",
+        "notes": [
+            "TM: Gitブランチ．ワーキングツリー(対応表、属性なし)。ブランチを開けるワーキング",
+            "ツリーは1つまで、ワーキングツリーが開くブランチも1つまで(detached HEAD なら無し)。",
+            "ブランチもワーキングツリーも GitRepository が所有しているので、コンポジションにはせず",
+            "関連にする(持ち主は1つだけ。冒頭の「TM からの写し方」を参照)。向きは GitWorktree →",
+            "GitBranch で、ワーキングツリーがチェックアウト中のブランチを ID で参照する",
+            "(実装: `GitWorktree { checked_out_branch: Option<ブランチID> }`)。ブランチの側からは",
+            "たどらない(起点の × の意味どおり)。ラベルは参照するフィールド名。",
+            "起点はワーキングツリーの上辺、終点はブランチの下辺(手調整で決めた配置を保つ)。"
+        ]
+    },
+    {
+        "id": "Profile->GitRepository",
+        "type": "association",
+        "from": {
+            "classId": "Profile",
+            "point": "top"
+        },
+        "to": {
+            "classId": "GitRepository",
+            "point": "bottom"
+        },
+        "label": "repository_path",
+        "fromMultiplicity": "0..1",
+        "toMultiplicity": "0..*",
+        "notes": [
+            "Profile が対象リポジトリを ID(パス)で参照する(実装:",
+            "`Profile { repository_path: Option<PathBuf> }`)。GitRepository は User が所有して",
+            "いるので(持ち主は1つだけ)、コンポジションにはせず関連にする。GitRepository の側から",
+            "はたどらない(起点の × の意味どおり)。GitRepository の真下に Profile を置き、",
+            "Profile の上辺から GitRepository の下辺へ縦につなぐ。"
+        ]
+    },
+    {
+        "id": "Session->User",
+        "type": "composition",
+        "from": {
+            "classId": "Session",
+            "point": "top"
+        },
+        "to": {
+            "classId": "User",
+            "point": "bottom"
+        },
+        "label": "sessions",
+        "fromMultiplicity": "0..*",
+        "notes": [
+            "TM: ユーザー．セッション(対照表、属性なし)。1人に会話は 0 件以上、1つの会話は",
+            "必ず1人のもの。User が Session を所有するのでコンポジションにする(「1つの会話は",
+            "必ず1人のもの」はコンポジションの全体側の多重度 1 と一致し、TM と矛盾しない)。",
+            "線は「部分 → 全体」の向き(◆が User 側に付く)で、ラベルは全体側のフィールド名、",
+            "多重度は部分側だけ書く。Session は User の下に置き、Session の上辺から User の",
+            "下辺へつなぐ(画面上での手調整で決めた配置)。"
+        ]
+    },
+    {
+        "id": "SessionFile->Session#conversation_files",
+        "type": "composition",
+        "from": {
+            "classId": "SessionFile",
+            "point": 100
+        },
+        "to": {
+            "classId": "Session",
+            "point": 260
+        },
+        "label": "conversation_files",
+        "fromMultiplicity": "0..*",
+        "notes": [
+            "TM: セッション．セッションファイル(対照表、属性なし)。1つの会話にファイルは",
+            "会話ファイル0..* + サブエージェント0件以上、ファイルは必ず1つの会話に属する",
+            "(Phase 2 で会話ファイルを 1..* から 0..* に緩めた。下記)。",
+            "Session が SessionFile を所有するのでコンポジションにし、役割(会話ファイル /",
+            "サブエージェントのファイル)ごとに線を分ける。1つのファイルはどちらか一方にだけ入る。",
+            "線は「部分 → 全体」の向き(◆が Session 側に付く)。SessionFile を Session の右に置き、",
+            "SessionFile の左辺から Session の右辺へ、2本を上下に並べてつなぐ。conversation_files は",
+            "上寄り(左辺 100° → 右辺 260°)、subagent_files は下寄り(左辺 80° → 右辺 280°)で、",
+            "2本は交差しない。",
+            "conversation_files は当初 1件固定だったが、実機確認でセッション途中に worktree へ",
+            "移動すると同じセッションIDの jsonl が複数のプロジェクトフォルダにできることが判明し",
+            "(#214)、TM どおりの 1..* に直した(#216)。複数ファイルにまたがる属性(custom_title 等)",
+            "の解決規則は図には書かず、実装イシュー側(#217)で扱う。",
+            "【Phase 2(#404。TM #403)】新規作成では、セッションID は起動時に決まるが会話ファイルは",
+            "最初の行が書かれた時点で作られるので、その窓を表せるよう 0..* に緩めた。その間の状態は",
+            "RunningSessionByApp の process_state(Starting / Idle)。実装済み(PR #413)。"
+        ]
+    },
+    {
+        "id": "SessionFile->Session#subagent_files",
+        "type": "composition",
+        "from": {
+            "classId": "SessionFile",
+            "point": 80
+        },
+        "to": {
+            "classId": "Session",
+            "point": 280
+        },
+        "label": "subagent_files",
+        "fromMultiplicity": "0..*"
+    },
+    {
+        "id": "LogLine->SessionFile",
+        "type": "composition",
+        "from": {
+            "classId": "LogLine",
+            "point": 90
+        },
+        "to": {
+            "classId": "SessionFile",
+            "point": 270
+        },
+        "label": "lines",
+        "fromMultiplicity": "1..*",
+        "notes": [
+            "TM: セッションファイル 1 : ログ行 1..*(書かれた先)。行はファイルに書かれるので、",
+            "SessionFile が LogLine を所有するコンポジションにする。TM の「セッション 1 : ログ行」",
+            "は線を描かない(冒頭の【TM との違い・未決】)。LogLine の左辺から SessionFile の右辺へ",
+            "横につなぐ。"
+        ]
+    },
+    {
+        "id": "UserLogLine->LogLine",
+        "type": "inheritance",
+        "from": {
+            "classId": "UserLogLine",
+            "point": "top"
+        },
+        "to": {
+            "classId": "LogLine",
+            "point": 30
+        },
+        "notes": [
+            "TM: ログ行のサブセット(×行種別。区分コードによる切断)。継承(汎化)で描く。線は",
+            "「サブクラス → 親」の向き(三角が LogLine 側に付く)。LogLine の下辺を角度で分けて",
+            "受ける(左から 30, 10, 350, 330。線どうしが交差しない順)。"
+        ]
+    },
+    {
+        "id": "AssistantLogLine->LogLine",
+        "type": "inheritance",
+        "from": {
+            "classId": "AssistantLogLine",
+            "point": "top"
+        },
+        "to": {
+            "classId": "LogLine",
+            "point": 10
+        }
+    },
+    {
+        "id": "SystemLogLine->LogLine",
+        "type": "inheritance",
+        "from": {
+            "classId": "SystemLogLine",
+            "point": "top"
+        },
+        "to": {
+            "classId": "LogLine",
+            "point": 350
+        }
+    },
+    {
+        "id": "AttachmentLogLine->LogLine",
+        "type": "inheritance",
+        "from": {
+            "classId": "AttachmentLogLine",
+            "point": "top"
+        },
+        "to": {
+            "classId": "LogLine",
+            "point": 330
+        }
+    },
+    {
+        "id": "UserLogLine->AssistantLogLine",
+        "type": "association",
+        "from": {
+            "classId": "UserLogLine",
+            "point": "right"
+        },
+        "to": {
+            "classId": "AssistantLogLine",
+            "point": "left"
+        },
+        "label": "source_tool_assistant",
+        "fromMultiplicity": "0..1",
+        "toMultiplicity": "0..1",
+        "notes": [
+            "TM の再帰表「ログ行．ログ行」は線にしない(LogLine の parent_uuid / logical_parent_uuid)。",
+            "TM: AI応答行 → ユーザー行(ツール発行元。E-E の先行・後続で、どちらも 0..1)。ユーザー行が",
+            "sourceToolAssistantUUID で tool_use を発行した AI応答行を指すので、UserLogLine →",
+            "AssistantLogLine の関連にし、実装では ID で参照する。ラベルが箱に隠れないよう、",
+            "2つのクラスの間を広めに空けている(UserLogLine の position の説明を参照)。"
+        ]
+    },
+    {
+        "id": "RunningSession->Session",
+        "type": "association",
+        "from": {
+            "classId": "RunningSession",
+            "point": "top"
+        },
+        "to": {
+            "classId": "Session",
+            "point": "bottom"
+        },
+        "label": "session",
+        "fromMultiplicity": "0..*",
+        "toMultiplicity": "1",
+        "notes": [
+            "---- Phase 1(実行中セッション・権限の問い合わせ。issue #388) ----",
+            "TM: セッション 1 : 実行中セッション 0..*(E-R。sessionId(R))。RunningSession は",
+            "プロセスの寿命で決まり、会話(Session)は所有しない(終わった会話は動いていない = 0件。",
+            "同じ会話を再開すると別のプロセス)ので、コンポジションにはせず関連にし、実装では",
+            "会話を session_id で参照する。Session の側からはたどらない(起点の × の意味どおり)。",
+            "Session の真下に RunningSession を置き、RunningSession の上辺から Session の下辺へ縦につなぐ。"
+        ]
+    },
+    {
+        "id": "RunningSession->RunningSessionExternal",
+        "type": "composition",
+        "from": {
+            "classId": "RunningSession",
+            "point": 20
+        },
+        "to": {
+            "classId": "RunningSessionExternal",
+            "point": "top"
+        },
+        "label": "base",
+        "notes": [
+            "TM: 実行中セッションのサブセット(×起動元。属性構成が異なる相違のサブセット)。設計は継承だったが、",
+            "実装(#391)は Rust に継承が無いため、共通のフィールドの struct RunningSession を、サブセットの",
+            "型が `base` として持つコンポジションにした(RunningSession の説明を参照)。線は「部分 → 全体」の",
+            "向き。RunningSession の下辺を左右に分けて出す(外部起動が左 = 20、app 起動が右 = 340。",
+            "線どうしが交差しない順)。"
+        ]
+    },
+    {
+        "id": "RunningSession->RunningSessionByApp",
+        "type": "composition",
+        "from": {
+            "classId": "RunningSession",
+            "point": 340
+        },
+        "to": {
+            "classId": "RunningSessionByApp",
+            "point": "top"
+        },
+        "label": "base"
+    },
+    {
+        "id": "ProcessState->RunningSessionByApp",
+        "type": "composition",
+        "from": {
+            "classId": "ProcessState",
+            "point": "left"
+        },
+        "to": {
+            "classId": "RunningSessionByApp",
+            "point": "right"
+        },
+        "label": "process_state",
+        "notes": [
+            "プロセス状態(TM: RunningSessionByApp の属性の区分コード)。値として持つ enum なのでコンポジション。"
+        ]
+    },
+    {
+        "id": "PermissionRequest->RunningSessionByApp",
+        "type": "composition",
+        "from": {
+            "classId": "PermissionRequest",
+            "point": "top"
+        },
+        "to": {
+            "classId": "RunningSessionByApp",
+            "point": "bottom"
+        },
+        "label": "permission_requests",
+        "fromMultiplicity": "0..*",
+        "notes": [
+            "TM: app が起動した実行中セッション 1 : 権限の問い合わせ 0..*(E-E。問い合わせが実行中セッションの",
+            "値を (R) で継承する)。RunningSessionByApp が所有するのでコンポジション。線は「部分 → 全体」の",
+            "向きで、問い合わせを ByApp の真下に置き、問い合わせの上辺から ByApp の下辺へ縦につなぐ。"
+        ]
+    },
+    {
+        "id": "PermissionResponse->PermissionRequest",
+        "type": "association",
+        "from": {
+            "classId": "PermissionResponse",
+            "point": "left"
+        },
+        "to": {
+            "classId": "PermissionRequest",
+            "point": 250
+        },
+        "label": "request_id",
+        "fromMultiplicity": "0..1",
+        "toMultiplicity": "1",
+        "notes": [
+            "TM: 権限の問い合わせ 1 : 権限の応答 0..1(E-E。中断で取り消されると応答が無い。request_id(R))。",
+            "設計は問い合わせが応答を所有するコンポジションだったが、実装(#391)は問い合わせが応答を",
+            "持たず、応答の側が request_id で問い合わせを指す(応答は組み立てて CLI へ書く値で、答えた",
+            "問い合わせは答え待ちの列から外れる)ので、関連にした。問い合わせの側からはたどらない",
+            "(起点の × の意味どおり)。応答は問い合わせの右に置き、問い合わせの右辺の上寄り(250°)で",
+            "受ける(下寄り 290° は問い合わせ種別の線に使う)。"
+        ]
+    },
+    {
+        "id": "PermissionBehavior->PermissionResponse",
+        "type": "composition",
+        "from": {
+            "classId": "PermissionBehavior",
+            "point": "left"
+        },
+        "to": {
+            "classId": "PermissionResponse",
+            "point": "right"
+        },
+        "label": "behavior",
+        "notes": [
+            "決着種別(TM: 権限の応答の属性の区分コード)。値として持つ enum なのでコンポジション。"
+        ]
+    },
+    {
+        "id": "PermissionSuggestion->PermissionRequest",
+        "type": "composition",
+        "from": {
+            "classId": "PermissionSuggestion",
+            "point": "top"
+        },
+        "to": {
+            "classId": "PermissionRequest",
+            "point": "bottom"
+        },
+        "label": "suggestions",
+        "fromMultiplicity": "0..*",
+        "notes": [
+            "TM: 権限の問い合わせ 1 : 提案 0..*(多値。request_id(R))。問い合わせが所有するのでコンポジション。",
+            "提案は問い合わせの真下に置き、提案の上辺から問い合わせの下辺へ縦につなぐ。"
+        ]
+    },
+    {
+        "id": "PermissionRequestKind->PermissionRequest",
+        "type": "composition",
+        "from": {
+            "classId": "PermissionRequestKind",
+            "point": "left"
+        },
+        "to": {
+            "classId": "PermissionRequest",
+            "point": 290
+        },
+        "label": "request_kind",
+        "notes": [
+            "問い合わせ種別(TM: (D) 導出。実装ではフィールドにせず、tool_name から求める)。属性の型を",
+            "表す線で、導出でも型の関係は変わらないため引く。問い合わせの右辺の下寄り(290°)で受ける。"
+        ]
+    },
+    {
+        "id": "Project->AgentKind",
+        "type": "composition",
+        "from": {
+            "classId": "Project",
+            "point": "left"
+        },
+        "to": {
+            "classId": "AgentKind",
+            "point": "right"
+        },
+        "label": "agent",
+        "notes": [
+            "セッション閲覧(プロトタイプ)"
+        ]
+    },
+    {
+        "id": "Conversation->AgentKind",
+        "type": "composition",
+        "from": {
+            "classId": "Conversation",
+            "point": "top"
+        },
+        "to": {
+            "classId": "AgentKind",
+            "point": "bottom"
+        },
+        "label": "agent"
+    },
+    {
+        "id": "Conversation->Message",
+        "type": "association",
+        "from": {
+            "classId": "Conversation",
+            "point": "right"
+        },
+        "to": {
+            "classId": "Message",
+            "point": "left"
+        },
+        "label": "messages"
+    },
+    {
+        "id": "Message->Role",
+        "type": "composition",
+        "from": {
+            "classId": "Message",
+            "point": "bottom"
+        },
+        "to": {
+            "classId": "Role",
+            "point": "top"
+        },
+        "label": "role"
+    },
+    {
+        "id": "Message->MessageStatus",
+        "type": "composition",
+        "from": {
+            "classId": "Message",
+            "point": "right"
+        },
+        "to": {
+            "classId": "MessageStatus",
+            "point": "left"
+        },
+        "label": "status"
+    },
+    {
+        "id": "Message->MessageKind",
+        "type": "composition",
+        "from": {
+            "classId": "Message",
+            "point": "right"
+        },
+        "to": {
+            "classId": "MessageKind",
+            "point": "left"
+        },
+        "label": "kind"
+    },
+    {
+        "id": "ProjectItemsPage->ProjectItem",
+        "type": "association",
+        "from": {
+            "classId": "ProjectItemsPage",
+            "point": "right"
+        },
+        "to": {
+            "classId": "ProjectItem",
+            "point": "left"
+        },
+        "label": "items",
+        "notes": [
+            "設定・プロファイル(Profile は classes-domain.ts に昇格済み。Settings.profiles の",
+            "コメントを参照)",
+            "GitHub連携(Projects v2)"
+        ]
+    },
+    {
+        "id": "ProjectItem->ProjectItemKind",
+        "type": "composition",
+        "from": {
+            "classId": "ProjectItem",
+            "point": "bottom"
+        },
+        "to": {
+            "classId": "ProjectItemKind",
+            "point": "top"
+        },
+        "label": "kind"
+    },
+    {
+        "id": "ProjectItemsPage->ProjectStatusOption",
+        "type": "association",
+        "from": {
+            "classId": "ProjectItemsPage",
+            "point": "bottom"
+        },
+        "to": {
+            "classId": "ProjectStatusOption",
+            "point": "top"
+        },
+        "label": "status_options"
+    },
+    {
+        "id": "WindowState->WindowTab",
+        "type": "association",
+        "from": {
+            "classId": "WindowState",
+            "point": "right"
+        },
+        "to": {
+            "classId": "WindowTab",
+            "point": "left"
+        },
+        "label": "tabs",
+        "notes": [
+            "ウィンドウ・ハブ"
+        ]
+    },
+    {
+        "id": "HubLayout->NodePosition",
+        "type": "association",
+        "from": {
+            "classId": "HubLayout",
+            "point": "right"
+        },
+        "to": {
+            "classId": "NodePosition",
+            "point": "left"
+        },
+        "label": "positions"
+    },
+    {
+        "id": "HubLayout->Camera",
+        "type": "association",
+        "from": {
+            "classId": "HubLayout",
+            "point": "bottom"
+        },
+        "to": {
+            "classId": "Camera",
+            "point": "top"
+        },
+        "label": "camera"
+    },
+    {
+        "id": "RestorableRunningSessions->RestorableRunningSession",
+        "type": "association",
+        "from": {
+            "classId": "RestorableRunningSessions",
+            "point": "right"
+        },
+        "to": {
+            "classId": "RestorableRunningSession",
+            "point": "left"
+        },
+        "label": "sessions",
+        "notes": [
+            "実行中セッションの復元(issue #459)"
+        ]
+    },
+    {
+        "id": "ImageAttachment->ImageMediaType",
+        "type": "composition",
+        "from": {
+            "classId": "ImageAttachment",
+            "point": "bottom"
+        },
+        "to": {
+            "classId": "ImageMediaType",
+            "point": "top"
+        },
+        "label": "media_type",
+        "notes": [
+            "画像添付"
+        ]
+    },
+    {
+        "id": "MessageImage->ImageMediaType",
+        "type": "composition",
+        "from": {
+            "classId": "MessageImage",
+            "point": "top"
+        },
+        "to": {
+            "classId": "ImageMediaType",
+            "point": "bottom"
+        },
+        "label": "media_type"
+    },
+    {
+        "id": "ClaudeDirPage->ClaudeDirEntry",
+        "type": "association",
+        "from": {
+            "classId": "ClaudeDirPage",
+            "point": "right"
+        },
+        "to": {
+            "classId": "ClaudeDirEntry",
+            "point": "left"
+        },
+        "label": "entries",
+        "notes": [
+            "/claude 画面(Explorer)"
+        ]
+    },
+    {
+        "id": "ClaudeDirEntry->ClaudeDirEntryKind",
+        "type": "composition",
+        "from": {
+            "classId": "ClaudeDirEntry",
+            "point": "bottom"
+        },
+        "to": {
+            "classId": "ClaudeDirEntryKind",
+            "point": "top"
+        },
+        "label": "kind"
+    },
+    {
+        "id": "GitLedger->GitRepositoryLedger",
+        "type": "association",
+        "from": {
+            "classId": "GitLedger",
+            "point": "right"
+        },
+        "to": {
+            "classId": "GitRepositoryLedger",
+            "point": "left"
+        },
+        "label": "repositories",
+        "notes": [
+            "Git台帳・観測(第3弾)"
+        ]
+    },
+    {
+        "id": "ObservedGitState->ObservedWorktree",
+        "type": "association",
+        "from": {
+            "classId": "ObservedGitState",
+            "point": "right"
+        },
+        "to": {
+            "classId": "ObservedWorktree",
+            "point": "left"
+        },
+        "label": "worktrees"
+    },
+    {
+        "id": "FileSystemRepository->SessionSource",
+        "type": "realization",
+        "from": {
+            "classId": "FileSystemRepository",
+            "point": "top"
+        },
+        "to": {
+            "classId": "SessionSource",
+            "point": "bottom"
+        }
+    },
+    {
+        "id": "FileSettingsStore->SettingsStore",
+        "type": "realization",
+        "from": {
+            "classId": "FileSettingsStore",
+            "point": "top"
+        },
+        "to": {
+            "classId": "SettingsStore",
+            "point": "bottom"
+        }
+    },
+    {
+        "id": "FileClaudeMdStore->ClaudeMdStore",
+        "type": "realization",
+        "from": {
+            "classId": "FileClaudeMdStore",
+            "point": "top"
+        },
+        "to": {
+            "classId": "ClaudeMdStore",
+            "point": "bottom"
+        }
+    },
+    {
+        "id": "FileClaudeSettingsStore->ClaudeSettingsStore",
+        "type": "realization",
+        "from": {
+            "classId": "FileClaudeSettingsStore",
+            "point": "top"
+        },
+        "to": {
+            "classId": "ClaudeSettingsStore",
+            "point": "bottom"
+        }
+    },
+    {
+        "id": "FileRulesStore->RulesStore",
+        "type": "realization",
+        "from": {
+            "classId": "FileRulesStore",
+            "point": "top"
+        },
+        "to": {
+            "classId": "RulesStore",
+            "point": "bottom"
+        }
+    },
+    {
+        "id": "FileSkillsStore->SkillsStore",
+        "type": "realization",
+        "from": {
+            "classId": "FileSkillsStore",
+            "point": "top"
+        },
+        "to": {
+            "classId": "SkillsStore",
+            "point": "bottom"
+        }
+    },
+    {
+        "id": "FileProjectSettingsStore->ProjectSettingsStore",
+        "type": "realization",
+        "from": {
+            "classId": "FileProjectSettingsStore",
+            "point": "top"
+        },
+        "to": {
+            "classId": "ProjectSettingsStore",
+            "point": "bottom"
+        }
+    },
+    {
+        "id": "FileHubLayoutStore->HubLayoutStore",
+        "type": "realization",
+        "from": {
+            "classId": "FileHubLayoutStore",
+            "point": "top"
+        },
+        "to": {
+            "classId": "HubLayoutStore",
+            "point": "bottom"
+        }
+    },
+    {
+        "id": "FileHubTuningStore->HubTuningStore",
+        "type": "realization",
+        "from": {
+            "classId": "FileHubTuningStore",
+            "point": "top"
+        },
+        "to": {
+            "classId": "HubTuningStore",
+            "point": "bottom"
+        }
+    },
+    {
+        "id": "SystemGitWorktreeManager->GitWorktreeManager",
+        "type": "realization",
+        "from": {
+            "classId": "SystemGitWorktreeManager",
+            "point": "top"
+        },
+        "to": {
+            "classId": "GitWorktreeManager",
+            "point": "bottom"
+        }
+    },
+    {
+        "id": "FileRestorableRunningSessionsStore->RestorableRunningSessionsStore",
+        "type": "realization",
+        "from": {
+            "classId": "FileRestorableRunningSessionsStore",
+            "point": "top"
+        },
+        "to": {
+            "classId": "RestorableRunningSessionsStore",
+            "point": "bottom"
+        }
+    },
+    {
+        "id": "FileArchivedSessionsStore->ArchivedSessionsStore",
+        "type": "realization",
+        "from": {
+            "classId": "FileArchivedSessionsStore",
+            "point": "top"
+        },
+        "to": {
+            "classId": "ArchivedSessionsStore",
+            "point": "bottom"
+        }
+    },
+    {
+        "id": "WindowsExecutionEnvironmentSource->ExecutionEnvironmentSource",
+        "type": "realization",
+        "from": {
+            "classId": "WindowsExecutionEnvironmentSource",
+            "point": "top"
+        },
+        "to": {
+            "classId": "ExecutionEnvironmentSource",
+            "point": "bottom"
+        }
+    },
+    {
+        "id": "GithubApiClient->GithubGateway",
+        "type": "realization",
+        "from": {
+            "classId": "GithubApiClient",
+            "point": "top"
+        },
+        "to": {
+            "classId": "GithubGateway",
+            "point": "bottom"
+        }
+    },
+    {
+        "id": "KeyringTokenStore->TokenStore",
+        "type": "realization",
+        "from": {
+            "classId": "KeyringTokenStore",
+            "point": "top"
+        },
+        "to": {
+            "classId": "TokenStore",
+            "point": "bottom"
+        }
+    },
+    {
+        "id": "FileLayoutStore->LayoutStore",
+        "type": "realization",
+        "from": {
+            "classId": "FileLayoutStore",
+            "point": "top"
+        },
+        "to": {
+            "classId": "LayoutStore",
+            "point": "bottom"
+        }
+    },
+    {
+        "id": "FileLocalApiTokenStore->LocalApiTokenStore",
+        "type": "realization",
+        "from": {
+            "classId": "FileLocalApiTokenStore",
+            "point": "top"
+        },
+        "to": {
+            "classId": "LocalApiTokenStore",
+            "point": "bottom"
+        }
+    },
+    {
+        "id": "FileLocalApiPortStore->LocalApiPortStore",
+        "type": "realization",
+        "from": {
+            "classId": "FileLocalApiPortStore",
+            "point": "top"
+        },
+        "to": {
+            "classId": "LocalApiPortStore",
+            "point": "bottom"
+        }
+    },
+    {
+        "id": "SystemGitWorktreeLister->GitWorktreeLister",
+        "type": "realization",
+        "from": {
+            "classId": "SystemGitWorktreeLister",
+            "point": "top"
+        },
+        "to": {
+            "classId": "GitWorktreeLister",
+            "point": "bottom"
+        }
+    },
+    {
+        "id": "FileClaudeDirStore->ClaudeDirStore",
+        "type": "realization",
+        "from": {
+            "classId": "FileClaudeDirStore",
+            "point": "top"
+        },
+        "to": {
+            "classId": "ClaudeDirStore",
+            "point": "bottom"
+        }
+    },
+    {
+        "id": "FileGitLedgerStore->GitLedgerStore",
+        "type": "realization",
+        "from": {
+            "classId": "FileGitLedgerStore",
+            "point": "top"
+        },
+        "to": {
+            "classId": "GitLedgerStore",
+            "point": "bottom"
+        },
+        "notes": [
+            "Git台帳・観測(第3弾)"
+        ]
+    },
+    {
+        "id": "SystemGitStateSource->GitStateSource",
+        "type": "realization",
+        "from": {
+            "classId": "SystemGitStateSource",
+            "point": "top"
+        },
+        "to": {
+            "classId": "GitStateSource",
+            "point": "bottom"
+        }
+    },
+    {
+        "id": "SessionContent->FileFingerprint",
+        "type": "composition",
+        "from": {
+            "classId": "SessionContent",
+            "point": "top"
+        },
+        "to": {
+            "classId": "FileFingerprint",
+            "point": "bottom"
+        },
+        "label": "fingerprint",
+        "notes": [
+            "app の入出力の型(issue #420)。持つ側 → 型(holder → 型の向き)。"
+        ]
+    },
+    {
+        "id": "CachedMessages->FileFingerprint",
+        "type": "composition",
+        "from": {
+            "classId": "CachedMessages",
+            "point": "top"
+        },
+        "to": {
+            "classId": "FileFingerprint",
+            "point": "right"
+        },
+        "label": "fingerprint"
+    },
+    {
+        "id": "FileRunningSessionSource->RunningSessionSource",
+        "type": "realization",
+        "from": {
+            "classId": "FileRunningSessionSource",
+            "point": "top"
+        },
+        "to": {
+            "classId": "RunningSessionSource",
+            "point": "bottom"
+        },
+        "notes": [
+            "実行中セッション(Phase 1)"
+        ]
+    },
+    {
+        "id": "ClaudeCliProcessLauncher->RunningSessionLauncher",
+        "type": "realization",
+        "from": {
+            "classId": "ClaudeCliProcessLauncher",
+            "point": "top"
+        },
+        "to": {
+            "classId": "RunningSessionLauncher",
+            "point": "bottom"
+        }
+    },
+    {
+        "id": "ClaudeCliProcess->RunningProcess",
+        "type": "realization",
+        "from": {
+            "classId": "ClaudeCliProcess",
+            "point": "top"
+        },
+        "to": {
+            "classId": "RunningProcess",
+            "point": "bottom"
+        }
+    },
+    {
+        "id": "ClaudeCliProcess->ExitSignal",
+        "type": "association",
+        "from": {
+            "classId": "ClaudeCliProcess",
+            "point": "right"
+        },
+        "to": {
+            "classId": "ExitSignal",
+            "point": "left"
+        },
+        "label": "exit",
+        "notes": [
+            "exit は Arc で共有される(所有ではないので関連)。"
+        ]
+    },
+    {
+        "id": "ResumeRunningSession->RunningPermissionMode",
+        "type": "composition",
+        "from": {
+            "classId": "ResumeRunningSession",
+            "point": "left"
+        },
+        "to": {
+            "classId": "RunningPermissionMode",
+            "point": "right"
+        },
+        "label": "mode",
+        "notes": [
+            "値として持つ enum なので、コンポジション(この図の書き方どおり、持つ側 → enum)。"
+        ]
+    },
+    {
+        "id": "CreateRunningSession->RunningPermissionMode",
+        "type": "composition",
+        "from": {
+            "classId": "CreateRunningSession",
+            "point": "left"
+        },
+        "to": {
+            "classId": "RunningPermissionMode",
+            "point": 290
+        },
+        "label": "mode"
+    },
+    {
+        "id": "AddressedProgress->RunningSessionRef",
+        "type": "association",
+        "from": {
+            "classId": "AddressedProgress",
+            "point": "left"
+        },
+        "to": {
+            "classId": "RunningSessionRef",
+            "point": "right"
+        },
+        "label": "target"
+    },
+    {
+        "id": "AddressedRunningSessionEvent->RunningSessionRef",
+        "type": "association",
+        "from": {
+            "classId": "AddressedRunningSessionEvent",
+            "point": "left"
+        },
+        "to": {
+            "classId": "RunningSessionRef",
+            "point": 290
+        },
+        "label": "target"
+    },
+    {
+        "id": "RunningSessionSummary->RunningSessionRef",
+        "type": "association",
+        "from": {
+            "classId": "RunningSessionSummary",
+            "point": "top"
+        },
+        "to": {
+            "classId": "RunningSessionRef",
+            "point": "bottom"
+        },
+        "label": "target"
+    },
+    {
+        "id": "ClaudeCliProcess->PendingSwitches",
+        "type": "association",
+        "from": {
+            "classId": "ClaudeCliProcess",
+            "point": 300
+        },
+        "to": {
+            "classId": "PendingSwitches",
+            "point": "left"
+        },
+        "label": "pending"
+    },
+    {
+        "id": "DetectedRunning->RunningEvidence",
+        "type": "composition",
+        "from": {
+            "classId": "DetectedRunning",
+            "point": "bottom"
+        },
+        "to": {
+            "classId": "RunningEvidence",
+            "point": "top"
+        },
+        "label": "evidence"
+    },
+    {
+        "id": "ProjectDto->AgentKindDto",
+        "type": "composition",
+        "from": {
+            "classId": "ProjectDto",
+            "point": "top"
+        },
+        "to": {
+            "classId": "AgentKindDto",
+            "point": 40
+        },
+        "label": "agent",
+        "notes": [
+            "セッション閲覧(AgentKindDto に3クラスから集まるので角度で分ける)"
+        ]
+    },
+    {
+        "id": "ConversationDto->AgentKindDto",
+        "type": "composition",
+        "from": {
+            "classId": "ConversationDto",
+            "point": "top"
+        },
+        "to": {
+            "classId": "AgentKindDto",
+            "point": 355
+        },
+        "label": "agent"
+    },
+    {
+        "id": "SessionChangedEventDto->AgentKindDto",
+        "type": "composition",
+        "from": {
+            "classId": "SessionChangedEventDto",
+            "point": "top"
+        },
+        "to": {
+            "classId": "AgentKindDto",
+            "point": 315
+        },
+        "label": "agent"
+    },
+    {
+        "id": "ConversationDto->MessageDto",
+        "type": "association",
+        "from": {
+            "classId": "ConversationDto",
+            "point": "bottom"
+        },
+        "to": {
+            "classId": "MessageDto",
+            "point": "top"
+        },
+        "label": "messages"
+    },
+    {
+        "id": "MessageDto->RoleDto",
+        "type": "composition",
+        "from": {
+            "classId": "MessageDto",
+            "point": "right"
+        },
+        "to": {
+            "classId": "RoleDto",
+            "point": "left"
+        },
+        "label": "role"
+    },
+    {
+        "id": "MessageDto->MessageStatusDto",
+        "type": "composition",
+        "from": {
+            "classId": "MessageDto",
+            "point": "bottom"
+        },
+        "to": {
+            "classId": "MessageStatusDto",
+            "point": "top"
+        },
+        "label": "status"
+    },
+    {
+        "id": "MessageDto->MessageKindDto",
+        "type": "composition",
+        "from": {
+            "classId": "MessageDto",
+            "point": "right"
+        },
+        "to": {
+            "classId": "MessageKindDto",
+            "point": "left"
+        },
+        "label": "kind"
+    },
+    {
+        "id": "SettingsDto->GithubProjectDto",
+        "type": "association",
+        "from": {
+            "classId": "SettingsDto",
+            "point": "top"
+        },
+        "to": {
+            "classId": "GithubProjectDto",
+            "point": "bottom"
+        },
+        "label": "github_project",
+        "notes": [
+            "設定・プロファイル(2x2 に並べ、3本とも縦横だけで結ぶ)"
+        ]
+    },
+    {
+        "id": "SettingsDto->ProfileSummaryDto",
+        "type": "association",
+        "from": {
+            "classId": "SettingsDto",
+            "point": "right"
+        },
+        "to": {
+            "classId": "ProfileSummaryDto",
+            "point": "left"
+        },
+        "label": "profiles"
+    },
+    {
+        "id": "SettingsInputDto->GithubProjectDto",
+        "type": "association",
+        "from": {
+            "classId": "SettingsInputDto",
+            "point": "left"
+        },
+        "to": {
+            "classId": "GithubProjectDto",
+            "point": "right"
+        },
+        "label": "github_project"
+    },
+    {
+        "id": "ProjectItemDto->ProjectItemKindDto",
+        "type": "composition",
+        "from": {
+            "classId": "ProjectItemDto",
+            "point": "bottom"
+        },
+        "to": {
+            "classId": "ProjectItemKindDto",
+            "point": "top"
+        },
+        "label": "kind",
+        "notes": [
+            "GitHub連携(Projects v2)"
+        ]
+    },
+    {
+        "id": "ProjectItemsPageDto->ProjectItemDto",
+        "type": "association",
+        "from": {
+            "classId": "ProjectItemsPageDto",
+            "point": "right"
+        },
+        "to": {
+            "classId": "ProjectItemDto",
+            "point": "left"
+        },
+        "label": "items"
+    },
+    {
+        "id": "ProjectItemsPageDto->ProjectStatusOptionDto",
+        "type": "association",
+        "from": {
+            "classId": "ProjectItemsPageDto",
+            "point": "bottom"
+        },
+        "to": {
+            "classId": "ProjectStatusOptionDto",
+            "point": "top"
+        },
+        "label": "status_options"
+    },
+    {
+        "id": "WindowStateDto->WindowTabDto",
+        "type": "association",
+        "from": {
+            "classId": "WindowStateDto",
+            "point": "right"
+        },
+        "to": {
+            "classId": "WindowTabDto",
+            "point": "left"
+        },
+        "label": "tabs",
+        "notes": [
+            "ウィンドウ・ハブ"
+        ]
+    },
+    {
+        "id": "HubLayoutDto->NodePositionDto",
+        "type": "association",
+        "from": {
+            "classId": "HubLayoutDto",
+            "point": "right"
+        },
+        "to": {
+            "classId": "NodePositionDto",
+            "point": "left"
+        },
+        "label": "positions"
+    },
+    {
+        "id": "HubLayoutDto->CameraDto",
+        "type": "association",
+        "from": {
+            "classId": "HubLayoutDto",
+            "point": "bottom"
+        },
+        "to": {
+            "classId": "CameraDto",
+            "point": "top"
+        },
+        "label": "camera"
+    },
+    {
+        "id": "ClaudeDirPageDto->ClaudeDirEntryDto",
+        "type": "association",
+        "from": {
+            "classId": "ClaudeDirPageDto",
+            "point": "right"
+        },
+        "to": {
+            "classId": "ClaudeDirEntryDto",
+            "point": "left"
+        },
+        "label": "entries",
+        "notes": [
+            "/claude 画面(Explorer)"
+        ]
+    },
+    {
+        "id": "ClaudeDirEntryDto->ClaudeDirEntryKindDto",
+        "type": "composition",
+        "from": {
+            "classId": "ClaudeDirEntryDto",
+            "point": "bottom"
+        },
+        "to": {
+            "classId": "ClaudeDirEntryKindDto",
+            "point": "top"
+        },
+        "label": "kind"
+    },
+    {
+        "id": "LoadResult->AppState",
+        "type": "composition",
+        "from": {
+            "classId": "LoadResult",
+            "point": "left"
+        },
+        "to": {
+            "classId": "AppState",
+            "point": "right"
+        },
+        "label": "state",
+        "notes": [
+            "アプリ状態"
+        ]
+    },
+    {
+        "id": "PcDto->UserDto",
+        "type": "association",
+        "from": {
+            "classId": "PcDto",
+            "point": "bottom"
+        },
+        "to": {
+            "classId": "UserDto",
+            "point": "top"
+        },
+        "label": "users",
+        "notes": [
+            "PC・ユーザー・Git・セッション(第1〜4弾)"
+        ]
+    },
+    {
+        "id": "UserDto->SessionDto",
+        "type": "association",
+        "from": {
+            "classId": "UserDto",
+            "point": "right"
+        },
+        "to": {
+            "classId": "SessionDto",
+            "point": "left"
+        },
+        "label": "sessions"
+    },
+    {
+        "id": "SessionDto->SessionFileDto#conversation_files",
+        "type": "association",
+        "from": {
+            "classId": "SessionDto",
+            "point": 250
+        },
+        "to": {
+            "classId": "SessionFileDto",
+            "point": 110
+        },
+        "label": "conversation_files"
+    },
+    {
+        "id": "SessionDto->SessionFileDto#subagent_files",
+        "type": "association",
+        "from": {
+            "classId": "SessionDto",
+            "point": 290
+        },
+        "to": {
+            "classId": "SessionFileDto",
+            "point": 70
+        },
+        "label": "subagent_files"
+    },
+    {
+        "id": "UserDto->GitRepositoryDto",
+        "type": "association",
+        "from": {
+            "classId": "UserDto",
+            "point": "bottom"
+        },
+        "to": {
+            "classId": "GitRepositoryDto",
+            "point": "top"
+        },
+        "label": "repositories"
+    },
+    {
+        "id": "GitRepositoryDto->GitWorktreeDto",
+        "type": "association",
+        "from": {
+            "classId": "GitRepositoryDto",
+            "point": "right"
+        },
+        "to": {
+            "classId": "GitWorktreeDto",
+            "point": "left"
+        },
+        "label": "worktrees"
+    },
+    {
+        "id": "GitRepositoryDto->GitBranchDto",
+        "type": "association",
+        "from": {
+            "classId": "GitRepositoryDto",
+            "point": "bottom"
+        },
+        "to": {
+            "classId": "GitBranchDto",
+            "point": "top"
+        },
+        "label": "branches"
+    },
+    {
+        "id": "RunningSessionChangedEventDto->ProcessStateDto",
+        "type": "composition",
+        "from": {
+            "classId": "RunningSessionChangedEventDto",
+            "point": "right"
+        },
+        "to": {
+            "classId": "ProcessStateDto",
+            "point": "left"
+        },
+        "label": "process_state",
+        "notes": [
+            "実行中セッション(Phase 1)。enum は値として持つのでコンポジション(この図の書き方どおり、持つ側 → enum)。"
+        ]
+    },
+    {
+        "id": "RunningSessionDto->ProcessStateDto",
+        "type": "composition",
+        "from": {
+            "classId": "RunningSessionDto",
+            "point": "left"
+        },
+        "to": {
+            "classId": "ProcessStateDto",
+            "point": "right"
+        },
+        "label": "process_state"
+    },
+    {
+        "id": "RunningSessionDto->PermissionRequestDto",
+        "type": "association",
+        "from": {
+            "classId": "RunningSessionDto",
+            "point": "bottom"
+        },
+        "to": {
+            "classId": "PermissionRequestDto",
+            "point": "top"
+        },
+        "label": "permission_requests"
+    },
+    {
+        "id": "RunningSessionDto->RunningSessionRefDto",
+        "type": "composition",
+        "from": {
+            "classId": "RunningSessionDto",
+            "point": "right"
+        },
+        "to": {
+            "classId": "RunningSessionRefDto",
+            "point": "left"
+        },
+        "label": "target",
+        "notes": [
+            "宛先(#407)。必須・単数 → コンポジション(持つ側 → 型)。"
+        ]
+    },
+    {
+        "id": "RunningSessionDto->AvailableModelDto",
+        "type": "association",
+        "from": {
+            "classId": "RunningSessionDto",
+            "point": "right"
+        },
+        "to": {
+            "classId": "AvailableModelDto",
+            "point": "top"
+        },
+        "label": "available_models"
+    },
+    {
+        "id": "AddressedProgressDto->RunningSessionRefDto",
+        "type": "composition",
+        "from": {
+            "classId": "AddressedProgressDto",
+            "point": "top"
+        },
+        "to": {
+            "classId": "RunningSessionRefDto",
+            "point": "bottom"
+        },
+        "label": "target"
+    },
+    {
+        "id": "RunningSessionSummaryDto->RunningSessionRefDto",
+        "type": "composition",
+        "from": {
+            "classId": "RunningSessionSummaryDto",
+            "point": "left"
+        },
+        "to": {
+            "classId": "RunningSessionRefDto",
+            "point": "right"
+        },
+        "label": "target"
+    },
+    {
+        "id": "RunningSessionSlot->ProgressSubscriber",
+        "type": "association",
+        "from": {
+            "classId": "RunningSessionSlot",
+            "point": "bottom"
+        },
+        "to": {
+            "classId": "ProgressSubscriber",
+            "point": "top"
+        },
+        "label": "subscribers"
+    },
+    {
+        "id": "PermissionRequestDto->PermissionRequestKindDto",
+        "type": "composition",
+        "from": {
+            "classId": "PermissionRequestDto",
+            "point": "left"
+        },
+        "to": {
+            "classId": "PermissionRequestKindDto",
+            "point": "right"
+        },
+        "label": "request_kind"
+    },
+    {
+        "id": "PermissionRequestDto->PermissionSuggestionDto",
+        "type": "association",
+        "from": {
+            "classId": "PermissionRequestDto",
+            "point": "bottom"
+        },
+        "to": {
+            "classId": "PermissionSuggestionDto",
+            "point": "top"
+        },
+        "label": "suggestions"
+    }
+]
