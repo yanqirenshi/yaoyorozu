@@ -8,6 +8,8 @@ AIを利用したITプロダクト開発をサポートするアプリ。ネイ�
 
 - **ネイティブアプリ**(`apps/native`): Claude Code / Gemini / Codex などのAIコーディングエージェントをラップし、GitHubを使ったタスク管理を行う。yaoyorozuとしてのプロダクト開発方法(プロセスなど)を確立し、ユーザーがプロダクト開発をしやすくすることを目指す。
 - **Webアプリ**(`apps/web`): プロダクトの情報(仕様など)を管理する。AIと人とのコミュニケーションに利用し、情報を断片化させないための場とする。
+  - **図のデータの管理は `hub/` へ移した**(2026-11-14、ユーザー判断)。WBS・構成図・ポンチ絵・サイトマップ・Classes・TM は `hub/data/` が正。apps/web に残っているのはデザインシステム(`/ui`)など、まだ移していないものだけ。
+- **ドキュメントサイト**(`hub/`): iHub(`@yanqirenshi/ihub.core`・`@yanqirenshi/ihub.srv`)で作った、プロダクトの情報を管理するサイト。データは `hub/data/*.json`(フォーマットは ihub.srv の JSON Schema)。画面からのドラッグなどの変更は、API サーバーがそのまま `hub/data/` に書き込む。移行元との対応は `hub/data/README.md`。iHub 本体の不具合・機能不足は、hub 側で回避せず iHub のリポジトリで直してもらう(例: クラス図。iHub #171)
 
 ## タスク管理
 
@@ -19,9 +21,10 @@ Claude Code で以下のセッションに役割を分けて対応する。
 
 - **デザイン (全体)**: 要件の整理・設計、実装イシューの作成
 - **デザイン (UI)**: UIデザイナーとして、Webアプリの UI ページ(`apps/web` の `/ui`、http://localhost:3000/ui)で UIコンポーネント(デザインシステム)を定義・作り込む。**デザイン (全体) セッションを通さず**(イシュー化せず)直接作業してよい。ただし `apps/web` を編集するため web.md の規約には従う
-- **デザイン (ドメイン:Data)**: ドメインモデルの データモデル として TM(`apps/web` の `/tm`)を作成する。`/tm` スキル(`.claude/skills/tm/`)に作業手順・TM(T字形ER)の規則・d3.ter の仕様・検証手順をまとめてある
-- **デザイン (ドメイン:オブジェクト)**: ドメインモデルの オブジェクトモデル として Classes(`apps/web` の `/class-diagram`)を作成する
-- **デザイン (画面構成)**: 画面構成を管理する。主に サイトマップ(`apps/web` の `/sitemap`、http://localhost:3001/sitemap)を管理する
+- **デザイン (ドメイン:Data)**: ドメインモデルの データモデル として TM(`hub` の「ビジネス」ページの TM タブ、http://localhost:3100/business?tab=tm。データは `hub/data/tm/`)を作成する。`/tm` スキル(`.claude/skills/tm/`)に作業手順・TM(T字形ER)の規則・d3.ter の仕様・検証手順をまとめてある
+- **デザイン (ドメイン:オブジェクト)**: ドメインモデルの オブジェクトモデル として Classes(`hub` の「クラス」ページのクラス図タブ、http://localhost:3100/classes?tab=class-diagram。データは `hub/data/classes/`)を作成する
+- **デザイン (画面構成)**: 画面構成を管理する。主に サイトマップ(`hub` の「画面」ページの画面遷移図タブ、http://localhost:3100/screens。データは `hub/data/sitemap/`)を管理する
+- ※ 上の 3 つは 2026-11-14 に apps/web から hub へ移った。図を確かめるときは、自分の worktree の `hub/data` を読む hub を別のポートで起動する(下の「hub で図を確かめる」)。main で動いている hub(3100 番)は main の `hub/data` を読み書きするので、そこで図を動かすと main の作業ツリーが書き換わる
 - **実装:APP**: Tauri + TypeScript + React によるネイティブアプリの構築
 - **実装:APP (画面:/)**: Tauri + TypeScript + React によるネイティブアプリの構築
 - **実装:APP (画面:/settings)**: Tauri + TypeScript + React によるネイティブアプリの構築
@@ -74,9 +77,10 @@ Claude Code で以下のセッションに役割を分けて対応する。
 
 ## 構成
 
-- `apps/web` — Next.js製のWebアプリ。WBS/構成図/UIデザイン/サイトマップ/Classes/TM図を表示するドキュメンテーションツール
+- `apps/web` — Next.js製のWebアプリ。WBS/構成図/UIデザイン/サイトマップ/Classes/TM図を表示するドキュメンテーションツール。図のデータの管理は `hub/` へ移した(2026-11-14)
 - `apps/native` — Tauri v2製のネイティブアプリ。Claude Codeのセッション履歴ビューア(開発中)
-- `yyz/` — このリポジトリ(yaoyorozu)自身の仕様データ。Webアプリが実行時に読む(`{リポジトリ}/yyz/spec/*.json`、詳細は `.claude/rules/web.md` §2)。Webアプリは複数リポジトリの仕様を扱えるようにする移行中で(issue #543)、各リポジトリが自分の `yyz/` を持つ想定
+- `hub/` — iHub で作ったドキュメントサイト。プロダクトの情報(WBS・構成図・ポンチ絵・サイトマップ・Classes・TM)の正は `hub/data/`。npm workspaces には入れていない(依存は `hub/node_modules` に別に入る)
+- `yyz/` — このリポジトリ(yaoyorozu)自身の仕様データ。Webアプリが実行時に読む(`{リポジトリ}/yyz/spec/*.json`、詳細は `.claude/rules/web.md` §2)。**2026-11-14 に `hub/data/` へ移した移行元で、以後は更新しない**(正は `hub/data/`。ここを直しても hub には反映されない)
 
 ## 配布(apps/native)
 
@@ -90,12 +94,34 @@ npm run web:dev       # Webアプリ (http://localhost:3000)
 npm run native:dev    # ネイティブアプリ (Tauri desktop window)
 npm run web:build
 npm run native:build
+npm install --prefix hub     # hub の依存関係インストール(ワークスペースとは別。初回は 10 分ほどかかる)
+npm start --prefix hub       # hub (画面 http://localhost:3100、API サーバー http://127.0.0.1:4000)
+npm run test:data --prefix hub   # hub/data がスキーマとルールに合っているかを検査する
 ```
+
+### hub で図を確かめる(worktree から)
+
+main で動いている hub(3100 番)は、main の `hub/data` を読み書きする。
+worktree で `hub/data` を直したときは、**main の hub に入っているパッケージを使って、自分の worktree の `hub/data` を読む hub を、別のポートで起動する**(worktree で `npm install` をしなくて済む)。
+
+```bash
+# 検査(自分の worktree の hub/data)
+npx --prefix C:/Users/yanqi/prj/yaoyorozu/hub ihub-srv check <自分の worktree>/hub/data
+
+# 自分の worktree の hub/data を読む hub を、画面 3110・API 4010 で起動する(バックグラウンドで実行する)
+cd C:/Users/yanqi/prj/yaoyorozu/hub
+IHUB_API_PORT=4010 PORT=3110 BROWSER=none npx concurrently -k -n web,api "react-scripts start" "ihub-srv --data <自分の worktree>/hub/data"
+```
+
+- ポートは、ほかのセッションと重ならない値にする(起動前に空いているかを確かめる)。
+- この hub で図を動かすと、自分の worktree の `hub/data` に書き込まれる(main は変わらない)。2026-11-14 に、この方法で確かめてある。
+- 止めるときは、自分が起動したプロセスだけを止める(「並行作業のルール」)。
 
 ## 各アプリの設計方針
 
 - `apps/web`(Next.js): [.claude/rules/web.md](.claude/rules/web.md) を参照(`apps/web/**` を編集する際に自動的に読み込まれる)
 - `apps/native`(Tauri v2): [.claude/rules/native.md](.claude/rules/native.md) を参照(`apps/native/**` を編集する際に自動的に読み込まれる)
+- `hub/`(iHub): 使い方は iHub のマニュアル(https://yanqirenshi.github.io/iHub/)を参照。データのフォーマットは `hub/node_modules/@yanqirenshi/ihub.srv/src/schemas/`
 
 ## rules ディレクトリ
 

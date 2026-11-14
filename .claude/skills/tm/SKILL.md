@@ -1,32 +1,30 @@
 ---
 name: tm
-description: /{リポジトリ名}/tm(ドメインモデルのデータモデル)を編集する。TM(T字形ER)の規則に沿ってモノと関係を起こし、{リポジトリ}/yyz/spec/tm.json と tm.md に反映して描画まで検証する。TM図・データモデル・エンティティ・個体指定子の追加や修正を頼まれたときに使用。
+description: hub の TM(ドメインモデルのデータモデル。「ビジネス」ページの TM タブ)を編集する。TM(T字形ER)の規則に沿ってモノと関係を起こし、hub/data/tm/*.json と README.md(判断の記録)に反映して、検査と描画まで確かめる。TM図・データモデル・エンティティ・個体指定子の追加や修正を頼まれたときに使用。
 ---
 
 # /tm
 
-`/{リポジトリ名}/tm`(いまは `/yaoyorozu/tm`)の TM(データモデル)を編集する。
+hub の TM(データモデル)を編集する。
+画面は hub の「ビジネス」ページの TM タブ(http://localhost:3100/business?tab=tm)。
 担当は「デザイン (ドメイン:Data)」セッション。
 
-- **モデルの編集対象は2つ**(#543 の最終段で `apps/web/src/data/tm.ts` から移した。#590)。
-  - [yyz/spec/tm.json](../../../yyz/spec/tm.json) … 語彙・箱・線。**資料に書いてあることだけ**を
-    物理名で持つ。ID は持たない(読み込み側が配列順から機械的に決める)。
-  - [yyz/spec/tm.md](../../../yyz/spec/tm.md) … **判断の記録**。スコープ、入れなかったものと
-    その理由、関係の検証の網羅性など、横断する判断を書く。
-  - 迷ったら「その項目を消したとき、この文章も一緒に消えるか」で決める。一緒に消えるなら
-    JSON の `description`、残るなら Markdown。
-- 読み込みと組み立ては [lib/tm.ts](../../../apps/web/src/lib/tm.ts)。ID の採番・`(R)` の解決・
-  レイアウト保存のキー・検証(語彙の参照漏れ、保存キーの重複など)はここにある。
-  **JSON を直すだけでは足りない変更**(新しい種別の受け入れなど)はここも見る。
-- 表示側([RepoTmTab.tsx](../../../apps/web/src/app/tabs/RepoTmTab.tsx))は、図の見せ方そのものを
-  変える依頼(ドラッグ位置の保存など)でなければ触らない。
+- **2026-11-14 に、データの正を `yyz/spec/tm.json`(apps/web)から `hub/data/tm/` へ移した**(ユーザー判断)。
+  `yyz/spec/tm.json`・`tm.md` は移行元として残っているだけで、**直さない**(直しても hub に反映されない)。
+- **編集対象は `hub/data/tm/` の5つ**。
+  - `identifiers.json` … 個体指定子のマスタ(語彙)。
+  - `attributes.json` … 属性のマスタ(語彙)。
+  - `entities.json` … エンティティ(箱)。識別子・属性は、マスタを参照する**インスタンス**として持つ。
+  - `relationships.json` … 結線。
+  - `README.md` … **判断の記録**。スコープ、入れなかったものとその理由、関係の検証の網羅性など、横断する判断を書く(移行元の `tm.md` そのもの)。
+  - 迷ったら「その項目を消したとき、この文章も一緒に消えるか」で決める。一緒に消えるなら JSON の `description`、残るなら README.md。
+- データの形は **d3.ter の入力の形そのもの**(読み込み側での変換は無い)。項目の定義は iHub の JSON Schema(`hub/node_modules/@yanqirenshi/ihub.srv/src/schemas/tm/*.schema.json`)と、d3.ter の型の宣言(`hub/node_modules/@yanqirenshi/d3.ter/dist/index.d.ts`)が一次資料。
+  - 移行前の Webアプリには、物理名で書いた tm.json から ID を振って組み立てる変換(`apps/web/src/lib/tm.ts`)があった。hub にはそれが無いので、**ID も参照も JSON に直接書く**(§3)。
 - 記法は TM(T字形ER)に従う。出典は佐藤正美/SDI「モデル作成の手続き」。
-  同資料は複写・転写が禁止されているため、**本スキルにも tm.json / tm.md にも文面を転記しない**
+  同資料は複写・転写が禁止されているため、**本スキルにも hub/data/tm/ にも文面を転記しない**
   (手順として書き下したものだけを置く)。
-- [web.md](../../../.claude/rules/web.md) の規約に従う(移行済みの画面は
-  `{リポジトリ}/yyz/spec/*.json` が SSoT。規約を逸脱する場合は理由をコメントに残す)。
-- 現在のスコープと次段の候補は `tm.md` の冒頭に書いてある。まずそこを読む。
-- **段階を切って進める**。一度に全部描くと、オブジェクトモデル(`/class-diagram`)と同じ密度になりデータモデルとしての可読性を失う。
+- 現在のスコープと次段の候補は `hub/data/tm/README.md` の冒頭に書いてある。まずそこを読む。
+- **段階を切って進める**。一度に全部描くと、オブジェクトモデル(クラス図)と同じ密度になりデータモデルとしての可読性を失う。
 
 ## 1. モデルを起こす(この順序を守る)
 
@@ -47,7 +45,7 @@ description: /{リポジトリ名}/tm(ドメインモデルのデータモデル
 - ただし ID を発明してよいかは**フェーズによって変わる**。「ID が存在しない」は
   「その対象が管理対象と認識されていない」という現状分析の結論であり、**業務改善**
   として管理対象に格上げするなら、ID を新設してモノを立ててよい。
-  どちらのフェーズで書いているかを明示し、新設した ID には理由をコメントで残す。
+  どちらのフェーズで書いているかを明示し、新設した ID には理由を `description` に残す。
   (例: git のブランチ・ワーキングツリーは名前とパスしか持たないが、アプリが管理する
   ため `GitブランチID` / `ワーキングツリーID` を新設した)
 - 逆に、業務改善として書くときは**このアプリが管理しないものはモノにしない**。
@@ -122,155 +120,119 @@ description: /{リポジトリ名}/tm(ドメインモデルのデータモデル
   - 複数の区分コードで階が生じ、**上下を入れ替えても意味が通る**。
 - null を除去するための形式的サブセットもある(状態遷移を表すことがある)。
 - 多値: OR(MO)は正規形に分ける。AND(MA)は HDR-DTL 構成。
-  **d3.ter に MO / MA の種別は無い**(§2)。代用したら理由をコメントに残す。
+  d3.ter 0.4 では `MANY-VALUED-OR` / `MANY-VALUED-AND` の種別がある(§2)。
 
 ### 1-7. クラスで整える
 
 1つのモノに他の性質(イベント的/他リソース的)が混入していたら切り出す。
 
-- クラスは他のモノと直接結線しない。
+- クラスは他のモノと直接結線しない。d3.ter 0.4 では種別 `CLASS` で描け、**切り出し元(親)とだけ**結線できる(§2)。
 - 計算・導出で得られる値は `(D)` を付ける。実装要否は後で判断してよい。
 
 ### 1-8. 関係の検証表をつくる
 
 モノ × モノ の表を書き、関係の網羅性を確認する。**報告に含める**(図だけでは抜けが見えない)。
 
-## 2. d3.ter の仕様(調べ直さないこと)
+## 2. d3.ter の仕様(hub に入っている 0.4.1)
 
-`@yanqirenshi/d3.ter` の `dist` を読んで確認した、ドキュメントに無い仕様。
+hub が使う d3.ter は `hub/node_modules/@yanqirenshi/d3.ter`(0.4.1。2026-11-14 時点)。
+apps/web が使っていたのは 0.2 系で、仕様が変わっている。迷ったら `dist/index.d.ts` を読む。
 
-- **エンティティ種別は7種のみ**。`RESOURCE` / `RESOURCE-SUBSET` / `EVENT` / `EVENT-SUBSET` /
-  `COMPARATIVE`(対照表) / `CORRESPONDENCE`(対応表) / `RECURSION`(再帰表)。
-  **未知の値を渡すと例外で図ごと落ちる**。MO / MA は無い。
-- **結線角度 `position`**: `0=下` / `90=左` / `180=上` / `270=右`。
-  Geometry が基準ベクトルを `(0, +対角長)` から回すため。SVG 座標なので y は下向き。
+- **エンティティ種別は10種**。`RESOURCE` / `RESOURCE-SUBSET` / `EVENT` / `EVENT-SUBSET` /
+  `COMPARATIVE`(対照表) / `CORRESPONDENCE`(対応表) / `RECURSION`(再帰表) /
+  `MANY-VALUED-OR` / `MANY-VALUED-AND` / `CLASS`。
+  **これ以外の値を渡すと例外で図ごと落ちる**(iHub のスキーマも同じ10種で検査する)。
+- **`CLASS`** は種別のバッジを持たない。**結線できるのは切り出し元(親)だけ**で、それ以外を
+  端点にすると例外になる。
+- **結線角度 `position`**: `0=下` / `90=左` / `180=上` / `270=右`(時計回り)。
   同じ辺から複数の線を出すときは角度をずらす(例: 下辺なら `30, 10, 350, 330` で左から右へ)。
 - **`cardinality`**: `1`=単一(横棒) / `3`=複数(鳥足)。**`optionality`**: `1`=必須(横棒) / `0`=任意(丸)。
-  記号は各端点(port)側に描かれる。「そのエンティティが相手1件に対して何件か」を表す。
-- **垂下 `mapping: { entity }`**(0.1.24)。結線の中点に○を置き、そこから対照表・対応表へ
-  線を引いてぶら下げる。指定できるのは `COMPARATIVE` / `CORRESPONDENCE` だけで、
-  それ以外を指定すると例外で落ちる。**再帰表は対象外**。
-  - 多重度は親どうしの1本に集約する。**相手側の端の記号** = 元の「その親 → 表」の
-    表側の記号。移すだけで情報は失われない。
-  - 垂下線は「線の中点」から「表の上辺または下辺の中央」へ引かれる。きれいな垂線に
-    するには**表の中心Xを中点Xに合わせる**。中点の高さに表を置くと線が横に寝る。
+  無ければ記号を描かない。記号は各端点(port)側に描かれる。「そのエンティティが相手1件に対して何件か」を表す。
+- **自己結線**: `from.entity` と `to.entity` に同じエンティティを指定すると、箱の外側を回るループで描かれる。
+  膨らむ向きは両端の `position` で決まる(自動の重なり回避は無い)。
+- **垂下 `mapping: { entity: <id> }`**。結線の中点の○から、指定したエンティティへ垂下線を引いてぶら下げる。
+  - 指定できるのは `CORRESPONDENCE` / `COMPARATIVE` / `RECURSION` だけ。それ以外は例外。
+  - `RECURSION` は**自己結線にだけ**指定できる(通常の結線に指定すると例外)。
+    0.2 系では再帰表を垂下できなかったため、いまのデータ(ログ行 × 再帰表)は親・子の2本の結線で描いている。
+    書き換えるかどうかはモデルの判断として決め、決めたら README.md に残す。
+  - 垂下線は、表のいちばん近い辺(上下左右)の中央に自動で付く。
+  - 多重度は親どうしの1本に集約する。**相手側の端の記号** = 元の「その親 → 表」の表側の記号。移すだけで情報は失われない。
   - 垂下線には多重度の記号は描かれない。
+- **サブセット `subset: { kind, code }`**。`kind` は `same`(=)/ `different`(×)。
+  d3.ter は `親エンティティ + code` で結線をまとめて1本の木として描くので、**同じ区分コードの結線は `code` の綴りをそろえる**(違うと別の木になる)。
+  `subset` を書いた結線では `label` は表示されない(区分コードが優先される)。
 - **`size: { w: 0, h: 0 }`** を渡すと内容から実寸を自動計算する。手で指定しない。
   左右のカラムは強制的に等幅(半分ずつ)になる。
-- **表示名の上書き**: 識別子・属性インスタンスに `name` を与えるとプールのマスタ名を上書きできる
-  (`data.name ? data.name : master.name`)。`(R)` 表記はこれで実現する。マスタを重複させない。
-- `name` は `{ physical, logical }` を渡す。**図に出るのは `logical`**(`logical || physical`)。
-  文字列を渡すと `physical` 側に入り、`logical` が空になる。
+- **表示名の上書き**: 識別子・属性のインスタンスに `name` を与えると、マスタの名前を上書きできる。`(R)` 表記はこれで実現する。マスタを重複させない。
+- `name` は `{ physical, logical }` を渡す。**図に出るのは `logical`**(無ければ `physical`)。
+- 結線の `details` を省くと、端点のエンティティの**先頭の識別子**に線が付く。
 - `description` は保持されるだけで描画されない。モデルの根拠を残す場所として使う。
 
-## 3. tm.json / tm.md の書き方
+## 3. hub/data/tm/ の書き方
 
-- MUST: `tm.json` に **ID を書かない**。数値 ID と保存キーは `lib/tm.ts` が配列順から決める
-  (手で採番すると並べ替えでずれる)。
-- MUST: `physical` は資料上のフィールド名、`logical` は日本語。`(R)` `(D)` は `logical` に付ける。
-- MUST: エンティティの `description` にモデルの根拠(一次資料の該当節、分類の理由)を書く。
-  語彙(`identifiers` / `attributes`)と結線にも `description` を置ける。
-- MUST: サブセットの区分コードは `subsetCodes` に定義し、結線からは `subset: "<code>"` と
-  **名前で参照する**。綴りが違うと d3.ter が別の木として描くため、`lib/tm.ts` が照合する。
-- MUST: `tm.md` は「。」ごとに改行し、見出しは `##` から始める(CLAUDE.md の文章ルール)。
-  節は**時系列**(第1弾 → Phase → 第2弾…)に並べる。あとから読む人が
-  「いつ、何を根拠にそう決めたか」をたどるため。
-- MUST: 判断の記録を**要約しない**。情報量が価値なので、整形はしても内容は削らない。
+項目の一覧と意味は JSON Schema(`ihub.srv/src/schemas/tm/`)にある。ここでは決まりだけを書く。
+
+- **ID**
+  - すべてのレコードに `id`(整数)を書く。いまの範囲は次のとおり(2026-11-14 の移行時に振ったもの):
+    個体指定子 1〜、属性 101〜、エンティティ 201〜、結線 501〜、識別子のインスタンス 1001〜、属性のインスタンス 2001〜。
+  - 新しく足すときは、そのコレクションの最大の `id` + 1 から、**tm の中のどこでも使われていない値**まで進めた値にする(iHub の API サーバーが ID を振るときと同じ決まり)。
+    例: 属性の最大が 202 でも、203〜236 はエンティティが使っているので、237 にする。
+  - インスタンス(`entities[].identifiers[].id`・`entities[].attributes[].id`)の `id` は、**全エンティティを通して一意**にする(結線の `details` がこれを指す)。
+  - 一度振った `id` は変えない(図で動かした位置や、結線の参照が `id` に付いているため)。並べ替えても `id` はそのまま。
+- **名前**: マスタとエンティティの `name` は `{ "logical": 日本語, "physical": 資料上のフィールド名 }`。
+  `(R)` `(D)` は `logical` に付ける。
+  - `(R)` は、エンティティの識別子インスタンスに `name` を与えて表す(例: `{"id": 1005, "identifier": 3, "name": {"physical": "repositoryPath", "logical": "リポジトリパス(R)"}}`)。マスタは増やさない。
+- **参照**: インスタンスの `identifier` / `attribute` はマスタの `id`、結線の `from.entity` / `to.entity` / `mapping.entity` はエンティティの `id`。名前では参照しない。
+- **説明**: エンティティの `description` にモデルの根拠(一次資料の該当節、分類の理由)を書く。
+  語彙(マスタ)と結線にも `description` を置ける。
+- **サブセット**: 区分コードのマスタは無い。結線ごとに `subset: { "kind", "code", "description" }` を書く。
+  同じ区分コードを使う結線どうしで、`kind`・`code`・`description` を**そろえる**(移行元の `subsetCodes` の説明は、ここに入れてある)。
+- **位置**: エンティティの `position`(`{ x, y, z }`)。画面でドラッグすると、iHub がここへ直接書き込む(別のレイアウトのファイルは無い)。
+  結線の取り付け角度は `from.position` / `to.position`。
+- **README.md**(判断の記録)
+  - MUST: 「。」ごとに改行し、見出しは `##` から始める(CLAUDE.md の文章ルール)。
+    節は**時系列**(第1弾 → Phase → 第2弾…)に並べる。あとから読む人が
+    「いつ、何を根拠にそう決めたか」をたどるため。
+  - MUST: 判断の記録を**要約しない**。情報量が価値なので、整形はしても内容は削らない。
+  - hub の画面には出ない(ファイルとして読む)。
 - 同じ物理名で意味が違う語彙は**別の属性に分ける**(例: 設定ファイルの `updatedAt`
   (手配の更新日)と、実行中セッションの `updatedAt`(記録の更新日時))。
   1つにまとめると誤ったモデルになる。
 
 ## 4. 検証する
 
-```bash
-npx tsc --noEmit -p apps/web/tsconfig.json
-npm run web:build
-```
+**自分の worktree の `hub/data` で確かめる**。main で動いている hub(3100 番)は main の `hub/data` を読むので、worktree の変更は見えない。
+起動のしかたは CLAUDE.md の「hub で図を確かめる(worktree から)」にある(main の hub のパッケージを使い、自分の `hub/data` を読む hub を別のポートで起動する)。
 
-次に `/tm` の描画と幾何(エンティティ数・重なり・結線記号の数)を確認する。
-**自分の作業ツリー(worktree)で実行する**こと(既定では、このコマンドを実行した
-作業ツリーから自分で開発サーバを起動して確認する。他セッションが動かしている
-サーバは既定では使わない)。
+1. **検査**(スキーマと、ID の重複・参照の整合性のルール):
 
-ただし **データは worktree から読まれない**。Web アプリは app に登録されたリポジトリの
-パス(= main の作業フォルダ)から `yyz/spec/` を読むため、worktree で開発サーバを立てても
-main 側のファイルを見る。`tm.json` / `tm.md` を直した内容で確認したいときは、**確認の間だけ**
-main の作業フォルダへコピーし、**終わったら必ず消す**(`trap` で終了時に消すのが確実)。
-消し忘れると、マージ後に main で `git pull` が止まりリリース作業も止まる。
+   ```bash
+   npx --prefix C:/Users/yanqi/prj/yaoyorozu/hub ihub-srv check <自分の worktree>/hub/data
+   ```
 
-```bash
-npm run web:check-diagram -- tm --expect-count=36
-```
+   `OK` なら合格。合わないときは、場所と理由が日本語で出る。
 
-Microsoft Edge を headless で起動し、CDP(Chrome DevTools Protocol)で `/tm` を開いて
-計測する([check-diagram.ts](../../../apps/web/scripts/check-diagram.ts)、#462)。
-`--expect-count` はそのときの想定エンティティ数に置き換える。実行開始時に表示される
-「作業ツリー」が自分の worktree のパスになっていることを確認する。終了コードが 0 なら合格、
-非 0 なら標準出力の JSON(`overlaps` / `overflow` / `connectors` / `cardLine` /
-`cardPath` / `optLine` / `optCircle` / `consoleMessages`)で原因を見る。判定基準:
+2. **描画**: 自分の `hub/data` を読む hub(例: http://localhost:3110/business?tab=tm)を開き、ブラウザのペイン(preview_start / javascript_tool / read_console_messages)で確かめる。
+   - すべてのエンティティの `logical` が描かれている(下の JS で欠けを数える)。
+   - コンソールにエラー・例外が無い(未知の種別などは図ごと落ちる)。
+   - 箱どうしが重なっていない・ラベルがはみ出していないことは、スクリーンショットで目で見る。
+     (Webアプリ時代の `npm run web:check-diagram -- tm` は apps/web の図を測るもので、hub には使えない)
 
-- `count` が定義したエンティティ数と一致する(`--expect-count` で指定した値と比較される)。
-- `overlaps` が空。重なっていたら `position` を調整する。
-- `overflow` が空。ラベルが箱の外へはみ出している。
-- `connectors` がリレーションシップ数と一致する。
-- `cardLine + cardPath` と `optLine + optCircle` がどちらも **リレーションシップ数 × 2**。
-  内訳も定義から数えた期待値と一致すること(合計だけ合っていても向きが逆なことがある)。
-  これは `check-diagram.ts` が計測しないので、`cardLine` / `cardPath` / `optLine` /
-  `optCircle` の数値を見て手で照合する。
-- `consoleMessages` が空(コンソールエラー・例外が無い)。
-
-Desktop のブラウザのペイン(preview_start / javascript_tool / read_console_messages)が
-使えるセッションは、そちらで直接ブラウザ内 JS を実行して確認してもよい(同じ照合項目)。
+   ```js
+   // hub の TM タブを開いた状態で実行する。欠けているエンティティの名前を返す
+   const svg = [...document.querySelectorAll('svg')].sort((a, b) => b.querySelectorAll('*').length - a.querySelectorAll('*').length)[0];
+   const texts = new Set([...svg.querySelectorAll('text')].map((t) => t.textContent.trim()));
+   const ents = (await fetch('/api/tm/entities').then((r) => r.json())).data; // { name, data, etag } の data
+   ({ entities: ents.length, missing: ents.filter((e) => !texts.has(e.name.logical)).map((e) => e.name.logical) })
+   ```
 
 ## 注意
 
 - 図が横に伸びやすい。実寸を測ってから `position` を詰める。手で見積もると外れる。
-- WBS([wbs.ts](../../../apps/web/src/data/wbs.ts))の TM 配下(`_id: 40`)にモデルの構成要素が並んでいる。
+- **main で動いている hub(3100 番)で箱を動かさない**。main の `hub/data/tm/entities.json` が書き換わり、main の作業ツリーに未コミットの変更が残る
+  (以前のレイアウトの JSON と同じく、リリース作業の `git pull` を止める原因になる)。動かすのは、自分の worktree の `hub/data` を読む hub で。
+- 視点(パン・ズーム)は、iHub がブラウザに覚える。データには入らない。
+- WBS(`hub/data/wbs/wbs.json`)の TM 配下(`id: 40`)にモデルの構成要素が並んでいる。
   エンティティの種類を増やしたらここも合わせる。
-  `/tm` の「WBS」タブが見ているのは画面としての TM(`_id: 26`)であり別物なので注意。
-- レイアウトの手調整は**リポジトリ内のファイル** `src/data/layout/tm.json` に保存される
-  ([tmLayoutStorage.ts](../../../apps/web/src/data/tmLayoutStorage.ts))。開発時専用の
-  保存API(`POST /api/layout/tm`)経由で書き込む。web.md §2 の規定であり、
-  **localStorage への保存は NEVER**(旧方式は廃止済み)。
-  - ファイルの形は `{ entities, ports, camera }`。エンティティ位置は**物理名をキー**にした
-    上書きで、`yyz/spec/tm.json` の `position` より優先される。
-  - そのため「定義を直したのに図が変わらない」ときは、まずこのレイアウトファイルを疑う。
-  - web.md §2 のとおり、調整が固まったら値を `yyz/spec/tm.json` に反映し、レイアウト
-    ファイルは空に戻す。
-  - **レイアウトは yyz/ へ移していない**(#587 の判断)。保存 API が apps/web 配下に書く
-    作りで、動かすと別の設計が要るため。置き場所は `apps/web/src/data/layout/tm.json` のまま。
-  - 保存は開発サーバーでしか通らない(本番ビルドでは 405)。成否はスナックバーに出る。
-- d3.ter にはドラッグ完了を知らせるコールバックが無い。RepoTmTab は window の capture
-  フェーズで mousedown/mouseup を拾い、`g.entity` の `__data__.position` を前後で
-  比較して変化したものだけ保存している(SitemapTab と同じ方式)。
-- エンティティの**右クリックでインスペクタ**(Colonoscope)が開く。種別・物理名・
-  説明を表示し、X / Y を数値で指定できる。閉じるのは `✕` / Esc / 空白部の右クリック。
-  contextmenu のコールバックも無いため、コンテナへの委譲で拾っている。
-- インスペクタの「適用」は `key` を変えて D3Ter を貼り替える。rectum を作り直す
-  だけでは再描画されないため。
-- インスペクタの中身は **基本 / 説明** の2タブ。スキーマを組むのは
-  [tmInspector.tsx](../../../apps/web/src/app/tabs/tm/tmInspector.tsx)。
-  基本は物理名・X・Y と**そのエンティティに繋がる結線の一覧**(相手の名前・ラベル・
-  このエンティティ側のポート角度)、説明は `description` を出す。幅は左端のハンドルで
-  伸縮できる(初期 444px / 最小 222px / 最大 888px)。
-  結線の角度の `path` は `ports.<添字>.angle` を使う。保存キーは記号・日本語を含むため、
-  ドット区切りの path に埋めると Colonoscope の `getByPath` が辿れなくなる。
-- ポート角度も同じ `tm.json` の `ports` に入る。キーは
-  `<from物理名>-><to物理名>[#ラベル]:<from|to>` で、同じ端点の組が複数ある場合だけ
-  ラベルで区別する(ログ行 × 再帰表 が親・子の2本)。重複したら `lib/tm.ts` がエラーを返し、
-  画面にその旨が出る(移行前は例外を投げていたが、実行時に読む形になったため)。
-  - 保存APIはファイルを丸ごと置き換えるため、**位置だけ・角度だけを書かない**。
-    `buildLayoutFile(entities, ports)` で必ず両方を含めて保存する
-    (片方だけ書くともう片方が消える)。
-- インスペクタは **Colonoscope**(`@yanqirenshi/colonoscope`)の `tabs` モードを使う。
-  0.4.0 でタブと幅の受け口が入ったため、自前実装(旧 `TmInspector.tsx`)をやめた(#572)。
-  サイトマップも同じ部品を使う([sitemapInspector.ts](../../../apps/web/src/app/tabs/sitemap/sitemapInspector.ts)
-  が先例)。Classes は使っていない(結線の一覧を置けず自前に戻した経緯がある)。
-- 対象を切り替えてもタブの選択は保たれる(説明を読み比べられるように)。「適用」は
-  変更が無いと押せず、編集する項目の無いタブ(説明)にはフッタごと出ない。いずれも
-  Colonoscope 側の挙動なので、こちらで作り込まない。
-- 視点(パン・ズーム)は `D3Svg` の `onZoom` で受け取って保存する(#571)。復元は
-  `svg.__zoom` を差し替えている(d3.svg に視点を設定する API が無いため。要望は
-  Foolsgolds/Assholes#124)。**描画は等倍で行わせ、そのあとで視点を当てる**こと。
-  `Rectum` に `transform`(ズーム初期値)を渡すと、縮小された状態で箱の寸法が
-  計算されて幅が変わる(#571 で実測。セッションが 381 → 393 に広がった)。
+  WBS の `id: 26` は画面としての TM であり別物なので注意。
+- 移行前の Webアプリのレイアウトのファイル(`apps/web/src/data/layout/tm.json`)の位置・角度は、移行のときに `hub/data/tm/` の `position` に入れてある。いまは使わない。
