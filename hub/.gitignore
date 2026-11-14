@@ -1,0 +1,20 @@
+# 依存パッケージ
+/node_modules
+
+# ビルドした画面
+/build
+
+# 個人のトークンなど
+.env.local
+
+# リポジトリのルートの .gitignore は .env* をすべて除外する。
+# hub のポートの設定 (.env) と環境変数の雛形 (.env.local.template) は共有するので戻す。
+!/.env
+!/.env.local.template
+
+# 個人の設定 (サイドメニューの on/off など) と、書き込み途中の一時ファイルは共有しない
+/data/local/
+/data/**/*.tmp
+
+.DS_Store
+npm-debug.log*

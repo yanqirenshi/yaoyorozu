@@ -1,0 +1,679 @@
+[
+    {
+        "id": 501,
+        "from": {
+            "entity": 201,
+            "position": 0,
+            "cardinality": 3,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 202,
+            "position": 180,
+            "cardinality": 3,
+            "optionality": 1
+        },
+        "mapping": {
+            "entity": 207
+        },
+        "description": "---- 実行環境(PC / ユーザー / Gitリポジトリ)----\nR-R(PC × ユーザー)。1台に1人以上のユーザーがいて、同じユーザー名が\n複数マシンにありうる。"
+    },
+    {
+        "id": 502,
+        "from": {
+            "entity": 201,
+            "position": 270,
+            "cardinality": 3,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 203,
+            "position": 90,
+            "cardinality": 3,
+            "optionality": 0
+        },
+        "mapping": {
+            "entity": 208
+        },
+        "description": "R-R(PC × Gitリポジトリ)。1台にリポジトリは複数または値なし、\n1つのリポジトリはどこかのマシンには置かれている。"
+    },
+    {
+        "id": 503,
+        "from": {
+            "entity": 202,
+            "position": 270,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 214,
+            "position": 90,
+            "cardinality": 3,
+            "optionality": 0
+        },
+        "mapping": {
+            "entity": 209
+        },
+        "description": "R-R(ユーザー × セッション)。\n1人のユーザーに会話は複数または値なし(まだ始めていないこともある)。\n1つの会話は必ず1人のもの。"
+    },
+    {
+        "id": 504,
+        "from": {
+            "entity": 203,
+            "position": 10,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 210,
+            "position": 180,
+            "cardinality": 1,
+            "optionality": 0
+        },
+        "description": "Gitリポジトリ 1 : 設定ファイルの手配 各1件または値なし(まだ作っていない\nリポジトリもある)。E-R。"
+    },
+    {
+        "id": 505,
+        "from": {
+            "entity": 203,
+            "position": 0,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 211,
+            "position": 150,
+            "cardinality": 1,
+            "optionality": 0
+        },
+        "description": "Gitリポジトリ 1 : 設定ファイルの手配 各1件または値なし(まだ作っていない\nリポジトリもある)。E-R。"
+    },
+    {
+        "id": 506,
+        "from": {
+            "entity": 203,
+            "position": 350,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 212,
+            "position": 130,
+            "cardinality": 1,
+            "optionality": 0
+        },
+        "description": "Gitリポジトリ 1 : 設定ファイルの手配 各1件または値なし(まだ作っていない\nリポジトリもある)。E-R。"
+    },
+    {
+        "id": 507,
+        "from": {
+            "entity": 203,
+            "position": 340,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 204,
+            "position": 180,
+            "cardinality": 3,
+            "optionality": 0
+        },
+        "description": "Gitリポジトリ 1 : Gitブランチ 複数または値なし。E-R。"
+    },
+    {
+        "id": 508,
+        "from": {
+            "entity": 203,
+            "position": 320,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 205,
+            "position": 160,
+            "cardinality": 3,
+            "optionality": 1
+        },
+        "description": "Gitリポジトリ 1 : ワーキングツリー 1以上(リポジトリ本体のディレクトリが\n常に1つ目のワーキングツリーであるため)。E-R。"
+    },
+    {
+        "id": 509,
+        "from": {
+            "entity": 204,
+            "position": 270,
+            "cardinality": 1,
+            "optionality": 0
+        },
+        "to": {
+            "entity": 205,
+            "position": 90,
+            "cardinality": 1,
+            "optionality": 0
+        },
+        "mapping": {
+            "entity": 206
+        },
+        "description": "E-E は対応表で構成する。ブランチ 1 に対し、それを開いているワーキングツリーは\n1つまで(同じブランチを2箇所で開けない)。逆にワーキングツリーが開いている\nブランチも1つまで(detached HEAD なら 0)。"
+    },
+    {
+        "id": 510,
+        "from": {
+            "entity": 202,
+            "position": 0,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 213,
+            "position": 180,
+            "cardinality": 1,
+            "optionality": 0
+        },
+        "description": "ユーザー 1 : CLAUDE.md(ユーザー)の手配 1件または値なし。E-R。"
+    },
+    {
+        "id": 511,
+        "from": {
+            "entity": 214,
+            "position": 270,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 215,
+            "position": 90,
+            "cardinality": 3,
+            "optionality": 0
+        },
+        "mapping": {
+            "entity": 216
+        },
+        "description": "R-R(セッション × ファイル)。セッション 1 にファイルは会話ファイル1件 +\nサブエージェント0件以上。ただし app が新しいセッションを起こした直後は、\nセッションIDは決まっているのに会話ファイルがまだ無い(最初の行が書かれた時点で\n作られる)。この窓を表せるよう「0件以上」にしている(Phase 2。イシュー #403)。\nファイル 1 は必ず1つの会話に属する。"
+    },
+    {
+        "id": 512,
+        "from": {
+            "entity": 215,
+            "position": 0,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 219,
+            "position": 90,
+            "cardinality": 3,
+            "optionality": 1
+        },
+        "label": "書かれた先",
+        "description": "ファイル 1 : ログ行 複数(1以上)。E-R。\nどのファイルに書かれた行かは、親の会話とサブエージェントの会話を区別する唯一の\n手がかりである(sessionId はサブエージェントでも親と同じ値になるため)。"
+    },
+    {
+        "id": 513,
+        "from": {
+            "entity": 214,
+            "position": 280,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 219,
+            "position": 70,
+            "cardinality": 3,
+            "optionality": 1
+        },
+        "label": "所属",
+        "description": "セッション 1 : ログ行 複数(1以上)。E-R。\nファイル経由でも辿れるが、sessionId は全行に明示的に記録される語彙のため残す。"
+    },
+    {
+        "id": 514,
+        "from": {
+            "entity": 214,
+            "position": 290,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 224,
+            "position": 90,
+            "cardinality": 3,
+            "optionality": 0
+        },
+        "description": "セッション 1 : 入力キュー 複数または値なし。\nqueue-operation は 49/146ファイルにしかないため任意。"
+    },
+    {
+        "id": 515,
+        "from": {
+            "entity": 214,
+            "position": 350,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 225,
+            "position": 170,
+            "cardinality": 3,
+            "optionality": 0
+        },
+        "description": "セッション 1 : 実行中セッション 複数または値なし。E-R。\n終わった会話は動いていない(0件)。同じ会話を後で再開すると別のプロセスになる。"
+    },
+    {
+        "id": 516,
+        "from": {
+            "entity": 225,
+            "position": 270,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 226,
+            "position": 90,
+            "cardinality": 3,
+            "optionality": 0
+        },
+        "description": "実行中セッション 1 : ピア機能 複数または値なし(多値)。"
+    },
+    {
+        "id": 517,
+        "from": {
+            "entity": 205,
+            "position": 0,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 227,
+            "position": 90,
+            "cardinality": 3,
+            "optionality": 0
+        },
+        "description": "ワーキングツリー 1 : 実行中セッション(app起動)複数または値なし。E-R。\napp は起動するときに「このリポジトリの、このブランチの worktree」を用意して、そこを\ncwd にする(Phase 3)。どの worktree で起動したかは記録された事実になる。リポジトリは\nworktree から決まるので Gitリポジトリへは直接結ばない。外部起動は cwd しか無いので\nどちらとも結ばない(冒頭の判断の記録)。"
+    },
+    {
+        "id": 518,
+        "from": {
+            "entity": 225,
+            "position": 20,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 227,
+            "position": 180,
+            "cardinality": 1,
+            "optionality": 0
+        },
+        "subset": {
+            "kind": "different",
+            "code": "起動元",
+            "description": "実行中セッションを起動元(app が起動 / 外部)で切る区分コード。app が起動したものだけが\nプロセスの状態と権限の問い合わせを持つため、属性構成が異なる相違のサブセットになる。"
+        },
+        "description": "実行中セッションのサブセット。起動元で切る(×起動元)。app が起動したものだけが\nプロセスの状態と権限の問い合わせを持つため、属性構成が異なる相違のサブセット。"
+    },
+    {
+        "id": 519,
+        "from": {
+            "entity": 225,
+            "position": 340,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 228,
+            "position": 180,
+            "cardinality": 1,
+            "optionality": 0
+        },
+        "subset": {
+            "kind": "different",
+            "code": "起動元",
+            "description": "実行中セッションを起動元(app が起動 / 外部)で切る区分コード。app が起動したものだけが\nプロセスの状態と権限の問い合わせを持つため、属性構成が異なる相違のサブセットになる。"
+        },
+        "description": "実行中セッションのサブセット。起動元で切る(×起動元)。app が起動したものだけが\nプロセスの状態と権限の問い合わせを持つため、属性構成が異なる相違のサブセット。"
+    },
+    {
+        "id": 520,
+        "from": {
+            "entity": 227,
+            "position": 0,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 229,
+            "position": 180,
+            "cardinality": 3,
+            "optionality": 0
+        },
+        "description": "app が起動した実行中セッション 1 : 権限の問い合わせ 複数または値なし。E-E の\n先行後続(問い合わせが実行中セッションの値を (R) で継承する)。"
+    },
+    {
+        "id": 521,
+        "from": {
+            "entity": 229,
+            "position": 270,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 230,
+            "position": 90,
+            "cardinality": 1,
+            "optionality": 0
+        },
+        "description": "権限の問い合わせ 1 : 応答 1件または値なし(中断で取り消されると応答が無い)。E-E。"
+    },
+    {
+        "id": 522,
+        "from": {
+            "entity": 229,
+            "position": 350,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 231,
+            "position": 170,
+            "cardinality": 3,
+            "optionality": 0
+        },
+        "description": "権限の問い合わせ 1 : 提案 複数または値なし(多値)。"
+    },
+    {
+        "id": 523,
+        "from": {
+            "entity": 219,
+            "position": 30,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 220,
+            "position": 180,
+            "cardinality": 1,
+            "optionality": 0
+        },
+        "subset": {
+            "kind": "different",
+            "code": "行種別",
+            "description": "ログ行のサブセットを切る区分コード(相違のサブセット)。\nd3.ter は `親エンティティ + 区分コード` で結線をグルーピングし、幹 → バス →\n各サブセット という1本の分岐として描く。そのため4本に同じ区分コードを与えると、\n線は1本の木、ラベルも `×行種別` が1つだけになる(TM のサブセット表記どおり)。\nカーディナリティ・オプショナリティの記号はサブセット結線には描かれない。"
+        },
+        "description": "ログ行のサブセット。属性構成が異なるので相違のサブセット(×行種別)。\n1対「1または値なし」。ログ行の下辺から角度をずらして出す。0=下 を基準に、\n30 → 330 の順で下辺の左から右へ接続点が移動する。"
+    },
+    {
+        "id": 524,
+        "from": {
+            "entity": 219,
+            "position": 10,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 221,
+            "position": 180,
+            "cardinality": 1,
+            "optionality": 0
+        },
+        "subset": {
+            "kind": "different",
+            "code": "行種別",
+            "description": "ログ行のサブセットを切る区分コード(相違のサブセット)。\nd3.ter は `親エンティティ + 区分コード` で結線をグルーピングし、幹 → バス →\n各サブセット という1本の分岐として描く。そのため4本に同じ区分コードを与えると、\n線は1本の木、ラベルも `×行種別` が1つだけになる(TM のサブセット表記どおり)。\nカーディナリティ・オプショナリティの記号はサブセット結線には描かれない。"
+        },
+        "description": "ログ行のサブセット。属性構成が異なるので相違のサブセット(×行種別)。\n1対「1または値なし」。ログ行の下辺から角度をずらして出す。0=下 を基準に、\n30 → 330 の順で下辺の左から右へ接続点が移動する。"
+    },
+    {
+        "id": 525,
+        "from": {
+            "entity": 219,
+            "position": 350,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 222,
+            "position": 180,
+            "cardinality": 1,
+            "optionality": 0
+        },
+        "subset": {
+            "kind": "different",
+            "code": "行種別",
+            "description": "ログ行のサブセットを切る区分コード(相違のサブセット)。\nd3.ter は `親エンティティ + 区分コード` で結線をグルーピングし、幹 → バス →\n各サブセット という1本の分岐として描く。そのため4本に同じ区分コードを与えると、\n線は1本の木、ラベルも `×行種別` が1つだけになる(TM のサブセット表記どおり)。\nカーディナリティ・オプショナリティの記号はサブセット結線には描かれない。"
+        },
+        "description": "ログ行のサブセット。属性構成が異なるので相違のサブセット(×行種別)。\n1対「1または値なし」。ログ行の下辺から角度をずらして出す。0=下 を基準に、\n30 → 330 の順で下辺の左から右へ接続点が移動する。"
+    },
+    {
+        "id": 526,
+        "from": {
+            "entity": 219,
+            "position": 330,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 223,
+            "position": 180,
+            "cardinality": 1,
+            "optionality": 0
+        },
+        "subset": {
+            "kind": "different",
+            "code": "行種別",
+            "description": "ログ行のサブセットを切る区分コード(相違のサブセット)。\nd3.ter は `親エンティティ + 区分コード` で結線をグルーピングし、幹 → バス →\n各サブセット という1本の分岐として描く。そのため4本に同じ区分コードを与えると、\n線は1本の木、ラベルも `×行種別` が1つだけになる(TM のサブセット表記どおり)。\nカーディナリティ・オプショナリティの記号はサブセット結線には描かれない。"
+        },
+        "description": "ログ行のサブセット。属性構成が異なるので相違のサブセット(×行種別)。\n1対「1または値なし」。ログ行の下辺から角度をずらして出す。0=下 を基準に、\n30 → 330 の順で下辺の左から右へ接続点が移動する。"
+    },
+    {
+        "id": 527,
+        "from": {
+            "entity": 219,
+            "position": 270,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 236,
+            "position": 90,
+            "cardinality": 3,
+            "optionality": 0
+        },
+        "label": "親",
+        "description": "再帰(親側): チェーン1件には親行が必ず1件。1つの行を親とするチェーンは\n複数または値なし(--fork-session で分岐しうる。葉の行は子を持たない)。"
+    },
+    {
+        "id": 528,
+        "from": {
+            "entity": 219,
+            "position": 280,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 236,
+            "position": 90,
+            "cardinality": 1,
+            "optionality": 0
+        },
+        "label": "子",
+        "description": "再帰(子側): チェーン1件には子行が必ず1件。1つの行を子とするチェーンは\n1件または値なし(親は1つだけ。チェーンの起点行は親を持たない)。"
+    },
+    {
+        "id": 529,
+        "from": {
+            "entity": 217,
+            "position": 180,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 221,
+            "position": 330,
+            "cardinality": 3,
+            "optionality": 1
+        },
+        "description": "第2弾(1/3。#579)。E-R。メッセージ 1 : AI応答行 1以上。1回の応答が複数ブロックに\n分かれると、同じ messageId の行が複数になる(報告書 §4.2)。"
+    },
+    {
+        "id": 530,
+        "from": {
+            "entity": 218,
+            "position": 200,
+            "cardinality": 1,
+            "optionality": 0
+        },
+        "to": {
+            "entity": 221,
+            "position": 30,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "description": "第2弾(1/3。#579)。E-R。ツール呼び出し 1 : AI応答行 1。呼び出しは必ず1つの行に\n記録される。行の側は tool_use ブロックの行だけが持つので「1件または値なし」。"
+    },
+    {
+        "id": 531,
+        "from": {
+            "entity": 218,
+            "position": 160,
+            "cardinality": 1,
+            "optionality": 0
+        },
+        "to": {
+            "entity": 220,
+            "position": 0,
+            "cardinality": 1,
+            "optionality": 0
+        },
+        "description": "第2弾(1/3。#579)。E-R。ツール呼び出し 1 : ユーザー行 1件または値なし。実測では\ntool_use 16,323 に対し tool_result 16,321 で、結果の無い呼び出しが2件ある(§6)。"
+    },
+    {
+        "id": 532,
+        "from": {
+            "entity": 222,
+            "position": 30,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 232,
+            "position": 180,
+            "cardinality": 1,
+            "optionality": 0
+        },
+        "subset": {
+            "kind": "different",
+            "code": "システム副種別",
+            "description": "システム行を副種別で切る区分コード(第2弾 2/3。#580)。stop_hook_summary /\napi_error / compact_boundary は固有の語彙を持つため相違のサブセットになる。\ninformational は内容だけで親の語彙に収まるため切らない。"
+        },
+        "description": "第2弾(2/3。#580)。システム行のサブセット。固有の語彙を持つ3種だけを切る\n(×システム副種別)。下辺から角度をずらして出す。"
+    },
+    {
+        "id": 533,
+        "from": {
+            "entity": 222,
+            "position": 350,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 233,
+            "position": 180,
+            "cardinality": 1,
+            "optionality": 0
+        },
+        "subset": {
+            "kind": "different",
+            "code": "システム副種別",
+            "description": "システム行を副種別で切る区分コード(第2弾 2/3。#580)。stop_hook_summary /\napi_error / compact_boundary は固有の語彙を持つため相違のサブセットになる。\ninformational は内容だけで親の語彙に収まるため切らない。"
+        },
+        "description": "第2弾(2/3。#580)。システム行のサブセット。固有の語彙を持つ3種だけを切る\n(×システム副種別)。下辺から角度をずらして出す。"
+    },
+    {
+        "id": 534,
+        "from": {
+            "entity": 222,
+            "position": 330,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 234,
+            "position": 180,
+            "cardinality": 1,
+            "optionality": 0
+        },
+        "subset": {
+            "kind": "different",
+            "code": "システム副種別",
+            "description": "システム行を副種別で切る区分コード(第2弾 2/3。#580)。stop_hook_summary /\napi_error / compact_boundary は固有の語彙を持つため相違のサブセットになる。\ninformational は内容だけで親の語彙に収まるため切らない。"
+        },
+        "description": "第2弾(2/3。#580)。システム行のサブセット。固有の語彙を持つ3種だけを切る\n(×システム副種別)。下辺から角度をずらして出す。"
+    },
+    {
+        "id": 535,
+        "from": {
+            "entity": 223,
+            "position": 30,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 235,
+            "position": 180,
+            "cardinality": 1,
+            "optionality": 0
+        },
+        "subset": {
+            "kind": "different",
+            "code": "付帯情報種別",
+            "description": "付帯情報行を種別で切る区分コード(第2弾 2/3。#580)。23値のうち、他のモノと関係を\n構成する語彙(ツール使用ID)を持つ hook_additional_context だけを切る。"
+        },
+        "description": "第2弾(2/3。#580)。付帯情報行のサブセット(×付帯情報種別)。23値のうち、\nツール呼び出しと関係を構成する hook_additional_context だけを切る。"
+    },
+    {
+        "id": 536,
+        "from": {
+            "entity": 218,
+            "position": 0,
+            "cardinality": 1,
+            "optionality": 0
+        },
+        "to": {
+            "entity": 232,
+            "position": 200,
+            "cardinality": 3,
+            "optionality": 0
+        },
+        "description": "第2弾(2/3。#580)。E-R。ツール呼び出し 1 : システム行(フック結果) 複数または\n値なし。ツール使用IDは §5 の型定義では任意で、持たない行もある。"
+    },
+    {
+        "id": 537,
+        "from": {
+            "entity": 218,
+            "position": 350,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 235,
+            "position": 160,
+            "cardinality": 3,
+            "optionality": 0
+        },
+        "description": "第2弾(2/3。#580)。E-R。ツール呼び出し 1 : 付帯情報行(フックの追加文脈)\n複数または値なし。追加文脈は必ず1つの呼び出しを指す。"
+    },
+    {
+        "id": 538,
+        "from": {
+            "entity": 218,
+            "position": 90,
+            "cardinality": 1,
+            "optionality": 1
+        },
+        "to": {
+            "entity": 229,
+            "position": 300,
+            "cardinality": 1,
+            "optionality": 0
+        },
+        "description": "第2弾(1/3。#579)。E-R。ツール呼び出し 1 : 権限の問い合わせ 1件または値なし。\n既に許可されているツールでは問い合わせが来ない。"
+    }
+]

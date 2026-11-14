@@ -1,0 +1,1728 @@
+[
+    {
+        "id": 201,
+        "type": "RESOURCE",
+        "name": {
+            "logical": "PC",
+            "physical": "Pc"
+        },
+        "description": "Claude Code を動かしているマシン。個体指定子は OS 由来のマシン固有値(Windows なら MachineGuid 等)を使い、アプリで勝手に採番しない。日付が帰属しないためリソース。",
+        "position": {
+            "x": -864.3475317955017,
+            "y": -195.23986612260344,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1001,
+                "identifier": 1
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2001,
+                "attribute": 101
+            },
+            {
+                "id": 2002,
+                "attribute": 102
+            }
+        ]
+    },
+    {
+        "id": 202,
+        "type": "RESOURCE",
+        "name": {
+            "logical": "ユーザー",
+            "physical": "User"
+        },
+        "description": "マシンを使う人。個体指定子は OS のユーザー名。ホームディレクトリ配下(~/.claude/)に CLAUDE.md や settings.json を持つ。日付が帰属しないためリソース。",
+        "position": {
+            "x": -894.9679312705994,
+            "y": 866.0723901987076,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1002,
+                "identifier": 2
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2003,
+                "attribute": 103
+            },
+            {
+                "id": 2004,
+                "attribute": 104
+            }
+        ]
+    },
+    {
+        "id": 203,
+        "type": "RESOURCE",
+        "name": {
+            "logical": "Gitリポジトリ",
+            "physical": "GitRepository"
+        },
+        "description": "プロダクト開発の対象リポジトリ。個体指定子はリポジトリのパス。配下に CLAUDE.md / .claude/settings.json / .claude/settings.local.json を持つ。作業ディレクトリはモノとして立てない(冒頭の【作業ディレクトリを立てない】を参照)。",
+        "position": {
+            "x": -301.4767608642578,
+            "y": -194.31139516830444,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1003,
+                "identifier": 3
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2005,
+                "attribute": 105
+            },
+            {
+                "id": 2006,
+                "attribute": 102
+            }
+        ]
+    },
+    {
+        "id": 204,
+        "type": "EVENT",
+        "name": {
+            "logical": "Gitブランチ",
+            "physical": "GitBranch"
+        },
+        "description": "ブランチの作成・削除。git 自体はブランチに ID を持たず、実体は refs/heads/<名前> にコミットハッシュが1行あるだけで、改名すると前後を結ぶ情報が残らない。現状分析としては「管理対象と認識されていない」が、業務改善として管理対象にするため GitブランチID を新設する。アプリがブランチを作る・消すことが業務であるためイベント。",
+        "position": {
+            "x": 1100.5208129882812,
+            "y": 255.5909624279011,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1004,
+                "identifier": 4
+            },
+            {
+                "id": 1005,
+                "identifier": 3,
+                "name": {
+                    "physical": "repositoryPath",
+                    "logical": "リポジトリパス(R)"
+                }
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2007,
+                "attribute": 106
+            },
+            {
+                "id": 2008,
+                "attribute": 102
+            },
+            {
+                "id": 2009,
+                "attribute": 110
+            },
+            {
+                "id": 2010,
+                "attribute": 111
+            }
+        ]
+    },
+    {
+        "id": 205,
+        "type": "EVENT",
+        "name": {
+            "logical": "ワーキングツリー",
+            "physical": "GitWorktree"
+        },
+        "description": "ワーキングツリーの作成・削除。git はワーキングツリーにも ID を持たず、識別子は台帳(.git/worktrees/<名前>)のディレクトリ名だけで、これはパス由来である。ブランチと同じく業務改善として ワーキングツリーID を新設する。フォルダパス(Claude)は実物のディレクトリ、ファイルパス(git)はその直下の .git ファイル(66バイトで台帳を指す)。",
+        "position": {
+            "x": 1915.4014129638672,
+            "y": 230.12174199344008,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1006,
+                "identifier": 5
+            },
+            {
+                "id": 1007,
+                "identifier": 3,
+                "name": {
+                    "physical": "repositoryPath",
+                    "logical": "リポジトリパス(R)"
+                }
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2011,
+                "attribute": 107
+            },
+            {
+                "id": 2012,
+                "attribute": 102
+            },
+            {
+                "id": 2013,
+                "attribute": 108
+            },
+            {
+                "id": 2014,
+                "attribute": 109
+            },
+            {
+                "id": 2015,
+                "attribute": 110
+            },
+            {
+                "id": 2016,
+                "attribute": 111
+            }
+        ]
+    },
+    {
+        "id": 206,
+        "type": "CORRESPONDENCE",
+        "name": {
+            "logical": "Gitブランチ．ワーキングツリー",
+            "physical": "GitBranchWorktree"
+        },
+        "description": "どのブランチをどのワーキングツリーが開いているか。どちらもイベントのため E-E であり、対応表で構成する(リソースどうしなら対照表だが、ここは両方イベント)。同じブランチを同時に開けるワーキングツリーは1つだけで、detached HEAD のワーキングツリーはブランチを持たない。",
+        "position": {
+            "x": 1434.6876029968262,
+            "y": 174.62281572818756,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1008,
+                "identifier": 4,
+                "name": {
+                    "physical": "branchId",
+                    "logical": "GitブランチID(R)"
+                }
+            },
+            {
+                "id": 1009,
+                "identifier": 5,
+                "name": {
+                    "physical": "worktreeId",
+                    "logical": "ワーキングツリーID(R)"
+                }
+            }
+        ],
+        "attributes": []
+    },
+    {
+        "id": 207,
+        "type": "COMPARATIVE",
+        "name": {
+            "logical": "PC．ユーザー",
+            "physical": "PcUser"
+        },
+        "description": "どのユーザーがどのマシンを使うか。PC とユーザーはどちらもリソースであり、R-R の関係は多重度によらず対照表で構成する。",
+        "position": {
+            "x": -1166.0619657635689,
+            "y": 329.7709581255913,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1010,
+                "identifier": 1,
+                "name": {
+                    "physical": "systemUuid",
+                    "logical": "システムUUID(R)"
+                }
+            },
+            {
+                "id": 1011,
+                "identifier": 2,
+                "name": {
+                    "physical": "userId",
+                    "logical": "ユーザーID(R)"
+                }
+            }
+        ],
+        "attributes": []
+    },
+    {
+        "id": 208,
+        "type": "COMPARATIVE",
+        "name": {
+            "logical": "PC．Gitリポジトリ",
+            "physical": "PcGitRepository"
+        },
+        "description": "どのマシンにどのリポジトリが置かれているか。同じリポジトリを複数のマシンにクローンしうるため、R-R の対照表が要る。",
+        "position": {
+            "x": -620.8961305618286,
+            "y": -330,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1012,
+                "identifier": 1,
+                "name": {
+                    "physical": "systemUuid",
+                    "logical": "システムUUID(R)"
+                }
+            },
+            {
+                "id": 1013,
+                "identifier": 3,
+                "name": {
+                    "physical": "repositoryPath",
+                    "logical": "リポジトリパス(R)"
+                }
+            }
+        ],
+        "attributes": []
+    },
+    {
+        "id": 209,
+        "type": "COMPARATIVE",
+        "name": {
+            "logical": "ユーザー．セッション",
+            "physical": "UserSession"
+        },
+        "description": "どの会話が誰のものか。ユーザーとセッションはどちらもリソースのため対照表で構成する。",
+        "position": {
+            "x": -565.9016418457031,
+            "y": 753.949450135231,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1014,
+                "identifier": 2,
+                "name": {
+                    "physical": "userId",
+                    "logical": "ユーザーID(R)"
+                }
+            },
+            {
+                "id": 1015,
+                "identifier": 7,
+                "name": {
+                    "physical": "sessionId",
+                    "logical": "セッションID(R)"
+                }
+            }
+        ],
+        "attributes": []
+    },
+    {
+        "id": 210,
+        "type": "EVENT",
+        "name": {
+            "logical": "CLAUDE.md(リポジトリ)",
+            "physical": "RepoClaudeMd"
+        },
+        "description": "リポジトリ直下の CLAUDE.md をアプリが作成・編集する行為(infra の claude_md_store)。このアプリにとって設定ファイルは「部品」ではなく「製品」であり、その手配(作成・編集)が業務そのものであるためイベントとして扱う。1リポジトリに1つなのでリポジトリパスで識別できる。",
+        "position": {
+            "x": -364.4445571899414,
+            "y": 254.95385694503784,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1016,
+                "identifier": 3,
+                "name": {
+                    "physical": "repositoryPath",
+                    "logical": "リポジトリパス(R)"
+                }
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2017,
+                "attribute": 112
+            },
+            {
+                "id": 2018,
+                "attribute": 113
+            },
+            {
+                "id": 2019,
+                "attribute": 114
+            }
+        ]
+    },
+    {
+        "id": 211,
+        "type": "EVENT",
+        "name": {
+            "logical": "settings.json(リポジトリ)",
+            "physical": "RepoSettings"
+        },
+        "description": "リポジトリの .claude/settings.json をアプリが作成・編集する行為(infra の project_settings_store)。",
+        "position": {
+            "x": 64.58951950073242,
+            "y": 253.63837444782257,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1017,
+                "identifier": 3,
+                "name": {
+                    "physical": "repositoryPath",
+                    "logical": "リポジトリパス(R)"
+                }
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2020,
+                "attribute": 112
+            },
+            {
+                "id": 2021,
+                "attribute": 113
+            },
+            {
+                "id": 2022,
+                "attribute": 114
+            }
+        ]
+    },
+    {
+        "id": 212,
+        "type": "EVENT",
+        "name": {
+            "logical": "settings.local.json(リポジトリ)",
+            "physical": "RepoSettingsLocal"
+        },
+        "description": "リポジトリの .claude/settings.local.json をアプリが作成・編集する行為(infra の project_settings_store)。settings.json と属性構成は同じだが、扱う値の性質(共有しないローカル設定)が違うため別のモノとして立てる。",
+        "position": {
+            "x": 534.044002532959,
+            "y": 253.0923607349396,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1018,
+                "identifier": 3,
+                "name": {
+                    "physical": "repositoryPath",
+                    "logical": "リポジトリパス(R)"
+                }
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2023,
+                "attribute": 112
+            },
+            {
+                "id": 2024,
+                "attribute": 113
+            },
+            {
+                "id": 2025,
+                "attribute": 114
+            }
+        ]
+    },
+    {
+        "id": 213,
+        "type": "EVENT",
+        "name": {
+            "logical": "CLAUDE.md(ユーザー)",
+            "physical": "UserClaudeMd"
+        },
+        "description": "ホームディレクトリ配下(~/.claude/CLAUDE.md)をアプリが作成・編集する行為。現時点のアプリにこのファイル用の store は無く(ユーザー側で扱っているのは ~/.claude/settings.json)、これから機能化する対象として置いている。",
+        "position": {
+            "x": -920.7845134735109,
+            "y": 1360.9334800243378,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1019,
+                "identifier": 2,
+                "name": {
+                    "physical": "userId",
+                    "logical": "ユーザーID(R)"
+                }
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2026,
+                "attribute": 112
+            },
+            {
+                "id": 2027,
+                "attribute": 113
+            },
+            {
+                "id": 2028,
+                "attribute": 114
+            }
+        ]
+    },
+    {
+        "id": 214,
+        "type": "RESOURCE",
+        "name": {
+            "logical": "セッション",
+            "physical": "Session"
+        },
+        "description": "1つの会話。セッションIDは会話開始時に発番される UUID v4 で、直下の .jsonl のファイル名にもなる。ただしセッションIDはファイルを識別しない: サブエージェントの会話は <セッションID>/subagents/agent-<ID>.jsonl に分離され、親と同じ sessionId を引き継ぐ(報告書 §7。実測でも87件すべてが親と同一)。ファイルをモノとして立てるのは第3弾(サブエージェント)の課題として残している。ログにセッション開始日時という語彙は無く(あるのは行ごとの timestamp)、日付が帰属しないためリソース。会話タイトル・モード等は custom-title / ai-title / mode 行として追記されるが、これらは個体指定子を持たないためモノにはならず、セッションの属性になる。app が新しいセッションを起こす場合、セッションIDは起動時に決まる(app が --session-id で決めることもある)ため、会話ファイルより先にセッションが存在する窓がある(Phase 2)。",
+        "position": {
+            "x": -200.3791127204895,
+            "y": 822.7880054712296,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1020,
+                "identifier": 7
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2029,
+                "attribute": 117
+            },
+            {
+                "id": 2030,
+                "attribute": 118
+            },
+            {
+                "id": 2031,
+                "attribute": 119
+            },
+            {
+                "id": 2032,
+                "attribute": 120
+            },
+            {
+                "id": 2033,
+                "attribute": 121
+            }
+        ]
+    },
+    {
+        "id": 215,
+        "type": "RESOURCE",
+        "name": {
+            "logical": "セッションファイル(jsonl)",
+            "physical": "SessionFile"
+        },
+        "description": "セッションログの .jsonl ファイル1件。個体指定子はファイルパス。会話ファイルは <フォルダ名>/<セッションID>.jsonl、サブエージェントのファイルは <フォルダ名>/<セッションID>/subagents/agent-<エージェントID>.jsonl(報告書 §1、§7)。日付が帰属しないためリソース。ファイル種別によるサブセットへの展開と、エージェントID・meta.json の語彙は第3弾で扱う。",
+        "position": {
+            "x": 628.3779296875,
+            "y": 880.4410442113876,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1021,
+                "identifier": 6
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2034,
+                "attribute": 116
+            }
+        ]
+    },
+    {
+        "id": 216,
+        "type": "COMPARATIVE",
+        "name": {
+            "logical": "セッション．セッションファイル",
+            "physical": "SessionFileMap"
+        },
+        "description": "どのファイルがどの会話に属するか。セッションとファイルはどちらもリソースであり R-R のため対照表で構成する。1セッションに対しファイルは会話ファイル1件とサブエージェントのファイル0件以上。サブエージェントのファイルは親と同じ sessionId を引き継ぐため(実測で87件すべて)、セッションIDはファイルを識別しない。",
+        "position": {
+            "x": 148.30886840820312,
+            "y": 761.2551175653934,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1022,
+                "identifier": 7,
+                "name": {
+                    "physical": "sessionId",
+                    "logical": "セッションID(R)"
+                }
+            },
+            {
+                "id": 1023,
+                "identifier": 6,
+                "name": {
+                    "physical": "filePath",
+                    "logical": "ファイルパス(R)"
+                }
+            }
+        ],
+        "attributes": []
+    },
+    {
+        "id": 217,
+        "type": "RESOURCE",
+        "name": {
+            "logical": "メッセージ",
+            "physical": "Message"
+        },
+        "description": "1回のAPI応答(message.id)。1回の応答が複数のブロックを含むとブロックごとに別行として記録され、同じ message.id を共有する(報告書 §4.2)ため、行とメッセージは1対1ではない。応答ごとに1つしかない値(モデルID・停止理由・トークン使用量)をここに置くことで、行に置いた場合に生じる複数行への重複が無くなる。資料で message の中にあるフィールドをここへ、行のトップレベルにあるフィールド(APIリクエストID)を行に残す、という線で分けた。メッセージ自体の日付は資料に無く(日付は記録した行の記録日時に帰属する)、資料に存在しない日付を補って分類を変えないためリソースとする(冒頭の【第2弾(1/3)】を参照)。トークン使用量(message.usage)は4つの数値とサービス階層・キャッシュ作成の内訳だが、このまとまりに個体指定子が無いためモノにせず右側に並べた(冒頭の【第2弾(3/3)】を参照)。",
+        "position": {
+            "x": 2250,
+            "y": 2650,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1024,
+                "identifier": 15
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2035,
+                "attribute": 132
+            },
+            {
+                "id": 2036,
+                "attribute": 133
+            },
+            {
+                "id": 2037,
+                "attribute": 161
+            },
+            {
+                "id": 2038,
+                "attribute": 162
+            },
+            {
+                "id": 2039,
+                "attribute": 163
+            },
+            {
+                "id": 2040,
+                "attribute": 164
+            },
+            {
+                "id": 2041,
+                "attribute": 165
+            },
+            {
+                "id": 2042,
+                "attribute": 166
+            },
+            {
+                "id": 2043,
+                "attribute": 167
+            }
+        ]
+    },
+    {
+        "id": 218,
+        "type": "RESOURCE",
+        "name": {
+            "logical": "ツール呼び出し",
+            "physical": "ToolUse"
+        },
+        "description": "tool_use ブロック(報告書 §4.2、§6)。個体指定子は id(toolu_…)。呼び出しを記録した AI応答行、結果を記録したユーザー行(tool_result.tool_use_id)、権限の問い合わせ(tool_use_id)がこの値で同じ呼び出しを指すため、3者をつなぐ位置に立つ。コンテンツブロックのうち個体指定子を持つのはこれだけで、text / thinking / image は持たないためモノにしない(報告書 §5 の型定義)。呼び出し元種別は caller.type で、資料で確認できる値は direct のみ。値が増えたら区分コードにできるが、資料に無い値を推測で足さない。ツールを呼ぶのは CLI でこのアプリではなく、ブロック自体に日付も無い(日付は記録した行に帰属する)ためリソースとする。",
+        "position": {
+            "x": 1550,
+            "y": 2650,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1025,
+                "identifier": 16
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2044,
+                "attribute": 189
+            },
+            {
+                "id": 2045,
+                "attribute": 191
+            },
+            {
+                "id": 2046,
+                "attribute": 136
+            }
+        ]
+    },
+    {
+        "id": 219,
+        "type": "EVENT",
+        "name": {
+            "logical": "ログ行",
+            "physical": "ChainLine"
+        },
+        "description": "uuid / parentUuid で親子チェーンを構成する行(user / assistant / system / attachment)。記録日時という過去の出来事の日付が帰属するためイベント。cwd(作業ディレクトリパス)は行単位のメタデータで、1ファイルの中でも変わる(報告書 §2.3。このPCの ~/.claude/projects/ 直下の .jsonl 54件を実測したところ、27件(50%)が1ファイル内に複数の cwd を持ち、最多の1件は14種類で別プロジェクトのディレクトリまで含んでいた)。作業ディレクトリはモノとして立てず、右側の属性に置く(冒頭の【作業ディレクトリを立てない】を参照)。",
+        "position": {
+            "x": 1990.2454208731651,
+            "y": 1656.84903216362,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1026,
+                "identifier": 12
+            },
+            {
+                "id": 1027,
+                "identifier": 6,
+                "name": {
+                    "physical": "filePath",
+                    "logical": "ファイルパス(R)"
+                }
+            },
+            {
+                "id": 1028,
+                "identifier": 7,
+                "name": {
+                    "physical": "sessionId",
+                    "logical": "セッションID(R)"
+                }
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2047,
+                "attribute": 122
+            },
+            {
+                "id": 2048,
+                "attribute": 115
+            },
+            {
+                "id": 2049,
+                "attribute": 123
+            },
+            {
+                "id": 2050,
+                "attribute": 124
+            },
+            {
+                "id": 2051,
+                "attribute": 125
+            },
+            {
+                "id": 2052,
+                "attribute": 126
+            },
+            {
+                "id": 2053,
+                "attribute": 127
+            },
+            {
+                "id": 2054,
+                "attribute": 128
+            }
+        ]
+    },
+    {
+        "id": 220,
+        "type": "EVENT-SUBSET",
+        "name": {
+            "logical": "ユーザー行",
+            "physical": "UserLine"
+        },
+        "description": "行種別による相違のサブセット(×行種別)。type = user。人間の入力(content が文字列)とツール実行結果(content が配列)の両方を含み、実測では約9割がツール実行結果(報告書 §4.1)。ツール実行結果の行は tool_result.tool_use_id で呼び出しを指すため、第2弾(1/3)で ツール使用ID(R) で ツール呼び出し と結ぶようにした。資料にある sourceToolAssistantUUID(発行元の AI応答行の uuid)でも同じ先にたどり着くが、ツール呼び出し経由で求まる導出なので持たない。ブロック種別は資料 §6 の tool_result / text / image と、文字列の content(人間の入力)。エラー区分は tool_result.is_error。",
+        "position": {
+            "x": 1673.5791530013084,
+            "y": 2185.2417654395103,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1029,
+                "identifier": 12
+            },
+            {
+                "id": 1030,
+                "identifier": 16,
+                "name": {
+                    "physical": "toolUseId",
+                    "logical": "ツール使用ID(R)"
+                }
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2055,
+                "attribute": 123
+            },
+            {
+                "id": 2056,
+                "attribute": 129
+            },
+            {
+                "id": 2057,
+                "attribute": 130
+            },
+            {
+                "id": 2058,
+                "attribute": 134
+            },
+            {
+                "id": 2059,
+                "attribute": 135
+            }
+        ]
+    },
+    {
+        "id": 221,
+        "type": "EVENT-SUBSET",
+        "name": {
+            "logical": "AI応答行",
+            "physical": "AssistantLine"
+        },
+        "description": "行種別による相違のサブセット(×行種別)。type = assistant。1回のAPI応答が複数ブロックを含む場合はブロックごとに別行となり、同じ messageId を共有する(報告書 §4.2)。第2弾(1/3)でその messageId を メッセージ として切り出したため、ここは APIメッセージID(R) で結ぶ(モデルID・停止理由もメッセージへ移した)。APIリクエストID は message の中ではなく行のトップレベルのフィールドなので行に残す。tool_use ブロックの行は ツール使用ID(R) で ツール呼び出し を指す(text / thinking の行は持たないので「1件または値なし」)。ブロック種別は資料 §6 の text / thinking / tool_use。実測では1行1ブロックが基本のため多値にしていない。",
+        "position": {
+            "x": 1995.7828492820263,
+            "y": 2173.393374502659,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1031,
+                "identifier": 12
+            },
+            {
+                "id": 1032,
+                "identifier": 15,
+                "name": {
+                    "physical": "messageId",
+                    "logical": "APIメッセージID(R)"
+                }
+            },
+            {
+                "id": 1033,
+                "identifier": 16,
+                "name": {
+                    "physical": "toolUseId",
+                    "logical": "ツール使用ID(R)"
+                }
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2060,
+                "attribute": 123
+            },
+            {
+                "id": 2061,
+                "attribute": 131
+            },
+            {
+                "id": 2062,
+                "attribute": 134
+            }
+        ]
+    },
+    {
+        "id": 222,
+        "type": "EVENT-SUBSET",
+        "name": {
+            "logical": "システム行",
+            "physical": "SystemLine"
+        },
+        "description": "行種別による相違のサブセット(×行種別)。type = system。subtype で4種に分かれる(報告書 §4.9)。第2弾(2/3)で、固有の語彙を持つ stop_hook_summary / api_error / compact_boundary を相違のサブセットに切った。informational は内容だけで親の語彙に収まるため切らず、subtype の値として残す。内容は compact_boundary と informational の両方が持つのでここに置く。",
+        "position": {
+            "x": 2330.0272550582886,
+            "y": 2206.8140518665314,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1034,
+                "identifier": 12
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2063,
+                "attribute": 123
+            },
+            {
+                "id": 2064,
+                "attribute": 137
+            },
+            {
+                "id": 2065,
+                "attribute": 138
+            },
+            {
+                "id": 2066,
+                "attribute": 140
+            }
+        ]
+    },
+    {
+        "id": 223,
+        "type": "EVENT-SUBSET",
+        "name": {
+            "logical": "付帯情報行",
+            "physical": "AttachmentLine"
+        },
+        "description": "行種別による相違のサブセット(×行種別)。type = attachment。実行環境が会話に注入した情報で、attachment.type が23値ある(報告書 §4.10)。第2弾(2/3)で切ったのは hook_additional_context だけ。資料の型定義は attachment を `{ type: string; [key: string]: unknown }` としており種別ごとの構造を定義しておらず、23種の表も「意味は推定」と明記されているため、確実に言えるのは区分が23値あることまで。その中で hook_additional_context だけは ツール使用ID を持つことが実例で確認でき、ツール呼び出しと関係を構成するので切った(冒頭の【第2弾(2/3)】を参照)。",
+        "position": {
+            "x": 2657.1634155511856,
+            "y": 2211.6975353956223,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1035,
+                "identifier": 12
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2067,
+                "attribute": 123
+            },
+            {
+                "id": 2068,
+                "attribute": 139
+            }
+        ]
+    },
+    {
+        "id": 224,
+        "type": "MANY-VALUED-OR",
+        "name": {
+            "logical": "セッション．入力キュー",
+            "physical": "SessionInputQueue"
+        },
+        "description": "queue-operation 行。ユーザーが入力を送信した瞬間の記録で、user 行より先に書かれる(報告書 §4.3)。1セッションに複数あるためセッションの多値(MO)。個体指定子は セッションID(R) だけで、行ごとに一意ではない。投入日時が並べるための語彙にあたる。",
+        "position": {
+            "x": 198.80506134033203,
+            "y": 1018.954672396183,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1036,
+                "identifier": 7,
+                "name": {
+                    "physical": "sessionId",
+                    "logical": "セッションID(R)"
+                }
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2069,
+                "attribute": 169
+            },
+            {
+                "id": 2070,
+                "attribute": 170
+            }
+        ]
+    },
+    {
+        "id": 225,
+        "type": "EVENT",
+        "name": {
+            "logical": "実行中セッション",
+            "physical": "RunningSession"
+        },
+        "description": "いま動いている Claude Code のプロセス1つ。~/.claude/sessions/ に <pid>.json(本体)と <pid>.<ハッシュ>.key(認証値)が置かれ、プロセスが終わると消える(実測: セッションログ49件に対してファイルは4件で、4件ともプロセスが生きていた)。ファイル名は pid だが OS は pid を使い回すため、pidDomain + pid + startedAt の組を個体指定子にする(procStart は sdk-cli 起動の台帳には原則書かれないため右側の属性に置く。レポート §4.2・§4.4)。.key も同じプロセスの値で特定されるので、別の箱にせず同じモノとして扱う。起動日時(startedAt)という過去の出来事の日付が帰属するためイベント。procStart は OS のプロセス作成時刻(実測で OS の値と100ナノ秒単位まで一致)、startedAt は Claude Code がセッションを始めた時刻で、約1秒遅い。会話(セッション)はこのプロセスの中で動くものなので、sessionId は個体指定子にせず (R) として持つ。実行中かどうかは、ファイルがあり、かつ OS に同じ pid のプロセスがあって開始時刻が procStart と一致することで判定する(pid だけで判定すると、終了後に同じ pid が別のプロセスに使われたとき誤判定する)。procStart が無い台帳では pid の生存だけで判定する(#361 のガードの現状の作りと同じ)。kill で落とすと台帳が残るため、ファイルの有無だけでは判定できない(レポート §4.3)。peerToken の値は秘匿で、画面・ログ・リポジトリに書かない。",
+        "position": {
+            "x": -137.4754409790039,
+            "y": 1394.3426176011565,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1037,
+                "identifier": 8
+            },
+            {
+                "id": 1038,
+                "identifier": 9
+            },
+            {
+                "id": 1039,
+                "identifier": 10
+            },
+            {
+                "id": 1040,
+                "identifier": 7,
+                "name": {
+                    "physical": "sessionId",
+                    "logical": "セッションID(R)"
+                }
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2071,
+                "attribute": 171
+            },
+            {
+                "id": 2072,
+                "attribute": 115
+            },
+            {
+                "id": 2073,
+                "attribute": 182
+            },
+            {
+                "id": 2074,
+                "attribute": 183
+            },
+            {
+                "id": 2075,
+                "attribute": 184
+            },
+            {
+                "id": 2076,
+                "attribute": 125
+            },
+            {
+                "id": 2077,
+                "attribute": 172
+            },
+            {
+                "id": 2078,
+                "attribute": 124
+            },
+            {
+                "id": 2079,
+                "attribute": 173
+            },
+            {
+                "id": 2080,
+                "attribute": 174
+            },
+            {
+                "id": 2081,
+                "attribute": 175
+            },
+            {
+                "id": 2082,
+                "attribute": 176
+            },
+            {
+                "id": 2083,
+                "attribute": 177
+            },
+            {
+                "id": 2084,
+                "attribute": 178
+            },
+            {
+                "id": 2085,
+                "attribute": 179
+            },
+            {
+                "id": 2086,
+                "attribute": 180
+            }
+        ]
+    },
+    {
+        "id": 226,
+        "type": "MANY-VALUED-OR",
+        "name": {
+            "logical": "実行中セッション．ピア機能",
+            "physical": "RunningSessionPeerFeature"
+        },
+        "description": "peerFeatures(配列。例: notify_idle / artifact_yield)。セッション間メッセージで使える機能の一覧で、1プロセスに複数あるため多値(MO)として分ける。個体指定子は親の3つの値(R)。",
+        "position": {
+            "x": 365.4331942647695,
+            "y": 1587.0854098051786,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1041,
+                "identifier": 8,
+                "name": {
+                    "physical": "pidDomain",
+                    "logical": "PIDドメイン(R)"
+                }
+            },
+            {
+                "id": 1042,
+                "identifier": 9,
+                "name": {
+                    "physical": "pid",
+                    "logical": "プロセスID(R)"
+                }
+            },
+            {
+                "id": 1043,
+                "identifier": 10,
+                "name": {
+                    "physical": "startedAt",
+                    "logical": "起動日時(R)"
+                }
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2087,
+                "attribute": 181
+            }
+        ]
+    },
+    {
+        "id": 227,
+        "type": "EVENT-SUBSET",
+        "name": {
+            "logical": "実行中セッション(app起動)",
+            "physical": "RunningSessionByApp"
+        },
+        "description": "app が子プロセスとして起動した claude CLI(PoC #382)。区分コードは起動元。app は標準入出力で対話し続けるため、このサブセットだけがプロセスの状態と権限の問い合わせを持つ。台帳は外部起動と同じ形で書かれる(entrypoint は sdk-cli。レポート §4.2)ので台帳だけでは区別できず、app が自分の子プロセスの PID を知っていることで区分する。#361 のガード(実行中の検知)では、app は自分が起動した PID を除外する(レポート §4.4)。プロセス状態は 起動中 / 待機 / 実行中 / 権限待ち / 終了(レポート §7.1)で、台帳の状態(idle / busy)より細かい。app は起動するときに「このリポジトリの、このブランチの worktree」を用意して、そこを cwd にする(Phase 3)。どの worktree で起動したかは cwd からの推測ではなく記録された事実になるため、ワーキングツリーへ ワーキングツリーID(R) + リポジトリパス(R) で結ぶ(ワーキングツリーの個体指定子がこの2つの組であり、リポジトリパスは worktree を指す鍵の一部として持つ)。リポジトリは worktree から決まるので Gitリポジトリへは直接結ばない。git ではリポジトリ本体のディレクトリも1つ目の worktree なので、worktree を作らずに本体で起動する場合もこの関係で表せる。外部起動は cwd しか無いため、ワーキングツリーともリポジトリとも結ばない。現在のモデル・現在の権限モードは set_model / set_permission_mode で途中から変わる値で、画面に出して切り替える(レポート §6.2)。更新日時は持たない。変更の履歴はログ側(model_changed 行、ユーザー行の権限モード)に残るため。",
+        "position": {
+            "x": -497.9999747276306,
+            "y": 2146.000114798546,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1044,
+                "identifier": 8,
+                "name": {
+                    "physical": "pidDomain",
+                    "logical": "PIDドメイン(R)"
+                }
+            },
+            {
+                "id": 1045,
+                "identifier": 9,
+                "name": {
+                    "physical": "pid",
+                    "logical": "プロセスID(R)"
+                }
+            },
+            {
+                "id": 1046,
+                "identifier": 10,
+                "name": {
+                    "physical": "startedAt",
+                    "logical": "起動日時(R)"
+                }
+            },
+            {
+                "id": 1047,
+                "identifier": 5,
+                "name": {
+                    "physical": "worktreeId",
+                    "logical": "ワーキングツリーID(R)"
+                }
+            },
+            {
+                "id": 1048,
+                "identifier": 3,
+                "name": {
+                    "physical": "repositoryPath",
+                    "logical": "リポジトリパス(R)"
+                }
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2088,
+                "attribute": 185
+            },
+            {
+                "id": 2089,
+                "attribute": 186
+            },
+            {
+                "id": 2090,
+                "attribute": 187
+            },
+            {
+                "id": 2091,
+                "attribute": 188
+            }
+        ]
+    },
+    {
+        "id": 228,
+        "type": "EVENT-SUBSET",
+        "name": {
+            "logical": "実行中セッション(外部起動)",
+            "physical": "RunningSessionExternal"
+        },
+        "description": "app 以外(ターミナルの claude、Claude Desktop、ほかの SDK 利用)が起動した実行中セッション。app は台帳から存在を知るだけで、標準入出力を持たないため対話できない。右側の語彙は親が持つものだけ。",
+        "position": {
+            "x": 1000,
+            "y": 2100,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1049,
+                "identifier": 8,
+                "name": {
+                    "physical": "pidDomain",
+                    "logical": "PIDドメイン(R)"
+                }
+            },
+            {
+                "id": 1050,
+                "identifier": 9,
+                "name": {
+                    "physical": "pid",
+                    "logical": "プロセスID(R)"
+                }
+            },
+            {
+                "id": 1051,
+                "identifier": 10,
+                "name": {
+                    "physical": "startedAt",
+                    "logical": "起動日時(R)"
+                }
+            }
+        ],
+        "attributes": []
+    },
+    {
+        "id": 229,
+        "type": "EVENT",
+        "name": {
+            "logical": "権限の問い合わせ",
+            "physical": "PermissionRequest"
+        },
+        "description": "CLI から届く control_request(subtype: can_use_tool)。ツールを使ってよいかを app に尋ねる(レポート §2.1)。個体指定子は request_id と、尋ねてきた実行中セッションの値(R)。AskUserQuestion(選択肢)と ExitPlanMode(計画の承認)も同じ形で届く(レポート §2.4)ため、tool_name から求まる問い合わせ種別(D)で区別し、画面の出し分けに使う。入力は渡された引数、提案は「今後も許可」の候補(多値に分ける)。拒否されたパスは Bash のときに付く。ツール使用IDは tool_use ブロックを指す。第2弾(1/3)でブロックを ツール呼び出し としてモノにしたため、ツール使用ID(R) で結ぶ。ツール名・入力は control_request が独自に渡す別の記録で(問い合わせ種別(D)の導出元でもある)、問い合わせの時点で会話ログに tool_use の行が書かれているとは限らないため、右側に残す。",
+        "position": {
+            "x": -455.9999704360962,
+            "y": 2446.0000981092453,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1052,
+                "identifier": 11
+            },
+            {
+                "id": 1053,
+                "identifier": 8,
+                "name": {
+                    "physical": "pidDomain",
+                    "logical": "PIDドメイン(R)"
+                }
+            },
+            {
+                "id": 1054,
+                "identifier": 9,
+                "name": {
+                    "physical": "pid",
+                    "logical": "プロセスID(R)"
+                }
+            },
+            {
+                "id": 1055,
+                "identifier": 10,
+                "name": {
+                    "physical": "startedAt",
+                    "logical": "起動日時(R)"
+                }
+            },
+            {
+                "id": 1056,
+                "identifier": 16,
+                "name": {
+                    "physical": "toolUseId",
+                    "logical": "ツール使用ID(R)"
+                }
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2092,
+                "attribute": 189
+            },
+            {
+                "id": 2093,
+                "attribute": 190
+            },
+            {
+                "id": 2094,
+                "attribute": 102
+            },
+            {
+                "id": 2095,
+                "attribute": 191
+            },
+            {
+                "id": 2096,
+                "attribute": 192
+            },
+            {
+                "id": 2097,
+                "attribute": 193
+            },
+            {
+                "id": 2098,
+                "attribute": 194
+            }
+        ]
+    },
+    {
+        "id": 230,
+        "type": "EVENT",
+        "name": {
+            "logical": "権限の応答",
+            "physical": "PermissionResponse"
+        },
+        "description": "app が返す control_response(レポート §2.1)。許可なら更新後の入力(そのまま、または書き換えた引数)を返し、拒否なら拒否メッセージがそのままモデルへの tool_result になる。「今後も許可」は更新後の権限に入れて返す。中断すると CLI から control_cancel_request が来て応答せずに終わるため、決着種別に取り消しを含める。問い合わせとは別の行為(日時が別)なので1つの箱に同居させず、先行後続で結ぶ。1つの問い合わせに応答は0件または1件。",
+        "position": {
+            "x": 287.9999694824219,
+            "y": 2489.9998817443848,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1057,
+                "identifier": 11,
+                "name": {
+                    "physical": "requestId",
+                    "logical": "リクエストID(R)"
+                }
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2099,
+                "attribute": 195
+            },
+            {
+                "id": 2100,
+                "attribute": 196
+            },
+            {
+                "id": 2101,
+                "attribute": 197
+            },
+            {
+                "id": 2102,
+                "attribute": 198
+            },
+            {
+                "id": 2103,
+                "attribute": 199
+            }
+        ]
+    },
+    {
+        "id": 231,
+        "type": "MANY-VALUED-OR",
+        "name": {
+            "logical": "権限の問い合わせ．提案",
+            "physical": "PermissionSuggestion"
+        },
+        "description": "permission_suggestions の1件(レポート §2.1)。setMode / addRules / addDirectories などの種別と、適用先(session / localSettings など)を持つ。1つの問い合わせに複数あるため多値(MO)。SDK の PermissionUpdate 型そのもので、許可応答の更新後の権限に入れ返すと「今後も許可」になる。",
+        "position": {
+            "x": -423.9999840259552,
+            "y": 2865.9999380111694,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1058,
+                "identifier": 11,
+                "name": {
+                    "physical": "requestId",
+                    "logical": "リクエストID(R)"
+                }
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2104,
+                "attribute": 200
+            },
+            {
+                "id": 2105,
+                "attribute": 201
+            },
+            {
+                "id": 2106,
+                "attribute": 202
+            }
+        ]
+    },
+    {
+        "id": 232,
+        "type": "EVENT-SUBSET",
+        "name": {
+            "logical": "システム行(フック結果)",
+            "physical": "StopHookSummaryLine"
+        },
+        "description": "システム行の相違のサブセット(×システム副種別)。subtype = stop_hook_summary。ターン終了時に実行されたフックの結果(報告書 §4.9)。フックの数・実行記録・エラー・継続の中断など固有の語彙を持つため切った。ツール使用IDを持つ行があり(§5 の型定義では任意)、ツール呼び出しと結ぶ。フックの実行記録・エラーは配列なので本来は多値(MO)だが、この段では属性に置く。追加文脈の配列は、同じ内容が 付帯情報行(フックの追加文脈)にも現れるためここでは持たない。",
+        "position": {
+            "x": 1550,
+            "y": 3100,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1059,
+                "identifier": 12
+            },
+            {
+                "id": 1060,
+                "identifier": 16,
+                "name": {
+                    "physical": "toolUseId",
+                    "logical": "ツール使用ID(R)"
+                }
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2107,
+                "attribute": 141
+            },
+            {
+                "id": 2108,
+                "attribute": 142
+            },
+            {
+                "id": 2109,
+                "attribute": 143
+            },
+            {
+                "id": 2110,
+                "attribute": 144
+            },
+            {
+                "id": 2111,
+                "attribute": 145
+            },
+            {
+                "id": 2112,
+                "attribute": 146
+            }
+        ]
+    },
+    {
+        "id": 233,
+        "type": "EVENT-SUBSET",
+        "name": {
+            "logical": "システム行(APIエラー)",
+            "physical": "ApiErrorLine"
+        },
+        "description": "システム行の相違のサブセット(×システム副種別)。subtype = api_error。API 呼び出しの失敗とリトライ(報告書 §4.9)。エラーの内容と再試行の語彙を持つため切った。level は常に error。error の入れ子のうち connection・isNetworkDown・rateLimits は構造が深いので、必要になった段で足す。",
+        "position": {
+            "x": 2650,
+            "y": 3100,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1061,
+                "identifier": 12
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2113,
+                "attribute": 147
+            },
+            {
+                "id": 2114,
+                "attribute": 148
+            },
+            {
+                "id": 2115,
+                "attribute": 149
+            },
+            {
+                "id": 2116,
+                "attribute": 150
+            },
+            {
+                "id": 2117,
+                "attribute": 151
+            },
+            {
+                "id": 2118,
+                "attribute": 152
+            }
+        ]
+    },
+    {
+        "id": 234,
+        "type": "EVENT-SUBSET",
+        "name": {
+            "logical": "システム行(圧縮境界)",
+            "physical": "CompactBoundaryLine"
+        },
+        "description": "システム行の相違のサブセット(×システム副種別)。subtype = compact_boundary。/compact による履歴圧縮の境界で、圧縮後の新しいチェーンの起点になる(報告書 §4.9)。parentUuid が null に戻り、代わりに logicalParentUuid が圧縮前の末尾を指す。圧縮の契機・前後のトークン数という固有の語彙を持つため切った。論理上の親の行UUID はログ行を指すが、再帰表(ログ行．ログ行)は parentUuid の親子関係を表すものなので、別の経路として重ねて張らず右側の属性に置く。preservedSegment・preservedMessages は uuid の集合なので持たない。",
+        "position": {
+            "x": 3200,
+            "y": 3100,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1062,
+                "identifier": 12
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2119,
+                "attribute": 153
+            },
+            {
+                "id": 2120,
+                "attribute": 154
+            },
+            {
+                "id": 2121,
+                "attribute": 155
+            },
+            {
+                "id": 2122,
+                "attribute": 156
+            },
+            {
+                "id": 2123,
+                "attribute": 157
+            }
+        ]
+    },
+    {
+        "id": 235,
+        "type": "EVENT-SUBSET",
+        "name": {
+            "logical": "付帯情報行(フックの追加文脈)",
+            "physical": "HookAdditionalContextLine"
+        },
+        "description": "付帯情報行の相違のサブセット(×付帯情報種別)。attachment.type = hook_additional_context。PostToolUse などのフックが返した追加の文脈(報告書 §4.10)。23種のうちこれだけを切ったのは、ツール使用IDを持つことが実例で確認でき、ツール呼び出しと関係を構成するため。他の22種は資料の型定義が汎用で、表も「意味は推定」なので区分コードの値として名前だけ残す。追加文脈は配列なので本来は多値(MO)だが、この段では属性に置く。",
+        "position": {
+            "x": 2100,
+            "y": 3100,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1063,
+                "identifier": 12
+            },
+            {
+                "id": 1064,
+                "identifier": 16,
+                "name": {
+                    "physical": "toolUseId",
+                    "logical": "ツール使用ID(R)"
+                }
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2124,
+                "attribute": 158
+            },
+            {
+                "id": 2125,
+                "attribute": 159
+            },
+            {
+                "id": 2126,
+                "attribute": 160
+            }
+        ]
+    },
+    {
+        "id": 236,
+        "type": "RECURSION",
+        "name": {
+            "logical": "ログ行．ログ行",
+            "physical": "ChainLineRecursion"
+        },
+        "description": "ログ行どうしの親子関係。物理チェーン(parentUuid)と論理チェーン(logicalParentUuid)の2種があり、後者は compact_boundary で parentUuid が null に戻った際に圧縮前の末尾を指す(報告書 §4.9)。チェーン種別で区別する。",
+        "position": {
+            "x": 2503.276491165161,
+            "y": 1738.7475047111511,
+            "z": 0
+        },
+        "size": {
+            "w": 0,
+            "h": 0
+        },
+        "identifiers": [
+            {
+                "id": 1065,
+                "identifier": 13
+            },
+            {
+                "id": 1066,
+                "identifier": 14
+            }
+        ],
+        "attributes": [
+            {
+                "id": 2127,
+                "attribute": 168
+            }
+        ]
+    }
+]

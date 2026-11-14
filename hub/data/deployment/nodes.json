@@ -1,0 +1,405 @@
+[
+    {
+        "type": "NODE",
+        "id": 60,
+        "label": {
+            "text": "GitHub",
+            "position": {
+                "x": 20,
+                "y": 20
+            }
+        },
+        "description": "github.com",
+        "size": {
+            "w": 340,
+            "h": 420
+        },
+        "position": {
+            "x": 0,
+            "y": 70
+        },
+        "children": [
+            {
+                "type": "NODE",
+                "id": 61,
+                "label": {
+                    "text": "OAuth(デバイスフロー)",
+                    "position": {
+                        "x": 20,
+                        "y": 20
+                    }
+                },
+                "description": "app の GitHub ログイン。scope は project",
+                "size": {
+                    "w": 260,
+                    "h": 90
+                },
+                "position": {
+                    "x": 40,
+                    "y": 70
+                },
+                "children": []
+            },
+            {
+                "type": "NODE",
+                "id": 62,
+                "label": {
+                    "text": "GraphQL API(Projects v2)",
+                    "position": {
+                        "x": 20,
+                        "y": 20
+                    }
+                },
+                "description": "かんばん(プロジェクトのアイテム・Status)の読み書き",
+                "size": {
+                    "w": 260,
+                    "h": 90
+                },
+                "position": {
+                    "x": 40,
+                    "y": 180
+                },
+                "children": []
+            },
+            {
+                "type": "NODE",
+                "id": 63,
+                "label": {
+                    "text": "Releases(MSI 配布)",
+                    "position": {
+                        "x": 20,
+                        "y": 20
+                    }
+                },
+                "description": "タグ push → GitHub Actions で MSI をビルドし、Releases で公開する",
+                "size": {
+                    "w": 260,
+                    "h": 90
+                },
+                "position": {
+                    "x": 40,
+                    "y": 290
+                },
+                "children": []
+            }
+        ]
+    },
+    {
+        "type": "NODE",
+        "id": 70,
+        "label": {
+            "text": "Anthropic(claude.ai)",
+            "position": {
+                "x": 20,
+                "y": 20
+            }
+        },
+        "description": "Claude Code CLI の接続先。利用状況(5時間枠・7日枠)も CLI 経由で取得する",
+        "size": {
+            "w": 340,
+            "h": 140
+        },
+        "position": {
+            "x": 0,
+            "y": 600
+        },
+        "children": []
+    },
+    {
+        "type": "NODE",
+        "id": 1,
+        "label": {
+            "text": "このPC(Windows)",
+            "position": {
+                "x": 20,
+                "y": 20
+            }
+        },
+        "description": "1台の PC の中で app・Webアプリ・Claude Code CLI が連携する",
+        "size": {
+            "w": 1240,
+            "h": 1040
+        },
+        "position": {
+            "x": 440,
+            "y": 0
+        },
+        "children": [
+            {
+                "type": "NODE",
+                "id": 10,
+                "label": {
+                    "text": "YAOYOROZU app(Tauri v2・MSI 版)",
+                    "position": {
+                        "x": 20,
+                        "y": 20
+                    }
+                },
+                "description": "日々の作業(セッションを動かす)は MSI 版。開発版(npm run native:dev)は動作確認専用で、別の identifier・別のポートで起動する",
+                "size": {
+                    "w": 600,
+                    "h": 470
+                },
+                "position": {
+                    "x": 40,
+                    "y": 70
+                },
+                "children": [
+                    {
+                        "type": "NODE",
+                        "id": 11,
+                        "label": {
+                            "text": "画面(React + Vite・WebView2)",
+                            "position": {
+                                "x": 20,
+                                "y": 20
+                            }
+                        },
+                        "description": "表示と入力のみ。invoke / event で Rust コアとやり取りする",
+                        "size": {
+                            "w": 520,
+                            "h": 100
+                        },
+                        "position": {
+                            "x": 40,
+                            "y": 70
+                        },
+                        "children": []
+                    },
+                    {
+                        "type": "NODE",
+                        "id": 12,
+                        "label": {
+                            "text": "Rust コア(tauri / app / domain / infra)",
+                            "position": {
+                                "x": 20,
+                                "y": 20
+                            }
+                        },
+                        "description": "ドメインロジック・状態・永続化。依存の向きは tauri → app → domain、infra → domain",
+                        "size": {
+                            "w": 520,
+                            "h": 100
+                        },
+                        "position": {
+                            "x": 40,
+                            "y": 220
+                        },
+                        "children": []
+                    },
+                    {
+                        "type": "NODE",
+                        "id": 13,
+                        "label": {
+                            "text": "ローカル API(axum)",
+                            "position": {
+                                "x": 20,
+                                "y": 20
+                            }
+                        },
+                        "description": "127.0.0.1:14200 のみで待ち受け。書き込みはトークン認証(POST /layout/{diagram})",
+                        "size": {
+                            "w": 220,
+                            "h": 90
+                        },
+                        "position": {
+                            "x": 360,
+                            "y": 350
+                        },
+                        "children": []
+                    }
+                ]
+            },
+            {
+                "type": "NODE",
+                "id": 30,
+                "label": {
+                    "text": "Claude Code CLI(子プロセス)",
+                    "position": {
+                        "x": 20,
+                        "y": 20
+                    }
+                },
+                "description": "app が claude を起動したままの子プロセスとして持ち、stream-json でやり取りする",
+                "size": {
+                    "w": 520,
+                    "h": 100
+                },
+                "position": {
+                    "x": 120,
+                    "y": 620
+                },
+                "children": []
+            },
+            {
+                "type": "NODE",
+                "id": 50,
+                "label": {
+                    "text": "OS のキーチェーン(資格情報マネージャ)",
+                    "position": {
+                        "x": 20,
+                        "y": 20
+                    }
+                },
+                "description": "GitHub のアクセストークンを保管する(設定ファイルには書かない)",
+                "size": {
+                    "w": 520,
+                    "h": 100
+                },
+                "position": {
+                    "x": 120,
+                    "y": 800
+                },
+                "children": []
+            },
+            {
+                "type": "NODE",
+                "id": 20,
+                "label": {
+                    "text": "Webアプリ(Next.js 開発サーバ)",
+                    "position": {
+                        "x": 20,
+                        "y": 20
+                    }
+                },
+                "description": "localhost:3000。app から npm run web:dev で起動できる",
+                "size": {
+                    "w": 480,
+                    "h": 330
+                },
+                "position": {
+                    "x": 720,
+                    "y": 70
+                },
+                "children": [
+                    {
+                        "type": "NODE",
+                        "id": 21,
+                        "label": {
+                            "text": "画面(ブラウザで表示)",
+                            "position": {
+                                "x": 20,
+                                "y": 20
+                            }
+                        },
+                        "description": "WBS・構成図・ポンチ絵・サイトマップ・Classes・TM・UI",
+                        "size": {
+                            "w": 400,
+                            "h": 90
+                        },
+                        "position": {
+                            "x": 40,
+                            "y": 70
+                        },
+                        "children": []
+                    },
+                    {
+                        "type": "NODE",
+                        "id": 22,
+                        "label": {
+                            "text": "Route Handler(/api/spec・/api/layout)",
+                            "position": {
+                                "x": 20,
+                                "y": 20
+                            }
+                        },
+                        "description": "パスはサーバ側でだけ組み立てる",
+                        "size": {
+                            "w": 400,
+                            "h": 90
+                        },
+                        "position": {
+                            "x": 40,
+                            "y": 200
+                        },
+                        "children": []
+                    }
+                ]
+            },
+            {
+                "type": "NODE",
+                "id": 40,
+                "label": {
+                    "text": "ファイル",
+                    "position": {
+                        "x": 20,
+                        "y": 20
+                    }
+                },
+                "size": {
+                    "w": 480,
+                    "h": 520
+                },
+                "position": {
+                    "x": 720,
+                    "y": 480
+                },
+                "children": [
+                    {
+                        "type": "NODE",
+                        "id": 41,
+                        "label": {
+                            "text": "app_data_dir",
+                            "position": {
+                                "x": 20,
+                                "y": 20
+                            }
+                        },
+                        "description": "%APPDATA%\\com.yaoyorozu.native。settings.json(プロファイル・repository_path)・local-api-token・local-api-port",
+                        "size": {
+                            "w": 360,
+                            "h": 100
+                        },
+                        "position": {
+                            "x": 40,
+                            "y": 70
+                        },
+                        "children": []
+                    },
+                    {
+                        "type": "NODE",
+                        "id": 42,
+                        "label": {
+                            "text": "~/.claude",
+                            "position": {
+                                "x": 20,
+                                "y": 20
+                            }
+                        },
+                        "description": "会話の記録(jsonl)・settings・CLAUDE.md・skills・rules",
+                        "size": {
+                            "w": 360,
+                            "h": 100
+                        },
+                        "position": {
+                            "x": 40,
+                            "y": 210
+                        },
+                        "children": []
+                    },
+                    {
+                        "type": "NODE",
+                        "id": 43,
+                        "label": {
+                            "text": "リポジトリ / worktree",
+                            "position": {
+                                "x": 20,
+                                "y": 20
+                            }
+                        },
+                        "description": "ソースコード・git・yyz/spec/*.json(仕様データ)",
+                        "size": {
+                            "w": 360,
+                            "h": 100
+                        },
+                        "position": {
+                            "x": 40,
+                            "y": 350
+                        },
+                        "children": []
+                    }
+                ]
+            }
+        ]
+    }
+]

@@ -1,0 +1,38 @@
+[
+    {
+        "id": 100,
+        "from": {
+            "id": 2,
+            "position": 0
+        },
+        "to": {
+            "id": 10,
+            "position": 180
+        },
+        "label": {
+            "text": "ラップして操作"
+        },
+        "stroke": {
+            "color": "#858585",
+            "width": 2
+        }
+    },
+    {
+        "id": 101,
+        "from": {
+            "id": 2,
+            "position": 0
+        },
+        "to": {
+            "id": 20,
+            "position": 180
+        },
+        "label": {
+            "text": "タスク管理"
+        },
+        "stroke": {
+            "color": "#858585",
+            "width": 2
+        }
+    }
+]

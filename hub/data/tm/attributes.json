@@ -1,0 +1,788 @@
+[
+    {
+        "id": 101,
+        "name": {
+            "physical": "pcName",
+            "logical": "PC名"
+        }
+    },
+    {
+        "id": 102,
+        "name": {
+            "physical": "description",
+            "logical": "説明"
+        },
+        "description": "PC と Gitリポジトリ で同じ語彙を共有する。"
+    },
+    {
+        "id": 103,
+        "name": {
+            "physical": "userName",
+            "logical": "ユーザー名"
+        }
+    },
+    {
+        "id": 104,
+        "name": {
+            "physical": "homeDirectory",
+            "logical": "ホームディレクトリ"
+        }
+    },
+    {
+        "id": 105,
+        "name": {
+            "physical": "repositoryName",
+            "logical": "リポジトリ名"
+        }
+    },
+    {
+        "id": 106,
+        "name": {
+            "physical": "branchName",
+            "logical": "ブランチ名"
+        }
+    },
+    {
+        "id": 107,
+        "name": {
+            "physical": "worktreeName",
+            "logical": "ワーキングツリー名"
+        }
+    },
+    {
+        "id": 108,
+        "name": {
+            "physical": "worktreeFolderPath",
+            "logical": "フォルダパス(Claude)"
+        },
+        "description": "ワーキングツリーは2つのパスを持つ。実物のディレクトリ(Claude Code が\n.claude/worktrees/ 配下に作る)と、その直下の .git ファイル(66バイトで、\ngit 側の台帳 .git/worktrees/<名前> を指す)。"
+    },
+    {
+        "id": 109,
+        "name": {
+            "physical": "worktreeGitFilePath",
+            "logical": "ファイルパス(git)"
+        },
+        "description": "ワーキングツリーは2つのパスを持つ。実物のディレクトリ(Claude Code が\n.claude/worktrees/ 配下に作る)と、その直下の .git ファイル(66バイトで、\ngit 側の台帳 .git/worktrees/<名前> を指す)。"
+    },
+    {
+        "id": 110,
+        "name": {
+            "physical": "createdAtTime",
+            "logical": "作成日時"
+        }
+    },
+    {
+        "id": 111,
+        "name": {
+            "physical": "deletedAtTime",
+            "logical": "削除日時"
+        }
+    },
+    {
+        "id": 112,
+        "name": {
+            "physical": "filePathFull",
+            "logical": "ファイルパス"
+        },
+        "description": "アプリが管理する設定ファイルの手配イベントで使う。ファイルパスは\nリポジトリ(またはホーム)からの位置が決まっているため右側に置く。"
+    },
+    {
+        "id": 113,
+        "name": {
+            "physical": "createdAt",
+            "logical": "作成日"
+        },
+        "description": "アプリが管理する設定ファイルの手配イベントで使う。ファイルパスは\nリポジトリ(またはホーム)からの位置が決まっているため右側に置く。"
+    },
+    {
+        "id": 114,
+        "name": {
+            "physical": "updatedAt",
+            "logical": "更新日"
+        },
+        "description": "アプリが管理する設定ファイルの手配イベントで使う。ファイルパスは\nリポジトリ(またはホーム)からの位置が決まっているため右側に置く。"
+    },
+    {
+        "id": 115,
+        "name": {
+            "physical": "cwd",
+            "logical": "作業ディレクトリパス"
+        },
+        "description": "行・実行中セッションが記録する作業ディレクトリ。モノとしては立てず、右側の属性に置く\n(冒頭の【作業ディレクトリを立てない】を参照)。"
+    },
+    {
+        "id": 116,
+        "name": {
+            "physical": "fileKind",
+            "logical": "ファイル種別"
+        },
+        "description": "ファイルを切る区分コード。第3弾でサブセットに展開する。"
+    },
+    {
+        "id": 117,
+        "name": {
+            "physical": "customTitle",
+            "logical": "会話タイトル"
+        }
+    },
+    {
+        "id": 118,
+        "name": {
+            "physical": "aiTitle",
+            "logical": "AI生成タイトル"
+        }
+    },
+    {
+        "id": 119,
+        "name": {
+            "physical": "mode",
+            "logical": "モード"
+        }
+    },
+    {
+        "id": 120,
+        "name": {
+            "physical": "slug",
+            "logical": "セッション別名"
+        }
+    },
+    {
+        "id": 121,
+        "name": {
+            "physical": "lastPrompt",
+            "logical": "直近入力テキスト(D)"
+        },
+        "description": "last-prompt 行は直近のユーザー入力の複製(表示用キャッシュ)であり、ログ行から\n導出できる。アトリビュート・リストの段で実装要否を判断する候補。"
+    },
+    {
+        "id": 122,
+        "name": {
+            "physical": "timestamp",
+            "logical": "記録日時"
+        }
+    },
+    {
+        "id": 123,
+        "name": {
+            "physical": "type",
+            "logical": "行種別"
+        },
+        "description": "ログ行のサブセットを切る区分コード。"
+    },
+    {
+        "id": 124,
+        "name": {
+            "physical": "entrypoint",
+            "logical": "入口"
+        }
+    },
+    {
+        "id": 125,
+        "name": {
+            "physical": "version",
+            "logical": "バージョン"
+        }
+    },
+    {
+        "id": 126,
+        "name": {
+            "physical": "gitBranch",
+            "logical": "gitブランチ"
+        }
+    },
+    {
+        "id": 127,
+        "name": {
+            "physical": "isSidechain",
+            "logical": "サブエージェント区分"
+        }
+    },
+    {
+        "id": 128,
+        "name": {
+            "physical": "userType",
+            "logical": "ユーザー種別"
+        }
+    },
+    {
+        "id": 129,
+        "name": {
+            "physical": "promptId",
+            "logical": "入力ID"
+        }
+    },
+    {
+        "id": 130,
+        "name": {
+            "physical": "permissionMode",
+            "logical": "権限モード"
+        }
+    },
+    {
+        "id": 131,
+        "name": {
+            "physical": "requestId",
+            "logical": "APIリクエストID"
+        }
+    },
+    {
+        "id": 132,
+        "name": {
+            "physical": "model",
+            "logical": "モデルID"
+        },
+        "description": "モデルID・停止理由は資料で message の中のフィールドなので、第2弾(1/3。#579)で\nメッセージの属性にした(行のトップレベルにある APIリクエストID は行に残す)。"
+    },
+    {
+        "id": 133,
+        "name": {
+            "physical": "stopReason",
+            "logical": "停止理由"
+        },
+        "description": "モデルID・停止理由は資料で message の中のフィールドなので、第2弾(1/3。#579)で\nメッセージの属性にした(行のトップレベルにある APIリクエストID は行に残す)。"
+    },
+    {
+        "id": 134,
+        "name": {
+            "physical": "blockType",
+            "logical": "ブロック種別"
+        },
+        "description": "第2弾(1/3。#579)。コンテンツブロック(資料 §6)と tool_use の付随情報。\nブロック種別は行の右側に置く(実測で1行1ブロックが基本のため多値にしない)。"
+    },
+    {
+        "id": 135,
+        "name": {
+            "physical": "isError",
+            "logical": "エラー区分"
+        },
+        "description": "第2弾(1/3。#579)。コンテンツブロック(資料 §6)と tool_use の付随情報。\nブロック種別は行の右側に置く(実測で1行1ブロックが基本のため多値にしない)。"
+    },
+    {
+        "id": 136,
+        "name": {
+            "physical": "callerType",
+            "logical": "呼び出し元種別"
+        },
+        "description": "第2弾(1/3。#579)。コンテンツブロック(資料 §6)と tool_use の付随情報。\nブロック種別は行の右側に置く(実測で1行1ブロックが基本のため多値にしない)。"
+    },
+    {
+        "id": 137,
+        "name": {
+            "physical": "subtype",
+            "logical": "システム副種別"
+        }
+    },
+    {
+        "id": 138,
+        "name": {
+            "physical": "level",
+            "logical": "重要度"
+        }
+    },
+    {
+        "id": 139,
+        "name": {
+            "physical": "attachmentType",
+            "logical": "付帯情報種別"
+        }
+    },
+    {
+        "id": 140,
+        "name": {
+            "physical": "systemContent",
+            "logical": "内容"
+        },
+        "description": "第2弾(2/3。#580)。システム行の4種(報告書 §4.9)。内容 は compact_boundary と\ninformational が持つ。入力キューの 入力テキスト とは意味が違うので別の語彙にする。"
+    },
+    {
+        "id": 141,
+        "name": {
+            "physical": "hookCount",
+            "logical": "フック数"
+        },
+        "description": "stop_hook_summary。フックの実行記録・エラーは配列なので本来は多値(MO)だが、\nこの段では属性に置く(多値への展開は次段)。フックの停止理由 は メッセージ の\n停止理由(stop_reason)と意味が違うため別の語彙にする。"
+    },
+    {
+        "id": 142,
+        "name": {
+            "physical": "hookInfos",
+            "logical": "フックの実行記録"
+        },
+        "description": "stop_hook_summary。フックの実行記録・エラーは配列なので本来は多値(MO)だが、\nこの段では属性に置く(多値への展開は次段)。フックの停止理由 は メッセージ の\n停止理由(stop_reason)と意味が違うため別の語彙にする。"
+    },
+    {
+        "id": 143,
+        "name": {
+            "physical": "hookErrors",
+            "logical": "フックのエラー"
+        },
+        "description": "stop_hook_summary。フックの実行記録・エラーは配列なので本来は多値(MO)だが、\nこの段では属性に置く(多値への展開は次段)。フックの停止理由 は メッセージ の\n停止理由(stop_reason)と意味が違うため別の語彙にする。"
+    },
+    {
+        "id": 144,
+        "name": {
+            "physical": "preventedContinuation",
+            "logical": "継続の中断"
+        },
+        "description": "stop_hook_summary。フックの実行記録・エラーは配列なので本来は多値(MO)だが、\nこの段では属性に置く(多値への展開は次段)。フックの停止理由 は メッセージ の\n停止理由(stop_reason)と意味が違うため別の語彙にする。"
+    },
+    {
+        "id": 145,
+        "name": {
+            "physical": "hookStopReason",
+            "logical": "フックの停止理由"
+        },
+        "description": "stop_hook_summary。フックの実行記録・エラーは配列なので本来は多値(MO)だが、\nこの段では属性に置く(多値への展開は次段)。フックの停止理由 は メッセージ の\n停止理由(stop_reason)と意味が違うため別の語彙にする。"
+    },
+    {
+        "id": 146,
+        "name": {
+            "physical": "hasOutput",
+            "logical": "出力の有無"
+        },
+        "description": "stop_hook_summary。フックの実行記録・エラーは配列なので本来は多値(MO)だが、\nこの段では属性に置く(多値への展開は次段)。フックの停止理由 は メッセージ の\n停止理由(stop_reason)と意味が違うため別の語彙にする。"
+    },
+    {
+        "id": 147,
+        "name": {
+            "physical": "errorMessage",
+            "logical": "エラーメッセージ"
+        },
+        "description": "api_error。error の入れ子は message / formatted までを置く。connection・\nisNetworkDown・rateLimits は構造が深く、必要になった段で足す。"
+    },
+    {
+        "id": 148,
+        "name": {
+            "physical": "errorFormatted",
+            "logical": "整形済みエラー"
+        },
+        "description": "api_error。error の入れ子は message / formatted までを置く。connection・\nisNetworkDown・rateLimits は構造が深く、必要になった段で足す。"
+    },
+    {
+        "id": 149,
+        "name": {
+            "physical": "retryInMs",
+            "logical": "再試行までの待ち"
+        },
+        "description": "api_error。error の入れ子は message / formatted までを置く。connection・\nisNetworkDown・rateLimits は構造が深く、必要になった段で足す。"
+    },
+    {
+        "id": 150,
+        "name": {
+            "physical": "retryAttempt",
+            "logical": "再試行回数"
+        },
+        "description": "api_error。error の入れ子は message / formatted までを置く。connection・\nisNetworkDown・rateLimits は構造が深く、必要になった段で足す。"
+    },
+    {
+        "id": 151,
+        "name": {
+            "physical": "maxRetries",
+            "logical": "再試行上限"
+        },
+        "description": "api_error。error の入れ子は message / formatted までを置く。connection・\nisNetworkDown・rateLimits は構造が深く、必要になった段で足す。"
+    },
+    {
+        "id": 152,
+        "name": {
+            "physical": "errorSource",
+            "logical": "エラーの発生元"
+        },
+        "description": "api_error。error の入れ子は message / formatted までを置く。connection・\nisNetworkDown・rateLimits は構造が深く、必要になった段で足す。"
+    },
+    {
+        "id": 153,
+        "name": {
+            "physical": "logicalParentUuid",
+            "logical": "論理上の親の行UUID"
+        },
+        "description": "compact_boundary。論理上の親の行UUID は圧縮前の末尾の行を指すが、関係は張らない\n(冒頭の【第2弾(2/3)】を参照)。preservedSegment・preservedMessages は uuid の\n集合なので持たない。"
+    },
+    {
+        "id": 154,
+        "name": {
+            "physical": "compactTrigger",
+            "logical": "圧縮の契機"
+        },
+        "description": "compact_boundary。論理上の親の行UUID は圧縮前の末尾の行を指すが、関係は張らない\n(冒頭の【第2弾(2/3)】を参照)。preservedSegment・preservedMessages は uuid の\n集合なので持たない。"
+    },
+    {
+        "id": 155,
+        "name": {
+            "physical": "preTokens",
+            "logical": "圧縮前のトークン数"
+        },
+        "description": "compact_boundary。論理上の親の行UUID は圧縮前の末尾の行を指すが、関係は張らない\n(冒頭の【第2弾(2/3)】を参照)。preservedSegment・preservedMessages は uuid の\n集合なので持たない。"
+    },
+    {
+        "id": 156,
+        "name": {
+            "physical": "postTokens",
+            "logical": "圧縮後のトークン数"
+        },
+        "description": "compact_boundary。論理上の親の行UUID は圧縮前の末尾の行を指すが、関係は張らない\n(冒頭の【第2弾(2/3)】を参照)。preservedSegment・preservedMessages は uuid の\n集合なので持たない。"
+    },
+    {
+        "id": 157,
+        "name": {
+            "physical": "compactDurationMs",
+            "logical": "圧縮の所要時間"
+        },
+        "description": "compact_boundary。論理上の親の行UUID は圧縮前の末尾の行を指すが、関係は張らない\n(冒頭の【第2弾(2/3)】を参照)。preservedSegment・preservedMessages は uuid の\n集合なので持たない。"
+    },
+    {
+        "id": 158,
+        "name": {
+            "physical": "hookName",
+            "logical": "フック名"
+        },
+        "description": "hook_additional_context(報告書 §4.10)。追加文脈は配列。"
+    },
+    {
+        "id": 159,
+        "name": {
+            "physical": "hookEvent",
+            "logical": "フックの契機"
+        },
+        "description": "hook_additional_context(報告書 §4.10)。追加文脈は配列。"
+    },
+    {
+        "id": 160,
+        "name": {
+            "physical": "hookContent",
+            "logical": "追加文脈"
+        },
+        "description": "hook_additional_context(報告書 §4.10)。追加文脈は配列。"
+    },
+    {
+        "id": 161,
+        "name": {
+            "physical": "inputTokens",
+            "logical": "入力トークン数"
+        },
+        "description": "第2弾(3/3。#581)。トークン使用量(message.usage。報告書 §4.2、§5 の Usage 型)。\nまとまりに個体指定子が無いためモノにせず、メッセージの右側に並べる。"
+    },
+    {
+        "id": 162,
+        "name": {
+            "physical": "outputTokens",
+            "logical": "出力トークン数"
+        },
+        "description": "第2弾(3/3。#581)。トークン使用量(message.usage。報告書 §4.2、§5 の Usage 型)。\nまとまりに個体指定子が無いためモノにせず、メッセージの右側に並べる。"
+    },
+    {
+        "id": 163,
+        "name": {
+            "physical": "cacheCreationInputTokens",
+            "logical": "キャッシュ作成の入力トークン数"
+        },
+        "description": "第2弾(3/3。#581)。トークン使用量(message.usage。報告書 §4.2、§5 の Usage 型)。\nまとまりに個体指定子が無いためモノにせず、メッセージの右側に並べる。"
+    },
+    {
+        "id": 164,
+        "name": {
+            "physical": "cacheReadInputTokens",
+            "logical": "キャッシュ読取の入力トークン数"
+        },
+        "description": "第2弾(3/3。#581)。トークン使用量(message.usage。報告書 §4.2、§5 の Usage 型)。\nまとまりに個体指定子が無いためモノにせず、メッセージの右側に並べる。"
+    },
+    {
+        "id": 165,
+        "name": {
+            "physical": "ephemeral1hInputTokens",
+            "logical": "1時間キャッシュの入力トークン数"
+        },
+        "description": "cache_creation の内訳。キャッシュ作成の入力トークン数との関係(合計かどうか)は\n資料で確かめられないため、どれにも (D) を付けない(冒頭の【第2弾(3/3)】を参照)。"
+    },
+    {
+        "id": 166,
+        "name": {
+            "physical": "ephemeral5mInputTokens",
+            "logical": "5分キャッシュの入力トークン数"
+        },
+        "description": "cache_creation の内訳。キャッシュ作成の入力トークン数との関係(合計かどうか)は\n資料で確かめられないため、どれにも (D) を付けない(冒頭の【第2弾(3/3)】を参照)。"
+    },
+    {
+        "id": 167,
+        "name": {
+            "physical": "serviceTier",
+            "logical": "サービス階層"
+        },
+        "description": "資料で確認できる値は standard の1例だけなので区分コードにしない。"
+    },
+    {
+        "id": 168,
+        "name": {
+            "physical": "linkKind",
+            "logical": "チェーン種別"
+        }
+    },
+    {
+        "id": 169,
+        "name": {
+            "physical": "enqueuedAt",
+            "logical": "投入日時"
+        }
+    },
+    {
+        "id": 170,
+        "name": {
+            "physical": "content",
+            "logical": "入力テキスト"
+        }
+    },
+    {
+        "id": 171,
+        "name": {
+            "physical": "procStart",
+            "logical": "プロセス開始日時"
+        },
+        "description": "実行中セッション(~/.claude/sessions/<pid>.json と <pid>.<ハッシュ>.key)の語彙。\nprocStart は OS のプロセス作成時刻(Windows では FILETIME)。sdk-cli 起動の台帳には\n原則書かれない(レポート §4.2)ため個体指定子から外したが、生存判定には使う。"
+    },
+    {
+        "id": 172,
+        "name": {
+            "physical": "kind",
+            "logical": "種別"
+        },
+        "description": "実行中セッション(~/.claude/sessions/<pid>.json と <pid>.<ハッシュ>.key)の語彙。\nprocStart は OS のプロセス作成時刻(Windows では FILETIME)。sdk-cli 起動の台帳には\n原則書かれない(レポート §4.2)ため個体指定子から外したが、生存判定には使う。"
+    },
+    {
+        "id": 173,
+        "name": {
+            "physical": "name",
+            "logical": "名前"
+        },
+        "description": "他のセッションからメッセージを送るときの宛先名。"
+    },
+    {
+        "id": 174,
+        "name": {
+            "physical": "nameSource",
+            "logical": "名前の由来"
+        },
+        "description": "他のセッションからメッセージを送るときの宛先名。"
+    },
+    {
+        "id": 175,
+        "name": {
+            "physical": "nameSince",
+            "logical": "名前の設定日時"
+        },
+        "description": "他のセッションからメッセージを送るときの宛先名。"
+    },
+    {
+        "id": 176,
+        "name": {
+            "physical": "updatedAtTime",
+            "logical": "更新日時"
+        },
+        "description": "設定ファイルの `updatedAt`(手配の更新日)とは意味が違うため別の属性に分ける。"
+    },
+    {
+        "id": 177,
+        "name": {
+            "physical": "peerProtocol",
+            "logical": "ピアプロトコル"
+        }
+    },
+    {
+        "id": 178,
+        "name": {
+            "physical": "messagingSocketPath",
+            "logical": "メッセージング経路"
+        }
+    },
+    {
+        "id": 179,
+        "name": {
+            "physical": "bridgeSessionId",
+            "logical": "ブリッジセッションID"
+        },
+        "description": "claude.ai 側のセッションID。個体指定子ではあるが、ほかの語彙が無いため今は属性に\n置く(ログ行の gitBranch と同じ扱い)。関連する語彙がそろう段でモノとして立てる。"
+    },
+    {
+        "id": 180,
+        "name": {
+            "physical": "peerToken",
+            "logical": "ピアトークン(秘匿)"
+        },
+        "description": "<pid>.<ハッシュ>.key にある、セッション間メッセージの認証値。値は秘匿であり、\n画面・ログ・リポジトリに書かない(native.md §4)。ここに置くのは語彙だけ。"
+    },
+    {
+        "id": 181,
+        "name": {
+            "physical": "peerFeature",
+            "logical": "機能名"
+        }
+    },
+    {
+        "id": 182,
+        "name": {
+            "physical": "status",
+            "logical": "台帳の状態"
+        },
+        "description": "台帳にあるが、これまでモデルに入れていなかった語彙(レポート §4.2)。"
+    },
+    {
+        "id": 183,
+        "name": {
+            "physical": "statusUpdatedAt",
+            "logical": "台帳の状態の更新日時"
+        },
+        "description": "台帳にあるが、これまでモデルに入れていなかった語彙(レポート §4.2)。"
+    },
+    {
+        "id": 184,
+        "name": {
+            "physical": "hostSessionId",
+            "logical": "ホストセッションID"
+        },
+        "description": "台帳にあるが、これまでモデルに入れていなかった語彙(レポート §4.2)。"
+    },
+    {
+        "id": 185,
+        "name": {
+            "physical": "processState",
+            "logical": "プロセス状態"
+        },
+        "description": "app が起動した実行中セッションだけが持つ、app 側の状態(レポート §7.1)。"
+    },
+    {
+        "id": 186,
+        "name": {
+            "physical": "processStateAt",
+            "logical": "プロセス状態の更新日時"
+        },
+        "description": "app が起動した実行中セッションだけが持つ、app 側の状態(レポート §7.1)。"
+    },
+    {
+        "id": 187,
+        "name": {
+            "physical": "currentModel",
+            "logical": "現在のモデル"
+        },
+        "description": "Phase 2。set_model / set_permission_mode で途中から変わる、いま送るときに使われる\n値(レポート §6.2)。ログ側の モデルID(メッセージ)・権限モード(ユーザー行)は\n記録された当時の値で意味が違うため、別の属性に分ける。"
+    },
+    {
+        "id": 188,
+        "name": {
+            "physical": "currentPermissionMode",
+            "logical": "現在の権限モード"
+        },
+        "description": "Phase 2。set_model / set_permission_mode で途中から変わる、いま送るときに使われる\n値(レポート §6.2)。ログ側の モデルID(メッセージ)・権限モード(ユーザー行)は\n記録された当時の値で意味が違うため、別の属性に分ける。"
+    },
+    {
+        "id": 189,
+        "name": {
+            "physical": "toolName",
+            "logical": "ツール名"
+        },
+        "description": "権限の問い合わせ(control_request / can_use_tool。レポート §2.1)。"
+    },
+    {
+        "id": 190,
+        "name": {
+            "physical": "displayName",
+            "logical": "表示名"
+        },
+        "description": "権限の問い合わせ(control_request / can_use_tool。レポート §2.1)。"
+    },
+    {
+        "id": 191,
+        "name": {
+            "physical": "toolInput",
+            "logical": "入力"
+        },
+        "description": "権限の問い合わせ(control_request / can_use_tool。レポート §2.1)。"
+    },
+    {
+        "id": 192,
+        "name": {
+            "physical": "blockedPath",
+            "logical": "拒否されたパス"
+        },
+        "description": "権限の問い合わせ(control_request / can_use_tool。レポート §2.1)。"
+    },
+    {
+        "id": 193,
+        "name": {
+            "physical": "requestedAt",
+            "logical": "問い合わせ日時"
+        },
+        "description": "権限の問い合わせ(control_request / can_use_tool。レポート §2.1)。"
+    },
+    {
+        "id": 194,
+        "name": {
+            "physical": "requestKind",
+            "logical": "問い合わせ種別(D)"
+        },
+        "description": "tool_name から求まる。can_use_tool / AskUserQuestion / ExitPlanMode(レポート §2.4)。"
+    },
+    {
+        "id": 195,
+        "name": {
+            "physical": "behavior",
+            "logical": "決着種別"
+        },
+        "description": "権限の応答(control_response)と、中断による取り消し(control_cancel_request)。"
+    },
+    {
+        "id": 196,
+        "name": {
+            "physical": "updatedInput",
+            "logical": "更新後の入力"
+        },
+        "description": "権限の応答(control_response)と、中断による取り消し(control_cancel_request)。"
+    },
+    {
+        "id": 197,
+        "name": {
+            "physical": "denyMessage",
+            "logical": "拒否メッセージ"
+        },
+        "description": "権限の応答(control_response)と、中断による取り消し(control_cancel_request)。"
+    },
+    {
+        "id": 198,
+        "name": {
+            "physical": "updatedPermissions",
+            "logical": "更新後の権限"
+        },
+        "description": "権限の応答(control_response)と、中断による取り消し(control_cancel_request)。"
+    },
+    {
+        "id": 199,
+        "name": {
+            "physical": "respondedAt",
+            "logical": "応答日時"
+        },
+        "description": "権限の応答(control_response)と、中断による取り消し(control_cancel_request)。"
+    },
+    {
+        "id": 200,
+        "name": {
+            "physical": "suggestionType",
+            "logical": "提案種別"
+        },
+        "description": "permission_suggestions の1件(多値)。"
+    },
+    {
+        "id": 201,
+        "name": {
+            "physical": "suggestionDestination",
+            "logical": "適用先"
+        },
+        "description": "permission_suggestions の1件(多値)。"
+    },
+    {
+        "id": 202,
+        "name": {
+            "physical": "suggestionContent",
+            "logical": "内容"
+        },
+        "description": "permission_suggestions の1件(多値)。"
+    }
+]
