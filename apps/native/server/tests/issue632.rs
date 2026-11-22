@@ -627,3 +627,71 @@ async fn saving_the_same_values_does_not_advance_either_version() {
     assert_eq!(body["revision"], rev + 1);
     assert_eq!(body["global_revision"], global);
 }
+
+// --- 18. 自動再開は、アーカイブ済みの会話を起動しない ---
+
+#[tokio::test]
+async fn an_automatic_restore_does_not_start_an_archived_conversation_and_keeps_the_mark() {
+    let f = fixture();
+    let session = "0a1b2c3d-1111-4222-8333-444455556666";
+    let repo = f.dir.path().join("repo");
+    let projects = f.dir.path().join("projects");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::create_dir_all(projects.join("proj1")).unwrap();
+    let line = serde_json::json!({
+        "type": "user", "sessionId": session, "cwd": forward(&repo),
+        "message": {"role": "user", "content": "hello"}
+    });
+    std::fs::write(
+        projects.join("proj1").join(format!("{session}.jsonl")),
+        format!("{line}\n"),
+    )
+    .unwrap();
+    let (status, _) = call(
+        &f.ctx,
+        "update_settings",
+        serde_json::json!({"input": {
+            "repository_path": forward(&repo), "github_project": null,
+            "selected_project_folders": [], "claude_projects_dir": forward(&projects)
+        }}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    // 自動再開の途中(起動の直前)より前に、利用者がアーカイブした。
+    let (status, _) = call(
+        &f.ctx,
+        "archive_session",
+        serde_json::json!({"project": "proj1", "sessionId": session}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let request: server::dto::StartRunningSessionDto = serde_json::from_value(serde_json::json!({
+        "kind": "resume", "project": "proj1", "session_id": session,
+        "mode": "default", "name": null, "sync_origin_main": false
+    }))
+    .unwrap();
+    let profile = f.ctx.state.lock().await.settings.active_profile_id.clone();
+    let result = server::running::start_restored_session(&f.ctx, Some(profile), request).await;
+    assert!(
+        matches!(&result, Err(app::AppError::InvalidInput(m)) if m == server::running::ARCHIVED_SKIP_REASON),
+        "{result:?}"
+    );
+    assert!(
+        f.ctx.state.lock().await.running_sessions.is_empty(),
+        "起動していない"
+    );
+    assert!(
+        f.ctx.state.lock().await.starting_session_ids.is_empty(),
+        "起動中の印を残さない"
+    );
+    let marks: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(f.dir.path().join("archived-sessions.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        marks["session_ids"],
+        serde_json::json!([session]),
+        "印は外さない"
+    );
+}

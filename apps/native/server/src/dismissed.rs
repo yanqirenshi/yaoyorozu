@@ -32,11 +32,22 @@ pub fn fingerprint(path: &Path) -> FileFingerprint {
 
 /// 保存した印を読む(無い・壊れているときは空。起動は止めない)。
 pub fn load(data_dir: &Path) -> HashMap<(String, String), FileFingerprint> {
-    let Ok(text) = std::fs::read_to_string(data_dir.join(FILE_NAME)) else {
-        return HashMap::new();
+    let path = data_dir.join(FILE_NAME);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        // 無いのはふつう(まだ何も閉じていない)。それ以外(読めない)はログに出す。
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return HashMap::new(),
+        Err(e) => {
+            eprintln!("{FILE_NAME} を読めませんでした(閉じた警告の印は空から始めます): {e}");
+            return HashMap::new();
+        }
     };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return HashMap::new();
+    let value = match serde_json::from_str::<serde_json::Value>(&text) {
+        Ok(value) => value,
+        Err(e) => {
+            eprintln!("{FILE_NAME} が壊れています(閉じた警告の印は空から始めます): {e}");
+            return HashMap::new();
+        }
     };
     value
         .get("dismissed")

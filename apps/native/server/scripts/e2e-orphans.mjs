@@ -73,6 +73,16 @@ async function main() {
   check("会話 b を止めると、b の子孫も 0 件", !alive(bChild) && !alive(bGrand), `b: ${bChild},${bGrand}`);
   tab.close();
 
+  // ---- claude が自分で(異常終了で)終わったときも、子孫が残らない ----
+  const tab2 = await openSse(srv);
+  const c = await start("orphans-c");
+  const [cChild, cGrand] = await makeOrphans(srv, tab2, c, "EXIT");
+  check("(異常終了する会話)子と孫が、生きている", alive(cChild) && alive(cGrand), `${cChild},${cGrand}`);
+  check("claude が自分で終わった(終了状態になる)", !!(await waitState(srv, c, "exited", 15000)));
+  await sleep(1000);
+  tab2.close();
+  check("claude が自分で終わったあと、切り離した子と孫も残らない", !alive(cChild) && !alive(cGrand), `${cChild},${cGrand}`);
+
   // ---- 起動の直後に子を作る偽の claude(会話用のジョブへ入れられる前に作られた子)----
   // 起動したあとで PID をジョブへ入れるので、入れる前に作られた子は、会話のジョブの外(サーバのジョブの中)に残る。
   // その結果(事実)を出す: 停止のあと、その子が残るか。サーバが終わると、サーバのジョブが止める。
