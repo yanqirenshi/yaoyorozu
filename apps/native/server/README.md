@@ -2,7 +2,7 @@
 
 `apps/native` を Tauri から「Next.js(ブラウザ)+ Rust サーバ」へ移す計画(#620)の、Rust 側。
 `tauri` クレートには依存しない。`crates/domain`・`app`・`infra` をそのまま使う。
-段階 1(#622)では `list_projects`・`get_settings`・SSE の骨組みだけを持つ。
+段階 1(#622)では `list_projects`・`get_settings`・通知の骨組みだけを持つ(通知と途中経過は、段階 3 の途中から WebSocket。#636)。
 
 ## 起動
 
@@ -12,7 +12,8 @@ npm run server:dev            # リポジトリのルートから(cargo run -p s
 cargo run -p server --manifest-path apps/native/Cargo.toml --target-dir <別の target>
 ```
 
-- 127.0.0.1 だけで待ち受ける。Ctrl+C で止まる(SSE も閉じる)。
+- 127.0.0.1 だけで待ち受ける。Ctrl+C で止まる(WebSocket も閉じる)。
+- `/ws` を使うには、画面(Next)のポートを環境変数 `YAOYOROZU_CONSOLE_PORT` で渡して起動する(下の表)。渡さないと `/ws` は誰も通さず、券の rpc も断る。
 - ビルドは `--target-dir` を分ける(main の `target/` やほかのセッションのビルドを巻き込まない)。
 
 ## データフォルダ・ポート
@@ -21,6 +22,7 @@ cargo run -p server --manifest-path apps/native/Cargo.toml --target-dir <別の 
 |---|---|---|
 | データフォルダ | `%APPDATA%\com.yaoyorozu.server` | 環境変数 `YAOYOROZU_DATA_DIR` |
 | ポート | `14210` | 環境変数 `YAOYOROZU_SERVER_PORT` |
+| 画面(Next)のポート | 無し(未設定なら `/ws` は誰も通さない) | 環境変数 `YAOYOROZU_CONSOLE_PORT`(`/ws` が通す Origin = `http://127.0.0.1:<この値>` と `http://localhost:<この値>` を作る) |
 
 - **MSI 版のフォルダ(`com.yaoyorozu.native`)は読まない・書かない**。指定されると起動を断る
   (同じフォルダを使うと、トークンを上書きし、後の段階では自動再開が本番のセッションに再開を試みる。native.md §8)。
@@ -45,7 +47,8 @@ cargo run -p server --manifest-path apps/native/Cargo.toml --target-dir <別の 
 | `POST /rpc/dismiss_pending_warning` | 必要 | 警告を閉じる(控えから消す)。本文 `{id}` |
 | `POST /rpc/check_folder` | 必要 | **この構成だけの Query**。Tauri 版のフォルダ選択ダイアログの代わり。本文 `{path}`(絶対パスだけ。`..`・`:` を含む形は 400)→ `{path, exists, is_dir, is_git_repository}`。読み書きはしない |
 | `POST /rpc/get_settings` | 必要 | 本文 `{profileId?: string \| null}`(キーは今のフロントと同じ camelCase)→ `SettingsDto` |
-| `GET /events` | 必要 | SSE。イベント名 = `event:`、ペイロード = `data:` の JSON。段階 1 は 2 秒おきの `ping`(`{n}`) |
+| `POST /rpc/issue_ws_ticket` | 必要 | **この構成だけの Query**。`/ws` へつなぐための**使い捨ての券**と、つなぐ先のポートを返す。本文 `{}` → `{ticket, port}`。ほかの rpc と同じ守り(トークン・Host。中継では Origin も) |
+| `GET /ws` | **トークンは使わない**(券・Origin・Host) | WebSocket。通知と途中経過。下の「通知と途中経過」 |
 
 - 本文が空なら `{}` と見なす。応答の DTO は今の Tauri 版と同じ形(`src/dto.rs` に写してある)。
 - 全エンドポイントで `Host` が `127.0.0.1:<port>` / `localhost:<port>` であることを確かめる(違えば 403 `forbidden_host`)。
@@ -177,15 +180,35 @@ ZWJ・ZWNJ・異体字セレクタは、前後に見える文字があるとき�
   ハブへの表示と `reconcile_git_state` command は段階 4。
 - **利用状況**: 動いているセッションがあるあいだ、最初の 1 回は待たずに、以後 5 分おきとターン終了ごとに取得する。`get_claude_usage` は持っている値を返すだけ。
 
-### 途中経過(`/events` の SSE。接続ごと)
+### 通知と途中経過(`/ws` の WebSocket。タブごとに 1 本。#636)
 
-- 途中経過(文字の断片・ツールの開始など。順序が大事)は、**同じ `GET /events`** の SSE で、イベント名 `running-session:progress`、本文 `{subscription_id, progress}`(`progress` は今の `AddressedProgressDto`)として流れる。
-  通知(`running-session:changed` など。取りこぼしてよい)は、これまでどおり放送(`EventBus`)。`/events` はこの 2 つを 1 本に束ねる。
-- 接続したときの**最初のイベントは `connection`**(本文 `{connection_id}`。**乱数から作る UUID の文字列**。サーバを起動し直しても、ほかの接続の ID と一致しない。古い ID での購読は 404、購読解除は何も起きない)。途中経過(`running-session:progress`)の本文は `{subscription_id, seq, progress}`。`seq` は**会話(実行中セッション)ごとの 1 からの連番**で、`get_running_session` の `progress_seq`(ここまでの番号)と突き合わせて、画面が重なり・順番の崩れを見分ける。購読の登録(`subscribe_running_session_progress` の `connectionId`)にはこの ID を使う。購読を外すとき(`unsubscribe_running_session_progress`)は、購読の ID とその接続の ID を渡す(**ほかの接続の購読は外せない**)。1 接続の購読は 64 まで。
-- **接続の表(接続の ID → 有限の送り口。`src/progress.rs`)は状態とは別のロック**。購読が持つのは「接続の ID と購読の ID」だけで、イベントループは**状態のロックの外で、待たない送信(`try_send`)**をする。
-  送り口(512 件)があふれた(遅い・止まったクライアントの)接続は、**その接続の購読を全部外して SSE を閉じる**。ブラウザは自動でつなぎ直し、画面は購読し直して `get_running_session` で状態を取り直す(途中経過は捨ててよい。状態・答え待ちは Query で取れる)。
+通知(取りこぼしてよい)と途中経過(文字の断片・ツールの開始など。順序が大事)は、ブラウザから Rust サーバへ**直接**つなぐ WebSocket で運ぶ(`src/ws.rs`)。
+操作(`/rpc`)は、今までどおり Next が中継する(トークンはブラウザへ渡さない)。Next の中継は HTTP/1.1 で、同じ接続先への接続が 6 本までのため、タブごとの SSE が 6 本になると全部のタブの操作が止まった(#629)。WebSocket はその枠を使わない。
+
+**つなぎ方**
+
+1. タブは、中継を通して `issue_ws_ticket` で**使い捨ての券**とポートをもらう。
+2. `ws://127.0.0.1:<ポート>/ws` へつなぎ、**最初のメッセージ**で `{"type":"ticket","ticket":"…"}` を送る(券は URL に入れない。クエリのある要求は 400 で断る)。
+3. サーバが `{"type":"ready"}` を返したら、つながった。以後:
+   - サーバ → タブ: `{"type":"event","name":<今のイベント名のまま>,"data":…}`(通知)/ `{"type":"progress","data":{subscription_id,seq,progress}}`(途中経過)/ `{"type":"subscribed"|"subscribe_failed","request_id",…}` / `{"type":"ping"}`
+   - タブ → サーバ: `{"type":"subscribe","request_id","target"}` / `{"type":"unsubscribe","subscription_id"}` / `{"type":"pong"}` だけ。ほかは閉じる。
+
+**守りの考え方**(ブラウザがサーバのポートへ直接つなぐ口が 1 つできる。守りは、券・Origin と Host の確かめ・127.0.0.1 だけでの待ち受け)
+
+- **券**: UUID v4 を 3 つつなげた乱数(360 ビット)。有効 30 秒・**1 回だけ**・サーバのメモリにだけ持つ。未使用の券は 64 枚まで(超えると `issue_ws_ticket` が `invalid_input`)。券の確かめの前は、何も送らず、ほかのメッセージも受け付けない。5 秒以内に正しい券が来なければ閉じる。券をログに出さない。
+- **アップグレードの要求で Host と Origin を確かめる**。Host は `127.0.0.1:<ポート>` / `localhost:<ポート>`。Origin は、画面のもの(`YAOYOROZU_CONSOLE_PORT` から作った `http://127.0.0.1:<画面のポート>` と `http://localhost:<同>`)だけ。**Origin が無い要求も断る**(403)。
+  許す Origin の出どころは環境変数にした: 今の中継の Origin の確かめは「要求の Host と同じ」で、サーバは Next のポートを知らないため。サーバを起動する側(`dev-fake`・確認スクリプト・起動の手順)が、Next と同じ値を渡す。
+- **購読・購読解除は、その接続の上のメッセージ**で行う。接続の ID はサーバの中だけで使う(外へ出ない)ので、「ほかの接続の ID を指して購読・購読解除する」ことはできない。1 接続の購読は 64 まで。
+- **大きさと時間**: タブから受け取るメッセージは 16KB まで(超えたら閉じる)。サーバは 10 秒ごとに `ping` を送り、30 秒、何も返ってこない接続(凍結されたタブなど)は閉じる。1 通を 10 秒以内に送れない接続も閉じる。
+- CSP の `connect-src` には、つなぐ先だけ(`ws://127.0.0.1:<サーバのポート>`)を足す(`apps/console/src/proxy.ts` が、サーバの書いたポートのファイルから実行時に読む。ワイルドカードにしない)。
+
+**途中経過の運び方**(Tauri 版からの変えていない部分)
+
+- 途中経過の本文は `{subscription_id, seq, progress}`(`progress` は今の `AddressedProgressDto`)。`seq` は**会話(実行中セッション)ごとの 1 からの連番**で、`get_running_session` の `progress_seq`(ここまでの番号)と突き合わせて、画面が重なり・順番の崩れを見分ける。
+- **接続の表(接続の ID → 待ち行列。`src/progress.rs`)は状態とは別のロック**。購読が持つのは「接続の ID と購読の ID」だけで、イベントループは**状態のロックの外で、待たない送信**をする。
+  待ち行列(512 件・16MB)があふれた(遅い・止まったクライアントの)接続は、**その接続の購読を全部外して WebSocket を閉じる**。画面は(自前で)つなぎ直し、購読し直して `get_running_session` で状態を取り直す(途中経過は捨ててよい。状態・答え待ちは Query で取れる)。
   接続が終わったとき(タブを閉じたとき)も、表と購読を片づける。
-- 1 タブ 1 本の SSE のまま(#629)。複数タブでの接続の共有は作っていない。「購読の登録・配送」と「接続」を分けてあるので、接続の持ち方だけを後から差し替えられる。
+- 切れている間の通知・途中経過は失われる。画面は、つなぎ直したときの合図(`onReconnected`)で状態を取り直す。凍結されたタブ・スリープから戻ったタブは、接続が切れているので、同じ道で戻る。
 - ブラウザ(全タブ)を閉じても claude は動き続ける。開き直すと、`list_running_sessions`・`get_running_session` で状態が見える。
 
 ### 守り(起動・送信の入口)
@@ -209,7 +232,7 @@ ZWJ・ZWNJ・異体字セレクタは、前後に見える文字があるとき�
     そのアプリから `CREATE_BREAKAWAY_FROM_JOB` で起動された子も同じ。Store 版の Python など、ほかのパッケージのアプリは確かめていない。
   - claude が切り離して(`detached`)起動した子とその子は、1 つの会話を止めたあとも、**サーバが動いている間は残る**。サーバが終わるとジョブが止める。
   守り方(サーバ自身をジョブへ入れる)は、この点では変えていない。
-- **穏やかな終了**: Ctrl+C のほか、コンソールを閉じる・ログオフ・シャットダウン(`tokio::signal::windows` の `ctrl_close`・`ctrl_logoff`・`ctrl_shutdown`)でも、SSE を閉じ、claude を並行して止める(標準入力を閉じる → 待つ → 強制終了)。
+- **穏やかな終了**: Ctrl+C のほか、コンソールを閉じる・ログオフ・シャットダウン(`tokio::signal::windows` の `ctrl_close`・`ctrl_logoff`・`ctrl_shutdown`)でも、WebSocket を閉じ、claude を並行して止める(標準入力を閉じる → 待つ → 強制終了)。
   OS が合図から打ち切るまでは約 5 秒なので、止める時間の上限は 4 秒。**間に合わなかった分はジョブオブジェクトが止める**。
   (Ctrl+C を「無視する」属性は子へ引き継がれる。サーバを起動する側がその属性を付けていると Ctrl+C が効かない。確認では起動の前に解除している。)
 - **起動のとき、前のサーバの残りの claude**: 既存の `find_running` の断り(同じ会話は動いていると 409)に任せる。
@@ -228,7 +251,8 @@ node server/scripts/e2e-real-claude.mjs --real   # 本物の claude を 1 セッ
 ```
 
 `e2e-running.mjs` は、**使い捨て**のデータフォルダ・ホーム(`USERPROFILE`/`HOME`)・リポジトリ・会話フォルダで、偽の claude を実際に起動し、起動 → 送信 → 途中経過 → 権限 → 中断 → 切り替え → 停止 → 再開 → Ctrl+C → 再起動 → 自動再開 → 二重起動の拒否 → 強制終了(子孫 0 件)までを確かめる。
-共通部分は `e2e-lib.mjs`。止めるのは、スクリプトが起動した PID とその子孫だけ。`cargo test -p server --test running` は、claude を起動しない部分(SSE の接続・あふれ・購読の守り・本文の大きさ)の確認。
+共通部分は `e2e-lib.mjs`。止めるのは、スクリプトが起動した PID とその子孫だけ。`cargo test -p server --test running` は、claude を起動しない部分(接続・あふれ・購読の守り・本文の大きさ)の確認。`cargo test -p server --test ws` は `/ws` の守り(券・Origin と Host・メッセージの種類と大きさ・接続の後片付け)を、実際のソケットでつないで確かめる。
+`node server/scripts/e2e-ws.mjs [--next]` は、実際のサーバ(exe)へ直接つないで、守りの表(券なし・でたらめな券・期限切れ・使用済み・最初のメッセージが券でない・券の前の購読・大きすぎるメッセージ・Origin 違い・Origin 無し・Host 違い・クエリの券)と、サーバのログに券が出ないことを確かめる(期限切れの確認で 31 秒待つ)。
 
 `e2e-real-claude.mjs --real` は、**本物の claude を 1 セッションだけ**、使い捨てのデータフォルダ・リポジトリで起動する(起動 → 1 往復 → 停止 → 再開 → Ctrl+C → 子孫 0 件 → サーバの再起動 → 自動再開)。
 本物の claude は `~/.claude` の認証が要るのでホームは差し替えない。作る会話は 1 つだけで、終わりにそのフォルダ(`~/.claude/projects/` の、使い捨てのリポジトリ用のもの)を消す。
