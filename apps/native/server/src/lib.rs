@@ -7,8 +7,12 @@ pub mod dto;
 pub mod error;
 pub mod events;
 pub mod folders;
+pub mod lock;
+pub mod progress;
 pub mod redact;
 pub mod rpc;
+pub mod running;
+pub mod signals;
 pub mod state;
 pub mod watcher;
 
@@ -17,13 +21,13 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::get;
 use axum::{middleware, Json, Router};
 use events::EventBus;
-use futures_util::{Stream, StreamExt};
+use futures_util::{stream, Stream, StreamExt};
 use serde::Serialize;
 pub use state::ServerState;
 use std::convert::Infallible;
 use std::sync::Arc;
 use tokio::sync::{watch, Mutex};
-use tokio_stream::wrappers::{errors::BroadcastStreamRecvError, BroadcastStream};
+use tokio_stream::wrappers::{errors::BroadcastStreamRecvError, BroadcastStream, ReceiverStream};
 
 #[derive(Clone)]
 pub struct AppContext {
@@ -46,6 +50,8 @@ pub struct AppContext {
     pub file_lane: Arc<tokio::sync::Mutex<()>>,
     /// 終了の合図。SSE を閉じて、Ctrl+C で止まれるようにする。
     pub shutdown: watch::Receiver<bool>,
+    /// 実行中セッションまわり(SSE の接続の表・保存のレーン・claude の差し替え)。
+    pub running: running::RunningServices,
 }
 
 #[derive(Serialize)]
@@ -61,22 +67,81 @@ async fn health(State(ctx): State<AppContext>) -> Json<HealthDto> {
     })
 }
 
-/// `GET /events`。バスのイベントを 1 件ずつ流す。取りこぼし(遅い購読者)は読み飛ばす。
+/// SSE の接続が終わったとき(閉じられたとき・つなぎ直されたとき)に、その接続の表と購読を片づける。
+struct ConnectionGuard {
+    ctx: AppContext,
+    conn_id: u64,
+}
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        self.ctx.running.connections.close(self.conn_id);
+        // 購読の掃除は状態のロックが要る(`Drop` は async にできない)ので、別のタスクで行う。
+        let ctx = self.ctx.clone();
+        let conn_id = self.conn_id;
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                ctx.state
+                    .lock()
+                    .await
+                    .drop_connection_subscriptions(&[conn_id]);
+            });
+        }
+    }
+}
+
+/// `GET /events`。**通知**(放送。取りこぼしてよい)と、この接続の**途中経過**(接続ごとの待ち行列。
+/// 順序を保つ)を 1 本の SSE に束ねる。最初のイベントは `connection`(この接続の ID。購読の登録に使う)。
+/// 途中経過の待ち行列があふれた接続は、サーバが閉じる(ブラウザがつなぎ直し、購読し直す)。
 async fn events(
     State(ctx): State<AppContext>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let mut shutdown = ctx.shutdown.clone();
-    let stream = BroadcastStream::new(ctx.events.subscribe())
-        .filter_map(|item| async move {
+    let opened = ctx.running.connections.open();
+    let conn_id = opened.id;
+    let mut kicked = opened.kicked;
+    let guard = ConnectionGuard {
+        ctx: ctx.clone(),
+        conn_id,
+    };
+    let first = stream::once(async move {
+        Ok::<Event, Infallible>(
+            Event::default()
+                .event("connection")
+                .data(serde_json::json!({ "connection_id": conn_id }).to_string()),
+        )
+    });
+    let notifications =
+        BroadcastStream::new(ctx.events.subscribe()).filter_map(|item| async move {
             match item {
                 Ok(ev) => Some(Ok(Event::default().event(ev.name).data(ev.data))),
                 Err(BroadcastStreamRecvError::Lagged(_)) => None,
             }
-        })
-        .take_until(async move {
-            let _ = shutdown.wait_for(|v| *v).await;
         });
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    let progress = ReceiverStream::new(opened.receiver).map(|m| {
+        Ok(Event::default()
+            .event(running::RUNNING_SESSION_PROGRESS_EVENT)
+            .data(m.progress_json))
+    });
+    let merged = first
+        .chain(stream::select(notifications, progress))
+        .take_until(async move {
+            tokio::select! {
+                // 送り側が先に落ちた(テストなど)ときは、終了の合図とはみなさない。
+                _ = async {
+                    if shutdown.wait_for(|v| *v).await.is_err() {
+                        std::future::pending::<()>().await;
+                    }
+                } => {}
+                _ = kicked.wait_for(|v| *v) => {}
+            }
+        })
+        // 接続の掃除は、ストリームが捨てられたとき(ガードが落ちたとき)に走る。
+        .map(move |item| {
+            let _ = &guard;
+            item
+        });
+    Sse::new(merged).keep_alive(KeepAlive::default())
 }
 
 pub fn router(ctx: AppContext) -> Router {

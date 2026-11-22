@@ -23,7 +23,7 @@ use serde::Deserialize;
 use std::path::PathBuf;
 
 /// 有効なセッションのルート(`~/.claude/projects` か、設定の上書き)。
-async fn effective_projects_dir(ctx: &AppContext) -> Result<PathBuf, ApiError> {
+pub(crate) async fn effective_projects_dir(ctx: &AppContext) -> Result<PathBuf, ApiError> {
     let settings = ctx.state.lock().await.settings.clone();
     Ok(resolve_effective_projects_dir(&settings)?)
 }

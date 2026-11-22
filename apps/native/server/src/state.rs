@@ -2,9 +2,10 @@
 //! `tauri/src/state.rs` から写した: `resolve_effective_projects_dir`・`store_loaded_session`。
 
 use crate::dto::PendingWarningDto;
-use domain::{LogLine, Settings};
+use domain::{GitLedger, LogLine, Settings};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// 設定の `claude_projects_dir` と既定値(`~/.claude/projects/`)から、実際に使うルートを求める。
 ///
@@ -38,6 +39,27 @@ pub struct SkipSource {
     pub fingerprint: FileFingerprint,
 }
 
+/// 途中経過の購読 1 件。**接続の ID と購読の ID だけ**を持つ(送り先の実体は `progress::Connections` が持つ。
+/// 状態のロックの中で、送り先を触らないため)。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Subscription {
+    pub id: u64,
+    pub conn_id: u64,
+}
+
+/// サーバが起動して持っている実行中セッション 1 つ(Tauri 版 `RunningSessionSlot` の写し)。
+pub struct RunningSessionSlot {
+    /// 会話ファイルのあるプロジェクトフォルダ名。再開のときだけ(新規は会話ファイルができるまで分からない)。
+    pub project: Option<String>,
+    pub session: domain::RunningSessionByApp,
+    /// 子プロセスの操作口(標準入力への書き込み・中断・停止)。
+    pub process: Arc<dyn app::RunningProcess>,
+    /// CLI が報告した、選べるモデル。
+    pub available_models: Vec<app::AvailableModel>,
+    /// 途中経過の購読(購読が無い間の出来事は捨てる。状態・答え待ちは Query で取れる)。
+    pub subscribers: Vec<Subscription>,
+}
+
 pub struct ServerState {
     pub settings: Settings,
     pub save_path: PathBuf,
@@ -56,6 +78,19 @@ pub struct ServerState {
     pub loaded_log_lines: HashMap<PathBuf, Vec<LogLine>>,
     /// 解析済みメッセージのキャッシュ(issue #350)。ファイルの状態とセットで持つ。
     pub loaded_messages: HashMap<PathBuf, app::CachedMessages>,
+    /// 起動した実行中セッション。終了しても、同じ会話を起動し直して置き換えるか、上限を超えて忘れるまで残す。
+    pub running_sessions: Vec<RunningSessionSlot>,
+    /// 起動している最中の会話の ID(起動は数秒かかりうるので、同じ会話・上限超えの同時の起動を止める)。
+    pub starting_session_ids: Vec<String>,
+    /// 途中経過の購読 ID の連番。
+    pub next_subscription_id: u64,
+    /// Claude.ai の利用状況(アカウント単位。最後に取れた値)。
+    pub claude_usage: app::ClaudeUsageSnapshot,
+    /// 利用状況の定期取得が動いているか。
+    pub usage_polling_active: bool,
+    /// Git 台帳(最小。`git-ledger.json`。worktree の ID と実体の対応に使う)。
+    pub git_ledger: GitLedger,
+    pub git_ledger_path: PathBuf,
 }
 
 impl ServerState {
@@ -70,6 +105,13 @@ impl ServerState {
             dismissed_skips: HashMap::new(),
             loaded_log_lines: HashMap::new(),
             loaded_messages: HashMap::new(),
+            running_sessions: Vec::new(),
+            starting_session_ids: Vec::new(),
+            next_subscription_id: 1,
+            claude_usage: app::ClaudeUsageSnapshot::default(),
+            usage_polling_active: false,
+            git_ledger: GitLedger::default(),
+            git_ledger_path: PathBuf::new(),
         }
     }
 
@@ -136,6 +178,16 @@ impl ServerState {
                 self.dismissed_skips
                     .insert((s.project, s.file_name), s.fingerprint);
             }
+        }
+    }
+
+    /// 閉じた(または閉じられた)接続の購読を、全部外す。
+    pub fn drop_connection_subscriptions(&mut self, conn_ids: &[u64]) {
+        if conn_ids.is_empty() {
+            return;
+        }
+        for slot in &mut self.running_sessions {
+            slot.subscribers.retain(|s| !conn_ids.contains(&s.conn_id));
         }
     }
 

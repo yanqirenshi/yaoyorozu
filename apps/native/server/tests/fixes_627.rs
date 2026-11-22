@@ -37,6 +37,7 @@ fn fixture() -> Fixture {
         save_lane: Arc::new(tokio::sync::Mutex::new(())),
         file_lane: Arc::new(tokio::sync::Mutex::new(())),
         shutdown: rx,
+        running: Default::default(),
     };
     Fixture { dir, ctx }
 }
