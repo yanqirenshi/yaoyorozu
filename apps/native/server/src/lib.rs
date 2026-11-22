@@ -14,6 +14,7 @@ pub mod progress;
 pub mod redact;
 pub mod rpc;
 pub mod running;
+pub mod session_ids;
 pub mod signals;
 pub mod state;
 pub mod watcher;

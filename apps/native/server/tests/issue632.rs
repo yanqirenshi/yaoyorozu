@@ -203,3 +203,70 @@ fn the_watch_sees_only_files_evacuated_after_it_started() {
     assert_ne!(names[0], "git-ledger.json.corrupt.1");
     assert!(watch.message(&names[0]).contains("git-ledger.json"));
 }
+
+// --- 8. 会話 ID は小文字にそろえる(入口・控え・アーカイブの印) ---
+
+const UPPER_ID: &str = "0A1B2C3D-1111-4222-8333-444455556666";
+
+#[tokio::test]
+async fn archive_marks_are_written_and_compared_in_lowercase() {
+    let f = fixture();
+    // 大文字の ID で archive しても、印は小文字で 1 つだけ。
+    let (status, _) = call(
+        &f.ctx,
+        "archive_session",
+        serde_json::json!({"project": "proj1", "sessionId": UPPER_ID}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let marks: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(f.dir.path().join("archived-sessions.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        marks["session_ids"],
+        serde_json::json!([UPPER_ID.to_ascii_lowercase()])
+    );
+    // 小文字・大文字のどちらで外しても、外れる。
+    let (status, _) = call(
+        &f.ctx,
+        "unarchive_session",
+        serde_json::json!({"project": "proj1", "sessionId": UPPER_ID}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let marks: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(f.dir.path().join("archived-sessions.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(marks["session_ids"], serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn an_existing_uppercase_row_is_normalized_and_merged_when_the_ledger_is_read() {
+    let f = fixture();
+    std::fs::write(
+        f.dir.path().join("archived-sessions.json"),
+        format!(
+            r#"{{"version":1,"session_ids":["{UPPER_ID}","{}"]}}"#,
+            UPPER_ID.to_ascii_lowercase()
+        ),
+    )
+    .unwrap();
+    // 小文字の ID で印を付け直しても、1 行のまま(大文字の行が残って、小文字の行が足されない)。
+    let (status, _) = call(
+        &f.ctx,
+        "archive_session",
+        serde_json::json!({"project": "proj1", "sessionId": UPPER_ID.to_ascii_lowercase()}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let marks: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(f.dir.path().join("archived-sessions.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        marks["session_ids"],
+        serde_json::json!([UPPER_ID.to_ascii_lowercase()])
+    );
+}

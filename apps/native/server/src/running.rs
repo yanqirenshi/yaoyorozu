@@ -168,10 +168,14 @@ where
     let path = ctx.data_dir.join("running-sessions.json");
     let _lane = ctx.running.store_lane.lock().await;
     let watch = crate::corruption::Watch::start(&ctx.data_dir, "running-sessions.json");
-    let result =
-        tokio::task::spawn_blocking(move || change(&FileRestorableRunningSessionsStore::new(path)))
-            .await
-            .unwrap_or_else(|_| Err(background_failed()));
+    let data_dir = ctx.data_dir.as_ref().clone();
+    let result = tokio::task::spawn_blocking(move || {
+        // 読む前に、大文字を含む会話 ID を小文字にそろえる(同じ会話の行は 1 行にまとめる)。
+        crate::session_ids::normalize_stores(&data_dir);
+        change(&FileRestorableRunningSessionsStore::new(path))
+    })
+    .await
+    .unwrap_or_else(|_| Err(background_failed()));
     watch.report(ctx).await;
     if let Err(e) = result {
         eprintln!("{what}に失敗しました: {e}");
@@ -187,9 +191,13 @@ where
     let path = ctx.data_dir.join("archived-sessions.json");
     let _lane = ctx.running.store_lane.lock().await;
     let watch = crate::corruption::Watch::start(&ctx.data_dir, "archived-sessions.json");
-    let result = tokio::task::spawn_blocking(move || change(&FileArchivedSessionsStore::new(path)))
-        .await
-        .unwrap_or_else(|_| Err(background_failed()));
+    let data_dir = ctx.data_dir.as_ref().clone();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::session_ids::normalize_stores(&data_dir);
+        change(&FileArchivedSessionsStore::new(path))
+    })
+    .await
+    .unwrap_or_else(|_| Err(background_failed()));
     watch.report(ctx).await;
     result
 }
@@ -577,7 +585,7 @@ async fn prepare_start_worktree(
 
 /// 会話 ID の正規の形(小文字)。比べる・控えに書く・claude へ渡すときは、すべてこの値を使う。
 fn canonical_session_id(session_id: &str) -> String {
-    session_id.to_ascii_lowercase()
+    crate::session_ids::canonical(session_id)
 }
 
 /// 再開する会話の作業フォルダ(cwd)が、リポジトリの外のときの文面(フルパスは入れない)。
@@ -743,8 +751,14 @@ pub async fn start_running_session(
         ..
     } = &request
     {
-        match ensure_resume_target_in_project(ctx, &root, project, session_id, repository.as_deref())
-            .await
+        match ensure_resume_target_in_project(
+            ctx,
+            &root,
+            project,
+            session_id,
+            repository.as_deref(),
+        )
+        .await
         {
             Ok(real) => verified_cwd = Some(real),
             Err(e) => {
@@ -992,7 +1006,9 @@ pub fn start_restoring_running_sessions(ctx: AppContext) {
             crate::corruption::Watch::start(&ctx.data_dir, "running-sessions.json"),
             crate::corruption::Watch::start(&ctx.data_dir, "archived-sessions.json"),
         ];
+        let data_dir = ctx.data_dir.as_ref().clone();
         let entries = tokio::task::spawn_blocking(move || {
+            crate::session_ids::normalize_stores(&data_dir);
             let archived =
                 app::load_archived_sessions(&FileArchivedSessionsStore::new(archived_path))?;
             app::sessions_to_restore(
@@ -1180,7 +1196,8 @@ pub async fn stop_running_sessions_for(ctx: &AppContext, session_id: &str) {
             .running_sessions
             .iter()
             .filter(|slot| {
-                slot.session.base.session_id == session_id
+                crate::session_ids::canonical(&slot.session.base.session_id)
+                    == crate::session_ids::canonical(session_id)
                     && slot.session.process_state != ProcessState::Exited
             })
             .map(|slot| (slot.session.clone(), slot.process.clone()))

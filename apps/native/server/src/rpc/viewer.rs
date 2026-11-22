@@ -78,7 +78,9 @@ pub async fn list_sessions(
     let archived_path = ctx.data_dir.join("archived-sessions.json");
     let project = args.project.clone();
     let watch = crate::corruption::Watch::start(&ctx.data_dir, "archived-sessions.json");
+    let data_dir = ctx.data_dir.as_ref().clone();
     let (list, skipped) = blocking(move || {
+        crate::session_ids::normalize_stores(&data_dir);
         let source = infra::FileSystemRepository::new(root);
         // 壊れた・読めない会話ファイルは飛ばして、残りを返す(1 つで一覧全体が失敗しない)。
         let listed = app::list_sessions_lenient(&source, &args.project)?;
@@ -88,7 +90,7 @@ pub async fn list_sessions(
             .sessions
             .into_iter()
             .map(|session| {
-                let is_archived = archived.is_archived(&session.id);
+                let is_archived = archived.is_archived(&crate::session_ids::canonical(&session.id));
                 let mut dto = SessionSummaryDto::from(session);
                 dto.archived = is_archived;
                 dto
