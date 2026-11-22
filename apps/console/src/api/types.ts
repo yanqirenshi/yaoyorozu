@@ -42,7 +42,7 @@ export type PingEvent = {
   n: number;
 };
 
-// 設定の保存(`update_settings`)の入力。対象はアクティブ(または指定)プロファイルの 3 項目 +
+// 設定の保存(`update_settings`)の入力。対象は指定したプロファイル(必須)の 3 項目 +
 // グローバル項目の `claude_projects_dir`。`apps/native/react/src/api/types.ts` と同じ。
 export type SettingsInputDto = {
   repository_path: string | null;

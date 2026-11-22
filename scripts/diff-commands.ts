@@ -95,6 +95,11 @@ function status(name: string, built: Set<string>, notBuilt: Set<string>) {
   if (notBuilt.has(name)) return "作らない";
   return built.has(name) ? "実装済み" : "まだ";
 }
+// Tauri 版との、引数・動きの違い(command 名の突き合わせでは見えないもの)。
+const DIFFERENCES: [string, string][] = [
+  ["update_settings", "`profileId` は必須(省略・null は 400。アクティブへは保存しない。削除済みなら 404)。`expectedRevision` も必須(古ければ 409)"],
+];
+
 const mark = (b: boolean) => (b ? "○" : "―");
 
 let missing = 0;
@@ -113,6 +118,9 @@ const apiNotInServer = [...consoleCommands].filter((c) => !serverCommands.has(c)
 const serverNotInApi = [...serverCommands].filter((c) => !consoleCommands.has(c));
 lines.push(`フロント api にあるがサーバに無い command: ${apiNotInServer.length ? apiNotInServer.join("、") : "なし"}`);
 lines.push(`サーバにあるがフロント api に無い command: ${serverNotInApi.length ? serverNotInApi.join("、") : "なし"}`);
+
+lines.push("", "Tauri 版との違い:");
+for (const [name, text] of DIFFERENCES) lines.push(`- ${name}: ${text}`);
 
 const eventList = [...tauriEvents].sort();
 lines.push("", `### イベント(Tauri ${eventList.length} 種)`, "");

@@ -37,6 +37,7 @@ async function main() {
       selected_project_folders: [],
       claude_projects_dir: slash(projects),
     },
+    profileId: settings.json.active_profile_id,
     expectedRevision: settings.json.revision,
   });
   check("設定(リポジトリ・会話フォルダ)の保存", upd.status === 200, upd.text);

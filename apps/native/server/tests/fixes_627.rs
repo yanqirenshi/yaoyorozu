@@ -52,6 +52,10 @@ async fn call(
     if command == "update_settings" && body.get("expectedRevision").is_none() {
         body["expectedRevision"] = serde_json::json!(ctx.state.lock().await.settings.revision);
     }
+    // 保存先のプロファイルが無い呼び出しには、いまのアクティブを補う(省略のテストは `"profileId": null` で明示する)。
+    if command == "update_settings" && body.get("profileId").is_none() {
+        body["profileId"] = serde_json::json!(ctx.state.lock().await.settings.active_profile_id);
+    }
     let req = Request::builder()
         .method("POST")
         .uri(format!("/rpc/{command}"))
@@ -157,7 +161,8 @@ async fn an_update_based_on_an_old_revision_is_refused_and_does_not_revert_other
 }
 
 #[tokio::test]
-async fn expected_revision_is_required_and_profile_operations_advance_the_revision() {
+async fn expected_revision_and_profile_id_are_required_and_profile_operations_do_not_advance_the_revision(
+) {
     let f = fixture();
     let (status, body) = call(
         &f.ctx,
@@ -168,59 +173,87 @@ async fn expected_revision_is_required_and_profile_operations_advance_the_revisi
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["code"], "invalid_input");
 
-    let r = revision(&f.ctx).await;
+    // 保存先(profileId)の省略・null は 400(「アクティブへ保存する」動きは無い)。
+    let r0 = revision(&f.ctx).await;
+    for profile_id in [serde_json::Value::Null] {
+        let (status, body) = call(
+            &f.ctx,
+            "update_settings",
+            serde_json::json!({"input": input(None, None), "profileId": profile_id, "expectedRevision": r0}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["code"], "invalid_input");
+    }
+    let original = f.ctx.state.lock().await.settings.active_profile_id.clone();
+
+    // プロファイルの操作(作成・改名・切替・削除)は、どれも版を進めない(別タブの保存を 409 にしない)。
     let (_, created) = call(&f.ctx, "create_profile", serde_json::json!({"name": "x"})).await;
-    let r_create = revision(&f.ctx).await;
-    assert!(r_create > r);
     let id = created["id"].as_str().unwrap().to_string();
+    assert_eq!(revision(&f.ctx).await, r0, "作成");
     call(
         &f.ctx,
         "rename_profile",
         serde_json::json!({"profileId": id, "name": "y"}),
     )
     .await;
-    let r_rename = revision(&f.ctx).await;
-    // 改名は版を進めない(進めると、設定画面の更新が不要に 409 になる)。
-    assert_eq!(r_rename, r_create);
-    // いまアクティブのプロファイルへの切替(何も変わらない)は、版を進めない。
+    assert_eq!(revision(&f.ctx).await, r0, "改名");
     call(
         &f.ctx,
         "switch_profile",
         serde_json::json!({"profileId": id}),
     )
     .await;
-    assert_eq!(revision(&f.ctx).await, r_rename);
-    let (_, other) = call(&f.ctx, "create_profile", serde_json::json!({"name": "z"})).await;
-    let other = other["id"].as_str().unwrap().to_string();
-    let r_other = revision(&f.ctx).await;
-    assert!(r_other > r_rename, "作成はアクティブが変わるので進む");
-    // アクティブでないプロファイルの削除は、版を進めない。
-    call(
+    assert_eq!(revision(&f.ctx).await, r0, "切替");
+
+    // 前の版のままの別タブの保存は、切替・作成のあとでも 200 で、もとのプロファイルへ書かれる。
+    let (status, body) = call(
         &f.ctx,
-        "delete_profile",
-        serde_json::json!({"profileId": id}),
+        "update_settings",
+        serde_json::json!({
+            "input": input(Some("C:/repo-original"), None),
+            "profileId": original, "expectedRevision": r0
+        }),
     )
     .await;
-    assert_eq!(revision(&f.ctx).await, r_other);
-    // 別のプロファイルへの切替は(保存先の既定が変わるので)進む。
-    let (_, third) = call(&f.ctx, "create_profile", serde_json::json!({"name": "w"})).await;
-    let third = third["id"].as_str().unwrap().to_string();
-    let r_third = revision(&f.ctx).await;
-    call(
-        &f.ctx,
-        "switch_profile",
-        serde_json::json!({"profileId": other}),
-    )
-    .await;
-    assert!(revision(&f.ctx).await > r_third);
+    assert_eq!(status, StatusCode::OK, "{body}");
+    {
+        let guard = f.ctx.state.lock().await;
+        let find = |pid: &str| {
+            guard
+                .settings
+                .profiles
+                .iter()
+                .find(|p| p.id == pid)
+                .unwrap()
+                .repository_path
+                .clone()
+        };
+        assert_eq!(
+            find(&original).map(|p| p.display().to_string().replace('\\', "/")),
+            Some("C:/repo-original".to_string())
+        );
+        assert_eq!(find(&id), None, "いまアクティブのほうへは書かれない");
+    }
+
     // プロファイルの操作は ID で対象を指すので、版の指定は要らない(古い版でも通る)。
+    // 編集中のプロファイルが削除されていたら、別のプロファイルへ書かず 404。
     let (status, _) = call(
         &f.ctx,
         "delete_profile",
-        serde_json::json!({"profileId": third}),
+        serde_json::json!({"profileId": id}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+    let r1 = revision(&f.ctx).await;
+    let (status, body) = call(
+        &f.ctx,
+        "update_settings",
+        serde_json::json!({"input": input(Some("C:/repo-deleted"), None), "profileId": id, "expectedRevision": r1}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["code"], "not_found");
 }
 
 // --- 2. エラーの文面にフルパスを出さない ---

@@ -91,6 +91,7 @@ pub async fn get_settings(
 #[serde(rename_all = "camelCase")]
 pub struct UpdateSettingsArgs {
     input: SettingsInputDto,
+    /// 保存先のプロファイル。必須(省略・null は 400。「アクティブへ保存する」動きは、この構成には無い)。
     profile_id: Option<String>,
     /// どの版の設定を元にした変更か(`get_settings` の `revision`)。必須。今の版と違えば 409。
     expected_revision: Option<u64>,
@@ -113,6 +114,12 @@ pub async fn update_settings(
             "expectedRevision(どの版を元にした変更か)を指定してください",
         ));
     };
+    let Some(target_id) = args.profile_id else {
+        return Err(ApiError::new(
+            "invalid_input",
+            "profileId(どのプロファイルへの保存か)を指定してください",
+        ));
+    };
     let input = args.input;
     // 保存するパスは、状態に触る前に検証する(不正なら何も変えずに 400)。
     let repository_path = optional_folder(input.repository_path)?;
@@ -131,9 +138,6 @@ pub async fn update_settings(
             ));
         }
         let mut candidate = guard.settings.clone();
-        let target_id = args
-            .profile_id
-            .unwrap_or_else(|| candidate.active_profile_id.clone());
         let Some(profile) = candidate.profiles.iter_mut().find(|p| p.id == target_id) else {
             return Err(ApiError::new(
                 "not_found",
@@ -180,16 +184,10 @@ async fn change_settings<T>(
     let extra = {
         let mut guard = ctx.state.lock().await;
         let (mut updated, extra) = change(&guard.settings)?;
-        // 版は、`update_settings` が確かめる欄が変わるときだけ進める。この流れの操作(切替・作成・削除・
-        // 名前の変更)は、どのプロファイルの欄(リポジトリ・GitHub・フォルダ)にも触れない。変わりうるのは、
-        // `profileId` を省いたときの保存先(アクティブなプロファイル)だけなので、アクティブが変わったときに限って
-        // 進める(自分のタブの名前変更や、アクティブでないプロファイルの削除のあとに、別タブの保存が 409 にならない)。
-        // あふれない足し算にする(`revision` は人が手で書けるファイルの値。上限のままでも落ちない)。
-        updated.revision = if updated.active_profile_id != guard.settings.active_profile_id {
-            guard.settings.revision.saturating_add(1)
-        } else {
-            guard.settings.revision
-        };
+        // この流れの操作(切替・作成・削除・名前の変更)は、`update_settings` が確かめる欄(どのプロファイルの
+        // リポジトリ・GitHub・フォルダも)を変えない。保存先は `profileId` で必ず指すので、アクティブが変わっても
+        // 版は進めない(別タブの切替で、開いたままの設定画面の保存が 409 にならない)。
+        updated.revision = guard.settings.revision;
         guard.settings = updated;
         extra
     };
@@ -209,7 +207,7 @@ pub async fn switch_profile(
     body: Bytes,
 ) -> Result<Json<()>, ApiError> {
     let args: ProfileIdRequired = parse_args(&body)?;
-    // アクティブが変わるときだけ版が進む(`change_settings`)。
+    // 版は進めない(`change_settings`)。
     change_settings(&ctx, |s| {
         Ok((app::switch_profile(s, &args.profile_id)?, ()))
     })
@@ -227,7 +225,7 @@ pub async fn create_profile(
     body: Bytes,
 ) -> Result<Json<ProfileSummaryDto>, ApiError> {
     let args: CreateProfileArgs = parse_args(&body)?;
-    // 作ったプロファイルがアクティブになるので、版が進む(`change_settings`)。
+    // 作ったプロファイルがアクティブになる(版は進めない。`change_settings`)。
     let created = change_settings(&ctx, |s| {
         let (updated, created) = app::create_profile_checked(s, args.name)?;
         Ok((updated, created))
@@ -263,7 +261,7 @@ pub async fn rename_profile(
     body: Bytes,
 ) -> Result<Json<()>, ApiError> {
     let args: RenameProfileArgs = parse_args(&body)?;
-    // 名前だけの変更。アクティブは変わらないので、版は進まない。
+    // 名前だけの変更。版は進めない。
     change_settings(&ctx, |s| {
         Ok((app::rename_profile(s, &args.profile_id, &args.name)?, ()))
     })

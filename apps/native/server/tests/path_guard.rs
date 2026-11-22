@@ -58,6 +58,10 @@ async fn call(
     if command == "update_settings" && body.get("expectedRevision").is_none() {
         body["expectedRevision"] = serde_json::json!(ctx.state.lock().await.settings.revision);
     }
+    // 保存先のプロファイルが無い呼び出しには、いまのアクティブを補う(省略のテストは `"profileId": null` で明示する)。
+    if command == "update_settings" && body.get("profileId").is_none() {
+        body["profileId"] = serde_json::json!(ctx.state.lock().await.settings.active_profile_id);
+    }
     let req = Request::builder()
         .method("POST")
         .uri(format!("/rpc/{command}"))
