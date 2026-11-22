@@ -27,6 +27,7 @@ import {
   saveProjectSettingsFile,
 } from "@/api";
 import type { MessageDto, SessionSummaryDto } from "@/api";
+import { createCoalescedRunner } from "./coalescedRunner";
 import ClaudeMdEditor from "./ClaudeMdEditor";
 import type { ClaudeMdEditorHandle } from "./ClaudeMdEditor";
 import { createClaudeMdDockItems } from "./claudeMdDockItems";
@@ -48,6 +49,9 @@ import { PANE_VIEWS } from "./viewerNav";
 import type { PaneView, ViewerNav } from "./viewerNav";
 
 const PAGE_SIZE = 50;
+
+// `session:changed` で取り直す最短の間隔(ミリ秒)。
+const SESSION_CHANGED_MIN_INTERVAL_MS = 1000;
 
 type SessionGroup = {
   folder: string;
@@ -231,15 +235,21 @@ function SessionsPage({ nav }: SessionsPageProps) {
   // 会話ファイルが増えた・変わったとき(`session:changed`)。一覧と、表示中の会話を取り直す。
   // 画面を離れたとき・unmount のときに必ず購読を外す。
   useEffect(() => {
-    const unlistenPromise = onSessionChanged(({ project }) => {
-      if (targetFolders.includes(project)) {
-        void loadSessionGroups(targetFolders);
+    // 書き込みが続く会話では、通知が 0.1 秒ごとに来る。取り直し中に来た通知はまとめて 1 回にし、
+    // 取り直しの開始は最短 1 秒あける(`coalescedRunner.ts`)。
+    const runner = createCoalescedRunner<string>(async (projects) => {
+      const jobs: Promise<unknown>[] = [];
+      if ([...projects].some((p) => targetFolders.includes(p))) {
+        jobs.push(loadSessionGroups(targetFolders));
       }
-      if (project === projectParam && sessionParam) {
-        void refreshSessionInPlace(project, sessionParam);
+      if (projectParam && sessionParam && projects.has(projectParam)) {
+        jobs.push(refreshSessionInPlace(projectParam, sessionParam));
       }
-    });
+      await Promise.all(jobs);
+    }, SESSION_CHANGED_MIN_INTERVAL_MS);
+    const unlistenPromise = onSessionChanged(({ project }) => runner.trigger(project));
     return () => {
+      runner.cancel();
       void unlistenPromise.then((unlisten) => unlisten());
     };
   }, [targetFolders, projectParam, sessionParam, loadSessionGroups, refreshSessionInPlace]);

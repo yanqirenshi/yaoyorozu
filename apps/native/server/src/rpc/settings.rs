@@ -83,6 +83,7 @@ pub async fn get_settings(
             .map(|p| p.display().to_string()),
         effective_projects_dir: effective,
         restore_running_sessions: settings.restore_running_sessions,
+        revision: settings.revision,
     }))
 }
 
@@ -91,13 +92,27 @@ pub async fn get_settings(
 pub struct UpdateSettingsArgs {
     input: SettingsInputDto,
     profile_id: Option<String>,
+    /// どの版の設定を元にした変更か(`get_settings` の `revision`)。必須。今の版と違えば 409。
+    expected_revision: Option<u64>,
+}
+
+/// `update_settings` の応答。保存後の版(次の保存に使える)。
+#[derive(serde::Serialize)]
+pub struct UpdateSettingsResultDto {
+    pub revision: u64,
 }
 
 pub async fn update_settings(
     State(ctx): State<AppContext>,
     body: Bytes,
-) -> Result<Json<()>, ApiError> {
+) -> Result<Json<UpdateSettingsResultDto>, ApiError> {
     let args: UpdateSettingsArgs = parse_args(&body)?;
+    let Some(expected_revision) = args.expected_revision else {
+        return Err(ApiError::new(
+            "invalid_input",
+            "expectedRevision(どの版を元にした変更か)を指定してください",
+        ));
+    };
     let input = args.input;
     // 保存するパスは、状態に触る前に検証する(不正なら何も変えずに 400)。
     let repository_path = optional_folder(input.repository_path)?;
@@ -108,6 +123,13 @@ pub async fn update_settings(
     // 状態を書き換えないまま抜ける(無効な値をメモリ上に残さない)。
     let (to_persist, projects_dir_changed) = {
         let mut guard = ctx.state.lock().await;
+        // 古い版を元にした保存は断る(別のタブが変えた別の欄を、古い値で黙って戻さないため)。
+        if guard.settings.revision != expected_revision {
+            return Err(ApiError::new(
+                "settings_conflict",
+                "設定がほかで変更されています。取り直してからやり直してください",
+            ));
+        }
         let mut candidate = guard.settings.clone();
         let target_id = args
             .profile_id
@@ -127,6 +149,7 @@ pub async fn update_settings(
             candidate.restore_running_sessions = restore;
         }
         app::validate_settings(&candidate)?;
+        candidate.revision += 1;
 
         let projects_dir_changed =
             guard.settings.claude_projects_dir != candidate.claude_projects_dir;
@@ -143,7 +166,9 @@ pub async fn update_settings(
         }
     }
     ctx.events.emit("settings:updated", &());
-    Ok(Json(()))
+    Ok(Json(UpdateSettingsResultDto {
+        revision: to_persist.revision,
+    }))
 }
 
 /// 設定を変える共通の流れ(ロック → 更新 → 解放 → 永続化 → イベント)。`change` は新しい設定と、
@@ -154,7 +179,9 @@ async fn change_settings<T>(
 ) -> Result<T, ApiError> {
     let extra = {
         let mut guard = ctx.state.lock().await;
-        let (updated, extra) = change(&guard.settings)?;
+        let (mut updated, extra) = change(&guard.settings)?;
+        // 保存のたびに版を進める(プロファイルの操作も。対象を ID で指す操作なので版の確かめは要らない)。
+        updated.revision = guard.settings.revision + 1;
         guard.settings = updated;
         extra
     };
@@ -265,7 +292,7 @@ pub struct CheckFolderArgs {
 /// 絶対パスだけを受け付け、`..` や `:`(代替データストリーム)を含む形は拒否する。
 pub async fn check_folder(body: Bytes) -> Result<Json<FolderCheckDto>, ApiError> {
     let args: CheckFolderArgs = parse_args(&body)?;
-    let path = app::validate_folder_path(&args.path)?;
+    let path = crate::folders::guard_folder_path(&args.path)?;
     let dto = blocking(move || {
         let meta = std::fs::metadata(&path).ok();
         let is_dir = meta.as_ref().is_some_and(|m| m.is_dir());
@@ -281,10 +308,10 @@ pub async fn check_folder(body: Bytes) -> Result<Json<FolderCheckDto>, ApiError>
 }
 
 /// 保存するパス(任意)を検証する。`None`・空白だけは「未設定」として許す(今の仕様)。それ以外は
-/// 画面の「パスの確認」(`check_folder`)と同じ規則(`app::validate_folder_path`)で断る。
+/// 画面の「パスの確認」(`check_folder`)と同じ規則(`app::validate_folder_path`)に、ドライブの種類(ネットワークのドライブを断る。`folders.rs`)を加えて断る。
 fn optional_folder(raw: Option<String>) -> Result<Option<PathBuf>, ApiError> {
     match raw.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
         None => Ok(None),
-        Some(text) => Ok(Some(app::validate_folder_path(text)?)),
+        Some(text) => Ok(Some(crate::folders::guard_folder_path(text)?)),
     }
 }

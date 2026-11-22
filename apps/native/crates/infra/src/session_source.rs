@@ -554,6 +554,44 @@ impl SessionSource for FileSystemRepository {
             .collect()
     }
 
+    fn list_sessions_lenient(
+        &self,
+        project: &str,
+    ) -> Result<(Vec<SessionSummary>, Vec<String>), AppError> {
+        let project_dir = self.projects_dir.join(project);
+        let mut sessions = Vec::new();
+        let mut skipped = Vec::new();
+        for path in session_files_by_recency(&project_dir) {
+            let modified_at_ms = to_millis(fs::metadata(&path).and_then(|m| m.modified()));
+            match cached_or_scanned_summary(&path, modified_at_ms) {
+                Ok(scanned) => sessions.push(SessionSummary {
+                    id: scanned.id,
+                    title: scanned.title,
+                    custom_title: scanned
+                        .custom_title
+                        .map(|t| t.trim().to_string())
+                        .filter(|t| !t.is_empty()),
+                    modified_at_ms,
+                    cwd: scanned.cwd,
+                    git_branch: scanned.git_branch,
+                }),
+                Err(e) => {
+                    // 詳しい理由(パスを含む)はログへ。画面にはファイル名だけを知らせる。
+                    eprintln!(
+                        "会話ファイルを読めないため一覧から飛ばしました: {} ({e:?})",
+                        path.display()
+                    );
+                    skipped.push(
+                        path.file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default(),
+                    );
+                }
+            }
+        }
+        Ok((sessions, skipped))
+    }
+
     fn list_parsed_sessions(&self, project: &str) -> Result<Vec<ParsedSession>, AppError> {
         // `list_sessions`と同じキャッシュ(`cached_or_scanned_summary`)に
         // 相乗りし、jsonlのフルパースをもう1周増やさない(issue #197/#208)。
@@ -1317,6 +1355,35 @@ mod tests {
 
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].cwd.as_deref(), Some(WORKTREE_CWD));
+    }
+
+    #[test]
+    fn list_sessions_lenient_skips_broken_files_and_returns_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        fs::write(
+            project_dir.join("good.jsonl"),
+            r#"{"type":"user","sessionId":"good","cwd":"/repo","message":{"content":"hello"}}"#,
+        )
+        .unwrap();
+        // セッション ID が取れない(中身が壊れている)ファイル。
+        fs::write(
+            project_dir.join("broken.jsonl"),
+            "これは JSON ではない\n{ 壊れ",
+        )
+        .unwrap();
+        fs::write(project_dir.join("binary.jsonl"), [0xff, 0xfe, 0x00, 0x80]).unwrap();
+
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        // 従来の一覧は、壊れたファイルが 1 つあると全体が失敗する。
+        assert!(repo.list_sessions("proj").is_err());
+        // 壊れたファイルを飛ばして、残りを返す。飛ばしたのはファイル名だけ(パスではない)。
+        let (sessions, mut skipped) = repo.list_sessions_lenient("proj").unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, "good");
+        skipped.sort();
+        assert_eq!(skipped, vec!["binary.jsonl", "broken.jsonl"]);
     }
 
     #[test]

@@ -206,6 +206,9 @@ function ProfileSettingsPane({
   // 最後に読み込んだ対象プロファイル。対象そのものが変わったとき(切替・削除)は、入力中の内容は
   // 別のプロファイルのものなので、取り直しの結果で置き換える。
   const loadedTargetRef = useRef<string | null>(null);
+  // 入力の元にした設定の版。取り直して入力へ反映したときだけ更新する(未保存の入力を守って取り直しを
+  // 見送ったときは更新しない。そのまま保存すると、サーバが 409 で断る)。
+  const loadedRevisionRef = useRef<number | null>(null);
 
   // 対象プロファイルの内容を取り直す。自分自身の操作(名前変更)の直後と、他画面からの変更
   // (`settings:updated`)・つなぎ直し(`refreshToken`)の両方で使う。
@@ -227,6 +230,7 @@ function ProfileSettingsPane({
           setRestoreRunningSessions(settings.restore_running_sessions);
           setGithubProject(settings.github_project);
           setSelectedProjectFolders(settings.selected_project_folders);
+          loadedRevisionRef.current = settings.revision;
           setBaseline({
             repositoryPath: settings.repository_path ?? "",
             claudeProjectsDir: settings.claude_projects_dir ?? "",
@@ -350,15 +354,21 @@ function ProfileSettingsPane({
         restore_running_sessions: restoreRunningSessions,
       },
       profileId,
+      loadedRevisionRef.current ?? -1,
     )
-      .then(() => {
+      .then((result) => {
         // 保存できた入力を「読み込んだ値」にする(未保存の変更ではなくなる。「ほかで変更されました」も消す)。
         // 失敗したとき(サーバ停止など)は、入力も未保存の状態もそのまま残し、エラーだけを出す。
+        loadedRevisionRef.current = result.revision;
         setBaseline(currentForm);
         clearStale();
         setSaved(true);
       })
-      .catch((e) => setError(isAppError(e) ? e.message : String(e)))
+      .catch((e) => {
+        setError(isAppError(e) ? e.message : String(e));
+        // ほかで変更されていた(古い版を元にした保存)ときは、入力は残したまま、取り直しを促す。
+        if (isAppError(e) && e.code === "settings_conflict") shouldApply();
+      })
       .finally(() => {
         savingRef.current = false;
         setSaving(false);

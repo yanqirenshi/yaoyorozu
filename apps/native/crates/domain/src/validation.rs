@@ -10,6 +10,28 @@ pub fn is_valid_json(content: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(content).is_ok()
 }
 
+/// `content` が JSON として正しく、**最上位がオブジェクト**(`{ … }`)かを判定する。設定ファイル
+/// (`settings.json`・`settings.local.json`)は Claude Code がオブジェクトとして読むため、配列・数値・
+/// 文字列・`null` だけの JSON は書かせない。
+pub fn is_valid_json_object(content: &str) -> bool {
+    matches!(
+        serde_json::from_str::<serde_json::Value>(content),
+        Ok(serde_json::Value::Object(_))
+    )
+}
+
+/// 制御文字(改行・NUL・タブなど)、または「見えない・表示の向きを変える」文字か。
+/// ゼロ幅の文字(U+200B〜U+200F)、双方向の制御(U+202A〜U+202E・U+2066〜U+2069)、
+/// 単語の結合・不可視の演算子(U+2060〜U+2065)、BOM(U+FEFF)。名前やパスに入れると、
+/// 見えない名前・表示の向きを変える名前(`…exe.txt` に見える `…txt.exe` など)を作れてしまう。
+pub fn is_control_or_invisible(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}'
+        )
+}
+
 /// `session_id` がファイルパスの構築に使って安全な形式(英数字とハイフンのみ)
 /// かを検証する。フロントから受け取った値をそのままパスに使わないための
 /// 入力検証(native.md §4。`<フォルダ>/<id>.jsonl` 以外を指せないようにする)。

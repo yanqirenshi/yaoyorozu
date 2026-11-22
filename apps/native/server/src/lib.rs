@@ -6,6 +6,8 @@ pub mod data_files;
 pub mod dto;
 pub mod error;
 pub mod events;
+pub mod folders;
+pub mod redact;
 pub mod rpc;
 pub mod state;
 pub mod watcher;

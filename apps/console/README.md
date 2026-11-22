@@ -136,3 +136,10 @@ CLAUDE.md・Rules・Skills・会話は、clone したリポジトリやエージ
 ```bash
 npm run test --workspace=console    # 無害化のテスト(jsdom)
 ```
+
+## 設定の版と、通知の間引き
+
+- **設定の版**: `getSettings` が返す `revision` を、`updateSettings(input, profileId, expectedRevision)` に渡す(必須)。古ければ 409(`settings_conflict`)で、画面は
+  「ほかで変更されました。取り直してからやり直してください」を出し、**入力は残し**、「取り直す」を促す(`ProfileSettingsPane`。未保存の入力を守って取り直しを見送ったときは、版を更新しない)。
+- **通知の間引き**(`src/coalescedRunner.ts`): `session:changed` のような通知を受けるたびに取り直さない。取り直し中に来た通知は**まとめて 1 回**、取り直しの開始は**最短 1 秒**あける。
+  画面を離れたとき・unmount のときに `cancel()` する。`npm run test --workspace=console` に、時計を差し替えたテストがある。

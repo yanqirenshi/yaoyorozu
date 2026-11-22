@@ -38,7 +38,7 @@ async fn repository_dir_for_profile(
     let repo = app::resolve_repository_dir(&settings, profile_id)?;
     // すでに保存されている値が不正(古い版や手書きで入った相対・UNC・`..` 入りなど)なら、起動は止めず、
     // この値を起点にした読み書きだけを断る(設定画面で直す)。
-    app::validate_folder_path(&repo.to_string_lossy()).map_err(|e| match e {
+    crate::folders::guard_folder_path(&repo.to_string_lossy()).map_err(|e| match e {
         app::AppError::InvalidInput(why) => app::AppError::InvalidInput(format!(
             "保存されている対象リポジトリのパスが不正です(設定で直してください): {why}"
         )),
@@ -76,12 +76,15 @@ pub async fn list_sessions(
     check_project(&args.project)?;
     let root = effective_projects_dir(&ctx).await?;
     let archived_path = ctx.data_dir.join("archived-sessions.json");
-    let list = blocking(move || {
+    let project = args.project.clone();
+    let (list, skipped) = blocking(move || {
         let source = infra::FileSystemRepository::new(root);
-        let sessions = app::list_sessions(&source, &args.project)?;
+        // 壊れた・読めない会話ファイルは飛ばして、残りを返す(1 つで一覧全体が失敗しない)。
+        let listed = app::list_sessions_lenient(&source, &args.project)?;
         let archived =
             app::load_archived_sessions(&infra::FileArchivedSessionsStore::new(archived_path))?;
-        Ok(sessions
+        let sessions = listed
+            .sessions
             .into_iter()
             .map(|session| {
                 let is_archived = archived.is_archived(&session.id);
@@ -89,10 +92,44 @@ pub async fn list_sessions(
                 dto.archived = is_archived;
                 dto
             })
-            .collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        Ok((sessions, listed.skipped_files))
     })
     .await?;
+    notify_skipped_sessions(&ctx, &project, &skipped).await;
     Ok(Json(list))
+}
+
+/// 飛ばした会話ファイルを、画面の警告(`app:warning`)で知らせる。同じ内容を何度も出さない
+/// (一覧は `session:changed` のたびに取り直されるため。控え(`list_pending_warnings`)にも積み、
+/// 画面を開いたあと・つなぎ直したあとにも出る)。
+async fn notify_skipped_sessions(ctx: &AppContext, project: &str, skipped: &[String]) {
+    if skipped.is_empty() {
+        return;
+    }
+    let mut names = skipped.to_vec();
+    names.sort();
+    let shown: Vec<&str> = names.iter().take(5).map(String::as_str).collect();
+    let more = names.len().saturating_sub(shown.len());
+    let message = format!(
+        "{} 件の会話ファイルを読めなかったため、一覧から飛ばしました({project}): {}{}",
+        names.len(),
+        shown.join("、"),
+        if more > 0 {
+            format!(" ほか {more} 件")
+        } else {
+            String::new()
+        }
+    );
+    let pushed = ctx
+        .state
+        .lock()
+        .await
+        .push_warning_once("app:warning", message.clone());
+    if pushed.is_some() {
+        ctx.events
+            .emit("app:warning", &crate::dto::AppWarningEventDto { message });
+    }
 }
 
 #[derive(Deserialize)]

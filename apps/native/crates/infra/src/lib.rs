@@ -6,6 +6,7 @@ mod claude_dir_store;
 mod claude_md_store;
 mod claude_settings_store;
 mod claude_stream_json;
+mod drive_kind;
 mod execution_environment_source;
 mod git_ledger_store;
 mod git_state_source;
@@ -30,11 +31,14 @@ mod web_dev_server;
 mod yyz_scaffold_writer;
 
 pub use archived_sessions_store::FileArchivedSessionsStore;
-pub use atomic_file::write_atomic;
+pub use atomic_file::{
+    is_write_atomic_tmp_name, remove_stale_write_atomic_tmp_files, write_atomic,
+};
 pub use claude_cli_process::ClaudeCliProcessLauncher;
 pub use claude_dir_store::{claude_home_dir, FileClaudeDirStore};
 pub use claude_md_store::FileClaudeMdStore;
 pub use claude_settings_store::FileClaudeSettingsStore;
+pub use drive_kind::{drive_kind, DriveKind};
 pub use execution_environment_source::WindowsExecutionEnvironmentSource;
 pub use git_ledger_store::FileGitLedgerStore;
 pub use git_state_source::SystemGitStateSource;

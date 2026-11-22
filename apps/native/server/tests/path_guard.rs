@@ -52,6 +52,11 @@ async fn call(
     command: &str,
     body: serde_json::Value,
 ) -> (StatusCode, serde_json::Value) {
+    // update_settings は「どの版を元にした変更か」が必須。指定の無い呼び出しには、今の版を補う。
+    let mut body = body;
+    if command == "update_settings" && body.get("expectedRevision").is_none() {
+        body["expectedRevision"] = serde_json::json!(ctx.state.lock().await.settings.revision);
+    }
     let req = Request::builder()
         .method("POST")
         .uri(format!("/rpc/{command}"))

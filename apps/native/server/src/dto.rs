@@ -323,6 +323,9 @@ pub struct SettingsDto {
     pub effective_projects_dir: String,
     /// app の起動時に、前回動かしていた実行中セッションを再開するか(issue #459)。
     pub restore_running_sessions: bool,
+    /// 設定の版(保存のたびに増える番号。この構成だけの項目)。`update_settings` に「どの版を元にした変更か」
+    /// として渡し、古ければ 409(`settings_conflict`)で断る。
+    pub revision: u64,
 }
 
 /// `update_settings` の引数。対象はアクティブプロファイル(3項目)+グローバル
@@ -630,9 +633,16 @@ impl From<app::AppError> for AppErrorDto {
             app::AppError::FileConflict(message) => ("file_conflict", message),
             app::AppError::WorktreeSyncFailed(message) => ("worktree_sync_failed", message),
         };
+        // クライアントへ返す文面から、サーバのパス(ユーザー名・フォルダ構成)を取り除く。エラーを DTO に
+        // する**この 1 か所**で守るので、どの command のエラーも通る(`redact.rs`)。I/O のエラーを
+        // そのまま文面にしない。詳しい内容(フルパスを含む)は、サーバのログ(標準エラー)へ出す。
+        let redacted = crate::redact::redact_paths(&message);
+        if redacted != message {
+            eprintln!("[エラーの詳細] {code}: {message}");
+        }
         Self {
             code: code.to_string(),
-            message,
+            message: redacted,
         }
     }
 }
