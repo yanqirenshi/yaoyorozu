@@ -1,7 +1,7 @@
 // フロントから Rust サーバを呼ぶ唯一の入口。
 // `apps/native/react/src/api/index.ts` と同じ関数名・引数・戻り値で、中身だけを
-// `invoke`/`listen` から `fetch`/`EventSource` に替えている(呼び出し側を変えないため)。
-// コンポーネントから `fetch` / `EventSource` を直接使わない(native.md §3.5 と同旨)。
+// `invoke`/`listen` から `fetch`/`WebSocket` に替えている(呼び出し側を変えないため)。
+// コンポーネントから `fetch` / `WebSocket` を直接使わない(native.md §3.5 と同旨)。
 
 import { listen, openProgressSubscription } from "./events";
 import type {
@@ -414,12 +414,8 @@ export function subscribeRunningSessionProgress(
   target: RunningSessionRefDto,
   onProgress: (progress: AddressedProgressDto, seq: number) => void,
 ): Promise<() => void> {
-  const stop = openProgressSubscription(
-    (connectionId) =>
-      invoke<number>("subscribe_running_session_progress", { target, connectionId }),
-    (subscriptionId, connectionId) =>
-      invoke<void>("unsubscribe_running_session_progress", { subscriptionId, connectionId }),
-    (progress, seq) => onProgress(progress as AddressedProgressDto, seq),
+  const stop = openProgressSubscription(target, (progress, seq) =>
+    onProgress(progress as AddressedProgressDto, seq),
   );
   return Promise.resolve(stop);
 }
