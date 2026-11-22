@@ -137,8 +137,9 @@ pub use subagent_meta::SubagentMeta;
 pub use timestamp::parse_iso_timestamp_to_epoch_ms;
 pub use user::User;
 pub use validation::{
-    is_control_or_invisible, is_valid_claude_dir_path, is_valid_json, is_valid_json_object,
-    is_valid_project_dir_name, is_valid_rule_file_name, is_valid_session_id, is_valid_skill_name,
+    contains_forbidden_invisible_or_control, has_visible_character, is_valid_claude_dir_path,
+    is_valid_json, is_valid_json_object, is_valid_project_dir_name, is_valid_rule_file_name,
+    is_valid_session_id, is_valid_skill_name,
 };
 pub use viewer_target::ViewerTarget;
 pub use window_state::WindowState;

@@ -35,7 +35,7 @@ impl ProfileName {
         if trimmed.is_empty() {
             return Err(ProfileNameError::Empty);
         }
-        if trimmed.chars().any(crate::is_control_or_invisible) {
+        if crate::contains_forbidden_invisible_or_control(trimmed) {
             return Err(ProfileNameError::ControlCharacter);
         }
         if trimmed.chars().count() > MAX_PROFILE_NAME_CHARS {
@@ -102,6 +102,22 @@ mod tests {
             "a\u{2066}b",
             "\u{2060}x",
             "\u{FEFF}name",
+            // 範囲の並べ書きでは抜けていた文字(Unicode の性質で断る)。
+            "a\u{061C}b",
+            "a\u{2028}b",
+            "a\u{2029}b",
+            "\u{3164}",
+            "名\u{3164}前",
+            "a\u{115F}b",
+            "a\u{1160}b",
+            "a\u{FFA0}b",
+            "a\u{00AD}b",
+            "a\u{034F}b",
+            "a\u{E0041}b",
+            // 前後に見える文字が無い ZWJ・ZWNJ・異体字セレクタ。
+            "\u{200D}a",
+            "a\u{200C} b",
+            "\u{FE0F}a",
         ] {
             assert_eq!(
                 ProfileName::parse(bad).unwrap_err(),
@@ -111,6 +127,29 @@ mod tests {
         }
         // 見える文字(絵文字・結合文字を含む日本語)は通る。
         assert!(ProfileName::parse("開発 😀 café").is_ok());
+    }
+
+    #[test]
+    fn allows_zwj_emoji_and_zwnj_language_names() {
+        for ok in [
+            "👨\u{200D}💻 開発",
+            "\u{2764}\u{FE0F}\u{200D}🔥",
+            "می\u{200C}خواهم",
+            "\u{263A}\u{FE0F}",
+            "👩\u{200D}👩\u{200D}👧",
+        ] {
+            assert!(ProfileName::parse(ok).is_ok(), "{ok:?}");
+        }
+    }
+
+    #[test]
+    fn a_name_without_any_visible_character_is_refused() {
+        // 空白だけは、トリム後は空。見えない文字だけは、見えない文字として断る。
+        assert_eq!(
+            ProfileName::parse(" \u{3000} ").unwrap_err(),
+            ProfileNameError::Empty
+        );
+        assert!(ProfileName::parse("\u{3164}\u{200B}").is_err());
     }
 
     #[test]

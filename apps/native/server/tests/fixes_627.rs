@@ -179,7 +179,8 @@ async fn expected_revision_is_required_and_profile_operations_advance_the_revisi
     )
     .await;
     let r_rename = revision(&f.ctx).await;
-    assert!(r_rename > r_create);
+    // 改名は版を進めない(進めると、設定画面の更新が不要に 409 になる)。
+    assert_eq!(r_rename, r_create);
     call(
         &f.ctx,
         "switch_profile",
@@ -335,7 +336,10 @@ async fn a_broken_conversation_file_is_skipped_and_the_rest_is_listed_with_one_w
     )
     .unwrap();
     std::fs::write(proj.join("broken.jsonl"), "壊れた内容\n{ 途中").unwrap();
-    std::fs::write(proj.join("binary.jsonl"), [0xff, 0xfe, 0x00]).unwrap();
+    std::fs::write(proj.join("binary.jsonl"), [0xff, 0xfe, 0x00, b'\n']).unwrap();
+    // 作成の途中(空・1 行目が書きかけ)のファイルは、警告に数えない。
+    std::fs::write(proj.join("empty.jsonl"), "").unwrap();
+    std::fs::write(proj.join("partial.jsonl"), r#"{"type":"user","sess"#).unwrap();
     let (status, _) = call(
         &f.ctx,
         "update_settings",
@@ -374,6 +378,7 @@ async fn a_broken_conversation_file_is_skipped_and_the_rest_is_listed_with_one_w
         "{}",
         ev.data
     );
+    assert!(!ev.data.contains("empty.jsonl") && !ev.data.contains("partial.jsonl"));
     assert!(!ev.data.contains(&forward(f.dir.path())));
     let (_, pending) = call(&f.ctx, "list_pending_warnings", serde_json::json!({})).await;
     assert_eq!(pending.as_array().unwrap().len(), 1);
@@ -389,6 +394,37 @@ async fn a_broken_conversation_file_is_skipped_and_the_rest_is_listed_with_one_w
     assert_eq!(status, StatusCode::OK);
     let (_, pending) = call(&f.ctx, "list_pending_warnings", serde_json::json!({})).await;
     assert_eq!(pending.as_array().unwrap().len(), 1);
+
+    // 閉じた警告は、そのファイルが変わるまで出ない。変わったらまた出る。
+    let id = pending[0]["id"].clone();
+    let (status, _) = call(
+        &f.ctx,
+        "dismiss_pending_warning",
+        serde_json::json!({"id": id}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    call(
+        &f.ctx,
+        "list_sessions",
+        serde_json::json!({"project": "proj1"}),
+    )
+    .await;
+    let (_, pending) = call(&f.ctx, "list_pending_warnings", serde_json::json!({})).await;
+    assert_eq!(pending.as_array().unwrap().len(), 0, "閉じた警告が復活した");
+    std::fs::write(proj.join("broken.jsonl"), "また壊れた内容\n{ 途中 2").unwrap();
+    call(
+        &f.ctx,
+        "list_sessions",
+        serde_json::json!({"project": "proj1"}),
+    )
+    .await;
+    let (_, pending) = call(&f.ctx, "list_pending_warnings", serde_json::json!({})).await;
+    assert_eq!(
+        pending.as_array().unwrap().len(),
+        1,
+        "ファイルが変わったので再び出る"
+    );
 }
 
 // --- 6. データフォルダの古い一時ファイルの掃除 ---
@@ -465,7 +501,14 @@ async fn paths_and_names_that_slipped_through_before_are_refused_consistently() 
         assert_eq!(b1["message"], b2["message"], "判定が食い違わない: {bad:?}");
     }
     // 名前(ゼロ幅・向きを変える文字)。
-    for bad in ["\u{200B}", "a\u{200D}b", "\u{202E}gpj.exe", "x\u{2066}"] {
+    for bad in [
+        "\u{200B}",
+        "\u{200D}a",
+        "a\u{200C} b",
+        "\u{202E}gpj.exe",
+        "x\u{2066}",
+        "\u{3164}",
+    ] {
         let (status, body) = call(&f.ctx, "create_profile", serde_json::json!({"name": bad})).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{bad:?}: {body}");
     }

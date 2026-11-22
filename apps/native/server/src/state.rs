@@ -27,6 +27,17 @@ pub fn resolve_effective_projects_dir(settings: &Settings) -> Result<PathBuf, ap
     ))
 }
 
+/// ファイルの状態(更新時刻のミリ秒, サイズ)。変わったかの判定に使う。
+pub type FileFingerprint = (u64, u64);
+
+/// 「飛ばした会話ファイル」の警告 1 件の、対象のファイル。
+#[derive(Clone, Debug)]
+pub struct SkipSource {
+    pub project: String,
+    pub file_name: String,
+    pub fingerprint: FileFingerprint,
+}
+
 pub struct ServerState {
     pub settings: Settings,
     pub save_path: PathBuf,
@@ -36,6 +47,11 @@ pub struct ServerState {
     /// 起動直後に出て取りこぼした警告の控え(`list_pending_warnings`)。
     pub warnings: Vec<PendingWarningDto>,
     pub next_warning_id: u64,
+    /// 「飛ばした会話ファイル」の警告(控えの id → 対象のファイルと、そのときのファイルの状態)。
+    pub skip_sources: HashMap<u64, Vec<SkipSource>>,
+    /// 閉じられた「飛ばした会話ファイル」の警告(プロジェクト, ファイル名 → 閉じたときのファイルの状態)。
+    /// **そのファイルが変わるまで**、同じ警告を出さない。
+    pub dismissed_skips: HashMap<(String, String), FileFingerprint>,
     /// セッションを開いたときに組み立てた `LogLine` のキャッシュ(会話ファイルのパスがキー)。
     pub loaded_log_lines: HashMap<PathBuf, Vec<LogLine>>,
     /// 解析済みメッセージのキャッシュ(issue #350)。ファイルの状態とセットで持つ。
@@ -50,6 +66,8 @@ impl ServerState {
             settings_recovery_pending: recovered_from_corruption,
             warnings: Vec::new(),
             next_warning_id: 1,
+            skip_sources: HashMap::new(),
+            dismissed_skips: HashMap::new(),
             loaded_log_lines: HashMap::new(),
             loaded_messages: HashMap::new(),
         }
@@ -77,6 +95,48 @@ impl ServerState {
             return None;
         }
         Some(self.push_warning(kind, message))
+    }
+
+    /// 「飛ばした会話ファイル」の警告を積む。同じプロジェクトの前の同種の警告は、置き換える(対象が変わるため)。
+    /// 同じ内容がすでにあるときは積まない(`None`)。
+    pub fn push_skip_warning(
+        &mut self,
+        project: &str,
+        message: String,
+        sources: Vec<SkipSource>,
+    ) -> Option<u64> {
+        if self
+            .warnings
+            .iter()
+            .any(|w| w.kind == "app:warning" && w.message == message)
+        {
+            return None;
+        }
+        // 同じプロジェクトの、前の「飛ばした」警告(対象のファイルが変わった・直った)を取り除く。
+        let stale: Vec<u64> = self
+            .skip_sources
+            .iter()
+            .filter(|(_, v)| v.iter().all(|s| s.project == project))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in stale {
+            self.skip_sources.remove(&id);
+            self.warnings.retain(|w| w.id != id);
+        }
+        let id = self.push_warning("app:warning", message);
+        self.skip_sources.insert(id, sources);
+        Some(id)
+    }
+
+    /// 警告を閉じる。「飛ばした会話ファイル」の警告なら、そのファイルが変わるまで同じ警告を出さない。
+    pub fn dismiss_warning(&mut self, id: u64) {
+        self.warnings.retain(|w| w.id != id);
+        if let Some(sources) = self.skip_sources.remove(&id) {
+            for s in sources {
+                self.dismissed_skips
+                    .insert((s.project, s.file_name), s.fingerprint);
+            }
+        }
     }
 
     /// 読み直した会話をキャッシュへ入れる(遅れて終わった古い読みが新しいキャッシュを

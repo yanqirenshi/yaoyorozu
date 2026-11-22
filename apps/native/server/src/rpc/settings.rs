@@ -149,7 +149,7 @@ pub async fn update_settings(
             candidate.restore_running_sessions = restore;
         }
         app::validate_settings(&candidate)?;
-        candidate.revision += 1;
+        candidate.revision = candidate.revision.saturating_add(1);
 
         let projects_dir_changed =
             guard.settings.claude_projects_dir != candidate.claude_projects_dir;
@@ -175,13 +175,21 @@ pub async fn update_settings(
 /// 戻り値に使う値を返す。
 async fn change_settings<T>(
     ctx: &AppContext,
+    advances_revision: bool,
     change: impl FnOnce(&domain::Settings) -> Result<(domain::Settings, T), app::AppError>,
 ) -> Result<T, ApiError> {
     let extra = {
         let mut guard = ctx.state.lock().await;
         let (mut updated, extra) = change(&guard.settings)?;
-        // 保存のたびに版を進める(プロファイルの操作も。対象を ID で指す操作なので版の確かめは要らない)。
-        updated.revision = guard.settings.revision + 1;
+        // 版は、`update_settings` が読み書きする内容(そのプロファイルの設定の欄、対象にするプロファイル
+        // = アクティブ)が変わるときに進める。名前の変更は、`update_settings` の確かめる内容を変えないので進めない
+        // (自分のタブの名前変更のあとに、設定の保存が 409 にならない)。あふれない足し算にする(`revision` は
+        // 人が手で書けるファイルの値。上限のままでも落ちない)。
+        updated.revision = if advances_revision {
+            guard.settings.revision.saturating_add(1)
+        } else {
+            guard.settings.revision
+        };
         guard.settings = updated;
         extra
     };
@@ -201,7 +209,8 @@ pub async fn switch_profile(
     body: Bytes,
 ) -> Result<Json<()>, ApiError> {
     let args: ProfileIdRequired = parse_args(&body)?;
-    change_settings(&ctx, |s| {
+    // アクティブなプロファイルが変わる(`update_settings` の既定の対象が変わる)ので、版を進める。
+    change_settings(&ctx, true, |s| {
         Ok((app::switch_profile(s, &args.profile_id)?, ()))
     })
     .await?;
@@ -218,7 +227,8 @@ pub async fn create_profile(
     body: Bytes,
 ) -> Result<Json<ProfileSummaryDto>, ApiError> {
     let args: CreateProfileArgs = parse_args(&body)?;
-    let created = change_settings(&ctx, |s| {
+    // 作ったプロファイルがアクティブになるので、版を進める。
+    let created = change_settings(&ctx, true, |s| {
         let (updated, created) = app::create_profile_checked(s, args.name)?;
         Ok((updated, created))
     })
@@ -234,7 +244,7 @@ pub async fn delete_profile(
     body: Bytes,
 ) -> Result<Json<()>, ApiError> {
     let args: ProfileIdRequired = parse_args(&body)?;
-    change_settings(&ctx, |s| {
+    change_settings(&ctx, true, |s| {
         Ok((app::delete_profile(s, &args.profile_id)?, ()))
     })
     .await?;
@@ -253,7 +263,8 @@ pub async fn rename_profile(
     body: Bytes,
 ) -> Result<Json<()>, ApiError> {
     let args: RenameProfileArgs = parse_args(&body)?;
-    change_settings(&ctx, |s| {
+    // 名前だけの変更。版は進めない。
+    change_settings(&ctx, false, |s| {
         Ok((app::rename_profile(s, &args.profile_id, &args.name)?, ()))
     })
     .await?;
@@ -278,7 +289,7 @@ pub async fn dismiss_pending_warning(
     body: Bytes,
 ) -> Result<Json<()>, ApiError> {
     let args: DismissArgs = parse_args(&body)?;
-    ctx.state.lock().await.warnings.retain(|w| w.id != args.id);
+    ctx.state.lock().await.dismiss_warning(args.id);
     Ok(Json(()))
 }
 

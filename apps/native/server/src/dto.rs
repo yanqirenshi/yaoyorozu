@@ -453,6 +453,10 @@ pub struct SettingsCorruptedEventDto {
 #[derive(Serialize, Clone)]
 pub struct AppWarningEventDto {
     pub message: String,
+    /// サーバの控え(`list_pending_warnings`)の id(この構成だけの項目)。付いていれば、画面は閉じるとき
+    /// `dismiss_pending_warning` に渡す(渡さないと、控えから積み直されて、閉じても出続ける)。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<u64>,
 }
 
 /// `github_login_start` の戻り値。ユーザーに見せてよいのはこの2項目のみ

@@ -61,6 +61,8 @@ export type SettingsCorruptedEvent = {
 // `app:warning` イベントのペイロード(処理は続くが、利用者に伝えたいこと)。
 export type AppWarningEvent = {
   message: string;
+  // サーバの控えの id(あれば。閉じるとき `dismissPendingWarning` に渡す)。
+  id?: number;
 };
 
 // 起動直後に出て、画面が取りこぼした警告の控え(`list_pending_warnings`。この構成だけの Query)。

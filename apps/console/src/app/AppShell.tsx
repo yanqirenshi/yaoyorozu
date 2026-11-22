@@ -121,15 +121,24 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   // 届いたイベントは、そのまま積む。複数届きうるので一覧にし、利用者が個別に消せる。
   // 同じ文言が既に出ていれば足さない(控えと重なるため)。
   useEffect(() => {
-    const push = (message: string) => {
-      setWarnings((current) =>
-        current.some((w) => w.message === message)
-          ? current
-          : [...current, { key: `event-${eventSeq++}`, serverId: null, message }],
-      );
+    // `id` は、サーバの控えの id(イベントに付いて届く)。付いていれば、閉じるとき控えからも消せる
+    // (消さないと、控えから積み直されて、閉じても出続ける)。
+    const push = (message: string, id?: number) => {
+      setWarnings((current) => {
+        const same = current.find((w) => w.message === message);
+        if (same) {
+          return id !== undefined && same.serverId === null
+            ? current.map((w) => (w === same ? { ...w, serverId: id } : w))
+            : current;
+        }
+        return [
+          ...current,
+          { key: `event-${eventSeq++}`, serverId: id ?? null, message },
+        ];
+      });
     };
     const corrupted = onSettingsCorrupted(({ message }) => push(message));
-    const appWarning = onAppWarning(({ message }) => push(message));
+    const appWarning = onAppWarning(({ message, id }) => push(message, id));
     return () => {
       void corrupted.then((unlisten) => unlisten());
       void appWarning.then((unlisten) => unlisten());
