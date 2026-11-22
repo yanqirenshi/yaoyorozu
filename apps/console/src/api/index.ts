@@ -258,73 +258,84 @@ export function getSessionLineImages(
   return invoke<MessageImageDto[]>("get_session_line_images", { project, sessionId, uuid });
 }
 
+// サーバは、これらの command の `profileId` の省略・null を断る(タブごとに別のプロファイルを開くので、「アクティブ」に頼らない)。
+// 画面がプロファイルを指定せずに開かれている(`/settings`・`/profiles`。`profileId` が null)ときだけ、呼ぶ時点のアクティブの ID を
+// 引いて付ける。プロファイルを指定したタブ(`/profiles/<id>`)は、その ID をそのまま送る。
+async function withProfile(profileId: string | null | undefined): Promise<string> {
+  if (profileId) return profileId;
+  return (await getSettings()).active_profile_id;
+}
+
 // yyz/ の状態を確かめる(副作用なし。issue #547)。repository_path が未設定ならエラー。
-export function getYyzScaffoldStatus(
+export async function getYyzScaffoldStatus(
   profileId?: string | null,
 ): Promise<YyzScaffoldStatusDto> {
   return invoke<YyzScaffoldStatusDto>("get_yyz_scaffold_status", {
-    profileId: profileId ?? null,
+    profileId: await withProfile(profileId),
   });
 }
 
 // yyz/ のうち足りないものだけ作る(既存のファイルは絶対に上書きしない)。
-export function createYyzScaffold(
+export async function createYyzScaffold(
   profileId?: string | null,
 ): Promise<YyzScaffoldStatusDto> {
   return invoke<YyzScaffoldStatusDto>("create_yyz_scaffold", {
-    profileId: profileId ?? null,
+    profileId: await withProfile(profileId),
   });
 }
 
 // ビューアの CLAUDE.md / Rules / Skills / settings 系は、対象リポジトリを backend が
 // プロファイルの `repository_path` から解決する(パスは渡さない。issue #269)。
-export function getProjectClaudeMd(profileId: string | null): Promise<ClaudeMdDto> {
-  return invoke<ClaudeMdDto>("get_project_claude_md", { profileId });
+export async function getProjectClaudeMd(profileId: string | null): Promise<ClaudeMdDto> {
+  return invoke<ClaudeMdDto>("get_project_claude_md", { profileId: await withProfile(profileId) });
 }
 
-export function saveProjectClaudeMd(
+export async function saveProjectClaudeMd(
   profileId: string | null,
   content: string,
   expectedModifiedAtMs: number | null,
 ): Promise<void> {
   return invoke<void>("save_project_claude_md", {
-    profileId,
+    profileId: await withProfile(profileId),
     content,
     expectedModifiedAtMs,
   });
 }
 
-export function listRules(profileId: string | null): Promise<RuleSummaryDto[]> {
-  return invoke<RuleSummaryDto[]>("list_rules", { profileId });
+export async function listRules(profileId: string | null): Promise<RuleSummaryDto[]> {
+  return invoke<RuleSummaryDto[]>("list_rules", { profileId: await withProfile(profileId) });
 }
 
-export function getRule(profileId: string | null, fileName: string): Promise<RuleDto> {
-  return invoke<RuleDto>("get_rule", { profileId, fileName });
+export async function getRule(profileId: string | null, fileName: string): Promise<RuleDto> {
+  return invoke<RuleDto>("get_rule", { profileId: await withProfile(profileId), fileName });
 }
 
-export function listSkills(profileId: string | null): Promise<SkillSummaryDto[]> {
-  return invoke<SkillSummaryDto[]>("list_skills", { profileId });
+export async function listSkills(profileId: string | null): Promise<SkillSummaryDto[]> {
+  return invoke<SkillSummaryDto[]>("list_skills", { profileId: await withProfile(profileId) });
 }
 
-export function getSkill(profileId: string | null, name: string): Promise<SkillDto> {
-  return invoke<SkillDto>("get_skill", { profileId, name });
+export async function getSkill(profileId: string | null, name: string): Promise<SkillDto> {
+  return invoke<SkillDto>("get_skill", { profileId: await withProfile(profileId), name });
 }
 
-export function getProjectSettingsFile(
+export async function getProjectSettingsFile(
   profileId: string | null,
   which: ProjectSettingsFileDto,
 ): Promise<ClaudeSettingsDto> {
-  return invoke<ClaudeSettingsDto>("get_project_settings_file", { profileId, which });
+  return invoke<ClaudeSettingsDto>("get_project_settings_file", {
+    profileId: await withProfile(profileId),
+    which,
+  });
 }
 
-export function saveProjectSettingsFile(
+export async function saveProjectSettingsFile(
   profileId: string | null,
   which: ProjectSettingsFileDto,
   content: string,
   expectedModifiedAtMs: number | null,
 ): Promise<void> {
   return invoke<void>("save_project_settings_file", {
-    profileId,
+    profileId: await withProfile(profileId),
     which,
     content,
     expectedModifiedAtMs,
