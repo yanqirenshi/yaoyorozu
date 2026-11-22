@@ -10,7 +10,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  alive, aliveMany, cleanupStarted, recordIdentity, check, dirs, openSse, projects, refOf, results, root, rpc, sendCtrlC, sleep, slash, startedPids, startServer,
+  alive, aliveMany, cleanupStarted, recordIdentity, check, dirs, openWs, projects, refOf, results, root, rpc, sendCtrlC, sleep, slash, startedPids, startServer,
   waitHealthy, waitState,
 } from "./e2e-lib.mjs";
 
@@ -18,7 +18,7 @@ const spawned = [];
 
 /** 偽の claude に ORPHAN を送り、作られた 2 つの PID(切り離した子・孫)を返す。 */
 async function makeOrphans(srv, tab, target, label) {
-  const sub = (await rpc(srv, "subscribe_running_session_progress", { target, connectionId: tab.connectionId })).json;
+  const sub = await tab.subscribe(target);
   const before = tab.events.length;
   await rpc(srv, "send_to_running_session", { target, text: `ORPHAN ${label}`, images: [] });
   const hit = await tab.waitFor(
@@ -48,7 +48,7 @@ async function main() {
     expectedRevision: settings.json.revision,
     expectedGlobalRevision: settings.json.global_revision,
   });
-  const tab = await openSse(srv);
+  const tab = await openWs(srv);
   const start = async (name) => {
     const r = await rpc(srv, "start_running_session", { request: { kind: "new", mode: "default", name, sync_origin_main: false } });
     if (r.status !== 200) throw new Error(`起動に失敗: ${r.status} ${r.text}`);
@@ -79,7 +79,7 @@ async function main() {
   tab.close();
 
   // ---- claude が自分で(異常終了で)終わったときも、子孫が残らない ----
-  const tab2 = await openSse(srv);
+  const tab2 = await openWs(srv);
   const c = await start("orphans-c");
   const [cChild, cGrand] = await makeOrphans(srv, tab2, c, "EXIT");
   // 偽の claude は、合図のファイルができるまで終わらない: 子と孫が生きているのを確かめ終えてから、合図を出す。

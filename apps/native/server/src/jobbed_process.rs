@@ -28,7 +28,7 @@ impl JobbedProcess {
                 })
             }
             Err(e) => {
-                eprintln!("会話用のジョブを使えないため、停止は claude 自身だけを止めます: {e}");
+                eprintln!("会話用のジョブを使えないため、停止は従来どおり taskkill /T でプロセスツリーごと止めます: {e}");
                 process
             }
         }

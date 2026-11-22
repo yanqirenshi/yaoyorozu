@@ -184,6 +184,7 @@ export function killTreeIfMine(root, { log = console.log } = {}) {
       // すでに終わっている。
     }
   }
-  if (killIfMine(root, { log, table })) killed.push(root);
+  // 根は、止める直前に取り直した表で確かめる(子孫を止めている間に、PID が別のものになっていないか)。
+  if (killIfMine(root, { log })) killed.push(root);
   return killed;
 }

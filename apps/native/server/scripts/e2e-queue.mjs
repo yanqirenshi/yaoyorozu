@@ -1,5 +1,5 @@
 // 途中経過の待ち行列の大きさの上限(`progress.rs`)の確認。**使い捨て**のデータフォルダ・ホーム・リポジトリで、
-// 偽の claude を動かし、**読まない接続**(ソケットを読み止めた SSE)を 1 本つなぎ、大きい送信(2MB)をくり返して、
+// 偽の claude を動かし、**読まない接続**(ソケットを読み止めた WebSocket)を 1 本つなぎ、大きい送信(2MB)をくり返して、
 // サーバのメモリ(プライベートバイト)の増え方を測る。
 //
 // 確かめること:
@@ -14,10 +14,11 @@
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import net from "node:net";
 import {
-  alive, cleanupStarted, check, dirs, openSse, projects, refOf, results, root, rpc, sleep, slash, startedPids, startServer,
-  token, waitHealthy, waitState,
+  alive, cleanupStarted, check, consoleOrigin, dirs, openWs, projects, refOf, results, root, rpc, sleep, slash, startedPids, startServer,
+  waitHealthy, waitState,
 } from "./e2e-lib.mjs";
 
 const mb = (n) => Math.round((n / 1024 / 1024) * 10) / 10;
@@ -26,23 +27,48 @@ const privateBytes = (pid) =>
     execFileSync("powershell", ["-NoProfile", "-Command", `(Get-Process -Id ${pid}).PrivateMemorySize64`], { encoding: "utf8" }).trim(),
   );
 
-/** 読まない SSE 接続を張る(最初のイベントだけ読んで、接続の ID を得たあと、読み止める)。 */
-function openStalledSse(srv) {
+/** クライアントから送るフレーム(マスクつきのテキスト)。 */
+function clientFrame(text) {
+  const payload = Buffer.from(text);
+  const mask = crypto.randomBytes(4);
+  const header =
+    payload.length < 126
+      ? Buffer.from([0x81, 0x80 | payload.length])
+      : Buffer.from([0x81, 0x80 | 126, payload.length >> 8, payload.length & 255]);
+  const masked = Buffer.from(payload.map((byte, i) => byte ^ mask[i % 4]));
+  return Buffer.concat([header, mask, masked]);
+}
+
+/** 読まない WebSocket 接続を張る(券 → 購読までは進め、そのあとは読み止める)。 */
+async function openStalledWs(srv, target) {
+  const issued = await rpc(srv, "issue_ws_ticket", {});
+  const ticket = issued.json.ticket;
   return new Promise((resolve, reject) => {
     const socket = net.connect(srv.port, "127.0.0.1", () => {
-      socket.write(`GET /events HTTP/1.1\r\nHost: 127.0.0.1:${srv.port}\r\nAuthorization: Bearer ${token(srv)}\r\nAccept: text/event-stream\r\n\r\n`);
+      socket.write(
+        `GET /ws HTTP/1.1\r\nHost: 127.0.0.1:${srv.port}\r\nOrigin: ${consoleOrigin}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${crypto.randomBytes(16).toString("base64")}\r\nSec-WebSocket-Version: 13\r\n\r\n`,
+      );
     });
     let buf = "";
+    let step = 0;
     socket.on("data", (chunk) => {
       buf += chunk.toString("utf8");
-      const m = buf.match(/"connection_id":"([0-9a-f-]{36})"/);
-      if (m) {
+      if (step === 0 && buf.includes("101")) {
+        step = 1;
+        socket.write(clientFrame(JSON.stringify({ type: "ticket", ticket })));
+      }
+      if (step === 1 && buf.includes('"type":"ready"')) {
+        step = 2;
+        socket.write(clientFrame(JSON.stringify({ type: "subscribe", request_id: 1, target })));
+      }
+      if (step === 2 && buf.includes('"type":"subscribed"')) {
+        step = 3;
         socket.pause(); // ここから読まない(カーネルの受信バッファがいっぱいになり、サーバの送信が詰まる)
-        resolve({ socket, connectionId: m[1] });
+        resolve({ socket });
       }
     });
     socket.on("error", () => {});
-    setTimeout(() => reject(new Error("接続の ID が届かない")), 8000);
+    setTimeout(() => reject(new Error(`読まない接続を張れません(段階 ${step})`)), 8000);
   });
 }
 
@@ -60,10 +86,9 @@ async function main() {
   const target = refOf(r.json);
   await waitState(srv, target, "idle");
 
-  const reader = await openSse(srv); // 読む接続
-  await rpc(srv, "subscribe_running_session_progress", { target, connectionId: reader.connectionId });
-  const stalled = await openStalledSse(srv); // 読まない接続
-  await rpc(srv, "subscribe_running_session_progress", { target, connectionId: stalled.connectionId });
+  const reader = await openWs(srv); // 読む接続
+  await reader.subscribe(target);
+  const stalled = await openStalledWs(srv, target); // 読まない接続
 
   const base = privateBytes(srv.child.pid);
   console.log(`  基準のメモリ: ${mb(base)}MB`);
@@ -92,7 +117,13 @@ async function main() {
   const after = privateBytes(srv.child.pid);
   console.log(`  外れたあとのメモリ: +${mb(after - base)}MB(基準との差)`);
   check("外れたあと、メモリは最大の増えより下がる", after < peak, `最大 +${mb(peak - base)}MB → +${mb(after - base)}MB`);
-  check("読まない接続は外れている(購読が 404 になる)", (await rpc(srv, "subscribe_running_session_progress", { target, connectionId: stalled.connectionId })).status === 404);
+  // 読まない接続は、サーバが外して閉じている: 読み始めると、たまっていた分のあとで接続が終わる。
+  const closedByServer = await new Promise((resolve) => {
+    stalled.socket.on("close", () => resolve(true));
+    stalled.socket.resume();
+    setTimeout(() => resolve(false), 10000);
+  });
+  check("読まない接続は、サーバに外されて閉じられている", closedByServer);
   stalled.socket.destroy();
   reader.close();
 }

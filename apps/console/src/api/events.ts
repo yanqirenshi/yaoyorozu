@@ -1,57 +1,70 @@
-// イベント(SSE)の接続管理。ブラウザ任せの再接続には頼らず、自分でつなぎ直す。
+// 通知と途中経過の接続管理(Rust サーバへ直接つなぐ WebSocket。タブごとに 1 本)。
 //
-// なぜ: 中継はサーバに届かないとき `/api/events` を 503(application/json)で返す。EventSource は
-// 仕様どおり、これを受けると再接続をやめて CLOSED になる(サーバを起動し直しても戻らない)。
+// なぜ WebSocket か: Next の中継は HTTP/1.1 だけで、同じ接続先への接続が 6 本までなので、タブごとの SSE が 6 本になると、
+// 全部のタブの操作と新しいタブの読み込みが止まった(#629・#633)。WebSocket はその枠を使わない。
+// 操作(`/rpc`)は、今までどおり Next が中継する(トークンはブラウザへ渡さない)。
+//
+// つなぎ方(守りは `server/README.md` と `server/src/ws.rs`):
+// 1. 中継を通して、使い捨ての「券」とつなぐ先のポートをもらう(`issue_ws_ticket`)。
+// 2. `ws://127.0.0.1:<ポート>/ws` へつなぎ、**最初のメッセージ**で券を送る(券を URL に入れない)。
+// 3. サーバが `ready` を返したら、つながった。通知(`event`)・途中経過(`progress`)・`ping` が届く。
+//    購読・購読解除は、この接続の上のメッセージで行う(`subscribe` → `subscribed`)。
 //
 // 形:
-// - 購読者(`listen`・`onConnectionChange`・`onReconnected`)が 1 人でもいる間だけ接続を持つ。
-//   0 人になったら閉じ、つなぎ直しの予約も取り消す(unlisten されたらつなぎ直しも止まる)。
-// - 切れたら(CLOSED、または自動再接続の待ち)接続状態を "disconnected" にし、間隔を空けて
-//   (1 秒から始めて 2 倍ずつ、最大 10 秒)作り直す。
+// - 購読者(`listen`・`onConnectionChange`・`onReconnected`・途中経過の購読)が 1 人でもいる間だけ接続を持つ。
+//   0 人になったら閉じ、つなぎ直しの予約も取り消す。
+// - 切れたら接続状態を "disconnected" にし、間隔を空けて(1 秒から始めて 2 倍ずつ、最大 10 秒)作り直す。
+//   つなぎ直すたびに、新しい券をもらう(券は 1 回しか使えない)。ブラウザ任せの再接続には頼らない。
 // - つながったら "connected"。それが「切れたあとのつなぎ直し」なら、`onReconnected` の合図を出す。
-//   切れている間のイベントは失われているので、画面はこの合図で表示を取り直す(Query を取り直す)。
-//   サーバが止まっている間に画面を開き、あとでサーバを起動した場合(初回の接続が失敗していた)も
-//   同じ合図が出る。
-//
-// 途中経過(実行中セッション。段階 3):
-// - サーバは、この接続(タブごとに 1 本)に「接続 ID」を最初のイベント(`connection`)で知らせる。
-//   途中経過は「購読」(接続 ID + 対象)ごとに、同じ接続へ流れてくる(`running-session:progress`。
-//   `{ subscription_id, progress }`)。接続が切れるとサーバ側の購読は消えるので、つなぎ直したときは新しい
-//   接続 ID で購読し直す。**接続の持ち方(1 タブ 1 本か、共有か。#629)は、このファイルの中に閉じる**:
-//   画面側は `openProgressSubscription` だけを使い、接続 ID も SSE も知らない。
-//   切れている間の途中経過は失われるので、画面は `onReconnected` で状態(Query)を取り直す。
+//   切れている間の通知・途中経過は失われているので、画面はこの合図で表示を取り直す(Query を取り直す)。
+//   サーバが止まっている間に画面を開き、あとでサーバを起動した場合(初回の接続が失敗していた)も同じ合図が出る。
+// - 凍結されたタブ・スリープから戻ったタブは、接続が切れている(ブラウザが閉じる)。サーバの ping に pong が返らない接続は
+//   サーバが閉じ、こちらも、一定時間サーバから何も届かなければ切れたとみなして、つなぎ直す。
+// - 途中経過は、接続ごとの待ち行列(サーバ側)から、会話ごとの連番つきで届く。つなぎ直したときは、購読し直す
+//   (サーバの購読は接続とともに消えている)。**接続の持ち方は、このファイルの中に閉じる**:
+//   画面側は `openProgressSubscription` だけを使い、接続も券も知らない。
 
 export type ConnectionState = "connecting" | "connected" | "disconnected";
 
 const INITIAL_DELAY_MS = 1000;
 const MAX_DELAY_MS = 10000;
-const EVENTS_URL = "/api/events";
+const TICKET_URL = "/api/rpc/issue_ws_ticket";
+/** サーバの ping(10 秒ごと)が届かないまま、これだけ経ったら、切れたとみなす。 */
+const SILENCE_LIMIT_MS = 35000;
+const WATCHDOG_INTERVAL_MS = 5000;
+/** 購読の要求への返事を待つ上限。 */
+const REQUEST_TIMEOUT_MS = 10000;
 
 type Listener = (payload: unknown) => void;
 
 const listeners = new Map<string, Set<Listener>>();
 const stateListeners = new Set<(state: ConnectionState) => void>();
 const reconnectedListeners = new Set<() => void>();
+/** つながった(`ready`)たびに呼ぶ(途中経過の購読が、購読し直す)。 */
+const readyListeners = new Set<() => void>();
 
 let subscribers = 0;
-let source: EventSource | null = null;
+let socket: WebSocket | null = null;
+let ready = false;
 let timer: ReturnType<typeof setTimeout> | null = null;
+let watchdog: ReturnType<typeof setInterval> | null = null;
+let lastHeard = 0;
 let delay = INITIAL_DELAY_MS;
 let state: ConnectionState = "connecting";
 // 接続に失敗した(切れた)あと、まだつながり直していないか。
 let hadFailure = false;
-// 今の EventSource に付けたイベント名(つなぎ直すたびに付け直す)。
-let attached = new Set<string>();
+// つなぎ直しのたびに進める(古い試みの遅れて来た結果を捨てる)。
+let attempt = 0;
 
-// 今の接続の ID(`connection` イベントで届く。切れたら `null`)。
-let connectionId: string | null = null;
-const connectionIdListeners = new Set<(id: string) => void>();
-// 購読 ID → 途中経過の受け取り口。購読の応答(購読 ID)より先に届いた途中経過は、少しの間ためておく。
+// 購読 ID → 途中経過の受け取り口。
 type ProgressMessage = { seq: number; progress: unknown };
 const progressSinks = new Map<number, (message: ProgressMessage) => void>();
-const earlyProgress = new Map<number, ProgressMessage[]>();
-const EARLY_PROGRESS_LIMIT = 256;
-const EARLY_PROGRESS_TTL_MS = 5000;
+// 返事待ちの購読の要求(request_id → 返事の受け口)。
+const pendingRequests = new Map<
+  number,
+  { resolve: (subscriptionId: number) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }
+>();
+let requestSeq = 0;
 
 function setState(next: ConnectionState) {
   if (state === next) return;
@@ -59,88 +72,143 @@ function setState(next: ConnectionState) {
   stateListeners.forEach((fn) => fn(next));
 }
 
-function attach(es: EventSource, name: string) {
-  if (attached.has(name)) return;
-  attached.add(name);
-  es.addEventListener(name, (event) => {
-    let payload: unknown = null;
-    try {
-      payload = JSON.parse((event as MessageEvent<string>).data);
-    } catch {
-      // 本文が JSON でなければ null として渡す。
-    }
-    listeners.get(name)?.forEach((fn) => fn(payload));
+function rejectPending(reason: string) {
+  pendingRequests.forEach((p) => {
+    clearTimeout(p.timer);
+    p.reject(new Error(reason));
   });
+  pendingRequests.clear();
+}
+
+function stopWatchdog() {
+  if (watchdog !== null) clearInterval(watchdog);
+  watchdog = null;
+}
+
+function sendJson(ws: WebSocket, message: unknown): boolean {
+  try {
+    ws.send(JSON.stringify(message));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 今の接続が使えなくなった(切れた・券がもらえなかった・黙った)。つなぎ直す。 */
+function lost(ws: WebSocket | null) {
+  if (ws !== null && socket !== ws) return; // 古い接続の知らせは無視する。
+  if (ws !== null) {
+    ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null;
+    try {
+      ws.close();
+    } catch {
+      // すでに閉じている。
+    }
+  }
+  socket = null;
+  ready = false;
+  stopWatchdog();
+  rejectPending("接続が切れました");
+  hadFailure = true;
+  setState("disconnected");
+  scheduleReconnect();
+}
+
+function handleMessage(ws: WebSocket, raw: unknown) {
+  if (socket !== ws || typeof raw !== "string") return;
+  lastHeard = Date.now();
+  let message: { type?: string; [key: string]: unknown };
+  try {
+    message = JSON.parse(raw);
+  } catch {
+    return;
+  }
+  switch (message.type) {
+    case "ready":
+      ready = true;
+      delay = INITIAL_DELAY_MS;
+      setState("connected");
+      if (hadFailure) {
+        hadFailure = false;
+        reconnectedListeners.forEach((fn) => fn());
+      }
+      readyListeners.forEach((fn) => fn());
+      break;
+    case "event": {
+      const name = message.name;
+      if (typeof name === "string") listeners.get(name)?.forEach((fn) => fn(message.data));
+      break;
+    }
+    case "progress": {
+      const body = message.data as { subscription_id?: number; seq?: number; progress?: unknown } | undefined;
+      if (!body || typeof body.subscription_id !== "number" || typeof body.seq !== "number") return;
+      progressSinks.get(body.subscription_id)?.({ seq: body.seq, progress: body.progress });
+      break;
+    }
+    case "subscribed":
+    case "subscribe_failed": {
+      const id = message.request_id;
+      if (typeof id !== "number") return;
+      const pending = pendingRequests.get(id);
+      if (!pending) return;
+      pendingRequests.delete(id);
+      clearTimeout(pending.timer);
+      if (message.type === "subscribed" && typeof message.subscription_id === "number") {
+        pending.resolve(message.subscription_id);
+      } else {
+        pending.reject(new Error(String(message.message ?? "購読できませんでした")));
+      }
+      break;
+    }
+    case "ping":
+      sendJson(ws, { type: "pong" });
+      break;
+  }
+}
+
+async function fetchTicket(): Promise<{ ticket: string; port: number }> {
+  const response = await fetch(TICKET_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}",
+    cache: "no-store",
+  });
+  if (!response.ok) throw new Error(`券をもらえません(${response.status})`);
+  const body = (await response.json()) as { ticket?: unknown; port?: unknown };
+  if (typeof body.ticket !== "string" || typeof body.port !== "number") {
+    throw new Error("券の形が違います");
+  }
+  return { ticket: body.ticket, port: body.port };
 }
 
 function connect() {
   timer = null;
   if (subscribers === 0) return;
-  const es = new EventSource(EVENTS_URL);
-  source = es;
-  attached = new Set();
-  listeners.forEach((_, name) => attach(es, name));
-
-  es.addEventListener("connection", (event) => {
-    if (source !== es) return;
-    try {
-      const body = JSON.parse((event as MessageEvent<string>).data) as { connection_id?: unknown };
-      if (typeof body.connection_id !== "string" || body.connection_id === "") return;
-      connectionId = body.connection_id;
-      connectionIdListeners.forEach((fn) => fn(body.connection_id as string));
-    } catch {
-      // 読めなければ無視する(購読は張れない。状態は Query で取れる)。
-    }
-  });
-  es.addEventListener("running-session:progress", (event) => {
-    if (source !== es) return;
-    try {
-      const body = JSON.parse((event as MessageEvent<string>).data) as {
-        subscription_id: number;
-        seq: number;
-        progress: unknown;
+  const mine = ++attempt;
+  fetchTicket()
+    .then(({ ticket, port }) => {
+      if (mine !== attempt || subscribers === 0) return;
+      // CSP の `connect-src` に足してあるのは `ws://127.0.0.1:<ポート>` だけ(画面を localhost で開いていても、ここは 127.0.0.1)。
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+      socket = ws;
+      lastHeard = Date.now();
+      ws.onopen = () => {
+        if (socket !== ws) return;
+        // 券は最初のメッセージで送る(URL には入れない)。
+        sendJson(ws, { type: "ticket", ticket });
       };
-      const message: ProgressMessage = { seq: body.seq, progress: body.progress };
-      const sink = progressSinks.get(body.subscription_id);
-      if (sink) {
-        sink(message);
-        return;
-      }
-      const early = earlyProgress.get(body.subscription_id) ?? [];
-      if (early.length === 0) {
-        const id = body.subscription_id;
-        setTimeout(() => earlyProgress.delete(id), EARLY_PROGRESS_TTL_MS);
-      }
-      if (early.length < EARLY_PROGRESS_LIMIT) early.push(message);
-      earlyProgress.set(body.subscription_id, early);
-    } catch {
-      // 読めない途中経過は捨てる。
-    }
-  });
-
-  es.onopen = () => {
-    if (source !== es) return;
-    delay = INITIAL_DELAY_MS;
-    setState("connected");
-    if (hadFailure) {
-      hadFailure = false;
-      reconnectedListeners.forEach((fn) => fn());
-    }
-  };
-  es.onerror = () => {
-    if (source !== es) return;
-    hadFailure = true;
-    connectionId = null;
-    setState("disconnected");
-    if (es.readyState === EventSource.CLOSED) {
-      // ブラウザは再接続をやめた(503 など)。自分でつなぎ直す。
-      es.close();
-      source = null;
-      scheduleReconnect();
-    }
-    // CONNECTING の間は、ブラウザが自分で再接続している(つながれば onopen が来る。
-    // 失敗すれば CLOSED で再び onerror が来て、上の分岐に入る)。
-  };
+      ws.onmessage = (event) => handleMessage(ws, event.data);
+      ws.onclose = () => lost(ws);
+      ws.onerror = () => lost(ws);
+      stopWatchdog();
+      watchdog = setInterval(() => {
+        if (socket === ws && Date.now() - lastHeard > SILENCE_LIMIT_MS) lost(ws);
+      }, WATCHDOG_INTERVAL_MS);
+    })
+    .catch(() => {
+      if (mine !== attempt) return;
+      lost(null);
+    });
 }
 
 function scheduleReconnect() {
@@ -163,12 +231,22 @@ function release() {
   subscribers -= 1;
   if (subscribers > 0) return;
   subscribers = 0;
+  attempt += 1;
   if (timer !== null) clearTimeout(timer);
   timer = null;
-  source?.close();
-  source = null;
-  attached = new Set();
-  connectionId = null;
+  stopWatchdog();
+  rejectPending("接続を閉じました");
+  if (socket) {
+    const ws = socket;
+    socket = null;
+    ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null;
+    try {
+      ws.close();
+    } catch {
+      // すでに閉じている。
+    }
+  }
+  ready = false;
 }
 
 /** サーバのイベントを購読する。戻り値の関数で購読をやめる(0 人になれば接続も閉じる)。 */
@@ -184,7 +262,6 @@ export function listen<T>(
   const handler: Listener = (payload) => callback(payload as T);
   set.add(handler);
   retain();
-  if (source) attach(source, name);
   let done = false;
   return Promise.resolve(() => {
     if (done) return;
@@ -226,62 +303,78 @@ export function onReconnected(callback: () => void): Promise<() => void> {
   });
 }
 
+/** この接続の上で、購読を頼む(返事の購読 ID を返す)。つながっていなければ失敗する。 */
+function requestSubscription(target: unknown): Promise<number> {
+  const ws = socket;
+  if (!ws || !ready) return Promise.reject(new Error("接続していません"));
+  const id = ++requestSeq;
+  return new Promise<number>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      pendingRequests.delete(id);
+      reject(new Error("購読の返事が来ません"));
+    }, REQUEST_TIMEOUT_MS);
+    pendingRequests.set(id, { resolve, reject, timer: timeout });
+    if (!sendJson(ws, { type: "subscribe", request_id: id, target })) {
+      pendingRequests.delete(id);
+      clearTimeout(timeout);
+      reject(new Error("送れませんでした"));
+    }
+  });
+}
+
+function sendUnsubscribe(subscriptionId: number) {
+  if (socket && ready) sendJson(socket, { type: "unsubscribe", subscription_id: subscriptionId });
+}
+
 /**
- * 実行中セッション 1 つの途中経過の購読を持つ。戻り値の関数で購読をやめる(接続も、ほかに使う人が
+ * 実行中セッション 1 つ(`target`)の途中経過の購読を持つ。戻り値の関数で購読をやめる(接続も、ほかに使う人が
  * いなければ閉じる)。
  *
- * - `register(connectionId)` が購読 ID を返す(サーバへ「この接続へ流す」と頼む)。`unregister` は購読を外す。
- * - 接続が切れて、つなぎ直したときは、新しい接続 ID で `register` をやり直す(サーバの購読は接続とともに
- *   消えているので、外す必要は無い)。切れている間の途中経過は失われる(画面は `onReconnected` で取り直す)。
+ * - つながったら(つなぎ直したときも)、この接続の上で購読を頼む。サーバの購読は接続とともに消えているので、
+ *   つなぎ直したときは、外す必要は無く、頼み直すだけ。切れている間の途中経過は失われる(画面は `onReconnected` で取り直す)。
  * - 購読に失敗しても例外は出さない(状態と確定した行は Query で取れる。表示が劣化するだけ)。
  */
 export function openProgressSubscription(
-  register: (connectionId: string) => Promise<number>,
-  unregister: (subscriptionId: number, connectionId: string) => Promise<void>,
+  target: unknown,
   onProgress: (progress: unknown, seq: number) => void,
 ): () => void {
   let cancelled = false;
-  let current: { subscriptionId: number; connectionId: string } | null = null;
+  let current: number | null = null;
   let generation = 0;
 
-  const setup = (id: string) => {
+  const setup = () => {
     generation += 1;
     const mine = generation;
-    if (current) {
-      progressSinks.delete(current.subscriptionId);
+    if (current !== null) {
+      progressSinks.delete(current);
       current = null;
     }
-    register(id)
+    requestSubscription(target)
       .then((subscriptionId) => {
         if (cancelled || mine !== generation) {
-          void unregister(subscriptionId, id).catch(() => {});
+          sendUnsubscribe(subscriptionId);
           return;
         }
-        current = { subscriptionId, connectionId: id };
-        const sink = (m: ProgressMessage) => onProgress(m.progress, m.seq);
-        progressSinks.set(subscriptionId, sink);
-        const early = earlyProgress.get(subscriptionId);
-        earlyProgress.delete(subscriptionId);
-        early?.forEach(sink);
+        current = subscriptionId;
+        progressSinks.set(subscriptionId, (m) => onProgress(m.progress, m.seq));
       })
       .catch(() => {
         // 購読できなくても、表示が劣化するだけ。
       });
   };
 
-  const listener = (id: string) => setup(id);
-  connectionIdListeners.add(listener);
+  readyListeners.add(setup);
   retain();
-  if (connectionId !== null) setup(connectionId);
+  if (ready) setup();
 
   return () => {
     if (cancelled) return;
     cancelled = true;
     generation += 1;
-    connectionIdListeners.delete(listener);
-    if (current) {
-      progressSinks.delete(current.subscriptionId);
-      void unregister(current.subscriptionId, current.connectionId).catch(() => {});
+    readyListeners.delete(setup);
+    if (current !== null) {
+      progressSinks.delete(current);
+      sendUnsubscribe(current);
       current = null;
     }
     release();

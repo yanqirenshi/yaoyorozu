@@ -497,7 +497,7 @@ export function useRunningSession({
         throw new Error("実行中のセッションの起動が終わりませんでした。しばらくしてからやり直してください");
       }
       if (ready.process_state === "exited") {
-        throw new Error("実行中のセッションが起動できませんでした(起動直後に終了しました)");
+        throw new Error("実行中のセッションが終了したため、発言は送られていません(送信の途中で停止・アーカイブされたか、起動の直後に終了しました)");
       }
       return ready;
     },

@@ -18,7 +18,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  alive, cleanupStarted, check, descendants, dirs, openSse, real, refOf, results, root, rpc, sendCtrlC, sleep, slash, startServer,
+  alive, cleanupStarted, check, descendants, dirs, openWs, real, refOf, results, root, rpc, sendCtrlC, sleep, slash, startServer,
   startedPids, waitHealthy, waitState,
 } from "./e2e-lib.mjs";
 
@@ -47,13 +47,13 @@ async function main() {
   });
   check("設定(使い捨てのリポジトリ)の保存", upd.status === 200, upd.text);
 
-  const tab = await openSse(srv);
+  const tab = await openWs(srv);
   let r = await rpc(srv, "start_running_session", { request: { kind: "new", mode: "default", name: "yyz-e2e-real", sync_origin_main: false } });
   check("本物の claude の新規セッションを起動", r.status === 200, `${r.status} ${r.text.slice(0, 300)}`);
   if (r.status !== 200) return;
   const session = r.json;
   const target = refOf(session);
-  const sub = (await rpc(srv, "subscribe_running_session_progress", { target, connectionId: tab.connectionId })).json;
+  const sub = await tab.subscribe(target);
   const idle = await waitState(srv, target, "idle", 60000);
   check("起動 → 待機(idle)", !!idle, idle ? `モデル ${idle.current_model ?? "未報告"}・版 ${idle.cli_version ?? "?"}` : "");
   const tree = descendants(srv.child.pid);

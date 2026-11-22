@@ -98,27 +98,18 @@ pub async fn get_running_session(
     })))
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SubscribeArgs {
-    target: RunningSessionRefDto,
-    /// `/events` の最初のイベント(`connection`)で受け取った接続の ID。
-    connection_id: String,
-}
-
-/// 実行中セッションの途中経過を、**この接続**(`/events` の SSE)へ流し始める。購読 ID を返す。
-/// 購読が無い間の出来事は捨てる(状態・答え待ちは `get_running_session` で取れる)。
-pub async fn subscribe_running_session_progress(
-    State(ctx): State<AppContext>,
-    body: Bytes,
-) -> Result<Json<u64>, ApiError> {
-    let args: SubscribeArgs = parse_args(&body)?;
-    let target: RunningSessionRef = args.target.into();
+/// 実行中セッションの途中経過を、**この接続**(`/ws` の WebSocket。接続の ID はサーバの中だけで使う)へ流し始める。
+/// 購読 ID を返す。購読が無い間の出来事は捨てる(状態・答え待ちは `get_running_session` で取れる)。
+pub async fn subscribe_progress(
+    ctx: &AppContext,
+    conn_id: &str,
+    target: RunningSessionRef,
+) -> Result<u64, ApiError> {
     // 接続の表は状態とは別のロック。先に確かめてから、状態を触る。
-    if !ctx.running.connections.is_open(&args.connection_id) {
+    if !ctx.running.connections.is_open(conn_id) {
         return Err(ApiError::new(
             "not_found",
-            "接続が見つかりません(つなぎ直したあとは、新しい接続の ID で購読し直してください)",
+            "接続が見つかりません(つなぎ直したあとは、新しい接続で購読し直してください)",
         ));
     }
     let mut guard = ctx.state.lock().await;
@@ -126,7 +117,7 @@ pub async fn subscribe_running_session_progress(
         .running_sessions
         .iter()
         .flat_map(|slot| slot.subscribers.iter())
-        .filter(|s| s.conn_id == args.connection_id)
+        .filter(|s| s.conn_id == conn_id)
         .count();
     if held >= MAX_SUBSCRIPTIONS_PER_CONNECTION {
         return Err(ApiError::new(
@@ -142,40 +133,50 @@ pub async fn subscribe_running_session_progress(
     }
     slot.subscribers.push(Subscription {
         id,
-        conn_id: args.connection_id.clone(),
+        conn_id: conn_id.to_string(),
     });
     guard.next_subscription_id += 1;
     drop(guard);
     // 登録のあいだに接続が閉じていたら(閉じる側の掃除と行き違い)、残さない。
-    if !ctx.running.connections.is_open(&args.connection_id) {
+    if !ctx.running.connections.is_open(conn_id) {
         ctx.state
             .lock()
             .await
-            .drop_connection_subscriptions(std::slice::from_ref(&args.connection_id));
+            .drop_connection_subscriptions(&[conn_id.to_string()]);
         return Err(ApiError::new("not_found", "接続が閉じられました"));
     }
-    Ok(Json(id))
+    Ok(id)
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UnsubscribeArgs {
-    subscription_id: u64,
-    connection_id: String,
-}
-
-/// 途中経過の購読をやめる。**その接続の購読だけ**(ほかのタブの購読は外せない)。無い ID は何もしない。
-pub async fn unsubscribe_running_session_progress(
-    State(ctx): State<AppContext>,
-    body: Bytes,
-) -> Result<Json<()>, ApiError> {
-    let args: UnsubscribeArgs = parse_args(&body)?;
+/// 途中経過の購読をやめる。**その接続の購読だけ**(ほかの接続の購読は外せない)。無い ID は何もしない。
+pub async fn unsubscribe_progress(ctx: &AppContext, conn_id: &str, subscription_id: u64) {
     let mut guard = ctx.state.lock().await;
     for slot in &mut guard.running_sessions {
         slot.subscribers
-            .retain(|s| !(s.id == args.subscription_id && s.conn_id == args.connection_id));
+            .retain(|s| !(s.id == subscription_id && s.conn_id == conn_id));
     }
-    Ok(Json(()))
+}
+
+/// `/ws` へつなぐための**使い捨ての券**と、つなぐ先のポートを返す。ほかの rpc と同じ守り(トークン・Host。中継では Origin も)を受ける。
+/// 券は 30 秒・1 回だけ有効で、つないだあとの最初のメッセージで送る(URL には入れない)。
+pub async fn issue_ws_ticket(
+    State(ctx): State<AppContext>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if ctx.running.allowed_origins.is_empty() {
+        return Err(ApiError::new(
+            "not_found",
+            "WebSocket が使えません(サーバに画面のポートが渡されていません)",
+        ));
+    }
+    match ctx.running.tickets.issue() {
+        Ok(ticket) => Ok(Json(
+            serde_json::json!({ "ticket": ticket, "port": ctx.port }),
+        )),
+        Err(crate::ws::IssueError::TooMany) => Err(ApiError::new(
+            "invalid_input",
+            "使われていない券が多すぎます。しばらくしてからやり直してください",
+        )),
+    }
 }
 
 #[derive(Deserialize)]

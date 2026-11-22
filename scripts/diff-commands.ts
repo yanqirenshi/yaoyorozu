@@ -32,6 +32,11 @@ const NOT_BUILT_COMMANDS = new Set([
   "ensure_web_app_running", // 「仕様」ボタン
 ]);
 const NOT_BUILT_EVENTS = new Set(["windows:changed", "viewer:navigate"]);
+// command ではなく、WebSocket(`/ws`)の上のメッセージで置き換えたもの(途中経過の購読は、その接続の上で行う。#636)。
+const REPLACED_COMMANDS = new Map([
+  ["subscribe_running_session_progress", "WebSocket の subscribe メッセージ"],
+  ["unsubscribe_running_session_progress", "WebSocket の unsubscribe メッセージ"],
+]);
 // イベントではなく Query で置き換えたもの(起動直後は誰も購読していないため、取りこぼす)。
 const REPLACED_EVENTS = new Map([["settings:corrupted", "list_pending_warnings"]]);
 
@@ -73,7 +78,7 @@ const serverSrc = ["lib.rs", "main.rs", "watcher.rs", "running.rs", join("rpc", 
   })
   .join("\n");
 // 定数で渡されるイベント名(`pub const X_EVENT: &str = "..."`)も解決する。SSE にだけ流すもの
-// (`Event::default().event(...)`。途中経過と接続の ID)も拾う。
+// (途中経過は WebSocket のメッセージ。`ws.rs`)も拾う。
 const serverConsts = new Map<string, string>();
 for (const m of serverSrc.matchAll(/const (\w+): &str = "([^"]+)"/g)) serverConsts.set(m[1], m[2]);
 const serverEvents = new Set<string>();
@@ -84,9 +89,12 @@ for (const m of serverSrc.matchAll(/\.(?:emit|event)\(\s*(?:"([^"]+)"|(?:\w+::)*
 
 // --- フロント ---
 const consoleApi = read("apps", "console", "src", "api", "index.ts");
-const consoleCommands = new Set(
-  [...consoleApi.matchAll(/invoke<[^>]*>\(\s*"([a-z_]+)"/g)].map((m) => m[1]),
-);
+// 通知と途中経過の接続(`events.ts`)が、中継を通して呼ぶ command(券)も、フロントが使うものに数える。
+const consoleEventsSrc = read("apps", "console", "src", "api", "events.ts");
+const consoleCommands = new Set([
+  ...[...consoleApi.matchAll(/invoke<[^>]*>\(\s*"([a-z_]+)"/g)].map((m) => m[1]),
+  ...[...consoleEventsSrc.matchAll(/"\/api\/rpc\/([a-z_]+)"/g)].map((m) => m[1]),
+]);
 const consoleEvents = new Set(
   [...consoleApi.matchAll(/listen<[^>]*>\(\s*"([^"]+)"/g)].map((m) => m[1]),
 );
@@ -108,7 +116,8 @@ const lines: string[] = [];
 lines.push(`### command(Tauri ${tauriCommands.length} 個)`, "");
 lines.push("| command | 状態 | サーバ `/rpc` | フロント api |", "|---|---|---|---|");
 for (const name of tauriCommands) {
-  const st = status(name, serverCommands, NOT_BUILT_COMMANDS);
+  const replaced = REPLACED_COMMANDS.get(name);
+  const st = replaced ? `代替(${replaced})` : status(name, serverCommands, NOT_BUILT_COMMANDS);
   if (st === "まだ") missing++;
   lines.push(`| ${name} | ${st} | ${mark(serverCommands.has(name))} | ${mark(consoleCommands.has(name))} |`);
 }
@@ -134,12 +143,13 @@ for (const name of eventList) {
 const extraEvents = [...serverEvents].filter((e) => !tauriEvents.has(e));
 lines.push("", `この構成だけのイベント: ${extraEvents.length ? extraEvents.join("、") : "なし"}`);
 
-const count = (names: string[], s: string) => names.filter((n) => status(n, serverCommands, NOT_BUILT_COMMANDS) === s).length;
+const count = (names: string[], s: string) =>
+  names.filter((n) => !REPLACED_COMMANDS.has(n) && status(n, serverCommands, NOT_BUILT_COMMANDS) === s).length;
 const ecount = (s: string) =>
   eventList.filter((n) => !REPLACED_EVENTS.has(n) && status(n, serverEvents, NOT_BUILT_EVENTS) === s).length;
 lines.push(
   "",
-  `集計: command は 実装済み ${count(tauriCommands, "実装済み")} / まだ ${count(tauriCommands, "まだ")} / 作らない ${count(tauriCommands, "作らない")}。` +
+  `集計: command は 実装済み ${count(tauriCommands, "実装済み")} / 代替 ${REPLACED_COMMANDS.size} / まだ ${count(tauriCommands, "まだ")} / 作らない ${count(tauriCommands, "作らない")}。` +
     `イベントは 実装済み ${ecount("実装済み")} / 代替 ${REPLACED_EVENTS.size} / まだ ${ecount("まだ")} / 作らない ${ecount("作らない")}。`,
 );
 

@@ -9,10 +9,12 @@
 Rust サーバを先に起動する(`apps/native/server/README.md`)。
 
 ```bash
-npm run server:dev     # ターミナル 1: Rust サーバ(14210 番)
+npm run server:dev     # ターミナル 1: Rust サーバ(14210 番)。画面のポートを渡す(下)
 npm run console:dev    # ターミナル 2: 画面(http://127.0.0.1:3200/settings)
 ```
 
+- **サーバへ、画面のポートを環境変数で渡す**: `$env:YAOYOROZU_CONSOLE_PORT = 3200`(PowerShell)のあとで `npm run server:dev`。
+  通知と途中経過の WebSocket(`/ws`)が通す Origin(`http://127.0.0.1:3200`・`http://localhost:3200`)を、サーバがこの値から作る。渡さないと `/ws` は誰も通さず、画面は「サーバに接続できません」のままになる。
 - 開発サーバは **127.0.0.1 の 3200 番**だけで待ち受ける(3000 = web、3100/4000 = hub、1420/1425 = Vite は使用中)。
 - サーバのデータフォルダを変えたときは、`console:dev` にも同じ環境変数 `YAOYOROZU_DATA_DIR` を渡す
   (中継が `server-token`・`server-port` をそこから読む)。MSI 版のフォルダは読まない。
@@ -21,23 +23,26 @@ npm run console:dev    # ターミナル 2: 画面(http://127.0.0.1:3200/setting
 
 ## 構成
 
-- `src/app/api/[...path]/route.ts` — 中継。`/api/rpc/<command>` → サーバの `/rpc/<command>`、`/api/events` → `/events`。
+- `src/app/api/[...path]/route.ts` — 中継。`/api/rpc/<command>` → サーバの `/rpc/<command>`。
   サーバ側でトークンを付ける(**ブラウザへは渡さない**)。`Host`・`Origin` を確かめ、入口は許可リストだけ。
-  SSE は本文をそのまま流す(圧縮しない・貯めない)。
+  通知と途中経過は、この中継を通さない(ブラウザが Rust サーバへ直接つなぐ WebSocket。`src/api/events.ts`。`/ws` の守りは `apps/native/server/README.md`)。
+- `src/proxy.ts` — 画面の応答に CSP を付ける。`connect-src` には、`'self'` と `ws://127.0.0.1:<サーバのポート>`(サーバが書いたポートのファイルを実行時に読む)だけ。
 - `src/api/` — フロントの唯一の入口。`apps/native/react/src/api/` と同じ関数名・引数・戻り値で、
-  中身だけ fetch / EventSource にしてある(`Promise<unlisten>` の形も同じ)。
+  中身だけ fetch / WebSocket にしてある(`Promise<unlisten>` の形も同じ)。
 - `src/app/settings/page.tsx` — `/settings`。client component。
 - `src/app/{App,tokens}.css` — Vite 版から写した(`tokens.css` は生成物。MUI への書き直しはしない)。
 
-## イベント(SSE)のつなぎ直しと、つなぎ直したあとの取り直し(段階 2 以降の全画面の土台)
+## 通知と途中経過(WebSocket)のつなぎ直しと、つなぎ直したあとの取り直し(段階 2 以降の全画面の土台)
 
-`src/api/events.ts` が接続を持つ。ブラウザ任せの再接続には頼らない。
-中継はサーバに届かないとき `/api/events` を 503(JSON)で返し、EventSource は仕様どおりそれで再接続をやめる(CLOSED)ため。
+`src/api/events.ts` が接続を持つ(タブごとに 1 本。Rust サーバへ直接つなぐ WebSocket)。ブラウザ任せの再接続には頼らない。
+つなぐたびに、中継を通して使い捨ての券をもらい(`issue_ws_ticket`)、つないだあとの最初のメッセージで券を送る(券は 1 回しか使えないので、つなぎ直すたびに新しい券)。
+サーバが止まっている・券がもらえないときも、切れた扱いにして、間隔を空けてつなぎ直す。
+凍結されたタブ・スリープから戻ったタブは、接続が切れている(ブラウザが閉じる)ので、同じ道でつなぎ直す。サーバから 35 秒何も届かない接続も、切れたとみなしてつなぎ直す。
 
 - 購読者(`onPing` などのイベント購読・`onConnectionChange`・`onReconnected`)が 1 人でもいる間だけ接続を持つ。
   0 人になれば閉じ、つなぎ直しの予約も取り消す(**unlisten するとつなぎ直しも止まる**)。
   どの購読も `Promise<unlisten>` を返す形のまま。
-- 切れたら(CLOSED、または自動再接続の待ち)接続状態が `"disconnected"` になり、1 秒から 2 倍ずつ(最大 10 秒)の間隔で作り直す。
+- 切れたら(閉じられた・券がもらえない・黙った)接続状態が `"disconnected"` になり、1 秒から 2 倍ずつ(最大 10 秒)の間隔で作り直す。
 - **接続状態**: `onConnectionChange(cb)`(`"connecting" | "connected" | "disconnected"`)。登録直後に今の状態を 1 回返す。
   画面の「サーバに接続できません」の表示・消去に使う。
 - **つなぎ直せた合図**: `onReconnected(cb)`。切れている間のイベントは失われているので、**画面はこの合図で表示(Query)を取り直す**。
@@ -100,10 +105,10 @@ save(input).then(() => { setBaseline(input); clear(); });
 
 - 部品は native と同じ(`useRunningSession`・`useRunningSessionList`・`useClaudeUsage`・`RunningSessionBar`・`PermissionRequestCard`・`LiveTurnView`・`NewSessionDialog`・`RenameSessionDialog`)。
   業務状態はサーバにあり、画面は「取得した表示用の値」と入力中の欄(下書き・添付・名前・モデルの選択)だけを持つ。
-- **途中経過(返答中の表示)**: `src/api/events.ts` の中に閉じている。タブごとの SSE 1 本に、サーバが最初に接続 ID(`connection`)を知らせる。
-  `subscribeRunningSessionProgress` はその ID で購読し(`openProgressSubscription`)、途中経過(`running-session:progress`)を購読 ID で振り分ける。
-  つなぎ直したときは、新しい接続 ID で購読し直す(サーバの購読は接続とともに消える)。画面側は接続 ID も SSE も知らない
-  (接続の持ち方を変える #629 のときは、このファイルだけを変える)。
+- **途中経過(返答中の表示)**: `src/api/events.ts` の中に閉じている。タブごとの WebSocket 1 本(Rust サーバへ直接つなぐ。#636)の上で、
+  `subscribeRunningSessionProgress` が購読を頼み(`openProgressSubscription`)、途中経過(`progress` メッセージ)を購読 ID で振り分ける。
+  つなぎ直したときは、新しい券でつなぎ直し、購読し直す(サーバの購読は接続とともに消える)。画面側は接続も券も知らない
+  (接続の持ち方を変えるときは、このファイルだけを変える)。
 - 途中経過と取り直しの合わせ方は、**番号で決める 1 か所**(`src/progressMerge.ts`)。サーバが会話ごとに途中経過へ連番(`seq`)を付け、取り直しの応答に「ここまで」の番号(`progress_seq`)を載せる。
   取り直しの「ここまで」以下の断片は捨て、続きだけを足す。重なり・順番の前後は渡さない。「ここまで」は、会話の切り替え・つなぎ直しのあとの最初の取り直し 1 回だけを使う。
 - 同じ瞬間の操作の二重実行(送信・起動・停止・権限の応答・中断・新規作成)は、state でなく ref で持つ集合で止める(`src/exclusive.ts`)。
@@ -131,7 +136,7 @@ npx tsc --noEmit        # apps/console で
 - 出していないもの(後の段階): かんばん・GitHub 連携、複数ウィンドウの連携(段階 4 でブラウザ側に作る)、サブエージェントの表示(native でもハブにある)。
   「仕様」ボタンは作らない。
 - 会話の Markdown 内のリンクは別タブで開く(`target="_blank"`・`rel="noopener noreferrer"`。`src/externalLinks.ts`)。
-- どの画面も、購読(`session:changed` など)は画面を離れたとき・unmount のときに `unlisten` する。サーバへの SSE 接続は、
+- どの画面も、購読(`session:changed` など)は画面を離れたとき・unmount のときに `unlisten` する。サーバへの WebSocket 接続は、
   画面を移動しても 1 本のまま(`src/api/events.ts` が持つ)。
 - command・イベントの実装状況は `npm run diff-commands` で出す。
 

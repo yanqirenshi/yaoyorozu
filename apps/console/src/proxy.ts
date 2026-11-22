@@ -7,7 +7,9 @@
 // - スクリプトは**リクエストごとの nonce** + `'strict-dynamic'` だけ(`'unsafe-inline'` は付けない)。
 //   Next はこのヘッダーから nonce を取り出し、自分の(インラインを含む)スクリプトに付ける。
 //   nonce を付けるには動的な描画が要るため、ルートの layout で `connection()` を呼んでいる。
-// - `connect-src 'self'`: fetch・SSE は同じオリジン(中継)だけ。外へは送れない。
+// - `connect-src 'self' ws://127.0.0.1:<サーバのポート>`: fetch は同じオリジン(中継)だけ。通知と途中経過の WebSocket は、
+//   Rust サーバのポートへ直接(ワイルドカードにしない)。ポートは実行時に決まるので、サーバが書いたポートのファイルを読む
+//   (サーバを起動し直して変わっても、次の画面の応答から追従する)。外へは送れない。
 // - `img-src 'self' data: blob:`: 外部の画像は読み込まない(読み込むだけで、開いたことが外へ伝わるため)。
 //   会話の中の外部の画像は表示されなくなる(了承済み)。
 // - `style-src 'self' 'unsafe-inline'`: command-dock・markdown.sitter が Shadow DOM の中に `<style>` を
@@ -16,14 +18,16 @@
 // - 開発(`next dev`)だけ、React の都合で `'unsafe-eval'` と HMR の `ws:` を足す。本番(`next start`)には付けない。
 
 import { NextResponse, type NextRequest } from "next/server";
+import { readServerPort } from "@/server/localServer";
 
-export function proxy(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
   const isDev = process.env.NODE_ENV === "development";
+  const serverPort = await readServerPort();
   const csp = [
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${isDev ? " 'unsafe-eval'" : ""}`,
-    `connect-src 'self'${isDev ? " ws:" : ""}`,
+    `connect-src 'self' ws://127.0.0.1:${serverPort}${isDev ? " ws:" : ""}`,
     "img-src 'self' data: blob:",
     "style-src 'self' 'unsafe-inline'",
     "font-src 'self' data:",

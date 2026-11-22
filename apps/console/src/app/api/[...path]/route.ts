@@ -1,8 +1,7 @@
 // Rust サーバへの中継。`/api/<path>` → サーバの `/<path>`(`/api/rpc/get_settings` →
-// `/rpc/get_settings`、`/api/events` → `/events`)。
+// `/rpc/get_settings`)。通知と途中経過は、この中継を通さず、ブラウザが Rust サーバへ直接つなぐ WebSocket で運ぶ(`api/events.ts`)。
 // - トークンはここ(サーバ側)で付け、ブラウザへは渡さない。
 // - Host / Origin を確かめる(DNS rebinding・他サイトからの呼び出し対策)。
-// - SSE は本文をそのまま流す(まとめない・貯めない)。
 
 import { NextResponse, type NextRequest } from "next/server";
 import { bodyLimitFor } from "@/server/bodyLimits";
@@ -12,7 +11,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 // 中継してよいのは、サーバが持つ入口だけ。
-const ALLOWED = [/^rpc\/[a-z_]+$/, /^events$/, /^health$/];
+const ALLOWED = [/^rpc\/[a-z_]+$/, /^health$/];
 
 const LOCAL_HOST = /^(127\.0\.0\.1|localhost):\d+$/i;
 
@@ -27,7 +26,7 @@ function originProblem(request: NextRequest): string | null {
 
   const origin = request.headers.get("origin");
   if (origin === null) {
-    // 同一オリジンの GET(EventSource 等)は Origin を付けない。変更を伴う要求には必須。
+    // 同一オリジンの GET は Origin を付けないことがある。変更を伴う要求には必須。
     return request.method === "GET" || request.method === "HEAD"
       ? null
       : "Origin がありません";
@@ -68,8 +67,6 @@ async function relay(
   const headers = new Headers({ Authorization: `Bearer ${token}` });
   const contentType = request.headers.get("content-type");
   if (contentType) headers.set("Content-Type", contentType);
-  const isEvents = target === "events";
-  if (isEvents) headers.set("Accept", "text/event-stream");
 
   const hasBody = request.method !== "GET" && request.method !== "HEAD";
   // 本文がサーバの上限を超えるものは、サーバへ送らずに 413 を返す(送ると、サーバが本文の途中で 413 を返して接続を
@@ -90,7 +87,7 @@ async function relay(
       headers,
       body,
       cache: "no-store",
-      // ブラウザが切れたら、サーバへの接続も切る(SSE の購読が残らないように)。
+      // ブラウザが切れたら、サーバへの接続も切る。
       signal: request.signal,
     });
   } catch {
@@ -105,11 +102,6 @@ async function relay(
   const responseHeaders = new Headers();
   const upstreamType = upstream.headers.get("content-type");
   if (upstreamType) responseHeaders.set("Content-Type", upstreamType);
-  if (isEvents) {
-    // 途中の変換・圧縮・貯め込みをさせない。
-    responseHeaders.set("Cache-Control", "no-cache, no-transform");
-    responseHeaders.set("X-Accel-Buffering", "no");
-  }
   return new Response(upstream.body, {
     status: upstream.status,
     headers: responseHeaders,
