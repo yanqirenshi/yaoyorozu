@@ -12,6 +12,14 @@
 //   切れている間のイベントは失われているので、画面はこの合図で表示を取り直す(Query を取り直す)。
 //   サーバが止まっている間に画面を開き、あとでサーバを起動した場合(初回の接続が失敗していた)も
 //   同じ合図が出る。
+//
+// 途中経過(実行中セッション。段階 3):
+// - サーバは、この接続(タブごとに 1 本)に「接続 ID」を最初のイベント(`connection`)で知らせる。
+//   途中経過は「購読」(接続 ID + 対象)ごとに、同じ接続へ流れてくる(`running-session:progress`。
+//   `{ subscription_id, progress }`)。接続が切れるとサーバ側の購読は消えるので、つなぎ直したときは新しい
+//   接続 ID で購読し直す。**接続の持ち方(1 タブ 1 本か、共有か。#629)は、このファイルの中に閉じる**:
+//   画面側は `openProgressSubscription` だけを使い、接続 ID も SSE も知らない。
+//   切れている間の途中経過は失われるので、画面は `onReconnected` で状態(Query)を取り直す。
 
 export type ConnectionState = "connecting" | "connected" | "disconnected";
 
@@ -34,6 +42,16 @@ let state: ConnectionState = "connecting";
 let hadFailure = false;
 // 今の EventSource に付けたイベント名(つなぎ直すたびに付け直す)。
 let attached = new Set<string>();
+
+// 今の接続の ID(`connection` イベントで届く。切れたら `null`)。
+let connectionId: string | null = null;
+const connectionIdListeners = new Set<(id: string) => void>();
+// 購読 ID → 途中経過の受け取り口。購読の応答(購読 ID)より先に届いた途中経過は、少しの間ためておく。
+type ProgressMessage = { seq: number; progress: unknown };
+const progressSinks = new Map<number, (message: ProgressMessage) => void>();
+const earlyProgress = new Map<number, ProgressMessage[]>();
+const EARLY_PROGRESS_LIMIT = 256;
+const EARLY_PROGRESS_TTL_MS = 5000;
 
 function setState(next: ConnectionState) {
   if (state === next) return;
@@ -63,6 +81,43 @@ function connect() {
   attached = new Set();
   listeners.forEach((_, name) => attach(es, name));
 
+  es.addEventListener("connection", (event) => {
+    if (source !== es) return;
+    try {
+      const body = JSON.parse((event as MessageEvent<string>).data) as { connection_id?: unknown };
+      if (typeof body.connection_id !== "string" || body.connection_id === "") return;
+      connectionId = body.connection_id;
+      connectionIdListeners.forEach((fn) => fn(body.connection_id as string));
+    } catch {
+      // 読めなければ無視する(購読は張れない。状態は Query で取れる)。
+    }
+  });
+  es.addEventListener("running-session:progress", (event) => {
+    if (source !== es) return;
+    try {
+      const body = JSON.parse((event as MessageEvent<string>).data) as {
+        subscription_id: number;
+        seq: number;
+        progress: unknown;
+      };
+      const message: ProgressMessage = { seq: body.seq, progress: body.progress };
+      const sink = progressSinks.get(body.subscription_id);
+      if (sink) {
+        sink(message);
+        return;
+      }
+      const early = earlyProgress.get(body.subscription_id) ?? [];
+      if (early.length === 0) {
+        const id = body.subscription_id;
+        setTimeout(() => earlyProgress.delete(id), EARLY_PROGRESS_TTL_MS);
+      }
+      if (early.length < EARLY_PROGRESS_LIMIT) early.push(message);
+      earlyProgress.set(body.subscription_id, early);
+    } catch {
+      // 読めない途中経過は捨てる。
+    }
+  });
+
   es.onopen = () => {
     if (source !== es) return;
     delay = INITIAL_DELAY_MS;
@@ -75,6 +130,7 @@ function connect() {
   es.onerror = () => {
     if (source !== es) return;
     hadFailure = true;
+    connectionId = null;
     setState("disconnected");
     if (es.readyState === EventSource.CLOSED) {
       // ブラウザは再接続をやめた(503 など)。自分でつなぎ直す。
@@ -112,6 +168,7 @@ function release() {
   source?.close();
   source = null;
   attached = new Set();
+  connectionId = null;
 }
 
 /** サーバのイベントを購読する。戻り値の関数で購読をやめる(0 人になれば接続も閉じる)。 */
@@ -167,4 +224,66 @@ export function onReconnected(callback: () => void): Promise<() => void> {
     reconnectedListeners.delete(callback);
     release();
   });
+}
+
+/**
+ * 実行中セッション 1 つの途中経過の購読を持つ。戻り値の関数で購読をやめる(接続も、ほかに使う人が
+ * いなければ閉じる)。
+ *
+ * - `register(connectionId)` が購読 ID を返す(サーバへ「この接続へ流す」と頼む)。`unregister` は購読を外す。
+ * - 接続が切れて、つなぎ直したときは、新しい接続 ID で `register` をやり直す(サーバの購読は接続とともに
+ *   消えているので、外す必要は無い)。切れている間の途中経過は失われる(画面は `onReconnected` で取り直す)。
+ * - 購読に失敗しても例外は出さない(状態と確定した行は Query で取れる。表示が劣化するだけ)。
+ */
+export function openProgressSubscription(
+  register: (connectionId: string) => Promise<number>,
+  unregister: (subscriptionId: number, connectionId: string) => Promise<void>,
+  onProgress: (progress: unknown, seq: number) => void,
+): () => void {
+  let cancelled = false;
+  let current: { subscriptionId: number; connectionId: string } | null = null;
+  let generation = 0;
+
+  const setup = (id: string) => {
+    generation += 1;
+    const mine = generation;
+    if (current) {
+      progressSinks.delete(current.subscriptionId);
+      current = null;
+    }
+    register(id)
+      .then((subscriptionId) => {
+        if (cancelled || mine !== generation) {
+          void unregister(subscriptionId, id).catch(() => {});
+          return;
+        }
+        current = { subscriptionId, connectionId: id };
+        const sink = (m: ProgressMessage) => onProgress(m.progress, m.seq);
+        progressSinks.set(subscriptionId, sink);
+        const early = earlyProgress.get(subscriptionId);
+        earlyProgress.delete(subscriptionId);
+        early?.forEach(sink);
+      })
+      .catch(() => {
+        // 購読できなくても、表示が劣化するだけ。
+      });
+  };
+
+  const listener = (id: string) => setup(id);
+  connectionIdListeners.add(listener);
+  retain();
+  if (connectionId !== null) setup(connectionId);
+
+  return () => {
+    if (cancelled) return;
+    cancelled = true;
+    generation += 1;
+    connectionIdListeners.delete(listener);
+    if (current) {
+      progressSinks.delete(current.subscriptionId);
+      void unregister(current.subscriptionId, current.connectionId).catch(() => {});
+      current = null;
+    }
+    release();
+  };
 }

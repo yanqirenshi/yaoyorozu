@@ -62,7 +62,7 @@ async function main() {
   check("守り: クライアントのパスは使われない(余分な項目は無視され、起動先はプロファイルのリポジトリ)", r.status === 200 && slash(r.json.cwd ?? "").toLowerCase().startsWith(slash(dirs.repo).toLowerCase()), `${r.status} cwd=${r.json?.cwd}`);
   if (r.status === 200) await rpc(srv, "stop_running_session", { target: refOf(r.json) });
 
-  r = await rpc(srv, "subscribe_running_session_progress", { target: { pid_domain: "x", pid: 1, started_at: 1 }, connectionId: 999999 });
+  r = await rpc(srv, "subscribe_running_session_progress", { target: { pid_domain: "x", pid: 1, started_at: 1 }, connectionId: "00000000-0000-4000-8000-000000000000" });
   check("守り: 無い接続への購読は 404", r.status === 404, `${r.status}`);
 
   // ---- 新規セッションの起動 ----

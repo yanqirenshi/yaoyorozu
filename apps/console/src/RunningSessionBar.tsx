@@ -1,0 +1,406 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import Badge from "./Badge";
+import LoadingIcon from "./LoadingIcon";
+import SelectButton from "./SelectButton";
+import type {
+  ClaudeUsageSnapshotDto,
+  RunningPermissionModeDto,
+  RunningSessionDto,
+  StartModelDto,
+} from "@/api/types";
+import {
+  PERMISSION_MODE_LABELS,
+  MAX_SESSION_NAME_CHARS,
+  START_MODELS,
+  START_MODEL_DEFAULT_LABEL,
+  START_MODEL_LABELS,
+  startModelLabel,
+  currentPermissionModeLabel,
+  processStateLabel,
+  processStateTone,
+  selectableModeOf,
+  usageSeverityTone,
+  usageLimitLabel,
+  usageResetsAtLabel,
+  usageFetchedAtLabel,
+} from "./runningSessionLabels";
+
+// 会話ビューの上部に出す、実行中セッション(app が起動したままの claude)の状態表示
+// (issue #392。#409 で、現在のモデル・権限モードの表示と、その場での切り替えを足した)。
+// プロセスの状態・権限モード・モデルを出し、中断・終了の操作を置く。状態は
+// イベント → Query で取り直したもの(楽観更新しない)。進行中(起動中・実行中)の
+// ローディングアイコンは issue #517 で `LiveTurnView` の「作成中」の横へ移した
+// (ここに残るのは設定の切り替え中(`switching`)のものだけ)。
+//
+// - 切り替えの選択は既存部品の選択ボタン(`SelectButton`)で開く一覧から行う。切り替えている間
+//   (`switching`)と、起動中は操作できない。結果(現在値)は CLI が受け入れたあとの取り直しで
+//   表示に反映される(要求しただけでは変わらない)。
+// - モデルは CLI が報告した一覧(`available_models`)から選ばせる(`set_model` は名前を検証しない)。
+// - 未起動のときは「次の起動」の権限モードとモデル(issue #445)を選べ、再開に付ける表示名
+//   (任意)を入れられる。起動前は CLI が動いていないので一覧が無く、モデルは別名の固定の選択肢
+//   (既定 / fable / opus / sonnet / haiku)から選ばせる(自由入力にしない)。
+
+type MenuKey = "mode" | "model" | "start-model";
+
+/** 利用状況バッジのツールチップ(issue #613)。「見ようと思えば見られる形」でリセット時刻を
+ * ローカル時刻にして添える(常時表示はしない。場所が狭いため)。読めなければ枠名だけ。 */
+function resetsAtTitle(frameLabel: string, resetsAtMs: number | null): string {
+  const local = usageResetsAtLabel(resetsAtMs);
+  return local ? `${frameLabel}(リセット: ${local})` : frameLabel;
+}
+
+const MODES: RunningPermissionModeDto[] = ["default", "plan", "accept_edits", "auto"];
+
+type Props = {
+  /** 表示中の会話の、app が起動している実行中セッション。無ければ `null`。 */
+  running: RunningSessionDto | null;
+  /** 次に起動するときの権限モード(未起動のとき、状態の横に出す)。 */
+  selectedMode: RunningPermissionModeDto;
+  /** 権限モードを選んだ(起動中なら切り替え、未起動なら次の起動の値)。 */
+  onSelectMode: (mode: RunningPermissionModeDto) => void;
+  /** モデルを選んだ(起動中だけ)。 */
+  onSelectModel: (model: string) => void;
+  /** 次に起動するときのモデル(未起動のとき。`null` は既定)。 */
+  selectedStartModel: StartModelDto | null;
+  onSelectStartModel: (model: StartModelDto | null) => void;
+  /** 切り替えの結果を待っている間(選択を止める)。 */
+  switching: boolean;
+  /** 再開に付ける表示名(任意。未起動のときだけ入力欄を出す)。 */
+  resumeName: string;
+  onResumeNameChange: (name: string) => void;
+  /** 再開に付ける表示名の入力欄とモデルの選択を出すか(会話ファイルのある会話の再開のとき)。 */
+  canConfigureResume: boolean;
+  onInterrupt: () => void;
+  onStop: () => void;
+  /** 未起動のとき「終了」の位置に出す「起動」ボタンから呼ぶ(issue #484)。 */
+  onStart: () => void;
+  /** 起動中(issue #484)。ボタンを押せなくし、表示を「起動中…」にする。 */
+  starting: boolean;
+  /** 会話の現在のタイトル(issue #524)。`canConfigureResume` が true(会話ファイルの
+   * ある会話)のときだけ、モデルの隣にこの値のボタンを出す。新規セッション(会話ファイルが
+   * 無い)では出さない。 */
+  sessionTitle: string;
+  /** セッション名のボタンから呼ぶ(issue #524)。呼び出し側でモーダルを開く。 */
+  onRenameSession: () => void;
+  /** Claude.ai の利用状況(issue #613)。アカウント全体の値で、この会話の値ではない。 */
+  claudeUsage: ClaudeUsageSnapshotDto;
+  /** 動いている実行中セッション(claude CLI)が1つ以上あるか。無ければ `claudeUsage` は
+   * 更新されないため、表示を薄くして古い値であることを示す(issue #613)。 */
+  claudeCliAlive: boolean;
+};
+
+export default function RunningSessionBar({
+  running,
+  selectedMode,
+  onSelectMode,
+  onSelectModel,
+  selectedStartModel,
+  onSelectStartModel,
+  switching,
+  resumeName,
+  onResumeNameChange,
+  canConfigureResume,
+  onInterrupt,
+  onStop,
+  onStart,
+  starting,
+  sessionTitle,
+  onRenameSession,
+  claudeUsage,
+  claudeCliAlive,
+}: Props) {
+  const alive = running !== null && running.process_state !== "exited";
+  const state = running?.process_state ?? null;
+  const canInterrupt = alive && (state === "running" || state === "awaiting_permission");
+  // 起動中(initialize の応答前)は CLI へ切り替えを要求できない。
+  const canSwitch = alive && state !== "starting" && !switching;
+  const models = running?.available_models ?? [];
+
+  const [openMenu, setOpenMenu] = useState<MenuKey | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // 外側のクリックで閉じる(既存のツールバーの一覧と同じ)。
+  useEffect(() => {
+    if (!openMenu) return;
+    const close = (e: MouseEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpenMenu(null);
+    };
+    document.addEventListener("click", close);
+    return () => document.removeEventListener("click", close);
+  }, [openMenu]);
+
+  // 起動状態が変わって選べなくなったら閉じる。
+  useEffect(() => {
+    if (alive && !canSwitch) setOpenMenu(null);
+  }, [alive, canSwitch]);
+
+  const currentMode = alive ? selectableModeOf(running.current_permission_mode) : selectedMode;
+
+  // ボタン自体に現在値を出す(issue #508。従来はボタンの隣に「権限モード: …」
+  // 「モデル: …」の説明書き(`.running-bar-mode`)を並べていたが、ボタンのラベルを
+  // 種別名(「権限モード」「モデル」)から現在値に置き換えて1か所にまとめた。
+  // 見た目のラベルだけでは用途が分からなくなるため、アクセシブルネーム・ツール
+  // チップ(`ariaLabel`/`title`)に種別名を残す。
+  const permissionModeValueLabel = alive
+    ? currentPermissionModeLabel(running.current_permission_mode)
+    : PERMISSION_MODE_LABELS[selectedMode];
+  const permissionModeAriaLabel = alive
+    ? `権限モード(現在: ${permissionModeValueLabel})`
+    : `次の起動の権限モード(現在: ${permissionModeValueLabel})`;
+  // 実行中のモデルは、最初の返答が来るまで CLI から報告されない(issue #409)。
+  // 未確定の間はボタンの文字自体を「モデル(未確定)」にする(現在値が無いので
+  // 種別名だけの表示にすると、他のボタンと紛れて現在値が無いことが伝わらないため)。
+  const aliveModelValueLabel = running?.current_model ?? "モデル(未確定)";
+  const aliveModelAriaLabel = running?.current_model
+    ? `モデル(現在: ${running.current_model})`
+    : "モデル(未確定)";
+  const startModelValueLabel = startModelLabel(selectedStartModel);
+  const startModelAriaLabel = `次の起動のモデル(現在: ${startModelValueLabel})`;
+
+  return (
+    <div className="running-bar" role="group" aria-label="実行中のセッション" ref={rootRef}>
+      {/* 進行中(起動中・実行中)のローディングアイコンは、ここには出さない(issue #517)。
+          会話に表示先がある「実行中」は `LiveTurnView` の「作成中」の横へ移した。
+          「起動中」は会話にまだ表示先が無い(会話ファイル・ライブなターンのどちらも
+          無い)ため、アイコンの出しどころが無く、このバッジ(「起動中」の文字)だけで
+          伝える(PR #517 の判断)。 */}
+      {/* 状態の変化を支援技術に伝える領域(色が変わっただけでは何も伝わらない。issue #411)。
+          LoadingIcon は自分で role="status" を持つので、包まずバッジだけを包む。 */}
+      <span className="running-bar-status" role="status">
+        <Badge tone={processStateTone(state)} label={processStateLabel(state)} size="small" />
+      </span>
+
+      {/* Claude.ai の利用状況(issue #613・#615)。アカウント全体の値であり、この会話の値では
+          ないことが伝わるよう「セッション」は使わず、「5時間」「今週」の表記にする。
+          - CLI が1つも動いていないとき(claudeCliAlive が偽)は、最後に取れた値を薄く出し
+            取得時刻を添える(「取得できません」より役に立つ。デザイン(全体)の指示)
+          - 一度も取れていない間も、CLI が動いているなら(これから取れるので)同じ場所に
+            控えめな「取得中」を出す(issue #615: 出さないと「機能があること自体に気づけない」)。
+            動いている CLI が無く、これから取れる見込みも無いときは、誤解を招く「取得中」を
+            出さず何も描かない。 */}
+      {(claudeUsage.usage || claudeCliAlive) && (
+        <span
+          className={`running-bar-usage${
+            claudeUsage.usage && claudeCliAlive ? "" : " running-bar-usage-stale"
+          }`}
+          role="status"
+          aria-label="Claude.ai の利用状況(アカウント全体)"
+        >
+          {claudeUsage.usage ? (
+            <>
+              {claudeUsage.usage.five_hour && (
+                <span title={resetsAtTitle("直近5時間", claudeUsage.usage.five_hour.resets_at_ms)}>
+                  <Badge
+                    tone={usageSeverityTone(claudeUsage.usage.five_hour.severity)}
+                    label={usageLimitLabel("直近5時間", claudeUsage.usage.five_hour)}
+                    size="small"
+                  />
+                </span>
+              )}
+              {claudeUsage.usage.seven_day && (
+                <span title={resetsAtTitle("今週(全モデル)", claudeUsage.usage.seven_day.resets_at_ms)}>
+                  <Badge
+                    tone={usageSeverityTone(claudeUsage.usage.seven_day.severity)}
+                    label={usageLimitLabel("今週", claudeUsage.usage.seven_day)}
+                    size="small"
+                  />
+                </span>
+              )}
+              {claudeUsage.usage.model_scoped.map((model) => (
+                <span
+                  key={model.display_name}
+                  title={resetsAtTitle(`今週の${model.display_name}`, model.limit.resets_at_ms)}
+                >
+                  <Badge
+                    tone={usageSeverityTone(model.limit.severity)}
+                    label={usageLimitLabel(`今週の${model.display_name}`, model.limit)}
+                    size="small"
+                  />
+                </span>
+              ))}
+              {!claudeCliAlive && (
+                <span className="running-bar-usage-fetched-at" title="claude が動いていないため更新していません">
+                  {usageFetchedAtLabel(claudeUsage.fetched_at_ms) ?? "未取得"}取得
+                </span>
+              )}
+            </>
+          ) : (
+            <span className="running-bar-usage-fetched-at">利用状況を取得中…</span>
+          )}
+        </span>
+      )}
+
+      <span className="running-bar-switch">
+        <SelectButton
+          size="small"
+          label={permissionModeValueLabel}
+          ariaLabel={permissionModeAriaLabel}
+          title={permissionModeAriaLabel}
+          disabled={alive && !canSwitch}
+          onClick={() => setOpenMenu((m) => (m === "mode" ? null : "mode"))}
+        />
+        {openMenu === "mode" && (
+          <div className="running-bar-menu" role="menu" aria-label="権限モード">
+            {MODES.map((value) => (
+              <button
+                key={value}
+                type="button"
+                role="menuitemradio"
+                aria-checked={currentMode === value}
+                className={`running-bar-menu-item${currentMode === value ? " active" : ""}`}
+                onClick={() => {
+                  setOpenMenu(null);
+                  onSelectMode(value);
+                }}
+              >
+                {PERMISSION_MODE_LABELS[value]}
+              </button>
+            ))}
+          </div>
+        )}
+      </span>
+
+      {alive && (
+        <span className="running-bar-switch">
+          <SelectButton
+            size="small"
+            label={aliveModelValueLabel}
+            ariaLabel={aliveModelAriaLabel}
+            title={aliveModelAriaLabel}
+            disabled={!canSwitch || models.length === 0}
+            onClick={() => setOpenMenu((m) => (m === "model" ? null : "model"))}
+          />
+          {openMenu === "model" && (
+            <div className="running-bar-menu" role="menu" aria-label="モデル">
+              {models.map((model) => (
+                <button
+                  key={model.value}
+                  type="button"
+                  role="menuitem"
+                  className={`running-bar-menu-item${
+                    running.current_model === model.value ? " active" : ""
+                  }`}
+                  title={model.description ?? undefined}
+                  onClick={() => {
+                    setOpenMenu(null);
+                    onSelectModel(model.value);
+                  }}
+                >
+                  {model.display_name}
+                </button>
+              ))}
+            </div>
+          )}
+        </span>
+      )}
+
+      {/* 未起動: 次の起動のモデル(別名の固定の選択肢。issue #445)。 */}
+      {!alive && canConfigureResume && (
+        <span className="running-bar-switch">
+          <SelectButton
+            size="small"
+            label={startModelValueLabel}
+            ariaLabel={startModelAriaLabel}
+            title={startModelAriaLabel}
+            onClick={() => setOpenMenu((m) => (m === "start-model" ? null : "start-model"))}
+          />
+          {openMenu === "start-model" && (
+            <div className="running-bar-menu" role="menu" aria-label="次の起動のモデル">
+              {[null, ...START_MODELS].map((value) => (
+                <button
+                  key={value ?? "default"}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={selectedStartModel === value}
+                  className={`running-bar-menu-item${selectedStartModel === value ? " active" : ""}`}
+                  onClick={() => {
+                    setOpenMenu(null);
+                    onSelectStartModel(value);
+                  }}
+                >
+                  {value === null ? START_MODEL_DEFAULT_LABEL : START_MODEL_LABELS[value]}
+                </button>
+              ))}
+            </div>
+          )}
+        </span>
+      )}
+
+      {/* セッション名のボタン(issue #524)。モデルの隣。押すと親がモーダルを開く
+          (入力・保存は親の責務。ここは表示とクリックの受け渡しだけ)。会話ファイルの
+          ある会話のときだけ(`canConfigureResume` と同じ条件)。長い名前は
+          CSS(.running-bar-session-name)で省略する。 */}
+      {canConfigureResume && (
+        <span className="running-bar-switch running-bar-session-name">
+          <SelectButton
+            size="small"
+            label={sessionTitle}
+            ariaLabel={`セッション名(現在: ${sessionTitle})`}
+            title={`セッション名(現在: ${sessionTitle})`}
+            onClick={onRenameSession}
+          />
+        </span>
+      )}
+
+      {switching && <LoadingIcon size="small" label="設定を切り替え中" />}
+
+      {/* 起動した claude がセッション間メッセージに対応していない版のときの説明(起動は止めない。
+          issue #437)。 */}
+      {alive && running.peer_messaging_warning && (
+        <span className="running-bar-note" role="note">
+          {running.peer_messaging_warning}
+        </span>
+      )}
+
+      {!alive && canConfigureResume && (
+        <span className="running-bar-name-field">
+          {/* 入力欄には、会話の現在の表示名を初期値として入れてある(issue #445)。同じ値で再開すれば
+              タイトルは変わらず、CLI が既定の名前(フォルダ名 + 連番)を付けない(セッション間
+              メッセージの宛先に、役割名を使い続けられる)。変えると、CLI が会話ファイルにタイトルの行を
+              足して、この会話のタイトルも変わる(最後のタイトルの行が採用される。CLI の挙動。#426)。
+              空にもできる(その場合は CLI が既定の名前を付ける)。注意書きは常時表示の
+              `.running-bar-name-note` だったが、状態バーの縦幅を取るため issue #513 で廃止し、
+              この `title`(ホバーで出るツールチップ)に移した(情報自体は失わない)。 */}
+          <input
+            type="text"
+            className="running-bar-name"
+            value={resumeName}
+            maxLength={MAX_SESSION_NAME_CHARS}
+            onChange={(e) => onResumeNameChange(e.target.value)}
+            placeholder="表示名(任意)"
+            aria-label="表示名(任意。次に開くときに付ける)"
+            title="変えると、この会話のタイトルも変わります"
+          />
+        </span>
+      )}
+
+      <span className="running-bar-actions">
+        {canInterrupt && (
+          <button type="button" className="running-bar-button" onClick={onInterrupt}>
+            中断
+          </button>
+        )}
+        {alive && (
+          <button type="button" className="running-bar-button" onClick={onStop}>
+            終了
+          </button>
+        )}
+        {/* 未起動のとき「終了」の位置に出す(issue #484)。メッセージ無しで、いまバーで
+            選んでいる値(権限モード・モデル・表示名)のまま起動だけする。会話ファイルが無い
+            新規セッションや対象未確定のときは出さない(`canConfigureResume` と同じ条件)。 */}
+        {!alive && canConfigureResume && (
+          <button
+            type="button"
+            className="running-bar-button"
+            disabled={starting}
+            onClick={onStart}
+          >
+            {starting ? "起動中…" : "起動"}
+          </button>
+        )}
+      </span>
+    </div>
+  );
+}

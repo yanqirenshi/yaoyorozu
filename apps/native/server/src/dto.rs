@@ -1549,6 +1549,8 @@ pub struct RunningSessionDto {
     /// 使えない版のときの説明(状態バーに出す。使える・分からないときは null)。起動は止めない。
     pub peer_messaging_warning: Option<String>,
     pub permission_requests: Vec<PermissionRequestDto>,
+    /// このセッションが送り出した途中経過の最後の番号(ここまでは、この応答の状態に反映済み)。
+    pub progress_seq: u64,
 }
 
 impl RunningSessionDto {
@@ -1556,9 +1558,11 @@ impl RunningSessionDto {
         project: Option<&str>,
         session: domain::RunningSessionByApp,
         available_models: Vec<app::AvailableModel>,
+        progress_seq: u64,
     ) -> Self {
         let version = session.base.version.clone();
         Self {
+            progress_seq,
             peer_messaging: version.as_deref().and_then(app::supports_peer_messaging),
             peer_messaging_warning: version.as_deref().and_then(app::peer_messaging_warning),
             cli_version: version,

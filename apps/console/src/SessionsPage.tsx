@@ -4,16 +4,20 @@
 // 閲覧と編集(セッション一覧・検索・会話表示・ページ送り・画像・生の行・CLAUDE.md / Rules / Skills /
 // settings の閲覧と保存)に必要な部分だけを写した(段階 2 C)。
 //
-// 出していないもの(ボタンごと表示しない): 実行中セッションとの対話(入力欄・権限応答・中断・起動・
-// 状態バー・サブエージェント表示・新規セッション・名前変更・アーカイブ操作。段階 3)、利用状況、
-// GitHub 連携(かんばん。段階 5)、「仕様」ボタン(#620 の決定)、複数ウィンドウの連携
-// (`useReportWindowState`・`viewer:navigate`。段階 4 で BroadcastChannel で作る)。
-// アーカイブ済みの印(`archived`)は、表示だけする。
+// 実行中セッションとの対話(入力欄・権限応答・中断・起動・停止・状態バー・新規セッション・名前変更・
+// アーカイブ操作・利用状況。段階 3 B)は、native と同じ部品(`useRunningSession` など)で足した。
+//
+// 出していないもの(ボタンごと表示しない): GitHub 連携(かんばん。段階 5)、「仕様」ボタン(#620 の決定)、
+// 複数ウィンドウの連携(`useReportWindowState`・`viewer:navigate`。段階 4 で BroadcastChannel で作る)、
+// サブエージェントの表示(native でもハブの画面にあるもの。段階 4)。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ChangeEvent, ClipboardEvent, FormEvent, KeyboardEvent } from "react";
 import type { DockItem } from "command-dock";
 import type { ViewMode } from "@yanqirenshi/markdown.sitter";
 import {
+  archiveSession,
+  checkImageAttachment,
   getProjectClaudeMd,
   getProjectSettingsFile,
   getSession,
@@ -23,15 +27,42 @@ import {
   onReconnected,
   onSessionChanged,
   onSettingsUpdated,
+  renameSession,
   saveProjectClaudeMd,
   saveProjectSettingsFile,
+  startRunningSession,
+  unarchiveSession,
 } from "@/api";
-import type { MessageDto, SessionSummaryDto } from "@/api";
+import type {
+  MessageDto,
+  ProcessStateDto,
+  RunningPermissionModeDto,
+  RunningSessionSummaryDto,
+  SessionSummaryDto,
+  StartModelDto,
+} from "@/api";
+import { readImageFile } from "./attachedImage";
+import type { AttachedImage } from "./attachedImage";
+import LiveTurnView from "./LiveTurnView";
+import NewSessionDialog from "./NewSessionDialog";
+import type { NewSessionInput } from "./NewSessionDialog";
+import PermissionRequestCard from "./PermissionRequestCard";
+import RenameSessionDialog from "./RenameSessionDialog";
+import RunningSessionBar from "./RunningSessionBar";
+import {
+  MAX_SESSION_NAME_CHARS,
+  PERMISSION_MODE_LABELS,
+  processStateLabel,
+  selectableModeOf,
+} from "./runningSessionLabels";
+import { useClaudeUsage } from "./useClaudeUsage";
+import { useRunningSession } from "./useRunningSession";
+import { useRunningSessionList } from "./useRunningSessionList";
 import { createCoalescedRunner } from "./coalescedRunner";
 import ClaudeMdEditor from "./ClaudeMdEditor";
 import type { ClaudeMdEditorHandle } from "./ClaudeMdEditor";
 import { createClaudeMdDockItems } from "./claudeMdDockItems";
-import { RELOAD_ICON } from "./icons";
+import { MODE_ICON, RELOAD_ICON } from "./icons";
 import JsonFileEditor from "./JsonFileEditor";
 import type { JsonFileEditorHandle } from "./JsonFileEditor";
 import { formatTimestamp } from "./formatTimestamp";
@@ -69,6 +100,22 @@ function sessionTabKey(folder: string, sessionId: string): string {
   return `${folder}${SESSION_TAB_SEPARATOR}${sessionId}`;
 }
 
+// 左の一覧の行の色分け(issue #491)。実行中(起動中・実行中)は金茶、権限待ちは濃い金茶、
+// 待機は墨、未起動・実行中セッションなしは無色。
+function sessionRowStateClass(state: ProcessStateDto | null): string {
+  switch (state) {
+    case "starting":
+    case "running":
+      return "session-list-item-running";
+    case "awaiting_permission":
+      return "session-list-item-awaiting";
+    case "idle":
+      return "session-list-item-idle";
+    default:
+      return "";
+  }
+}
+
 /**
  * 吹き出しの横の見出し(role)。セッション間メッセージ(issue #437)は、通常の会話と見分けて
  * 「他セッションから(送り元)」「送信: 宛先」「送信の結果」と出す。
@@ -97,13 +144,35 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const windowProfileId = nav.windowProfileId;
   // タブのタイトル(Tauri 版のウィンドウタイトル)に出すプロファイル名。読み込み前は null。
   const [profileName, setProfileName] = useState<string | null>(null);
+  // このタブが開いているプロファイルの ID(`/profiles` に id が無いときはアクティブ)。実行中セッションの
+  // 起動には、省略に頼らず必ずこの ID を渡す。読み込み前は null。
+  const [resolvedProfileId, setResolvedProfileId] = useState<string | null>(null);
   const [targetFolders, setTargetFolders] = useState<string[]>([]);
   const [sessionGroups, setSessionGroups] = useState<SessionGroup[]>([]);
   // 左ペインの検索語(issue #487。インクリメンタル・大文字小文字を区別しない部分一致)。
   const [sessionFilter, setSessionFilter] = useState("");
-  // アーカイブ済みを一覧に出すか(UI 状態なので保存しない。既定は出さない)。実行中の区分(起動・未起動)は
-  // 実行中セッションを持つ段階 3 で足す。
+  // 一覧の区分トグル(issue #506)。区分は 1 セッション 1 つ: archived なら「アーカイブ」(実行中より優先)、
+  // そうでなく実行中(会話ファイルの無い新規セッションも含む)なら「起動」、残りが「未起動」。ON = 一覧に表示。
+  // UI 状態なので保存しない。既定は 起動 ON・未起動 ON・アーカイブ OFF。検索語とは AND。
+  const [showRunningCategory, setShowRunningCategory] = useState(true);
+  const [showIdleCategory, setShowIdleCategory] = useState(true);
   const [showArchivedCategory, setShowArchivedCategory] = useState(false);
+  // 新規セッションのモーダル(issue #409)。
+  const [newDialogOpen, setNewDialogOpen] = useState(false);
+  // セッション名を変えるモーダル(issue #524)。
+  const [renameDialogOpen, setRenameDialogOpen] = useState(false);
+  // 再開に付ける表示名の、ユーザーが入力欄を編集した値(未編集は null = その会話の現在の表示名を出す)。
+  const [resumeNameEdit, setResumeNameEdit] = useState<string | null>(null);
+  // 次に起動する(再開する)ときのモデル(null は CLI の既定)。別の会話へ移ったら既定に戻す。
+  const [startModel, setStartModel] = useState<StartModelDto | null>(null);
+  useEffect(() => {
+    setStartModel(null);
+    setResumeNameEdit(null);
+  }, [nav.session]);
+  // このタブで新規に作ったセッションの ID(会話ファイルができたら、URL を `project` 付きの表示へ切り替える)。
+  const newlyStartedRef = useRef<Set<string>>(new Set());
+  // 新規セッションの作成中(同じ瞬間の 2 回目を受け付けない。state でなく ref)。
+  const creatingRef = useRef(false);
   const [messages, setMessages] = useState<MessageDto[]>([]);
   // `refreshSessionInPlace` が最新の読み込み件数を参照するための ref(issue #314)。
   // state をそのまま依存配列に入れると、追記のたびに購読の effect が再登録されてしまうため、
@@ -120,6 +189,14 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const [rawLineUuid, setRawLineUuid] = useState<string | null>(null);
   // 「画像 n 枚」で開いているメッセージの uuid(閉じていれば null。issue #349)。
   const [imagesUuid, setImagesUuid] = useState<string | null>(null);
+  // 送信前の添付画像・入力欄の下書き(入力途中の UI 状態。サーバから取り直した値で上書きしない。送信で空に戻す)。
+  const [attachments, setAttachments] = useState<AttachedImage[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [draft, setDraft] = useState("");
+  // 複数行入力欄(issue #483)の自動リサイズ用。
+  const draftInputRef = useRef<HTMLTextAreaElement>(null);
+  // 次に起動する実行中セッションの権限モード。
+  const [mode, setMode] = useState<RunningPermissionModeDto>("default");
   const viewParam = nav.view;
   const view: PaneView = PANE_VIEWS.includes(viewParam as PaneView)
     ? (viewParam as PaneView)
@@ -158,10 +235,9 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const loadTargetFoldersAndSessions = useCallback((): Promise<void> => {
     return getSettings(windowProfileId)
       .then((settings) => {
-        setProfileName(
-          settings.profiles.find((p) => p.id === (windowProfileId ?? settings.active_profile_id))
-            ?.name ?? null,
-        );
+        const profileId = windowProfileId ?? settings.active_profile_id;
+        setResolvedProfileId(profileId);
+        setProfileName(settings.profiles.find((p) => p.id === profileId)?.name ?? null);
         setRepositoryPath(settings.repository_path);
         setTargetFolders(settings.selected_project_folders);
         return loadSessionGroups(settings.selected_project_folders);
@@ -198,6 +274,31 @@ function SessionsPage({ nav }: SessionsPageProps) {
       })
       .catch((e) => setError(isAppError(e) ? e.message : String(e)));
   }, []);
+
+  // app が起動したまま持つ claude CLI との対話。状態はイベント → Query で取り直す(楽観更新しない)。
+  // 途中経過(返答中の表示)は、確定した行が一覧に現れたら消える。`busy` は起動〜送信の書き込みが終わるまで。
+  const {
+    running,
+    live,
+    busy: sending,
+    switching,
+    send: sendToSession,
+    start: startRunning,
+    starting,
+    respond: respondToPermission,
+    interrupt: interruptRunning,
+    switchTo: switchRunning,
+    stop: stopRunning,
+  } = useRunningSession({
+    sessionId: sessionParam ?? null,
+    onTurnFinished: (target) => {
+      if (projectParam && sessionParam && target && target.session_id === sessionParam) {
+        return refreshSessionInPlace(projectParam, sessionParam);
+      }
+    },
+    onError: (message) => setError(message),
+    getMessageUuids: () => messagesRef.current.flatMap((m) => (m.uuid ? [m.uuid] : [])),
+  });
 
   const loadMore = useCallback(() => {
     if (!projectParam || !sessionParam || loadingMore) return;
@@ -260,10 +361,9 @@ function SessionsPage({ nav }: SessionsPageProps) {
     const unlistenPromise = onSettingsUpdated(() => {
       getSettings(windowProfileId)
         .then((settings) => {
-          setProfileName(
-            settings.profiles.find((p) => p.id === (windowProfileId ?? settings.active_profile_id))
-              ?.name ?? null,
-          );
+          const profileId = windowProfileId ?? settings.active_profile_id;
+          setResolvedProfileId(profileId);
+          setProfileName(settings.profiles.find((p) => p.id === profileId)?.name ?? null);
           setRepositoryPath(settings.repository_path);
           setTargetFolders(settings.selected_project_folders);
           if (projectParam && !settings.selected_project_folders.includes(projectParam)) {
@@ -311,13 +411,40 @@ function SessionsPage({ nav }: SessionsPageProps) {
     .flatMap((group) => group.sessions.map((session) => ({ folder: group.folder, session })))
     .sort((a, b) => b.session.modified_at - a.session.modified_at);
 
-  // 左ペインの縦一覧(issue #487)。全セッションを常に表示し、検索語で絞り込むだけにする。
-  // 対象: タイトル。対象フォルダが複数のときはフォルダ名も対象に含める。アーカイブ済みは
-  // 「アーカイブ」を ON にしたときだけ出す(検索語とは AND)。
-  const normalizedSessionFilter = sessionFilter.trim().toLowerCase();
-  const categoryFilteredSessions = allSessions.filter(
-    ({ session }) => showArchivedCategory || !session.archived,
+  // 会話ファイルがまだ無い新規のセッション(issue #409)。app が起動して持っているセッションのうち、
+  // 一覧(会話ファイルから作る)に無いもの。左の一覧に並べ、選ぶと空の会話として開く
+  // (URL は `session` だけで `project` を持たない)。会話ファイルができたら通常の行になる。
+  const runningList = useRunningSessionList();
+  // Claude.ai の利用状況(アカウント単位の値。状態バーに出す)。
+  const claudeUsage = useClaudeUsage();
+  const claudeCliAlive = runningList.some((s) => s.process_state !== "exited");
+  const knownSessionIds = new Set(allSessions.map(({ session }) => session.id));
+  // 一覧に出す側だけ、このプロファイルのリポジトリのセッションに絞る(issue #618)。実行中セッションの
+  // 一覧は他プロファイルのものも含むので、絞らないと混ざる。`repository_path` が空・一致しないものは出さない。
+  const pendingSummaries = runningList.filter(
+    (s) =>
+      s.process_state !== "exited" &&
+      !knownSessionIds.has(s.session_id) &&
+      !!repositoryPath &&
+      s.repository_path === repositoryPath,
   );
+  // session_id → 実行中セッション。一覧の行の色分け・区分に使う。終了したものは載せない(未起動と同じ扱い)。
+  const runningBySessionId = useMemo(() => {
+    const map = new Map<string, RunningSessionSummaryDto>();
+    runningList.forEach((summary) => {
+      if (summary.process_state !== "exited") map.set(summary.session_id, summary);
+    });
+    return map;
+  }, [runningList]);
+
+  // 左ペインの縦一覧(issue #487)。全セッションを常に表示し、検索語で絞り込むだけにする。
+  // 対象: タイトル。対象フォルダが複数のときはフォルダ名も対象に含める。区分トグルで OFF の区分は除く。
+  const normalizedSessionFilter = sessionFilter.trim().toLowerCase();
+  const categoryFilteredSessions = allSessions.filter(({ session }) => {
+    if (session.archived) return showArchivedCategory;
+    if (runningBySessionId.has(session.id)) return showRunningCategory;
+    return showIdleCategory;
+  });
   const visibleSessions = (
     normalizedSessionFilter
       ? categoryFilteredSessions.filter(
@@ -327,14 +454,110 @@ function SessionsPage({ nav }: SessionsPageProps) {
         )
       : categoryFilteredSessions
   ).map(({ folder, session }) => ({ key: sessionTabKey(folder, session.id), folder, session }));
+  // 会話ファイルの無い新規セッションも「起動」の区分として扱う。
+  const visiblePendingSummaries = showRunningCategory ? pendingSummaries : [];
   const selectedSummary = sessionGroups
     .find((g) => g.folder === projectParam)
     ?.sessions.find((s) => s.id === sessionParam);
   const selectedTabValue =
     projectParam && selectedSummary ? sessionTabKey(projectParam, selectedSummary.id) : "";
+  // 表示中の会話の実行中セッションが動いているか(実行中セッションは会話ごとに複数持てる)。
+  const runningAlive = running !== null && running.process_state !== "exited";
 
-  // 表示中の対象がある(会話ファイルのある会話)。
-  const hasTarget = !!sessionParam && !!projectParam;
+  const pendingSelected =
+    !projectParam && sessionParam
+      ? (pendingSummaries.find((s) => s.session_id === sessionParam) ?? null)
+      : null;
+  // 表示中の対象がある(会話ファイルのある会話、または新規のセッション)。
+  const hasTarget = !!sessionParam && (!!projectParam || !!pendingSelected);
+  // 選択を外した(hasTarget が false になった)ら、書きかけの下書き・添付を空にする(issue #515)。
+  // 対象を切り替えただけ(選択が無い状態を経由しない)のときは保持する。
+  useEffect(() => {
+    if (!hasTarget) {
+      setDraft("");
+      setAttachments([]);
+    }
+  }, [hasTarget]);
+  // 一覧に出るセッションはすべて送信対象にできる。新規のセッション(会話ファイルがまだ無い)も、実行中なら送れる。
+  const canSend = !!selectedSummary || !!pendingSelected;
+  // 再開の表示名の入力欄の値(編集していなければ、その会話の現在の表示名)。上限を超える表示名は
+  // 切り詰めるとタイトルが変わるので初期値にしない。
+  const currentTitleAsName = selectedSummary?.custom_title ?? "";
+  const resumeName =
+    resumeNameEdit ??
+    ([...currentTitleAsName].length <= MAX_SESSION_NAME_CHARS ? currentTitleAsName : "");
+
+  // 権限モードの選択: 起動中なら実行中のセッションを切り替え、未起動なら次の起動の値。
+  const selectMode = (value: RunningPermissionModeDto) => {
+    setMode(value);
+    if (runningAlive) void switchRunning({ kind: "permission_mode", mode: value });
+  };
+  const selectModel = (model: string) => void switchRunning({ kind: "model", model });
+
+  // 未起動のとき、メッセージ無しで起動だけする(issue #484)。送信時の自動起動と同じ `ensureStarted` を使う。
+  const handleStartRunning = () => {
+    if (!projectParam || !sessionParam || !resolvedProfileId) return;
+    void startRunning({
+      profileId: resolvedProfileId,
+      project: projectParam,
+      sessionId: sessionParam,
+      mode,
+      name: resumeName,
+      model: startModel,
+    });
+  };
+
+  // アーカイブする(issue #495)。実行中のものは、止めてからアーカイブすることを確認する。表示中の会話を
+  // アーカイブしたら、選択を外して 0 件の案内へ戻す。一覧への反映は `session:changed`(既存の購読)。
+  const archiveSessionWithConfirm = async (project: string, sessionId: string, alive: boolean) => {
+    if (alive && !window.confirm("実行中です。止めてからアーカイブします。よろしいですか?")) {
+      return;
+    }
+    try {
+      await archiveSession(project, sessionId);
+      if (project === projectParam && sessionId === sessionParam) {
+        nav.clearProjectAndSession();
+      }
+    } catch (e) {
+      setError(isAppError(e) ? e.message : String(e));
+    }
+  };
+
+  // 会話ペイン左下の「アーカイブ」/「戻す」から呼ぶ(表示中の会話が対象)。
+  const handleArchiveToggleCurrentSession = () => {
+    if (!projectParam || !sessionParam) return;
+    if (selectedSummary?.archived) {
+      void unarchiveSession(projectParam, sessionParam).catch((e) =>
+        setError(isAppError(e) ? e.message : String(e)),
+      );
+      return;
+    }
+    void archiveSessionWithConfirm(projectParam, sessionParam, runningAlive);
+  };
+
+  // 状態バーの「セッション名」ボタンのモーダルでの確定(issue #524)。表示は `session:changed` で反映される。
+  const handleRenameSession = async (title: string) => {
+    if (!projectParam || !sessionParam) return;
+    try {
+      await renameSession(projectParam, sessionParam, title);
+      setRenameDialogOpen(false);
+    } catch (e) {
+      setError(isAppError(e) ? e.message : String(e));
+    }
+  };
+
+  // 会話ファイルができた新規セッションの表示中(URL が `session` だけ)を、通常の会話の表示(`project` 付き)へ移す。
+  useEffect(() => {
+    const ids = new Set(newlyStartedRef.current);
+    if (!projectParam && sessionParam) ids.add(sessionParam);
+    for (const id of ids) {
+      const hit = allSessions.find(({ session }) => session.id === id);
+      if (!hit) continue;
+      newlyStartedRef.current.delete(id);
+      if (!projectParam && sessionParam === id) nav.setProjectAndSession(hit.folder, id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionGroups, projectParam, sessionParam]);
 
   const confirmDiscardIfDirty = (): boolean => {
     if (view === "claude-md" && claudeMdDirty) {
@@ -368,9 +591,123 @@ function SessionsPage({ nav }: SessionsPageProps) {
     nav.setSkill(name);
   };
 
+  // 受け取った画像ファイル(貼り付け・ファイル選択)を 1 枚ずつサーバで事前検証し、通ったものだけを
+  // サムネイルにする(形式・サイズ・枚数の規則はサーバの domain が唯一の判定元。issue #349)。
+  const addImageFiles = async (files: File[]) => {
+    setError(null);
+    let count = attachments.length;
+    for (const file of files) {
+      try {
+        const image = await readImageFile(file);
+        await checkImageAttachment(image.base64, count);
+        count += 1;
+        setAttachments((prev) => [...prev, image]);
+      } catch (e) {
+        // 本文の上限を超えた(サーバが 413 で断った)ときは、上限の説明を出す(1 枚の上限は base64 で 5,000,000 文字 = 約 3.7MB)。
+        setError(
+          isAppError(e) && e.code === "payload_too_large"
+            ? "画像が大きすぎます(上限は 1 枚あたり約 3.7MB)"
+            : isAppError(e)
+              ? e.message
+              : String(e),
+        );
+      }
+    }
+  };
+
+  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null);
+    if (files.length === 0) return;
+    event.preventDefault();
+    void addImageFiles(files);
+  };
+
+  // 複数行入力欄(issue #483)。行数に応じて高さを伸ばし、空になったら 1 行に戻す。
+  useEffect(() => {
+    const el = draftInputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [draft]);
+
+  const handleFilesSelected = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    // 同じファイルをもう一度選べるように、選択をリセットする。
+    event.target.value = "";
+    if (files.length > 0) void addImageFiles(files);
+  };
+
+  const canSubmit = !!draft.trim() || attachments.length > 0;
+
+  // 送信。app が起動したままの claude 経由で送る: 未起動なら起動して、待機になってから送る。
+  // 外部(ターミナル・Desktop)で同じ会話が実行中なら、サーバが止める(エラー表示)。
+  // フォームの送信と、入力欄での Enter(issue #483)の両方から呼ぶ。
+  const submitMessage = async () => {
+    if (!hasTarget || !sessionParam || !canSend || sending || !canSubmit || !resolvedProfileId) {
+      return;
+    }
+    setError(null);
+    const sent = await sendToSession({
+      profileId: resolvedProfileId,
+      project: projectParam,
+      sessionId: sessionParam,
+      mode,
+      name: resumeName,
+      model: startModel,
+      text: draft,
+      images: attachments.map((image) => image.base64),
+    });
+    if (sent) {
+      setDraft("");
+      setAttachments([]);
+      setResumeNameEdit(null);
+      setStartModel(null);
+    }
+  };
+
+  const handleSubmit = (event: FormEvent) => {
+    event.preventDefault();
+    void submitMessage();
+  };
+
+  // Enter で送信、Shift+Enter で改行(issue #483)。IME の変換確定の Enter では送信しない。
+  const handleDraftKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== "Enter" || event.shiftKey) return;
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+    event.preventDefault();
+    void submitMessage();
+  };
+
+  // 新規セッションを作る(issue #409)。app が新しい会話を起動し、できたら自動で開く(会話ファイルができる
+  // までは空の会話)。失敗(同時数の上限など)はバナーで理由を出す。
+  const handleCreateNewSession = async (input: NewSessionInput) => {
+    setNewDialogOpen(false);
+    setError(null);
+    // 同じ瞬間の 2 回目(ダブルクリック・Enter の連打)は受け付けない(state は描画まで古いので ref で持つ)。
+    if (!resolvedProfileId || creatingRef.current) return;
+    creatingRef.current = true;
+    try {
+      const started = await startRunningSession(resolvedProfileId, {
+        kind: "new",
+        mode: input.mode,
+        name: input.name,
+        model: input.model,
+      });
+      newlyStartedRef.current.add(started.session_id);
+      setMode(input.mode);
+      if (confirmDiscardIfDirty()) nav.setProjectAndSession(null, started.session_id);
+    } catch (e) {
+      setError(isAppError(e) ? e.message : String(e));
+    } finally {
+      creatingRef.current = false;
+    }
+  };
+
   // ビューアでは dock を表示しない(issue #257)ため、これらの操作は dock ではなくページ内の
-  // `ViewerToolbar` に出す(内容・挙動は dock 時代のまま)。権限モードの切り替えは実行中セッションの
-  // 操作なので、段階 3 で足す。
+  // `ViewerToolbar` に出す(内容・挙動は dock 時代のまま)。
   const dockItems = useMemo<DockItem[]>(() => {
     const items: DockItem[] = [
       {
@@ -378,6 +715,21 @@ function SessionsPage({ nav }: SessionsPageProps) {
         label: RELOAD_ICON,
         title: "再読み込み",
         onClick: reload,
+      },
+      {
+        id: "mode",
+        label: MODE_ICON,
+        // 未起動なら次の起動から、起動中ならいまの実行中セッションを切り替える(結果は CLI が受け入れたあと、
+        // 状態の取り直しで表示に反映される)。
+        title: runningAlive ? "権限モード(実行中のセッションを切り替え)" : "権限モード(次の起動から)",
+        popup: (["default", "plan", "accept_edits", "auto"] as RunningPermissionModeDto[]).map(
+          (value) => ({
+            label: PERMISSION_MODE_LABELS[value],
+            active:
+              (runningAlive ? selectableModeOf(running.current_permission_mode) : mode) === value,
+            onSelect: () => selectMode(value),
+          }),
+        ),
       },
     ];
     if (view === "claude-md") {
@@ -419,7 +771,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
       );
     }
     return items;
-  }, [reload, view, claudeMdMode, claudeMdDirty, settingsJsonDirty, settingsLocalJsonDirty]);
+  }, [reload, mode, view, claudeMdMode, claudeMdDirty, settingsJsonDirty, settingsLocalJsonDirty]);
 
   // CLAUDE.md / Rules / Skills / settings 系ビューの、リポジトリ未設定時の案内(issue #269)。
   // 読み込み前(`undefined`)は何も出さない。
@@ -430,6 +782,20 @@ function SessionsPage({ nav }: SessionsPageProps) {
 
   return (
     <div className="viewer-page">
+      {newDialogOpen && (
+        <NewSessionDialog
+          initialMode={mode}
+          onCreate={handleCreateNewSession}
+          onClose={() => setNewDialogOpen(false)}
+        />
+      )}
+      {renameDialogOpen && selectedSummary && (
+        <RenameSessionDialog
+          initialTitle={selectedSummary.title}
+          onRename={(title) => void handleRenameSession(title)}
+          onClose={() => setRenameDialogOpen(false)}
+        />
+      )}
       <div className="viewer-body">
         {/* ビュー切り替えは上部のタブではなく、画面の最左端のサイドメニュー(issue #263)。 */}
         <ViewerSideMenu active={view} onChange={handleSwitchView} />
@@ -449,8 +815,34 @@ function SessionsPage({ nav }: SessionsPageProps) {
                   onChange={(e) => setSessionFilter(e.target.value)}
                   aria-label="セッションを検索"
                 />
+                <button
+                  type="button"
+                  className="session-list-add"
+                  title="新しい会話を始める"
+                  aria-label="新規セッション"
+                  disabled={!resolvedProfileId || !repositoryPath}
+                  onClick={() => setNewDialogOpen(true)}
+                >
+                  +
+                </button>
               </div>
               <div className="session-list-category-toggle" role="group" aria-label="表示する区分">
+                <button
+                  type="button"
+                  className="session-list-category-button"
+                  aria-pressed={showRunningCategory}
+                  onClick={() => setShowRunningCategory((v) => !v)}
+                >
+                  起動
+                </button>
+                <button
+                  type="button"
+                  className="session-list-category-button"
+                  aria-pressed={showIdleCategory}
+                  onClick={() => setShowIdleCategory((v) => !v)}
+                >
+                  未起動
+                </button>
                 <button
                   type="button"
                   className="session-list-category-button"
@@ -462,18 +854,43 @@ function SessionsPage({ nav }: SessionsPageProps) {
               </div>
             </div>
             <div className="project-list-rows">
+              {/* 会話ファイルがまだ無い新規のセッション(実行中のもの。「起動」の区分)。会話ファイルができたら通常の行になる。 */}
+              {visiblePendingSummaries.map((summary) => {
+                const title = summary.name ?? "新規セッション";
+                const rowTitle = `${title} / ${processStateLabel(summary.process_state)}`;
+                return (
+                  <div key={summary.session_id} className="session-list-row">
+                    <button
+                      type="button"
+                      className={`project-item session-list-item ${
+                        pendingSelected?.session_id === summary.session_id ? "selected" : ""
+                      }`}
+                      title={rowTitle}
+                      onClick={() => {
+                        if (confirmDiscardIfDirty()) nav.setProjectAndSession(null, summary.session_id);
+                      }}
+                    >
+                      <span className="session-item-title">{title}</span>
+                    </button>
+                  </div>
+                );
+              })}
               {visibleSessions.map(({ key, folder, session }) => {
+                const sessionRunning = runningBySessionId.get(session.id) ?? null;
                 // 更新日時・状態は、行ではなくホバーの title に残す(issue #519)。
-                const rowTitle = `${session.title} / ${new Date(session.modified_at).toLocaleString()}${
-                  session.archived ? " / アーカイブ" : ""
-                }`;
+                const statusLabel = session.archived
+                  ? "アーカイブ"
+                  : sessionRunning
+                    ? processStateLabel(sessionRunning.process_state)
+                    : "未起動";
+                const rowTitle = `${session.title} / ${new Date(session.modified_at).toLocaleString()} / ${statusLabel}`;
                 return (
                   <div key={key} className="session-list-row">
                     <button
                       type="button"
-                      className={`project-item session-list-item ${
-                        key === selectedTabValue ? "selected" : ""
-                      }`}
+                      className={`project-item session-list-item ${sessionRowStateClass(
+                        sessionRunning?.process_state ?? null,
+                      )} ${key === selectedTabValue ? "selected" : ""}`}
                       title={rowTitle}
                       onClick={() => handleSelectSession(folder, session.id)}
                     >
@@ -492,15 +909,111 @@ function SessionsPage({ nav }: SessionsPageProps) {
         )}
         <div className="session-conversation">
           {view === "chat" ? (
+            <>
+            {hasTarget && (
+              <RunningSessionBar
+                running={running}
+                selectedMode={mode}
+                onSelectMode={selectMode}
+                onSelectModel={selectModel}
+                selectedStartModel={startModel}
+                onSelectStartModel={setStartModel}
+                switching={switching}
+                resumeName={resumeName}
+                onResumeNameChange={setResumeNameEdit}
+                canConfigureResume={!!projectParam && !!selectedSummary}
+                onInterrupt={() => void interruptRunning()}
+                onStop={() => void stopRunning()}
+                onStart={handleStartRunning}
+                starting={starting}
+                sessionTitle={selectedSummary?.title ?? ""}
+                onRenameSession={() => setRenameDialogOpen(true)}
+                claudeUsage={claudeUsage}
+                claudeCliAlive={claudeCliAlive}
+              />
+            )}
+            {/* メッセージ入力欄・添付サムネイルは、選んでいる対象があるときだけ描く(issue #515)。
+                下書き・添付はこのコンポーネントの状態なので、サーバから取り直しても上書きされない。 */}
+            {hasTarget && (
+              <>
+                <form className="message-form" onSubmit={handleSubmit}>
+                  {/* 画像の添付(ファイル選択。貼り付けは入力欄の paste で受ける。issue #349) */}
+                  <button
+                    type="button"
+                    className="message-attach"
+                    title="画像を添付"
+                    aria-label="画像を添付"
+                    disabled={!canSend || sending}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    画像
+                  </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    hidden
+                    onChange={handleFilesSelected}
+                  />
+                  <textarea
+                    ref={draftInputRef}
+                    className="message-input"
+                    placeholder="AIにメッセージを送る(画像は貼り付けでも添付できます)"
+                    rows={1}
+                    value={draft}
+                    disabled={!canSend || sending}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={handleDraftKeyDown}
+                    onPaste={handlePaste}
+                  />
+                  <button
+                    type="submit"
+                    className="message-send"
+                    disabled={!canSend || sending || !canSubmit || !resolvedProfileId}
+                  >
+                    {sending ? "送信中…" : "送信"}
+                  </button>
+                </form>
+                {attachments.length > 0 && (
+                  <div className="message-attachments">
+                    {attachments.map((image, i) => (
+                      <div key={image.id} className="message-attachment">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          className="message-attachment-thumb"
+                          src={image.dataUrl}
+                          alt={`添付画像 ${i + 1}`}
+                        />
+                        <button
+                          type="button"
+                          className="message-attachment-remove"
+                          title="この画像を外す"
+                          aria-label={`添付画像 ${i + 1} を外す`}
+                          disabled={sending}
+                          onClick={() =>
+                            setAttachments((prev) => prev.filter((a) => a.id !== image.id))
+                          }
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
             <div className="conversation-scroll">
               {error && <p className="error">{error}</p>}
               {!hasTarget ? (
                 <p>
                   {targetFolders.length === 0
                     ? "設定のClaudeタブで対象フォルダを選択してください。"
-                    : normalizedSessionFilter && visibleSessions.length === 0
-                      ? "該当するセッションがありません。"
-                      : "左の一覧からセッションを選んでください。"}
+                    : !showRunningCategory && !showIdleCategory && !showArchivedCategory
+                      ? "表示する区分を選んでください。"
+                      : normalizedSessionFilter && visibleSessions.length === 0
+                        ? "該当するセッションがありません。"
+                        : "左の一覧からセッションを選んでください。"}
                 </p>
               ) : (
                 <>
@@ -520,7 +1033,24 @@ function SessionsPage({ nav }: SessionsPageProps) {
                       onClose={() => setImagesUuid(null)}
                     />
                   )}
+                  {pendingSelected && messages.length === 0 && (
+                    <p className="session-pending-note">
+                      新しい会話です。最初のメッセージを送ると、会話ファイルができて一覧に加わります。
+                    </p>
+                  )}
                   <div className="messages">
+                    {/* 権限の問い合わせと返答中の表示(issue #392)。新しい順なので先頭に置く。 */}
+                    {runningAlive &&
+                      running.permission_requests.map((request) => (
+                        <PermissionRequestCard
+                          key={request.request_id}
+                          request={request}
+                          respond={(requestId, behavior, options) =>
+                            void respondToPermission(requestId, behavior, options)
+                          }
+                        />
+                      ))}
+                    {(runningAlive || sending) && <LiveTurnView live={live} messages={messages} />}
                     {messages.map((m, i) => {
                       // uuid をキーにして、追記のたびの DOM の作り直しを避ける(issue #314)。
                       // 行に uuid が無ければ従来どおり位置キー。
@@ -596,6 +1126,20 @@ function SessionsPage({ nav }: SessionsPageProps) {
                 </>
               )}
             </div>
+            {/* アーカイブ/戻す(issue #495・#510・#511)。会話の表示・入力欄と重ならない、会話ペインの左下。
+                実行中のものは、止めてからアーカイブすることを確認する。 */}
+            {hasTarget && (runningAlive || (!!projectParam && !!selectedSummary)) && (
+              <div className="conversation-archive-bar">
+                <button
+                  type="button"
+                  className="running-bar-button"
+                  onClick={handleArchiveToggleCurrentSession}
+                >
+                  {selectedSummary?.archived ? "戻す" : "アーカイブ"}
+                </button>
+              </div>
+            )}
+            </>
           ) : view === "profile-settings" ? (
             // /settings と同じプロファイル設定(共有コンポーネント)を、このタブのプロファイルに
             // 固定して表示する(issue #299)。

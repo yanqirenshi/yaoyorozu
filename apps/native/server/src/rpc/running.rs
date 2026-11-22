@@ -93,6 +93,7 @@ pub async fn get_running_session(
             slot.project.as_deref(),
             slot.session.clone(),
             slot.available_models.clone(),
+            slot.progress_seq,
         )
     })))
 }
@@ -102,7 +103,7 @@ pub async fn get_running_session(
 pub struct SubscribeArgs {
     target: RunningSessionRefDto,
     /// `/events` の最初のイベント(`connection`)で受け取った接続の ID。
-    connection_id: u64,
+    connection_id: String,
 }
 
 /// 実行中セッションの途中経過を、**この接続**(`/events` の SSE)へ流し始める。購読 ID を返す。
@@ -114,7 +115,7 @@ pub async fn subscribe_running_session_progress(
     let args: SubscribeArgs = parse_args(&body)?;
     let target: RunningSessionRef = args.target.into();
     // 接続の表は状態とは別のロック。先に確かめてから、状態を触る。
-    if !ctx.running.connections.is_open(args.connection_id) {
+    if !ctx.running.connections.is_open(&args.connection_id) {
         return Err(ApiError::new(
             "not_found",
             "接続が見つかりません(つなぎ直したあとは、新しい接続の ID で購読し直してください)",
@@ -137,16 +138,16 @@ pub async fn subscribe_running_session_progress(
     let slot = find_slot_mut(&mut guard, &target).ok_or_else(not_running)?;
     slot.subscribers.push(Subscription {
         id,
-        conn_id: args.connection_id,
+        conn_id: args.connection_id.clone(),
     });
     guard.next_subscription_id += 1;
     drop(guard);
     // 登録のあいだに接続が閉じていたら(閉じる側の掃除と行き違い)、残さない。
-    if !ctx.running.connections.is_open(args.connection_id) {
+    if !ctx.running.connections.is_open(&args.connection_id) {
         ctx.state
             .lock()
             .await
-            .drop_connection_subscriptions(&[args.connection_id]);
+            .drop_connection_subscriptions(std::slice::from_ref(&args.connection_id));
         return Err(ApiError::new("not_found", "接続が閉じられました"));
     }
     Ok(Json(id))
@@ -156,7 +157,7 @@ pub async fn subscribe_running_session_progress(
 #[serde(rename_all = "camelCase")]
 pub struct UnsubscribeArgs {
     subscription_id: u64,
-    connection_id: u64,
+    connection_id: String,
 }
 
 /// 途中経過の購読をやめる。**その接続の購読だけ**(ほかのタブの購読は外せない)。無い ID は何もしない。

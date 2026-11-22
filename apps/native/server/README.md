@@ -175,7 +175,7 @@ ZWJ・ZWNJ・異体字セレクタは、前後に見える文字があるとき�
 
 - 途中経過(文字の断片・ツールの開始など。順序が大事)は、**同じ `GET /events`** の SSE で、イベント名 `running-session:progress`、本文 `{subscription_id, progress}`(`progress` は今の `AddressedProgressDto`)として流れる。
   通知(`running-session:changed` など。取りこぼしてよい)は、これまでどおり放送(`EventBus`)。`/events` はこの 2 つを 1 本に束ねる。
-- 接続したときの**最初のイベントは `connection`**(本文 `{connection_id}`)。購読の登録(`subscribe_running_session_progress` の `connectionId`)にはこの ID を使う。購読を外すとき(`unsubscribe_running_session_progress`)は、購読の ID とその接続の ID を渡す(**ほかの接続の購読は外せない**)。1 接続の購読は 64 まで。
+- 接続したときの**最初のイベントは `connection`**(本文 `{connection_id}`。**乱数から作る UUID の文字列**。サーバを起動し直しても、ほかの接続の ID と一致しない。古い ID での購読は 404、購読解除は何も起きない)。途中経過(`running-session:progress`)の本文は `{subscription_id, seq, progress}`。`seq` は**会話(実行中セッション)ごとの 1 からの連番**で、`get_running_session` の `progress_seq`(ここまでの番号)と突き合わせて、画面が重なり・順番の崩れを見分ける。購読の登録(`subscribe_running_session_progress` の `connectionId`)にはこの ID を使う。購読を外すとき(`unsubscribe_running_session_progress`)は、購読の ID とその接続の ID を渡す(**ほかの接続の購読は外せない**)。1 接続の購読は 64 まで。
 - **接続の表(接続の ID → 有限の送り口。`src/progress.rs`)は状態とは別のロック**。購読が持つのは「接続の ID と購読の ID」だけで、イベントループは**状態のロックの外で、待たない送信(`try_send`)**をする。
   送り口(512 件)があふれた(遅い・止まったクライアントの)接続は、**その接続の購読を全部外して SSE を閉じる**。ブラウザは自動でつなぎ直し、画面は購読し直して `get_running_session` で状態を取り直す(途中経過は捨ててよい。状態・答え待ちは Query で取れる)。
   接続が終わったとき(タブを閉じたとき)も、表と購読を片づける。
@@ -187,7 +187,7 @@ ZWJ・ZWNJ・異体字セレクタは、前後に見える文字があるとき�
 - 起動先(リポジトリ・worktree・プロファイル)は、**登録済みプロファイルのリポジトリと、実際の `git worktree list`(台帳)から引けるものだけ**。クライアントのパスは受け取らない(余分な項目は無視される)。
 - claude の引数に、クライアントの文字列をそのまま使わない: 権限モード・起動時のモデルは**列挙**(`RunningPermissionModeDto`・`StartModelDto`。範囲外は 400)、表示名は 100 文字以内・制御文字なし、起動中のモデル切り替えは英数字と `-_.:[]` だけ(`app::begin_switch_running_session`)、ブランチ名は先頭の `-` などを断る。
 - **同じ会話の二重起動は 409(`session_busy`)**。判断と「起動している最中」の印づけを同じ状態のロックの中で行うので、**同時に来た再開のうち通るのは 1 本だけ**。外部(ターミナルなど)で動いている同じ会話も `find_running` で断る。
-- **本文の大きさ**: ふつうの command は 2MB まで(超えると 413)。`send_to_running_session` だけ、画像の上限(5 枚 × 5,000,000 文字の base64)に合わせて **26MB** まで(超えると 413)。Next の中継(`apps/console`)は本文を貯めて転送するだけで、この大きさでも切らない(`--next` で確認)。
+- **本文の大きさ**: ふつうの command は 2MB まで(超えると 413)。`check_image_attachment`(添付の前の事前の検証。画像 1 枚の base64)だけ、画像 1 枚の上限(5,000,000 文字)が通る **6MB** まで。`send_to_running_session` だけ、画像の上限(5 枚 × 5,000,000 文字の base64)に合わせて **26MB** まで(超えると 413)。Next の中継(`apps/console`)は本文を貯めて転送するだけで、この大きさでも切らない(`--next` で確認)。
 - 長い起動(worktree の最新化)は、サーバは応答を保留するだけで途中で切らない。中継の fetch の待ち時間は既定(5 分)。
 - 起動した子プロセスには、親(Claude Desktop など)由来の起動元の印を引き継がない(`DESKTOP_LINEAGE_ENV_VARS` を除く。Tauri 版と同じ処理)。
 

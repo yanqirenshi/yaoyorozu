@@ -13,7 +13,6 @@
 //! 「購読の登録・配送」と「接続」を分けてあるので、後から接続の持ち方だけを差し替えられる。
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, watch};
 
@@ -38,8 +37,7 @@ struct Entry {
 
 #[derive(Default)]
 struct Inner {
-    table: Mutex<HashMap<u64, Entry>>,
-    next: AtomicU64,
+    table: Mutex<HashMap<String, Entry>>,
 }
 
 /// 開いている SSE の接続の表。
@@ -50,7 +48,9 @@ pub struct Connections {
 
 /// 接続を 1 つ開いたときの受け取り口。
 pub struct OpenedConnection {
-    pub id: u64,
+    /// 接続の ID。乱数から作る(UUID v4)。サーバを起動し直しても、ほかの接続の ID と一致しない
+    /// (古い ID での購読・購読解除が、新しいサーバの別の接続に当たらない)。
+    pub id: String,
     pub receiver: mpsc::Receiver<ProgressMessage>,
     /// 閉じる合図が来たら `true` になる。
     pub kicked: watch::Receiver<bool>,
@@ -65,7 +65,7 @@ pub enum Delivery {
 }
 
 impl Connections {
-    fn table(&self) -> std::sync::MutexGuard<'_, HashMap<u64, Entry>> {
+    fn table(&self) -> std::sync::MutexGuard<'_, HashMap<String, Entry>> {
         self.inner.table.lock().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -75,10 +75,10 @@ impl Connections {
     }
 
     pub fn open_with_len(&self, queue_len: usize) -> OpenedConnection {
-        let id = self.inner.next.fetch_add(1, Ordering::Relaxed) + 1;
+        let id = uuid::Uuid::new_v4().to_string();
         let (tx, receiver) = mpsc::channel(queue_len);
         let (kick, kicked) = watch::channel(false);
-        self.table().insert(id, Entry { tx, kick });
+        self.table().insert(id.clone(), Entry { tx, kick });
         OpenedConnection {
             id,
             receiver,
@@ -87,12 +87,12 @@ impl Connections {
     }
 
     /// 接続を閉じる(表から外す)。無い ID は何もしない。
-    pub fn close(&self, id: u64) {
-        self.table().remove(&id);
+    pub fn close(&self, id: &str) {
+        self.table().remove(id);
     }
 
-    pub fn is_open(&self, id: u64) -> bool {
-        self.table().contains_key(&id)
+    pub fn is_open(&self, id: &str) -> bool {
+        self.table().contains_key(id)
     }
 
     pub fn len(&self) -> usize {
@@ -104,15 +104,15 @@ impl Connections {
     }
 
     /// 待たずに送る。送れなければ、その接続を表から外して閉じる合図を出す([`Delivery::Dropped`])。
-    pub fn deliver(&self, conn_id: u64, message: ProgressMessage) -> Delivery {
+    pub fn deliver(&self, conn_id: &str, message: ProgressMessage) -> Delivery {
         let mut table = self.table();
-        let Some(entry) = table.get(&conn_id) else {
+        let Some(entry) = table.get(conn_id) else {
             return Delivery::Dropped;
         };
         match entry.tx.try_send(message) {
             Ok(()) => Delivery::Sent,
             Err(_) => {
-                if let Some(entry) = table.remove(&conn_id) {
+                if let Some(entry) = table.remove(conn_id) {
                     let _ = entry.kick.send(true);
                 }
                 Delivery::Dropped
@@ -137,7 +137,7 @@ mod tests {
         let table = Connections::default();
         let mut conn = table.open();
         for n in 1..=3 {
-            assert_eq!(table.deliver(conn.id, message(n)), Delivery::Sent);
+            assert_eq!(table.deliver(&conn.id, message(n)), Delivery::Sent);
         }
         for n in 1..=3 {
             assert_eq!(conn.receiver.recv().await.unwrap().subscription_id, n);
@@ -149,28 +149,28 @@ mod tests {
         let table = Connections::default();
         let slow = table.open_with_len(2);
         let mut fine = table.open();
-        assert_eq!(table.deliver(slow.id, message(1)), Delivery::Sent);
-        assert_eq!(table.deliver(slow.id, message(2)), Delivery::Sent);
+        assert_eq!(table.deliver(&slow.id, message(1)), Delivery::Sent);
+        assert_eq!(table.deliver(&slow.id, message(2)), Delivery::Sent);
         // いっぱいの 3 件目。待たずに外れる。
-        assert_eq!(table.deliver(slow.id, message(3)), Delivery::Dropped);
-        assert!(!table.is_open(slow.id));
+        assert_eq!(table.deliver(&slow.id, message(3)), Delivery::Dropped);
+        assert!(!table.is_open(&slow.id));
         assert!(*slow.kicked.borrow());
         // 外れたあとは、送り先が無い扱い。
-        assert_eq!(table.deliver(slow.id, message(4)), Delivery::Dropped);
+        assert_eq!(table.deliver(&slow.id, message(4)), Delivery::Dropped);
         // ほかの接続は影響を受けない。
-        assert_eq!(table.deliver(fine.id, message(5)), Delivery::Sent);
+        assert_eq!(table.deliver(&fine.id, message(5)), Delivery::Sent);
         assert_eq!(fine.receiver.recv().await.unwrap().subscription_id, 5);
-        assert!(table.is_open(fine.id));
+        assert!(table.is_open(&fine.id));
     }
 
     #[tokio::test]
     async fn closing_removes_the_connection() {
         let table = Connections::default();
         let conn = table.open();
-        assert!(table.is_open(conn.id));
-        table.close(conn.id);
-        assert!(!table.is_open(conn.id));
-        assert_eq!(table.deliver(conn.id, message(1)), Delivery::Dropped);
+        assert!(table.is_open(&conn.id));
+        table.close(&conn.id);
+        assert!(!table.is_open(&conn.id));
+        assert_eq!(table.deliver(&conn.id, message(1)), Delivery::Dropped);
         assert!(table.is_empty());
     }
 }

@@ -165,6 +165,7 @@ async fn the_same_conversation_is_not_started_twice_whatever_the_case_of_its_id(
         .await
         .running_sessions
         .push(RunningSessionSlot {
+            progress_seq: 0,
             project: None,
             session: domain::RunningSessionByApp::new(
                 base,

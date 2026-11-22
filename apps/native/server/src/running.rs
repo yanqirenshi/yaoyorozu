@@ -275,6 +275,7 @@ pub async fn deliver_progress(
     ctx: &AppContext,
     subscribers: &[crate::state::Subscription],
     dto: &AddressedProgressDto,
+    seq: u64,
 ) {
     if subscribers.is_empty() {
         return;
@@ -282,19 +283,20 @@ pub async fn deliver_progress(
     let Ok(progress) = serde_json::to_value(dto) else {
         return;
     };
-    let mut dropped: Vec<u64> = Vec::new();
+    let mut dropped: Vec<String> = Vec::new();
     for sub in subscribers {
         let json =
-            serde_json::json!({ "subscription_id": sub.id, "progress": progress }).to_string();
+            serde_json::json!({ "subscription_id": sub.id, "seq": seq, "progress": progress })
+                .to_string();
         let delivery = ctx.running.connections.deliver(
-            sub.conn_id,
+            &sub.conn_id,
             ProgressMessage {
                 subscription_id: sub.id,
                 progress_json: json,
             },
         );
         if delivery == Delivery::Dropped && !dropped.contains(&sub.conn_id) {
-            dropped.push(sub.conn_id);
+            dropped.push(sub.conn_id.clone());
         }
     }
     if !dropped.is_empty() {
@@ -323,7 +325,14 @@ fn spawn_event_loop(
                 _ => None,
             };
 
-            let (notify, subscribers, exited_abnormally, usage_payload, turn_finished_process) = {
+            let (
+                notify,
+                subscribers,
+                progress_seq,
+                exited_abnormally,
+                usage_payload,
+                turn_finished_process,
+            ) = {
                 let mut guard = ctx.state.lock().await;
                 // アカウント単位の値なので、この会話(`slot`)ではなく状態へ直接反映する。
                 let usage_payload =
@@ -336,7 +345,7 @@ fn spawn_event_loop(
                     } else {
                         None
                     };
-                let (notify, subscribers, exited_abnormally, turn_finished_process) =
+                let (notify, subscribers, progress_seq, exited_abnormally, turn_finished_process) =
                     match find_slot_mut(&mut guard, &target) {
                         Some(slot) => {
                             let before = watched(&slot.session);
@@ -361,11 +370,14 @@ fn spawn_event_loop(
                             let changed = before != watched(&slot.session)
                                 || exit_code.is_some()
                                 || models_listed;
+                            // 途中経過には、このセッションの連番を付ける(購読者がいなくても進める。取り直しの「ここまで」)。
                             let subscribers = if addressed.as_progress().is_some() {
+                                slot.progress_seq += 1;
                                 slot.subscribers.clone()
                             } else {
                                 Vec::new()
                             };
+                            let progress_seq = slot.progress_seq;
                             if matches!(addressed.event, RunningSessionEvent::Exited { .. }) {
                                 slot.subscribers.clear();
                             }
@@ -388,15 +400,17 @@ fn spawn_event_loop(
                             (
                                 changed.then(|| changed_event(&slot.session, exit_code)),
                                 subscribers,
+                                progress_seq,
                                 exited_abnormally,
                                 turn_finished_process,
                             )
                         }
-                        None => (None, Vec::new(), None, None),
+                        None => (None, Vec::new(), 0, None, None),
                     };
                 (
                     notify,
                     subscribers,
+                    progress_seq,
                     exited_abnormally,
                     usage_payload,
                     turn_finished_process,
@@ -420,7 +434,7 @@ fn spawn_event_loop(
             // 途中経過を、購読中の接続へ流す(ロックの外・待たない)。
             if let Some(progress) = addressed.as_progress() {
                 let dto = AddressedProgressDto::from(progress);
-                deliver_progress(&ctx, &subscribers, &dto).await;
+                deliver_progress(&ctx, &subscribers, &dto, progress_seq).await;
             }
             if let Some(payload) = notify {
                 ctx.events.emit(RUNNING_SESSION_CHANGED_EVENT, &payload);
@@ -871,6 +885,7 @@ pub async fn start_running_session(
                 .retain(|slot| !gone.matches(&slot.session));
         }
         let slot = RunningSessionSlot {
+            progress_seq: 0,
             project: resumed_project,
             session: started.session,
             process: started.process,
@@ -881,6 +896,7 @@ pub async fn start_running_session(
             slot.project.as_deref(),
             slot.session.clone(),
             slot.available_models.clone(),
+            slot.progress_seq,
         );
         let payload = changed_event(&slot.session, None);
         let remembered = slot.session.clone();

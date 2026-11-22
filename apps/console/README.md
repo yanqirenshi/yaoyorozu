@@ -96,6 +96,22 @@ save(input).then(() => { setBaseline(input); clear(); });
 ハンドラの先頭でも送信中なら何もしない(Enter の連打・ダブルクリックで 2 つできるのを防ぐ)。応答が返ったら(成功・失敗どちらでも)戻す。
 手本: `src/app/settings/page.tsx` の `runWrite`、`src/ProfileSettingsPane.tsx` の `saving`・`renaming`・`yyzCreating`。
 
+## 実行中セッション(段階 3 B)
+
+- 部品は native と同じ(`useRunningSession`・`useRunningSessionList`・`useClaudeUsage`・`RunningSessionBar`・`PermissionRequestCard`・`LiveTurnView`・`NewSessionDialog`・`RenameSessionDialog`)。
+  業務状態はサーバにあり、画面は「取得した表示用の値」と入力中の欄(下書き・添付・名前・モデルの選択)だけを持つ。
+- **途中経過(返答中の表示)**: `src/api/events.ts` の中に閉じている。タブごとの SSE 1 本に、サーバが最初に接続 ID(`connection`)を知らせる。
+  `subscribeRunningSessionProgress` はその ID で購読し(`openProgressSubscription`)、途中経過(`running-session:progress`)を購読 ID で振り分ける。
+  つなぎ直したときは、新しい接続 ID で購読し直す(サーバの購読は接続とともに消える)。画面側は接続 ID も SSE も知らない
+  (接続の持ち方を変える #629 のときは、このファイルだけを変える)。
+- 途中経過と取り直しの合わせ方は、**番号で決める 1 か所**(`src/progressMerge.ts`)。サーバが会話ごとに途中経過へ連番(`seq`)を付け、取り直しの応答に「ここまで」の番号(`progress_seq`)を載せる。
+  取り直しの「ここまで」以下の断片は捨て、続きだけを足す。重なり・順番の前後は渡さない。「ここまで」は、会話の切り替え・つなぎ直しのあとの最初の取り直し 1 回だけを使う。
+- 同じ瞬間の操作の二重実行(送信・起動・停止・権限の応答・中断・新規作成)は、state でなく ref で持つ集合で止める(`src/exclusive.ts`)。
+- 画像の添付で本文が上限を超えて 413 になったときは、「画像が大きすぎます(上限は 1 枚あたり約 3.7MB)」と出す。
+- 切れている間の途中経過は失われるので、`onReconnected` で状態(`get_running_session`)と確定した行を取り直す(`useRunningSession`)。入力中の欄は上書きしない。
+- 起動・再開(`start_running_session`)には、画面が開いているプロファイルの ID を必ず付ける(省略に頼らない)。
+- 確認用の環境: `apps/native/server/scripts/dev-fake.mjs`(偽の claude・使い捨てのデータで、サーバと `next start` を起動する)。
+
 ## 確認
 
 ```bash
@@ -110,8 +126,9 @@ npx tsc --noEmit        # apps/console で
 | `/settings` | プロファイルの操作・対象リポジトリ・対象フォルダ(手入力 + 確認) | 2 A |
 | `/claude` | `~/.claude` の閲覧と保存(CLAUDE.md・settings.json・Explorer) | 2 B |
 | `/profiles/[[...profileId]]` | ビューア(セッション一覧・会話・画像・生の行、CLAUDE.md・Rules・Skills・設定ファイルの閲覧と保存) | 2 C |
+| 同上(会話の画面) | 実行中セッションとの対話(入力欄・画像の添付・権限の応答・中断・権限モード/モデルの切替・停止・起動/再開・新規・名前変更・アーカイブ・利用状況) | 3 B |
 
-- 出していないもの(後の段階): 実行中セッションとの対話、利用状況、かんばん・GitHub 連携、複数ウィンドウの連携(段階 4 でブラウザ側に作る)。
+- 出していないもの(後の段階): かんばん・GitHub 連携、複数ウィンドウの連携(段階 4 でブラウザ側に作る)、サブエージェントの表示(native でもハブにある)。
   「仕様」ボタンは作らない。
 - 会話の Markdown 内のリンクは別タブで開く(`target="_blank"`・`rel="noopener noreferrer"`。`src/externalLinks.ts`)。
 - どの画面も、購読(`session:changed` など)は画面を離れたとき・unmount のときに `unlisten` する。サーバへの SSE 接続は、
