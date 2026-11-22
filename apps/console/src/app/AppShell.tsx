@@ -24,7 +24,7 @@ import {
 } from "@/api";
 import { DockItemsProvider } from "@/DockItemsContext";
 import type { PageDockItem } from "@/DockItemsContext";
-import { SETTINGS_ICON } from "@/icons";
+import { CLAUDE_SETTINGS_ICON, SETTINGS_ICON, VIEWER_ICON } from "@/icons";
 
 // command-dock はブラウザにしか無い Web Component のため、サーバ側の描画から外す。
 const AppDock = dynamic(() => import("@/AppDock"), { ssr: false });
@@ -39,7 +39,10 @@ type NavRoute = {
 };
 
 const NAV_ROUTES: NavRoute[] = [
+  // ビューア。Tauri 版と同じ「先頭」(ハブができるまでの間はここが起点)。
+  { id: "nav-sessions", path: "/profiles", title: "ビューア", icon: VIEWER_ICON },
   { id: "nav-settings", path: "/settings", title: "設定", icon: SETTINGS_ICON },
+  { id: "nav-claude", path: "/claude", title: "Claude", icon: CLAUDE_SETTINGS_ICON },
 ];
 
 const DEFAULT_WINDOW_TITLE = "YAOYOROZU";
@@ -56,7 +59,12 @@ type Warning = {
 let eventSeq = 0;
 
 function routeForPath(pathname: string): NavRoute | null {
-  return NAV_ROUTES.find((r) => r.path === pathname) ?? null;
+  // ビューアは `/profiles` と `/profiles/<id>` の両方(パスパラメータでプロファイルが決まる)。
+  return (
+    NAV_ROUTES.find(
+      (r) => r.path === pathname || (r.path === "/profiles" && pathname.startsWith("/profiles/")),
+    ) ?? null
+  );
 }
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
@@ -138,6 +146,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   // OS のウィンドウのタイトルに当たるもの。ページ内の見出しは重複するため置かない。
   const currentRoute = routeForPath(pathname);
   useEffect(() => {
+    // ビューアのタイトルは、プロファイル名にする(Tauri 版の viewerWindowTitle。画面側が設定する)。
+    if (currentRoute?.id === "nav-sessions") return;
     document.title = currentRoute ? currentRoute.title : DEFAULT_WINDOW_TITLE;
   }, [currentRoute]);
 

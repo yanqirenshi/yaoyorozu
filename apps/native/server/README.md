@@ -72,3 +72,16 @@ cargo test -p server
 
 `tauri/src/{lib,dto,state}.rs` の該当部分を**写している**(共通クレートへの切り出しはしない。Tauri 版は凍結)。
 `AppHandle.emit` に当たるものは `EventBus`(`src/events.rs`)にまとめてある。
+
+## パスの検証(読み書きの入口)
+
+クライアントから受け取るパスは、そのまま読み書きに使わない(native.md §4・§7)。
+
+- `~/.claude` 系(`/claude`): パスやファイル名は受け取らない(CLAUDE.md・settings.json は固定)。Explorer(`list_claude_dir`)は
+  `~/.claude` からの相対パスだけ(`..`・`\`・`:`・絶対パスは 400)で、リンク経由の逸脱は infra が検出する。`.credentials.json` の中身を読む経路は無い。
+- 会話ファイル: `<セッションのルート>/<project>/<sessionId>.jsonl` に固定。`project`・`sessionId` は**ファイルに触る前に**サーバの入口で検証する
+  (`domain` の検証に加えて `:` を拒否。Windows では `dir.join("C:x")` が `dir` の外を指すため。`domain` の検証は `:` を見ない)。
+- リポジトリ系(CLAUDE.md・Rules・Skills・設定ファイル・yyz): パスは受け取らず、`profileId` から settings の `repository_path` を引く
+  (未登録の `profileId` は 404、`repository_path` 未設定は 400)。ルール名・スキル名は単一セグメントだけ(`:` も拒否)、設定ファイルは
+  `which`(`settings` / `settings_local`)の列挙値だけ。
+- 手入力のフォルダ確認(`check_folder`): 絶対パスだけ。`..`・`:` は 400。存在・フォルダか・`.git` の有無だけを返す。

@@ -62,3 +62,19 @@ useEffect(() => {
 ```bash
 npx tsc --noEmit        # apps/console で
 ```
+
+## 画面(ルート)
+
+| ルート | 内容 | 段階 |
+|---|---|---|
+| `/` | `/settings` へ redirect(ハブは段階 4) | 1 |
+| `/settings` | プロファイルの操作・対象リポジトリ・対象フォルダ(手入力 + 確認) | 2 A |
+| `/claude` | `~/.claude` の閲覧と保存(CLAUDE.md・settings.json・Explorer) | 2 B |
+| `/profiles/[[...profileId]]` | ビューア(セッション一覧・会話・画像・生の行、CLAUDE.md・Rules・Skills・設定ファイルの閲覧と保存) | 2 C |
+
+- 出していないもの(後の段階): 実行中セッションとの対話、利用状況、かんばん・GitHub 連携、複数ウィンドウの連携(段階 4 でブラウザ側に作る)。
+  「仕様」ボタンは作らない。
+- 会話の Markdown 内のリンクは別タブで開く(`target="_blank"`・`rel="noopener noreferrer"`。`src/externalLinks.ts`)。
+- どの画面も、購読(`session:changed` など)は画面を離れたとき・unmount のときに `unlisten` する。サーバへの SSE 接続は、
+  画面を移動しても 1 本のまま(`src/api/events.ts` が持つ)。
+- command・イベントの実装状況は `npm run diff-commands` で出す。

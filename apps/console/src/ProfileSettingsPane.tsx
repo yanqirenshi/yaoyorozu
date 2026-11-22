@@ -5,6 +5,8 @@ import type { FormEvent } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   checkFolder,
+  createYyzScaffold,
+  getYyzScaffoldStatus,
   getSettings,
   isAppError,
   listProjects,
@@ -12,7 +14,12 @@ import {
   renameProfile,
   updateSettings,
 } from "@/api";
-import type { FolderCheckDto, ProfileSummaryDto, ProjectDto } from "@/api";
+import type {
+  FolderCheckDto,
+  ProfileSummaryDto,
+  ProjectDto,
+  YyzScaffoldStatusDto,
+} from "@/api";
 import Tabs, { tabPanelProps } from "@/Tabs";
 
 // プロファイル1件分の設定ペイン(プロファイル名・名前変更・Claude 等のタブとその中身)。
@@ -21,7 +28,7 @@ import Tabs, { tabPanelProps } from "@/Tabs";
 //   (ブラウザは絶対パスを取れない。フォルダの一覧を出す画面は作らない)。
 // - GitHub 連携(認証・プロジェクト選択・かんばん)は出さない(段階 5)。保存のとき GitHub プロジェクトの
 //   値は、読み込んだままを書き戻して変えない。
-// - 仕様フォルダ(yyz/)を作る部分は出さない(ビューアの段階で足す)。
+// - 仕様フォルダ(yyz/)を作る部分は Tauri 版どおりに出す(段階 2 C。保存済みのパスに対する状態)。
 // - react-router の `useSearchParams` → next/navigation(`tab` クエリは `router.replace`)。
 // `profileId` が `null` のときはアクティブプロファイルを対象にする(/settings)。
 // 文字列のときはそのプロファイルに固定する(ビューア。1 タブ = 1 プロファイル)。
@@ -145,6 +152,14 @@ function ProfileSettingsPane({
   const [profileError, setProfileError] = useState<string | null>(null);
   // パスの入力欄の値。空は未設定(保存のとき null にする)。
   const [repositoryPath, setRepositoryPath] = useState("");
+  // 「仕様フォルダ(yyz/)を作る」(issue #547)。保存済みの repository_path に対する状態なので、
+  // フォーム入力中(未保存)の repositoryPath とは別に、`loadSettingsData` 側で取り直す
+  // (保存前のパスに対して作成ボタンを有効にしない)。
+  const [savedRepositoryPath, setSavedRepositoryPath] = useState<string | null>(null);
+  const [yyzStatus, setYyzStatus] = useState<YyzScaffoldStatusDto | null>(null);
+  const [yyzStatusError, setYyzStatusError] = useState<string | null>(null);
+  const [yyzCreating, setYyzCreating] = useState(false);
+  const [yyzCreateError, setYyzCreateError] = useState<string | null>(null);
   const [claudeProjectsDir, setClaudeProjectsDir] = useState("");
   // app の起動時に前回動かしていたセッションを再開するか(プロファイルごとではなくマシン設定)。
   const [restoreRunningSessions, setRestoreRunningSessions] = useState(true);
@@ -172,6 +187,23 @@ function ProfileSettingsPane({
         setGithubProject(settings.github_project);
         setSelectedProjectFolders(settings.selected_project_folders);
         setError(null);
+
+        setSavedRepositoryPath(settings.repository_path);
+        setYyzCreateError(null);
+        if (!settings.repository_path) {
+          setYyzStatus(null);
+          setYyzStatusError(null);
+          return;
+        }
+        return getYyzScaffoldStatus(profileId)
+          .then((status) => {
+            setYyzStatus(status);
+            setYyzStatusError(null);
+          })
+          .catch((e) => {
+            setYyzStatus(null);
+            setYyzStatusError(isAppError(e) ? e.message : String(e));
+          });
       })
       .catch((e) => setError(isAppError(e) ? e.message : String(e)));
   }, [profileId]);
@@ -196,7 +228,19 @@ function ProfileSettingsPane({
       .catch((e) => setError(isAppError(e) ? e.message : String(e)));
   }, [refreshToken]);
 
-  const handleStartRenameProfile = (target: ProfileSummaryDto) => {
+  const handleCreateYyzScaffold = () => {
+    setYyzCreating(true);
+    setYyzCreateError(null);
+    createYyzScaffold(profileId)
+      .then((status) => {
+        setYyzStatus(status);
+        setYyzStatusError(null);
+      })
+      .catch((e) => setYyzCreateError(isAppError(e) ? e.message : String(e)))
+      .finally(() => setYyzCreating(false));
+  };
+
+  const handleStartRenameProfile =(target: ProfileSummaryDto) => {
     setRenamingProfileId(target.id);
     setRenameDraft(target.name);
   };
@@ -330,6 +374,30 @@ function ProfileSettingsPane({
               placeholder="例: C:\Users\you\prj\repo(未設定なら空)"
               onChange={setRepositoryPath}
             />
+
+            <div className="settings-yyz-scaffold">
+              <button
+                type="button"
+                onClick={handleCreateYyzScaffold}
+                disabled={!savedRepositoryPath || yyzStatus?.complete === true || yyzCreating}
+              >
+                {yyzStatus?.complete ? "作成済み" : "仕様フォルダ(yyz/)を作る"}
+              </button>
+              {!savedRepositoryPath && (
+                <p className="settings-hint">先に対象リポジトリを入力して保存してください。</p>
+              )}
+              {yyzStatusError && <p className="error">{yyzStatusError}</p>}
+              {yyzCreateError && <p className="error">{yyzCreateError}</p>}
+              {yyzStatus && yyzStatus.files.length > 0 && (
+                <ul className="settings-yyz-scaffold-files">
+                  {yyzStatus.files.map((file) => (
+                    <li key={file.relative_path}>
+                      {file.exists ? "✓" : "未作成"} {file.relative_path}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </section>
         )}
 

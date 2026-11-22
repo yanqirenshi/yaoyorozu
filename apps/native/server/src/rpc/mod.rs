@@ -5,6 +5,7 @@
 //! command の足し方: ハンドラを書き、`routes()` に 1 行(`.route("/rpc/<名前>", post(...))`)足す。
 //! 突き合わせのスクリプト(`scripts/diff-commands.ts`)がこの 1 行を読む。
 
+pub mod claude;
 pub mod settings;
 pub mod viewer;
 
@@ -65,5 +66,61 @@ pub fn routes() -> Router<AppContext> {
             post(settings::dismiss_pending_warning),
         )
         .route("/rpc/check_folder", post(settings::check_folder))
+        .route("/rpc/list_sessions", post(viewer::list_sessions))
+        .route("/rpc/get_session", post(viewer::get_session))
+        .route(
+            "/rpc/get_session_line_raw",
+            post(viewer::get_session_line_raw),
+        )
+        .route(
+            "/rpc/get_session_line_images",
+            post(viewer::get_session_line_images),
+        )
+        .route(
+            "/rpc/check_image_attachment",
+            post(viewer::check_image_attachment),
+        )
+        .route(
+            "/rpc/get_project_claude_md",
+            post(viewer::get_project_claude_md),
+        )
+        .route(
+            "/rpc/save_project_claude_md",
+            post(viewer::save_project_claude_md),
+        )
+        .route("/rpc/list_rules", post(viewer::list_rules))
+        .route("/rpc/get_rule", post(viewer::get_rule))
+        .route("/rpc/list_skills", post(viewer::list_skills))
+        .route("/rpc/get_skill", post(viewer::get_skill))
+        .route(
+            "/rpc/get_project_settings_file",
+            post(viewer::get_project_settings_file),
+        )
+        .route(
+            "/rpc/save_project_settings_file",
+            post(viewer::save_project_settings_file),
+        )
+        .route(
+            "/rpc/get_yyz_scaffold_status",
+            post(viewer::get_yyz_scaffold_status),
+        )
+        .route(
+            "/rpc/create_yyz_scaffold",
+            post(viewer::create_yyz_scaffold),
+        )
+        .route("/rpc/get_user_claude_md", post(claude::get_user_claude_md))
+        .route(
+            "/rpc/save_user_claude_md",
+            post(claude::save_user_claude_md),
+        )
+        .route(
+            "/rpc/get_claude_settings_file",
+            post(claude::get_claude_settings_file),
+        )
+        .route(
+            "/rpc/save_claude_settings_file",
+            post(claude::save_claude_settings_file),
+        )
+        .route("/rpc/list_claude_dir", post(claude::list_claude_dir))
         .route("/rpc/{command}", post(unknown_command))
 }

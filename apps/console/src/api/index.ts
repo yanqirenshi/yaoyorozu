@@ -15,6 +15,19 @@ import type {
   SettingsCorruptedEvent,
   SettingsDto,
   SettingsInputDto,
+  ClaudeDirPageDto,
+  ClaudeMdDto,
+  ClaudeSettingsDto,
+  ConversationDto,
+  MessageImageDto,
+  ProjectSettingsFileDto,
+  RuleDto,
+  RuleSummaryDto,
+  SessionChangedEvent,
+  SessionSummaryDto,
+  SkillDto,
+  SkillSummaryDto,
+  YyzScaffoldStatusDto,
 } from "./types";
 
 export { onConnectionChange, onReconnected } from "./events";
@@ -32,6 +45,26 @@ export type {
   SettingsCorruptedEvent,
   SettingsDto,
   SettingsInputDto,
+  ClaudeDirEntryDto,
+  ClaudeDirEntryKindDto,
+  ClaudeDirPageDto,
+  ClaudeMdDto,
+  ClaudeSettingsDto,
+  ConversationDto,
+  MessageDto,
+  MessageImageDto,
+  MessageKindDto,
+  MessageStatusDto,
+  ProjectSettingsFileDto,
+  RoleDto,
+  RuleDto,
+  RuleSummaryDto,
+  SessionChangedEvent,
+  SessionSummaryDto,
+  SkillDto,
+  SkillSummaryDto,
+  YyzScaffoldFileStatusDto,
+  YyzScaffoldStatusDto,
 } from "./types";
 
 /** `POST /api/rpc/<command>`。失敗は `AppErrorDto` を throw する(`isAppError` で見分ける)。 */
@@ -121,6 +154,158 @@ export function dismissPendingWarning(id: number): Promise<void> {
 // パスの手入力の確認(存在するか・フォルダか・リポジトリか)。
 export function checkFolder(path: string): Promise<FolderCheckDto> {
   return invoke<FolderCheckDto>("check_folder", { path });
+}
+
+// --- ~/.claude(/claude 画面。対象パスはサーバ側で固定解決し、パスは受け取らない) ---
+
+export function getUserClaudeMd(): Promise<ClaudeMdDto> {
+  return invoke<ClaudeMdDto>("get_user_claude_md");
+}
+
+export function saveUserClaudeMd(
+  content: string,
+  expectedModifiedAtMs: number | null,
+): Promise<void> {
+  return invoke<void>("save_user_claude_md", { content, expectedModifiedAtMs });
+}
+
+export function getClaudeSettingsFile(): Promise<ClaudeSettingsDto> {
+  return invoke<ClaudeSettingsDto>("get_claude_settings_file");
+}
+
+export function saveClaudeSettingsFile(
+  content: string,
+  expectedModifiedAtMs: number | null,
+): Promise<void> {
+  return invoke<void>("save_claude_settings_file", { content, expectedModifiedAtMs });
+}
+
+// `~/.claude` 配下の `path`(`~/.claude` からの相対パス。区切りは `/`、ルートは空文字列)直下を一覧する。
+export function listClaudeDir(
+  path: string,
+  offset: number,
+  limit: number,
+): Promise<ClaudeDirPageDto> {
+  return invoke<ClaudeDirPageDto>("list_claude_dir", { path, offset, limit });
+}
+
+
+// --- 段階 2 C: ビューア(閲覧と編集) ---
+
+export function getSession(
+  project: string,
+  sessionId: string,
+  offset: number,
+  limit: number,
+): Promise<ConversationDto> {
+  return invoke<ConversationDto>("get_session", { project, sessionId, offset, limit });
+}
+
+// メッセージの元の jsonl 行(生のテキスト)。オンデマンドで取る(issue #313)。
+export function getSessionLineRaw(
+  project: string,
+  sessionId: string,
+  uuid: string,
+): Promise<string> {
+  return invoke<string>("get_session_line_raw", { project, sessionId, uuid });
+}
+
+export function listSessions(project: string): Promise<SessionSummaryDto[]> {
+  return invoke<SessionSummaryDto[]>("list_sessions", { project });
+}
+
+// 画像を 1 枚添付する前の事前検証(issue #349)。違反なら理由つきの AppErrorDto で reject される。
+export function checkImageAttachment(data: string, existingCount: number): Promise<void> {
+  return invoke<void>("check_image_attachment", { data, existingCount });
+}
+
+// メッセージ(uuid)に含まれる画像をオンデマンドで取る(「画像 n 枚」。issue #349)。
+export function getSessionLineImages(
+  project: string,
+  sessionId: string,
+  uuid: string,
+): Promise<MessageImageDto[]> {
+  return invoke<MessageImageDto[]>("get_session_line_images", { project, sessionId, uuid });
+}
+
+// yyz/ の状態を確かめる(副作用なし。issue #547)。repository_path が未設定ならエラー。
+export function getYyzScaffoldStatus(
+  profileId?: string | null,
+): Promise<YyzScaffoldStatusDto> {
+  return invoke<YyzScaffoldStatusDto>("get_yyz_scaffold_status", {
+    profileId: profileId ?? null,
+  });
+}
+
+// yyz/ のうち足りないものだけ作る(既存のファイルは絶対に上書きしない)。
+export function createYyzScaffold(
+  profileId?: string | null,
+): Promise<YyzScaffoldStatusDto> {
+  return invoke<YyzScaffoldStatusDto>("create_yyz_scaffold", {
+    profileId: profileId ?? null,
+  });
+}
+
+// ビューアの CLAUDE.md / Rules / Skills / settings 系は、対象リポジトリを backend が
+// プロファイルの `repository_path` から解決する(パスは渡さない。issue #269)。
+export function getProjectClaudeMd(profileId: string | null): Promise<ClaudeMdDto> {
+  return invoke<ClaudeMdDto>("get_project_claude_md", { profileId });
+}
+
+export function saveProjectClaudeMd(
+  profileId: string | null,
+  content: string,
+  expectedModifiedAtMs: number | null,
+): Promise<void> {
+  return invoke<void>("save_project_claude_md", {
+    profileId,
+    content,
+    expectedModifiedAtMs,
+  });
+}
+
+export function listRules(profileId: string | null): Promise<RuleSummaryDto[]> {
+  return invoke<RuleSummaryDto[]>("list_rules", { profileId });
+}
+
+export function getRule(profileId: string | null, fileName: string): Promise<RuleDto> {
+  return invoke<RuleDto>("get_rule", { profileId, fileName });
+}
+
+export function listSkills(profileId: string | null): Promise<SkillSummaryDto[]> {
+  return invoke<SkillSummaryDto[]>("list_skills", { profileId });
+}
+
+export function getSkill(profileId: string | null, name: string): Promise<SkillDto> {
+  return invoke<SkillDto>("get_skill", { profileId, name });
+}
+
+export function getProjectSettingsFile(
+  profileId: string | null,
+  which: ProjectSettingsFileDto,
+): Promise<ClaudeSettingsDto> {
+  return invoke<ClaudeSettingsDto>("get_project_settings_file", { profileId, which });
+}
+
+export function saveProjectSettingsFile(
+  profileId: string | null,
+  which: ProjectSettingsFileDto,
+  content: string,
+  expectedModifiedAtMs: number | null,
+): Promise<void> {
+  return invoke<void>("save_project_settings_file", {
+    profileId,
+    which,
+    content,
+    expectedModifiedAtMs,
+  });
+}
+
+// 会話ファイルが増えた・変わったことの通知(session:changed)。データ本体は Query で取り直す。
+export function onSessionChanged(
+  callback: (event: SessionChangedEvent) => void,
+): Promise<() => void> {
+  return listen<SessionChangedEvent>("session:changed", callback);
 }
 
 // --- イベント購読 ---
