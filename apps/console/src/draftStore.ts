@@ -20,6 +20,10 @@ export function createDraftStore<A>() {
       if (to !== null) drafts.delete(to);
       return restored ?? { text: "", attachments: [] };
     },
+    /** 送った(後片付けをする)会話の下書きを捨てる。いま表示していない会話の分も、その会話のものとして捨てる。 */
+    clear(id: string): void {
+      drafts.delete(id);
+    },
     size: () => drafts.size,
   };
 }

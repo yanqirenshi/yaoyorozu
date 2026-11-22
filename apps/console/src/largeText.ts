@@ -8,6 +8,18 @@ export const LARGE_TEXT_CHARS = 1_000_000;
 /** 大きい発言で出す、先頭の文字数。 */
 export const PREVIEW_CHARS = 2_000;
 
+/** 先頭の `count` 符号位置(サロゲートペアの途中で切らない)。長い文字列の全体は走査しない。 */
+export function firstCodePoints(text: string, count: number): string {
+  let out = "";
+  let n = 0;
+  for (const ch of text) {
+    if (n >= count) break;
+    out += ch;
+    n += 1;
+  }
+  return out;
+}
+
 export type LargeTextView = { large: false } | { large: true; preview: string; note: string };
 
 /** 発言の表示の仕方を決める(純粋。`MessageText` が使う)。 */
@@ -16,8 +28,8 @@ export function viewOfText(text: string): LargeTextView {
   const megabytes = (text.length / 1_000_000).toFixed(1);
   return {
     large: true,
-    // サロゲートペアの途中で切らない。
-    preview: Array.from(text.slice(0, PREVIEW_CHARS)).join(""),
+    // 符号位置の境目で切る(サロゲートペアの途中で切らない)。
+    preview: firstCodePoints(text, PREVIEW_CHARS),
     note: `大きいため省略しました(全体で約 ${megabytes}M 文字。先頭 ${PREVIEW_CHARS} 文字だけを出しています)`,
   };
 }

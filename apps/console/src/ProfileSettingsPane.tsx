@@ -20,7 +20,8 @@ import type {
   ProjectDto,
   YyzScaffoldStatusDto,
 } from "@/api";
-import { shouldHoldDisplay } from "@/followActive";
+import { holdReason } from "@/followActive";
+import type { HoldReason } from "@/followActive";
 import StaleNotice from "@/StaleNotice";
 import Tabs, { tabPanelProps } from "@/Tabs";
 import { useRefreshGuard } from "@/useRefreshGuard";
@@ -209,7 +210,11 @@ function ProfileSettingsPane({
   dirtyRef.current = dirty;
   // /settings(プロファイルを指定せず、アクティブへ追従する画面)で、入力中にアクティブが変わったとき、移さずに知らせる
   // ための、新しいアクティブのプロファイルの ID(`null` は知らせ無し)。保存先は、いつも表示しているプロファイル。
-  const [activeChangedTo, setActiveChangedTo] = useState<string | null>(null);
+  const [holdNotice, setHoldNotice] = useState<HoldReason | null>(null);
+  // 入力か保存の操作をしたか(利用者が「移る」を選ぶまで、アクティブが変わっても表示を移さない)。保存のあとも、
+  // 自動では移らない(「保存しました」が、別のプロファイルへ移って出るのを防ぐ)。
+  const touchedRef = useRef(false);
+  if (dirty) touchedRef.current = true;
   // 最後に読み込んだ対象プロファイル。対象そのものが変わったとき(切替・削除)は、入力中の内容は
   // 別のプロファイルのものなので、取り直しの結果で置き換える。
   const loadedTargetRef = useRef<string | null>(null);
@@ -232,21 +237,22 @@ function ProfileSettingsPane({
         setProfile(settings.profiles.find((p) => p.id === targetId) ?? null);
         // 入力中(未保存)にアクティブが変わったときは、表示を移さず、知らせる(`followActive.ts`)。
         const shown = loadedTargetRef.current;
-        if (
-          shouldHoldDisplay({
-            followsActive: profileId == null,
-            shownId: shown,
-            activeId: targetId,
-            dirty: dirtyRef.current,
-            force,
-            shownStillExists: settings.profiles.some((p) => p.id === shown),
-          })
-        ) {
+        const hold = holdReason({
+          followsActive: profileId == null,
+          shownId: shown,
+          activeId: targetId,
+          dirty: dirtyRef.current,
+          touched: touchedRef.current,
+          force,
+          shownStillExists: settings.profiles.some((p) => p.id === shown),
+        });
+        if (hold !== null) {
           setProfile(settings.profiles.find((p) => p.id === shown) ?? null);
-          setActiveChangedTo(targetId);
+          setHoldNotice(hold);
           return;
         }
-        setActiveChangedTo(null);
+        setHoldNotice(null);
+        if (force || shown !== targetId) touchedRef.current = false;
         const targetChanged =
           loadedTargetRef.current !== null && loadedTargetRef.current !== targetId;
         loadedTargetRef.current = targetId;
@@ -368,6 +374,17 @@ function ProfileSettingsPane({
     );
   };
 
+  // 入力が残っているときに、別のプロファイルへ移る・取り直す操作には、確かめを 1 回はさむ(入力が消えるため)。
+  const handleMoveToActive = () => {
+    if (dirtyRef.current && !window.confirm("入力中の内容は失われます。新しいアクティブへ移りますか?")) return;
+    touchedRef.current = false;
+    void loadSettingsData(true);
+  };
+  const handleReloadDiscardingInput = () => {
+    if (dirtyRef.current && !window.confirm("入力中の内容は失われます。取り直しますか?")) return;
+    void loadSettingsData(true);
+  };
+
   const handleSave = (event: FormEvent) => {
     event.preventDefault();
     // 保存中の再送信(Enter の連打・ダブルクリック)は無視する。
@@ -401,6 +418,8 @@ function ProfileSettingsPane({
         // 失敗したとき(サーバ停止など)は、入力も未保存の状態もそのまま残し、エラーだけを出す。
         loadedRevisionRef.current = result.revision;
         loadedGlobalRevisionRef.current = result.global_revision;
+        // 保存した。利用者が「移る」を選ぶまで、アクティブが変わっても表示を移さない(知らせは出す)。
+        touchedRef.current = true;
         setBaseline(currentForm);
         clearStale();
         setSaved(true);
@@ -483,14 +502,18 @@ function ProfileSettingsPane({
       )}
       {profileError && <p className="error">{profileError}</p>}
       {/* 入力中(未保存)の欄は、ほかのタブの変更・つなぎ直しで上書きしない。代わりにこの知らせを出す。 */}
-      {activeChangedTo && (
+      {holdNotice !== null && (
         <StaleNotice
-          message="アクティブなプロファイルが変わりました。入力中の内容は、いま表示しているプロファイルのまま残してあります(保存先も、表示しているプロファイルです)。"
+          message={
+            holdNotice === "deleted"
+              ? "表示していたプロファイルは、ほかで削除されました。入力中の内容は残してあります(このプロファイルへは保存できません)。"
+              : "アクティブなプロファイルが変わりました。表示は、いまのプロファイルのまま残してあります(保存先も、表示しているプロファイルです)。"
+          }
           actionLabel="新しいアクティブへ移る"
-          onReload={() => void loadSettingsData(true)}
+          onReload={handleMoveToActive}
         />
       )}
-      {stale && <StaleNotice onReload={() => void loadSettingsData(true)} />}
+      {stale && <StaleNotice onReload={handleReloadDiscardingInput} />}
       <Tabs
         id="settings-tabs"
         aria-label="設定の切り替え"

@@ -103,6 +103,11 @@ function formatLimitMegabytes(bytes: number): string {
   return (Math.floor(bytes / 10_000) / 100).toFixed(2) + "MB";
 }
 
+/** 画像の大きさ(バイト)を、MB(1,000,000 バイト)で、小数 2 桁(切り上げ)の文字にする。 */
+function formatLimitMegabytesCeil(bytes: number): string {
+  return (Math.ceil(bytes / 10_000) / 100).toFixed(2) + "MB";
+}
+
 function sessionTabKey(folder: string, sessionId: string): string {
   return `${folder}${SESSION_TAB_SEPARATOR}${sessionId}`;
 }
@@ -319,7 +324,10 @@ function SessionsPage({ nav }: SessionsPageProps) {
         return refreshSessionInPlace(projectParam, sessionParam);
       }
     },
-    onError: (message) => setError(message),
+    // 起こした会話のものだけを出す(待っている間に別の会話へ移ったら、移った先には出さない)。
+    onError: (message, forSessionId) => {
+      if (forSessionId === undefined || forSessionId === nav.session) setError(message);
+    },
     getMessageUuids: () => messagesRef.current.flatMap((m) => (m.uuid ? [m.uuid] : [])),
   });
 
@@ -621,6 +629,19 @@ function SessionsPage({ nav }: SessionsPageProps) {
     let count = attachments.length;
     for (const file of files) {
       try {
+        // 送る前に大きさを見て、上限(サーバの `get_attachment_limits`)を超える画像は、サーバへ送らずに断る
+        // (読み込み・送信の無駄と、本文が大きすぎて接続が切れるのを避ける)。
+        const limits = await getAttachmentLimits().catch(() => null);
+        if (limits && file.size > limits.max_image_bytes) {
+          setError(
+            "画像が大きすぎます(約" +
+              formatLimitMegabytesCeil(file.size) +
+              "。上限は 1 枚あたり約" +
+              formatLimitMegabytes(limits.max_image_bytes) +
+              ")",
+          );
+          continue;
+        }
         const image = await readImageFile(file);
         await checkImageAttachment(image.base64, count);
         count += 1;
@@ -676,6 +697,8 @@ function SessionsPage({ nav }: SessionsPageProps) {
       return;
     }
     setError(null);
+    // 送った会話。送信の要求が返るまでの間に別の会話へ切り替えても、後片付け(下書きを消す)は、送った会話に対して行う。
+    const sentSession = sessionParam;
     const sent = await sendToSession({
       profileId: resolvedProfileId,
       project: projectParam,
@@ -687,10 +710,15 @@ function SessionsPage({ nav }: SessionsPageProps) {
       images: attachments.map((image) => image.base64),
     });
     if (sent) {
-      setDraft("");
-      setAttachments([]);
-      setResumeNameEdit(null);
-      setStartModel(null);
+      if (inputOwnerRef.current === sentSession) {
+        setDraft("");
+        setAttachments([]);
+        setResumeNameEdit(null);
+        setStartModel(null);
+      } else {
+        // 別の会話へ移っていた: いま表示している会話の入力には触らず、送った会話の下書きだけを捨てる。
+        draftStoreRef.current.clear(sentSession);
+      }
     }
   };
 
