@@ -210,7 +210,12 @@ ZWJ・ZWNJ・異体字セレクタは、前後に見える文字があるとき�
 cargo build -p server
 node server/scripts/e2e-running.mjs          # サーバへ直接
 node server/scripts/e2e-running.mjs --next   # Next の中継(apps/console を next build したあと)を通して
+node server/scripts/e2e-real-claude.mjs --real   # 本物の claude を 1 セッションだけ(使い捨てのリポジトリ。下)
 ```
 
 `e2e-running.mjs` は、**使い捨て**のデータフォルダ・ホーム(`USERPROFILE`/`HOME`)・リポジトリ・会話フォルダで、偽の claude を実際に起動し、起動 → 送信 → 途中経過 → 権限 → 中断 → 切り替え → 停止 → 再開 → Ctrl+C → 再起動 → 自動再開 → 二重起動の拒否 → 強制終了(子孫 0 件)までを確かめる。
-止めるのは、スクリプトが起動した PID とその子孫だけ。`cargo test -p server --test running` は、claude を起動しない部分(SSE の接続・あふれ・購読の守り・本文の大きさ)の確認。
+共通部分は `e2e-lib.mjs`。止めるのは、スクリプトが起動した PID とその子孫だけ。`cargo test -p server --test running` は、claude を起動しない部分(SSE の接続・あふれ・購読の守り・本文の大きさ)の確認。
+
+`e2e-real-claude.mjs --real` は、**本物の claude を 1 セッションだけ**、使い捨てのデータフォルダ・リポジトリで起動する(起動 → 1 往復 → 停止 → 再開 → Ctrl+C → 子孫 0 件 → サーバの再起動 → 自動再開)。
+本物の claude は `~/.claude` の認証が要るのでホームは差し替えない。作る会話は 1 つだけで、終わりにそのフォルダ(`~/.claude/projects/` の、使い捨てのリポジトリ用のもの)を消す。
+claude の認証が切れていると、モデルの応答が認証エラーで失敗する(サーバの不具合ではない。`claude auth login` で入り直すと通る)。
