@@ -87,7 +87,7 @@ fn is_separator(c: char) -> bool {
 }
 
 /// `CON`・`NUL`・`COM1`・`COM¹`(上付き数字も予約)・`CONIN$`・`CONOUT$`…(拡張子付きも)。
-fn is_reserved_device_name(component: &str) -> bool {
+pub fn is_reserved_device_name(component: &str) -> bool {
     let base = component
         .split('.')
         .next()

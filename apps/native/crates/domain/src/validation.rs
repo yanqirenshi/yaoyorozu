@@ -83,6 +83,13 @@ pub fn contains_forbidden_invisible_or_control(text: &str) -> bool {
     false
 }
 
+/// 文字列に、**書式の文字(Cf)・既定で無視される文字・制御文字・行と段落の区切り**が 1 つでも含まれるか。
+/// `contains_forbidden_invisible_or_control` と違い、ZWJ・ZWNJ・異体字セレクタの例外を認めない
+/// (ブランチ名のように、絵文字や、ZWNJ を使う言語の名前を通す必要が無いもの用)。
+pub fn contains_format_or_ignorable_character(text: &str) -> bool {
+    text.chars().any(is_invisible_or_control)
+}
+
 /// 名前に、見える文字が 1 つ以上あるか(空白や、見えない文字だけの名前を断る)。
 pub fn has_visible_character(text: &str) -> bool {
     text.chars().any(is_visible)
