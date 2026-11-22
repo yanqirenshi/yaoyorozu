@@ -1,10 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import SafeMarkdownViewer from "./SafeMarkdownViewer";
+import { useEffect, useState } from "react";
 import "./externalLinks";
-import DOMPurify from "dompurify";
-import "@yanqirenshi/markdown.sitter";
-import type { MarkdownViewer } from "@yanqirenshi/markdown.sitter";
 import { getSkill, isAppError, listSkills } from "@/api";
 import type { SkillSummaryDto } from "@/api";
 
@@ -25,7 +23,6 @@ function SkillsPane({ profileId, selectedName, onSelectSkill }: SkillsPaneProps)
   const [loadingContent, setLoadingContent] = useState(false);
   const [contentError, setContentError] = useState<string | null>(null);
 
-  const viewerRef = useRef<MarkdownViewer | null>(null);
 
   useEffect(() => {
     setLoadingList(true);
@@ -50,20 +47,6 @@ function SkillsPane({ profileId, selectedName, onSelectSkill }: SkillsPaneProps)
       .catch((e) => setContentError(isAppError(e) ? e.message : String(e)))
       .finally(() => setLoadingContent(false));
   }, [profileId, selectedName]);
-
-  // viewerは選択中スキルがある間だけDOMに存在するため、その都度sanitize
-  // フックを設定し直す。既定は素通しのため必須設定(issue #57と同じ理由)。
-  useEffect(() => {
-    const viewer = viewerRef.current;
-    if (!viewer) return;
-    viewer.sanitize = (html) => DOMPurify.sanitize(html);
-  }, [selectedName]);
-
-  useEffect(() => {
-    const viewer = viewerRef.current;
-    if (!viewer) return;
-    viewer.markdown = content ?? "";
-  }, [content]);
 
   return (
     <div className="file-list-pane">
@@ -97,7 +80,7 @@ function SkillsPane({ profileId, selectedName, onSelectSkill }: SkillsPaneProps)
           <>
             {loadingContent && <p>読み込み中…</p>}
             {contentError && <p className="error">{contentError}</p>}
-            <markdown-viewer ref={viewerRef} foldable className="file-content-viewer" />
+            <SafeMarkdownViewer text={content ?? ""} className="file-content-viewer" />
           </>
         )}
       </div>

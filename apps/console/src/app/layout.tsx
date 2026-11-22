@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { connection } from "next/server";
 import AppShell from "./AppShell";
 import "./App.css";
 
@@ -7,9 +8,11 @@ export const metadata: Metadata = {
   description: "YAOYOROZU(Next.js + Rust サーバ)",
 };
 
-export default function RootLayout({
+// リクエストごとの nonce(Content-Security-Policy。`src/proxy.ts`)を付けるため、動的に描画する。
+export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
+  await connection();
   return (
     <html lang="ja">
       <body>

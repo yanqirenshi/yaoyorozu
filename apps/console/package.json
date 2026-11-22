@@ -6,7 +6,8 @@
     "dev": "next dev -H 127.0.0.1 -p 3200",
     "build": "next build",
     "start": "next start -H 127.0.0.1 -p 3200",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/*.test.ts"
   },
   "dependencies": {
     "@yanqirenshi/markdown.sitter": "^0.1.4",
@@ -20,6 +21,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "jsdom": "^31.0.1",
     "typescript": "^5"
   }
 }

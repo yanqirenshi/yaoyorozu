@@ -3,11 +3,11 @@
 import AddButton from "./AddButton";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import "./externalLinks";
-import DOMPurify from "dompurify";
 import "@yanqirenshi/markdown.sitter";
 import type { MarkdownWorkspace, ViewMode } from "@yanqirenshi/markdown.sitter";
 import { isAppError } from "@/api";
 import StaleNotice from "./StaleNotice";
+import { armWorkspace, setWorkspaceValue } from "./safeMarkdown";
 
 // CLAUDE.md(issue #27)・settings.json(issue #53)のどちらも
 // `{ content, modified_at_ms }` の同形DTOなので、この部品はRust側の
@@ -114,31 +114,32 @@ const ClaudeMdEditor = forwardRef<ClaudeMdEditorHandle, ClaudeMdEditorProps>(
     }, [reloadKey]);
 
     // React state(ロード/再読み込みで得た内容)をworkspaceへ一方向に反映する。
-    // ユーザー入力はworkspaceの `input` イベント経由でReact側へ戻すため
-    // (下のuseEffect)、既に同じ値ならDOMへ書き戻さない(往復を防ぐ)。
+    // ユーザー入力はworkspaceの `input` イベント経由でReact側へ戻すため(下のuseEffect)、
+    // 既に同じ値ならDOMへ書き戻さない(往復を防ぐ)。
+    //
+    // **無害化は、内容を渡す前に必ず仕込む**(`setWorkspaceValue` が先にプレビューへ無害化を仕込み、
+    // 仕込めなければ渡さない)。以前は「内容を入れる effect」が「無害化を設定する effect」より先に走り、
+    // 最初の描画が素通しで行われて、`<img onerror>` が画面のオリジンで実行された(XSS)。
+    // effect の宣言順に頼らない(`safeMarkdown.ts`)。
     useEffect(() => {
       const workspace = workspaceRef.current;
       if (!workspace) return;
       if (workspace.value !== content) {
-        workspace.value = content;
+        setWorkspaceValue(workspace, content);
       }
     }, [content, hasFile, creating]);
 
-    // workspaceが(再)マウントされるたびに、sanitizeフックの設定と
-    // inputイベントの購読をやり直す。sanitizeは既定が素通しのため必須で
-    // 設定する: CLAUDE.mdはAIやアプリ外からも書き換わるファイルであり、
-    // 素通しだとMarkdown内の生HTML/scriptがTauri WebView(= invoke で
-    // backendを呼べる環境)で実行されうる(issue #57)。
+    // workspaceが(再)マウントされるたびに、無害化の仕込みと input イベントの購読をやり直す
+    // (ユーザーの入力が live のプレビューへ流れる前に、プレビューへ無害化を仕込む)。
     useEffect(() => {
       const workspace = workspaceRef.current;
       if (!workspace) return;
+      armWorkspace(workspace);
 
-      const viewer = workspace.viewer;
-      if (viewer) {
-        viewer.sanitize = (html) => DOMPurify.sanitize(html);
-      }
-
-      const handleInput = () => setContent(workspace.value);
+      const handleInput = () => {
+        armWorkspace(workspace);
+        setContent(workspace.value);
+      };
       workspace.addEventListener("input", handleInput);
       return () => workspace.removeEventListener("input", handleInput);
     }, [hasFile, creating]);

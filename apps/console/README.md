@@ -117,3 +117,22 @@ npx tsc --noEmit        # apps/console で
 - どの画面も、購読(`session:changed` など)は画面を離れたとき・unmount のときに `unlisten` する。サーバへの SSE 接続は、
   画面を移動しても 1 本のまま(`src/api/events.ts` が持つ)。
 - command・イベントの実装状況は `npm run diff-commands` で出す。
+
+## Markdown の表示と Content-Security-Policy(XSS の守り)
+
+CLAUDE.md・Rules・Skills・会話は、clone したリポジトリやエージェントが書くので、`<img src=x onerror=…>` のような細工が入りうる。
+この画面と同じオリジンで動くと、中継(`/api/rpc/*`)を通して `~/.claude/settings.json` の読み書きまで届く。3 重に守る。
+
+1. **Markdown を表示する所は、共通の部品を通す**: 閲覧専用は `SafeMarkdownViewer`(会話の `MessageText`・`RulesPane`・`SkillsPane`)、編集つきは `ClaudeMdEditor`。
+   `<markdown-viewer>` / `<markdown-workspace>` を直接置かない・`viewer.markdown = …` / `workspace.value = …` と直接代入しない(`tests/sanitizeMarkdown.test.ts` がソースを検査して落ちる)。
+   内容は `setViewerMarkdown` / `setWorkspaceValue`(`src/safeMarkdown.ts`)でしか渡さない。どちらも**先に無害化を仕込み**(`sanitize` を設定し、`parser` も包んで出力を必ず無害化する)、仕込めなければ内容を渡さない。
+   markdown.sitter の `sanitize` の既定は素通しで、effect の宣言順に頼ると最初の描画が素通しになる(実際に起きた)。新しい Markdown の表示を足すときも、この部品を使う。
+2. **無害化の設定を締めてある**(`src/sanitizeMarkdown.ts`): `<script>`・`on` 属性・`javascript:` に加えて、`<style>`・`<link>`・`<iframe>`・`<object>`・`<embed>`・`<form>`・`<base>`・`<meta>`・`<svg>`・`style` 属性を落とす。リンク・画像の URL は `http`・`https`・`mailto` とスキームの無い相対・`#` だけ。
+3. **Content-Security-Policy**(`src/proxy.ts`。Next の Proxy): 万一無害化を抜けても、インラインのスクリプト・on 属性は実行されず、外への送信・読み込みも出ていかない。
+   `script-src` はリクエストごとの nonce + `'strict-dynamic'`(`'unsafe-inline'` なし。そのためルートの layout が `connection()` で動的に描画する)、`connect-src 'self'`、`img-src 'self' data: blob:`、`object-src 'none'`、`base-uri 'none'`、`frame-ancestors 'none'`、`form-action 'self'`。
+   **緩めた所**: `style-src` は `'unsafe-inline'` を許す(command-dock・markdown.sitter が Shadow DOM の中に `<style>` を入れ、nonce を付けられないため)。`next dev` だけ React の都合で `'unsafe-eval'` と `ws:` を足す。
+   **会話の中の外部の画像は表示されない**(読み込むだけで、開いたことが外へ伝わるため。了承済み)。
+
+```bash
+npm run test --workspace=console    # 無害化のテスト(jsdom)
+```
