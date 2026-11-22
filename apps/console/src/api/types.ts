@@ -279,6 +279,9 @@ export type AddressedProgressDto = {
   event: ProgressEventDto;
 };
 
+// 途中経過に付く、会話ごとの連番(1 から。取り直しの `progress_seq` と突き合わせる。`progressMerge.ts`)。
+export type ProgressSeq = number;
+
 // 途中経過(Channel で流れてくる)。kind で区別する。
 export type ProgressEventDto =
   | { kind: "text_delta"; text: string }
@@ -350,6 +353,8 @@ export type RunningSessionDto = {
   // 使えない版のときの説明(状態バーに出す。使える・分からないときは null)。起動は止めない。
   peer_messaging_warning: string | null;
   permission_requests: PermissionRequestDto[];
+  // この会話が送り出した途中経過の最後の番号(ここまでは、この応答の状態に反映済み)。
+  progress_seq: number;
 };
 
 // 選べるモデル(value を set_model に渡す)。

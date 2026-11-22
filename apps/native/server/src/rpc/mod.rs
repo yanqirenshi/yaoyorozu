@@ -50,6 +50,11 @@ where
 /// 超えると 413。ほかの command は 2MB のまま。
 pub const SEND_BODY_LIMIT: usize = 26 * 1024 * 1024;
 
+/// `check_image_attachment`(添付の前の事前の検証。画像 1 枚の base64 を送る)の本文の上限。画像 1 枚の上限
+/// (`domain::MAX_IMAGE_BASE64_LEN` = 5,000,000 文字)に、JSON の囲みを足しても通る大きさ(6MB)。
+/// `send_to_running_session` の上限とは別の値。ほかの command は 2MB のまま。
+pub const IMAGE_CHECK_BODY_LIMIT: usize = 6 * 1024 * 1024;
+
 /// 未知の command。
 async fn unknown_command() -> ApiError {
     ApiError::new("not_found", "その command はありません")
@@ -85,7 +90,8 @@ pub fn routes() -> Router<AppContext> {
         )
         .route(
             "/rpc/check_image_attachment",
-            post(viewer::check_image_attachment),
+            post(viewer::check_image_attachment)
+                .layer(DefaultBodyLimit::max(IMAGE_CHECK_BODY_LIMIT)),
         )
         .route(
             "/rpc/get_project_claude_md",

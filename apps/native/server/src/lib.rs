@@ -70,15 +70,15 @@ async fn health(State(ctx): State<AppContext>) -> Json<HealthDto> {
 /// SSE の接続が終わったとき(閉じられたとき・つなぎ直されたとき)に、その接続の表と購読を片づける。
 struct ConnectionGuard {
     ctx: AppContext,
-    conn_id: u64,
+    conn_id: String,
 }
 
 impl Drop for ConnectionGuard {
     fn drop(&mut self) {
-        self.ctx.running.connections.close(self.conn_id);
+        self.ctx.running.connections.close(&self.conn_id);
         // 購読の掃除は状態のロックが要る(`Drop` は async にできない)ので、別のタスクで行う。
         let ctx = self.ctx.clone();
-        let conn_id = self.conn_id;
+        let conn_id = self.conn_id.clone();
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(async move {
                 ctx.state
@@ -98,11 +98,11 @@ async fn events(
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let mut shutdown = ctx.shutdown.clone();
     let opened = ctx.running.connections.open();
-    let conn_id = opened.id;
+    let conn_id = opened.id.clone();
     let mut kicked = opened.kicked;
     let guard = ConnectionGuard {
         ctx: ctx.clone(),
-        conn_id,
+        conn_id: conn_id.clone(),
     };
     let first = stream::once(async move {
         Ok::<Event, Infallible>(

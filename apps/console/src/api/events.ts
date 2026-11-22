@@ -44,11 +44,12 @@ let hadFailure = false;
 let attached = new Set<string>();
 
 // 今の接続の ID(`connection` イベントで届く。切れたら `null`)。
-let connectionId: number | null = null;
-const connectionIdListeners = new Set<(id: number) => void>();
+let connectionId: string | null = null;
+const connectionIdListeners = new Set<(id: string) => void>();
 // 購読 ID → 途中経過の受け取り口。購読の応答(購読 ID)より先に届いた途中経過は、少しの間ためておく。
-const progressSinks = new Map<number, (progress: unknown) => void>();
-const earlyProgress = new Map<number, unknown[]>();
+type ProgressMessage = { seq: number; progress: unknown };
+const progressSinks = new Map<number, (message: ProgressMessage) => void>();
+const earlyProgress = new Map<number, ProgressMessage[]>();
 const EARLY_PROGRESS_LIMIT = 256;
 const EARLY_PROGRESS_TTL_MS = 5000;
 
@@ -84,9 +85,9 @@ function connect() {
     if (source !== es) return;
     try {
       const body = JSON.parse((event as MessageEvent<string>).data) as { connection_id?: unknown };
-      if (typeof body.connection_id !== "number") return;
+      if (typeof body.connection_id !== "string" || body.connection_id === "") return;
       connectionId = body.connection_id;
-      connectionIdListeners.forEach((fn) => fn(body.connection_id as number));
+      connectionIdListeners.forEach((fn) => fn(body.connection_id as string));
     } catch {
       // 読めなければ無視する(購読は張れない。状態は Query で取れる)。
     }
@@ -96,11 +97,13 @@ function connect() {
     try {
       const body = JSON.parse((event as MessageEvent<string>).data) as {
         subscription_id: number;
+        seq: number;
         progress: unknown;
       };
+      const message: ProgressMessage = { seq: body.seq, progress: body.progress };
       const sink = progressSinks.get(body.subscription_id);
       if (sink) {
-        sink(body.progress);
+        sink(message);
         return;
       }
       const early = earlyProgress.get(body.subscription_id) ?? [];
@@ -108,7 +111,7 @@ function connect() {
         const id = body.subscription_id;
         setTimeout(() => earlyProgress.delete(id), EARLY_PROGRESS_TTL_MS);
       }
-      if (early.length < EARLY_PROGRESS_LIMIT) early.push(body.progress);
+      if (early.length < EARLY_PROGRESS_LIMIT) early.push(message);
       earlyProgress.set(body.subscription_id, early);
     } catch {
       // 読めない途中経過は捨てる。
@@ -233,15 +236,15 @@ export function onReconnected(callback: () => void): Promise<() => void> {
  * - 購読に失敗しても例外は出さない(状態と確定した行は Query で取れる。表示が劣化するだけ)。
  */
 export function openProgressSubscription(
-  register: (connectionId: number) => Promise<number>,
-  unregister: (subscriptionId: number, connectionId: number) => Promise<void>,
-  onProgress: (progress: unknown) => void,
+  register: (connectionId: string) => Promise<number>,
+  unregister: (subscriptionId: number, connectionId: string) => Promise<void>,
+  onProgress: (progress: unknown, seq: number) => void,
 ): () => void {
   let cancelled = false;
-  let current: { subscriptionId: number; connectionId: number } | null = null;
+  let current: { subscriptionId: number; connectionId: string } | null = null;
   let generation = 0;
 
-  const setup = (id: number) => {
+  const setup = (id: string) => {
     generation += 1;
     const mine = generation;
     if (current) {
@@ -255,17 +258,18 @@ export function openProgressSubscription(
           return;
         }
         current = { subscriptionId, connectionId: id };
-        progressSinks.set(subscriptionId, onProgress);
+        const sink = (m: ProgressMessage) => onProgress(m.progress, m.seq);
+        progressSinks.set(subscriptionId, sink);
         const early = earlyProgress.get(subscriptionId);
         earlyProgress.delete(subscriptionId);
-        early?.forEach((p) => onProgress(p));
+        early?.forEach(sink);
       })
       .catch(() => {
         // 購読できなくても、表示が劣化するだけ。
       });
   };
 
-  const listener = (id: number) => setup(id);
+  const listener = (id: string) => setup(id);
   connectionIdListeners.add(listener);
   retain();
   if (connectionId !== null) setup(connectionId);

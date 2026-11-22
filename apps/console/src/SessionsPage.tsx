@@ -171,6 +171,8 @@ function SessionsPage({ nav }: SessionsPageProps) {
   }, [nav.session]);
   // このタブで新規に作ったセッションの ID(会話ファイルができたら、URL を `project` 付きの表示へ切り替える)。
   const newlyStartedRef = useRef<Set<string>>(new Set());
+  // 新規セッションの作成中(同じ瞬間の 2 回目を受け付けない。state でなく ref)。
+  const creatingRef = useRef(false);
   const [messages, setMessages] = useState<MessageDto[]>([]);
   // `refreshSessionInPlace` が最新の読み込み件数を参照するための ref(issue #314)。
   // state をそのまま依存配列に入れると、追記のたびに購読の effect が再登録されてしまうため、
@@ -601,7 +603,14 @@ function SessionsPage({ nav }: SessionsPageProps) {
         count += 1;
         setAttachments((prev) => [...prev, image]);
       } catch (e) {
-        setError(isAppError(e) ? e.message : String(e));
+        // 本文の上限を超えた(サーバが 413 で断った)ときは、上限の説明を出す(1 枚の上限は base64 で 5,000,000 文字 = 約 3.7MB)。
+        setError(
+          isAppError(e) && e.code === "payload_too_large"
+            ? "画像が大きすぎます(上限は 1 枚あたり約 3.7MB)"
+            : isAppError(e)
+              ? e.message
+              : String(e),
+        );
       }
     }
   };
@@ -677,7 +686,9 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const handleCreateNewSession = async (input: NewSessionInput) => {
     setNewDialogOpen(false);
     setError(null);
-    if (!resolvedProfileId) return;
+    // 同じ瞬間の 2 回目(ダブルクリック・Enter の連打)は受け付けない(state は描画まで古いので ref で持つ)。
+    if (!resolvedProfileId || creatingRef.current) return;
+    creatingRef.current = true;
     try {
       const started = await startRunningSession(resolvedProfileId, {
         kind: "new",
@@ -690,6 +701,8 @@ function SessionsPage({ nav }: SessionsPageProps) {
       if (confirmDiscardIfDirty()) nav.setProjectAndSession(null, started.session_id);
     } catch (e) {
       setError(isAppError(e) ? e.message : String(e));
+    } finally {
+      creatingRef.current = false;
     }
   };
 

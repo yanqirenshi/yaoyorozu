@@ -98,6 +98,14 @@ async function invoke<T>(
     throw error;
   }
   if (!response.ok) {
+    if (response.status === 413) {
+      // 本文が、その command の上限を超えた(サーバの本文の上限。JSON の本文は無い)。
+      const tooLarge: AppErrorDto = {
+        code: "payload_too_large",
+        message: "送ろうとしたデータが大きすぎます",
+      };
+      throw tooLarge;
+    }
     const error: AppErrorDto = await response
       .json()
       .then((body: unknown) => (isAppError(body) ? body : null))
@@ -401,14 +409,14 @@ export function getClaudeUsage(): Promise<ClaudeUsageSnapshotDto> {
 // 購読し直す(接続の持ち方は `events.ts` の中に閉じている)。同期で返る(購読の確立は裏で行う)。
 export function subscribeRunningSessionProgress(
   target: RunningSessionRefDto,
-  onProgress: (progress: AddressedProgressDto) => void,
+  onProgress: (progress: AddressedProgressDto, seq: number) => void,
 ): Promise<() => void> {
   const stop = openProgressSubscription(
     (connectionId) =>
       invoke<number>("subscribe_running_session_progress", { target, connectionId }),
     (subscriptionId, connectionId) =>
       invoke<void>("unsubscribe_running_session_progress", { subscriptionId, connectionId }),
-    (progress) => onProgress(progress as AddressedProgressDto),
+    (progress, seq) => onProgress(progress as AddressedProgressDto, seq),
   );
   return Promise.resolve(stop);
 }

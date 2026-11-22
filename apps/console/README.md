@@ -104,6 +104,10 @@ save(input).then(() => { setBaseline(input); clear(); });
   `subscribeRunningSessionProgress` はその ID で購読し(`openProgressSubscription`)、途中経過(`running-session:progress`)を購読 ID で振り分ける。
   つなぎ直したときは、新しい接続 ID で購読し直す(サーバの購読は接続とともに消える)。画面側は接続 ID も SSE も知らない
   (接続の持ち方を変える #629 のときは、このファイルだけを変える)。
+- 途中経過と取り直しの合わせ方は、**番号で決める 1 か所**(`src/progressMerge.ts`)。サーバが会話ごとに途中経過へ連番(`seq`)を付け、取り直しの応答に「ここまで」の番号(`progress_seq`)を載せる。
+  取り直しの「ここまで」以下の断片は捨て、続きだけを足す。重なり・順番の前後は渡さない。「ここまで」は、会話の切り替え・つなぎ直しのあとの最初の取り直し 1 回だけを使う。
+- 同じ瞬間の操作の二重実行(送信・起動・停止・権限の応答・中断・新規作成)は、state でなく ref で持つ集合で止める(`src/exclusive.ts`)。
+- 画像の添付で本文が上限を超えて 413 になったときは、「画像が大きすぎます(上限は 1 枚あたり約 3.7MB)」と出す。
 - 切れている間の途中経過は失われるので、`onReconnected` で状態(`get_running_session`)と確定した行を取り直す(`useRunningSession`)。入力中の欄は上書きしない。
 - 起動・再開(`start_running_session`)には、画面が開いているプロファイルの ID を必ず付ける(省略に頼らない)。
 - 確認用の環境: `apps/native/server/scripts/dev-fake.mjs`(偽の claude・使い捨てのデータで、サーバと `next start` を起動する)。

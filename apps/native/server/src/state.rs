@@ -41,14 +41,17 @@ pub struct SkipSource {
 
 /// 途中経過の購読 1 件。**接続の ID と購読の ID だけ**を持つ(送り先の実体は `progress::Connections` が持つ。
 /// 状態のロックの中で、送り先を触らないため)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Subscription {
     pub id: u64,
-    pub conn_id: u64,
+    pub conn_id: String,
 }
 
 /// サーバが起動して持っている実行中セッション 1 つ(Tauri 版 `RunningSessionSlot` の写し)。
 pub struct RunningSessionSlot {
+    /// このセッションが送り出した途中経過の最後の番号(1 から。送るたびに 1 増える)。取り直し(`get_running_session`)が
+    /// 「ここまで」として返し、画面が重なり・順番の崩れを番号で見分ける。
+    pub progress_seq: u64,
     /// 会話ファイルのあるプロジェクトフォルダ名。再開のときだけ(新規は会話ファイルができるまで分からない)。
     pub project: Option<String>,
     pub session: domain::RunningSessionByApp,
@@ -182,7 +185,7 @@ impl ServerState {
     }
 
     /// 閉じた(または閉じられた)接続の購読を、全部外す。
-    pub fn drop_connection_subscriptions(&mut self, conn_ids: &[u64]) {
+    pub fn drop_connection_subscriptions(&mut self, conn_ids: &[String]) {
         if conn_ids.is_empty() {
             return;
         }

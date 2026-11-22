@@ -16,6 +16,8 @@ import {
   subscribeRunningSessionProgress,
   switchRunningSession,
 } from "@/api";
+import { createExclusive } from "./exclusive";
+import { createProgressMerger } from "./progressMerge";
 import { selectableModeOf } from "./runningSessionLabels";
 import type {
   PermissionSuggestionDto,
@@ -128,6 +130,18 @@ export function useRunningSession({
   const subscriptionRef = useRef<{ key: string; unsubscribe: () => void } | null>(null);
   // 購読の張り替えを直列にする(同じ宛先の二重購読を避ける)。
   const subscribingRef = useRef<Promise<void>>(Promise.resolve());
+  // 途中経過と取り直しの合わせ方(番号で決める 1 か所。`progressMerge.ts`)。
+  const mergerRef = useRef(createProgressMerger<ProgressEventDto>());
+  // 会話を切り替えるたびに進める。切り替える前の購読から遅れて届いた途中経過は、この世代が違うので捨てる
+  // (同期で進めるので、購読を外す処理(非同期)より先に効く)。
+  const generationRef = useRef(0);
+  // 同じ瞬間(同じ描画の前)の 2 回目の操作を受け付けない(state は描画まで古いので、ref で持つ)。
+  const exclusiveRef = useRef(createExclusive());
+  const exclusive = useCallback(
+    <T,>(key: string, fallback: T, run: () => Promise<T>): Promise<T> =>
+      exclusiveRef.current.run(key, fallback, run),
+    [],
+  );
 
   const callbacks = useRef({ onTurnFinished, onError, getMessageUuids });
   useEffect(() => {
@@ -220,11 +234,18 @@ export function useRunningSession({
         }
         if (!target || !key) return;
         try {
-          const unsubscribe = await subscribeRunningSessionProgress(target, (progress) => {
-            // 購読の宛先の出来事だけを扱う(張り替えの途中で遅れて届いたものは捨てる)。
-            if (subscriptionRef.current?.key === refKey(progress.target)) {
-              handleProgress(progress.event);
-            }
+          // 新しい宛先の購読を始める: 番号は宛先ごとに 1 から振り直されるので最初からにし、「ここまで」は、
+          // いまの取り直し(この購読のきっかけ)の番号にする(それより前の断片は、見ない)。
+          const gen = generationRef.current;
+          const merger = mergerRef.current;
+          merger.begin();
+          const snapshot = runningRef.current;
+          merger.setFloor(snapshot && refKey(snapshot.target) === key ? snapshot.progress_seq : 0);
+          const unsubscribe = await subscribeRunningSessionProgress(target, (progress, seq) => {
+            // 購読の宛先の出来事だけを扱う(張り替えの途中・切り替える前の購読から遅れて届いたものは捨てる)。
+            if (gen !== generationRef.current) return;
+            if (subscriptionRef.current?.key !== refKey(progress.target)) return;
+            merger.push(seq, progress.event).forEach((m) => handleProgress(m.item));
           });
           subscriptionRef.current = { key, unsubscribe };
         } catch {
@@ -246,15 +267,19 @@ export function useRunningSession({
       // 取得の間に会話が切り替わっていたら、古い結果は使わない。
       if (sessionIdRef.current !== id) return runningRef.current;
       applyRunning(next);
+      // つなぎ直しのあとの最初の取り直しの「ここまで」で、ためてあった途中経過の続きを足す(2 回目以降は何もしない)。
+      if (next) mergerRef.current.setFloor(next.progress_seq).forEach((m) => handleProgress(m.item));
       return next;
     } catch (e) {
       callbacks.current.onError(messageOf(e));
       return runningRef.current;
     }
-  }, [applyRunning]);
+  }, [applyRunning, handleProgress]);
 
   // 表示中の会話が変わったら、その会話の実行中セッションを探し直す(返答中の表示は会話ごと)。
   useEffect(() => {
+    generationRef.current += 1;
+    mergerRef.current.begin();
     resetLive();
     applyRunning(null);
     void refresh();
@@ -313,6 +338,7 @@ export function useRunningSession({
   // 失われるので、返答の途中の表示は取り直した状態に合わせる(待機に戻っていれば片付ける)。
   useEffect(() => {
     const unlistenPromise = onReconnected(() => {
+      mergerRef.current.begin();
       void refresh().then((next) => {
         if (
           liveRef.current !== EMPTY_TURN &&
@@ -413,7 +439,8 @@ export function useRunningSession({
       model?: StartModelDto | null;
       text: string;
       images: string[];
-    }): Promise<boolean> => {
+    }): Promise<boolean> =>
+      exclusive("send", false, async () => {
       setBusy(true);
       stoppedByUserRef.current = false;
       segmentOpenRef.current = false;
@@ -435,8 +462,8 @@ export function useRunningSession({
       } finally {
         setBusy(false);
       }
-    },
-    [ensureStarted, refresh, resetLive, updateLive],
+      }),
+    [ensureStarted, exclusive, refresh, resetLive, updateLive],
   );
 
   // メッセージ無しで起動だけする(issue #484)。「起動」ボタンから呼ぶ。`send` と同じ
@@ -451,20 +478,21 @@ export function useRunningSession({
       mode: RunningPermissionModeDto;
       name?: string | null;
       model?: StartModelDto | null;
-    }): Promise<boolean> => {
-      setStarting(true);
-      try {
-        await ensureStarted(args);
-        return true;
-      } catch (e) {
-        callbacks.current.onError(messageOf(e));
-        await refresh();
-        return false;
-      } finally {
-        setStarting(false);
-      }
-    },
-    [ensureStarted, refresh],
+    }): Promise<boolean> =>
+      exclusive("start", false, async () => {
+        setStarting(true);
+        try {
+          await ensureStarted(args);
+          return true;
+        } catch (e) {
+          callbacks.current.onError(messageOf(e));
+          await refresh();
+          return false;
+        } finally {
+          setStarting(false);
+        }
+      }),
+    [ensureStarted, exclusive, refresh],
   );
 
   const respond = useCallback(
@@ -479,25 +507,29 @@ export function useRunningSession({
     ) => {
       const target = runningRef.current?.target;
       if (!target) return;
-      try {
-        await respondPermission(target, requestId, behavior, options);
-      } catch (e) {
-        callbacks.current.onError(messageOf(e));
-      }
-      await refresh();
+      await exclusive(`respond:${requestId}`, undefined, async () => {
+        try {
+          await respondPermission(target, requestId, behavior, options);
+        } catch (e) {
+          callbacks.current.onError(messageOf(e));
+        }
+        await refresh();
+      });
     },
-    [refresh],
+    [exclusive, refresh],
   );
 
   const interrupt = useCallback(async () => {
     const target = runningRef.current?.target;
     if (!target) return;
-    try {
-      await interruptRunningSession(target);
-    } catch (e) {
-      callbacks.current.onError(messageOf(e));
-    }
-  }, []);
+    await exclusive("interrupt", undefined, async () => {
+      try {
+        await interruptRunningSession(target);
+      } catch (e) {
+        callbacks.current.onError(messageOf(e));
+      }
+    });
+  }, [exclusive]);
 
   /**
    * 起動中に、モデル・権限モードを切り替える。反映は CLI が受け入れたあと(応答)なので、要求を
@@ -508,7 +540,7 @@ export function useRunningSession({
   const switchTo = useCallback(
     async (request: RunningSessionSwitchDto) => {
       const current = runningRef.current;
-      if (!current || switching) return;
+      if (!current || switching || exclusiveRef.current.has("switch")) return;
       const same =
         request.kind === "model"
           ? current.current_model === request.model
@@ -543,16 +575,18 @@ export function useRunningSession({
   const stop = useCallback(async () => {
     const target = runningRef.current?.target;
     if (!target) return;
-    stoppedByUserRef.current = true;
-    try {
-      await stopRunningSession(target);
-    } catch (e) {
-      stoppedByUserRef.current = false;
-      callbacks.current.onError(messageOf(e));
-    }
-    await refresh();
-    resetLive();
-  }, [refresh, resetLive]);
+    await exclusive("stop", undefined, async () => {
+      stoppedByUserRef.current = true;
+      try {
+        await stopRunningSession(target);
+      } catch (e) {
+        stoppedByUserRef.current = false;
+        callbacks.current.onError(messageOf(e));
+      }
+      await refresh();
+      resetLive();
+    });
+  }, [exclusive, refresh, resetLive]);
 
   return { running, live, busy, switching, send, start, starting, respond, interrupt, switchTo, stop };
 }

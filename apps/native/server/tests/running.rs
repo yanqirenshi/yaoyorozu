@@ -55,6 +55,7 @@ impl app::RunningProcess for StubProcess {
 fn slot() -> RunningSessionSlot {
     let base = domain::RunningSession::new("s-1", "windows:test", 4242, 1000);
     RunningSessionSlot {
+        progress_seq: 0,
         project: None,
         session: domain::RunningSessionByApp::new(base, "C:/repo".into(), "main-worktree", 1000),
         process: Arc::new(StubProcess),
@@ -120,7 +121,7 @@ async fn call_raw(
     )
 }
 
-async fn open_events(ctx: &AppContext) -> (Body, u64) {
+async fn open_events(ctx: &AppContext) -> (Body, String) {
     let req = Request::builder()
         .uri("/events")
         .header("host", format!("127.0.0.1:{PORT}"))
@@ -134,14 +135,13 @@ async fn open_events(ctx: &AppContext) -> (Body, u64) {
     let text = String::from_utf8_lossy(frame.data_ref().unwrap()).to_string();
     assert!(text.contains("event: connection"), "{text}");
     let id = text
-        .split("\"connection_id\":")
+        .split("\"connection_id\":\"")
         .nth(1)
         .unwrap()
-        .split(|c: char| !c.is_ascii_digit())
+        .split('"')
         .next()
         .unwrap()
-        .parse()
-        .unwrap();
+        .to_string();
     (body, id)
 }
 
@@ -164,7 +164,7 @@ async fn the_first_event_is_the_connection_id_and_each_connection_is_distinct() 
     let (_a, id_a) = open_events(&ctx).await;
     let (_b, id_b) = open_events(&ctx).await;
     assert_ne!(id_a, id_b);
-    assert!(ctx.running.connections.is_open(id_a) && ctx.running.connections.is_open(id_b));
+    assert!(ctx.running.connections.is_open(&id_a) && ctx.running.connections.is_open(&id_b));
 }
 
 #[tokio::test]
@@ -172,7 +172,7 @@ async fn a_connection_that_overflows_is_closed_and_its_subscriptions_are_dropped
     let (ctx, target) = ctx_with_one_session();
     let (mut slow, slow_id) = open_events(&ctx).await;
     let (_fine, fine_id) = open_events(&ctx).await;
-    for conn in [slow_id, fine_id] {
+    for conn in [slow_id.clone(), fine_id.clone()] {
         let (status, _) = call(
             &ctx,
             "subscribe_running_session_progress",
@@ -186,20 +186,23 @@ async fn a_connection_that_overflows_is_closed_and_its_subscriptions_are_dropped
     // 読まない接続へ、待ち行列を超えて送る(待たずに外れる)。
     let mut dropped = false;
     for n in 0..(PROGRESS_QUEUE_LEN as u64 + 5) {
-        if ctx.running.connections.deliver(slow_id, message(n)) == Delivery::Dropped {
+        if ctx.running.connections.deliver(&slow_id, message(n)) == Delivery::Dropped {
             dropped = true;
             break;
         }
     }
     assert!(dropped, "待ち行列があふれたら、待たずに外す");
-    assert!(!ctx.running.connections.is_open(slow_id));
-    assert!(ctx.running.connections.is_open(fine_id), "ほかの接続は残る");
+    assert!(!ctx.running.connections.is_open(&slow_id));
+    assert!(
+        ctx.running.connections.is_open(&fine_id),
+        "ほかの接続は残る"
+    );
 
     // 配る側がまとめて外す(イベントループが行う処理と同じ)。
     ctx.state
         .lock()
         .await
-        .drop_connection_subscriptions(&[slow_id]);
+        .drop_connection_subscriptions(std::slice::from_ref(&slow_id));
     let left = subscribers(&ctx).await;
     assert_eq!(left.len(), 1);
     assert_eq!(left[0].conn_id, fine_id);
@@ -228,7 +231,7 @@ async fn closing_a_stream_removes_its_connection_and_subscriptions() {
     drop(body); // タブを閉じた(接続が切れた)
     let cleaned = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if !ctx.running.connections.is_open(id) && subscribers(&ctx).await.is_empty() {
+            if !ctx.running.connections.is_open(&id) && subscribers(&ctx).await.is_empty() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -244,7 +247,7 @@ async fn subscribing_needs_an_open_connection_and_unsubscribing_is_per_connectio
     let (status, body) = call(
         &ctx,
         "subscribe_running_session_progress",
-        serde_json::json!({"target": target, "connectionId": 12345}),
+        serde_json::json!({"target": target, "connectionId": "00000000-0000-4000-8000-000000000000"}),
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
@@ -369,4 +372,86 @@ async fn start_refuses_values_outside_the_enums_and_unregistered_things() {
         ctx.state.lock().await.starting_session_ids.is_empty(),
         "失敗したら起動中の印を残さない"
     );
+}
+
+#[tokio::test]
+async fn check_image_attachment_accepts_a_body_for_the_largest_image_but_not_much_more() {
+    let (ctx, _) = ctx_with_one_session();
+    // 画像 1 枚の上限(5,000,000 文字の base64)は、本文の上限(2MB)に掛からず、中身の検証へ進む
+    // (中身は画像ではないので 400。413 ではない)。
+    let max = "A".repeat(5_000_000);
+    let (status, _) = call(
+        &ctx,
+        "check_image_attachment",
+        serde_json::json!({"data": max, "existingCount": 0}),
+    )
+    .await;
+    assert_ne!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    // 上限(6MB)を超える本文は 413。
+    let over = "A".repeat(server::rpc::IMAGE_CHECK_BODY_LIMIT + 1024);
+    let (status, _) = call(
+        &ctx,
+        "check_image_attachment",
+        serde_json::json!({"data": over, "existingCount": 0}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    // ほかの command は 2MB のまま。
+    let pad = "x".repeat(3 * 1024 * 1024);
+    let (status, _) = call(&ctx, "get_running_session", serde_json::json!({"pad": pad})).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
+async fn connection_ids_are_random_so_an_old_id_never_hits_another_servers_connection() {
+    // サーバを起動し直すと、接続の ID は振り直される。乱数(UUID)なので、古いサーバの ID は、新しいサーバの
+    // どの接続とも一致しない(古い ID での購読は 404、購読解除は何も起きない)。
+    let (old_server, target) = ctx_with_one_session();
+    let (_old_conn, old_id) = open_events(&old_server).await;
+    assert_eq!(old_id.len(), 36, "UUID の形: {old_id}");
+
+    let (new_server, target) = {
+        let (ctx, t) = ctx_with_one_session();
+        let _ = &target;
+        (ctx, t)
+    };
+    let (_b, new_id) = open_events(&new_server).await;
+    assert_ne!(old_id, new_id);
+    // 新しいサーバで、B の購読。
+    let (_, sub_b) = call(
+        &new_server,
+        "subscribe_running_session_progress",
+        serde_json::json!({"target": target, "connectionId": new_id}),
+    )
+    .await;
+    assert_eq!(subscribers(&new_server).await.len(), 1);
+    // 古い ID での購読は 404。購読 ID が同じでも、古い ID での購読解除は B の購読を外さない。
+    let (status, _) = call(
+        &new_server,
+        "subscribe_running_session_progress",
+        serde_json::json!({"target": target, "connectionId": old_id}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(
+        &new_server,
+        "unsubscribe_running_session_progress",
+        serde_json::json!({"subscriptionId": sub_b, "connectionId": old_id}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(subscribers(&new_server).await.len(), 1, "B の購読は残る");
+}
+
+#[tokio::test]
+async fn running_session_snapshot_carries_the_last_progress_sequence_number() {
+    let (ctx, target) = ctx_with_one_session();
+    let (status, body) = call(
+        &ctx,
+        "get_running_session",
+        serde_json::json!({"target": target}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["progress_seq"], 0, "{body}");
 }
