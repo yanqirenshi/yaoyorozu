@@ -47,6 +47,61 @@ pub struct Subscription {
     pub conn_id: String,
 }
 
+/// 進行中のターンの、ここまでの途中経過(連番つき)。凍結されたタブ・切り替えたあとの会話が、ターンの途中から表示を始められるように、
+/// `get_running_session` が返す。ターンが終わったら捨てる(確定した内容は会話ファイルにある)。
+/// 大きくなりすぎたら、古いほうから捨てる(画面は、残った分から続きを足す)。
+#[derive(Default, Clone, Debug)]
+pub struct TurnBuffer {
+    events: std::collections::VecDeque<(u64, crate::dto::ProgressEventDto)>,
+    bytes: usize,
+}
+
+impl TurnBuffer {
+    /// 件数の上限と、大きさ(JSON にしたときの文字数)の上限。
+    pub const MAX_EVENTS: usize = 20_000;
+    pub const MAX_BYTES: usize = 2 * 1024 * 1024;
+
+    /// 途中経過 1 件を足す。ターンの終わり(`finished`)なら、全部捨てる。
+    pub fn record(&mut self, seq: u64, event: crate::dto::ProgressEventDto, finished: bool) {
+        if finished {
+            self.events.clear();
+            self.bytes = 0;
+            return;
+        }
+        let size = serde_json::to_string(&event).map(|s| s.len()).unwrap_or(0) + 16;
+        self.events.push_back((seq, event));
+        self.bytes += size;
+        while self.events.len() > Self::MAX_EVENTS || self.bytes > Self::MAX_BYTES {
+            let Some((_, dropped)) = self.events.pop_front() else {
+                break;
+            };
+            let dropped_size = serde_json::to_string(&dropped)
+                .map(|s| s.len())
+                .unwrap_or(0)
+                + 16;
+            self.bytes = self.bytes.saturating_sub(dropped_size);
+        }
+    }
+
+    pub fn snapshot(&self) -> Vec<crate::dto::TurnEventDto> {
+        self.events
+            .iter()
+            .map(|(seq, event)| crate::dto::TurnEventDto {
+                seq: *seq,
+                event: event.clone(),
+            })
+            .collect()
+    }
+
+    pub fn len(&self) -> usize {
+        self.events.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
+}
+
 /// サーバが起動して持っている実行中セッション 1 つ(Tauri 版 `RunningSessionSlot` の写し)。
 pub struct RunningSessionSlot {
     /// このセッションが送り出した途中経過の最後の番号(1 から。送るたびに 1 増える)。取り直し(`get_running_session`)が
@@ -61,6 +116,8 @@ pub struct RunningSessionSlot {
     pub available_models: Vec<app::AvailableModel>,
     /// 途中経過の購読(購読が無い間の出来事は捨てる。状態・答え待ちは Query で取れる)。
     pub subscribers: Vec<Subscription>,
+    /// 進行中のターンの、ここまでの途中経過(連番つき)。
+    pub turn_events: TurnBuffer,
 }
 
 pub struct ServerState {

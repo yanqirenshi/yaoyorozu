@@ -57,6 +57,8 @@ pub struct RunningServices {
     pub connections: Connections,
     /// `/ws` につなぐための使い捨ての券(メモリにだけ持つ)。
     pub tickets: crate::ws::Tickets,
+    /// `/ws` につながっていて、まだ券の確かめを終えていない接続の数(上限 [`crate::ws::MAX_UNAUTHENTICATED`])。
+    pub unauthenticated: Arc<std::sync::atomic::AtomicUsize>,
     /// `/ws` が通す Origin(Next の画面のもの。空なら、誰も通さない)。
     pub allowed_origins: Arc<Vec<String>>,
     /// `running-sessions.json`・`archived-sessions.json`・`git-ledger.json` の保存のレーン
@@ -388,8 +390,18 @@ fn spawn_event_loop(
                                 || exit_code.is_some()
                                 || models_listed;
                             // 途中経過には、このセッションの連番を付ける(購読者がいなくても進める。取り直しの「ここまで」)。
-                            let subscribers = if addressed.as_progress().is_some() {
+                            let subscribers = if let Some(progress) = addressed.as_progress() {
                                 slot.progress_seq += 1;
+                                // 進行中のターンの控え(凍結・切り替えのあとの画面が、途中から表示を始められる)。
+                                let finished = matches!(
+                                    progress.event,
+                                    domain::ProgressEvent::TurnFinished { .. }
+                                );
+                                slot.turn_events.record(
+                                    slot.progress_seq,
+                                    crate::dto::ProgressEventDto::from(progress.event),
+                                    finished,
+                                );
                                 slot.subscribers.clone()
                             } else {
                                 Vec::new()
@@ -977,12 +989,14 @@ async fn start_running_session_inner(
             process: crate::jobbed_process::JobbedProcess::wrap(started.process),
             available_models: Vec::new(),
             subscribers: Vec::new(),
+            turn_events: Default::default(),
         };
         let dto = RunningSessionDto::from_session(
             slot.project.as_deref(),
             slot.session.clone(),
             slot.available_models.clone(),
             slot.progress_seq,
+            slot.turn_events.snapshot(),
         );
         let payload = changed_event(&slot.session, None);
         let remembered = slot.session.clone();

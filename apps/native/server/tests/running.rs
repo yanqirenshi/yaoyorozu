@@ -62,6 +62,7 @@ fn slot() -> RunningSessionSlot {
         process: Arc::new(StubProcess),
         available_models: Vec::new(),
         subscribers: Vec::new(),
+        turn_events: Default::default(),
     }
 }
 
@@ -390,4 +391,79 @@ async fn subscribing_to_an_exited_session_is_not_found() {
         .expect_err("終了したセッションへの購読は断る");
     assert_eq!(err.0.code, "not_found");
     assert!(subscribers(&ctx).await.is_empty(), "購読を残さない");
+}
+
+#[tokio::test]
+async fn the_snapshot_carries_the_turn_so_far_and_it_is_dropped_when_the_turn_finishes() {
+    use server::dto::ProgressEventDto;
+    let (ctx, target) = ctx_with_one_session();
+    {
+        let mut guard = ctx.state.lock().await;
+        let slot = &mut guard.running_sessions[0];
+        for seq in 1..=3 {
+            slot.turn_events.record(
+                seq,
+                ProgressEventDto::TextDelta {
+                    text: format!("[{seq}]"),
+                },
+                false,
+            );
+        }
+        slot.progress_seq = 3;
+    }
+    let (status, body) = call(
+        &ctx,
+        "get_running_session",
+        serde_json::json!({"target": target}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["progress_seq"], 3);
+    let events = body["turn_events"].as_array().unwrap();
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0]["seq"], 1);
+    assert_eq!(events[2]["event"]["text"], "[3]");
+
+    // ターンが終わると捨てる(確定した内容は会話ファイルにある)。
+    {
+        let mut guard = ctx.state.lock().await;
+        guard.running_sessions[0].turn_events.record(
+            4,
+            ProgressEventDto::TurnFinished { succeeded: true },
+            true,
+        );
+    }
+    let (_, body) = call(
+        &ctx,
+        "get_running_session",
+        serde_json::json!({"target": target}),
+    )
+    .await;
+    assert!(body["turn_events"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn the_turn_buffer_drops_the_oldest_when_it_gets_too_big() {
+    use server::dto::ProgressEventDto;
+    use server::state::TurnBuffer;
+    let mut buffer = TurnBuffer::default();
+    let big = "x".repeat(100_000);
+    for seq in 1..=100u64 {
+        buffer.record(
+            seq,
+            ProgressEventDto::TextDelta { text: big.clone() },
+            false,
+        );
+    }
+    // 2MB の上限: 古いほうから捨て、新しいほうが残る(番号は連続のまま)。
+    let kept = buffer.snapshot();
+    assert!(kept.len() < 100 && kept.len() >= 15, "{}", kept.len());
+    assert_eq!(kept.last().unwrap().seq, 100);
+    assert!(kept.windows(2).all(|w| w[1].seq == w[0].seq + 1));
+    // 件数の上限。
+    let mut buffer = TurnBuffer::default();
+    for seq in 1..=(TurnBuffer::MAX_EVENTS as u64 + 10) {
+        buffer.record(seq, ProgressEventDto::TextDelta { text: "a".into() }, false);
+    }
+    assert_eq!(buffer.len(), TurnBuffer::MAX_EVENTS);
 }

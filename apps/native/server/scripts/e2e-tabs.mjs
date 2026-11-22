@@ -23,6 +23,8 @@ const line = (o) => JSON.stringify(o) + "\n";
 const CDP_PORT = 9400 + Math.floor(Math.random() * 90);
 
 let browser = null;
+// 使い捨てのブラウザのプロフィール(ブラウザを止めてから消す)。
+let profileDir = null;
 let cdp;
 let id = 0;
 const pending = new Map();
@@ -91,6 +93,7 @@ async function main() {
 
   // ---- ブラウザ ----
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), "tabs10-"));
+  profileDir = profile;
   browser = spawn(exe, [`--remote-debugging-port=${CDP_PORT}`, `--user-data-dir=${profile}`, "--headless=new", "--no-first-run", "--no-default-browser-check", "about:blank"], { stdio: "ignore", windowsHide: true });
   recordIdentity(browser.pid);
   const version = await connectCdp();
@@ -172,19 +175,30 @@ async function main() {
   await rpc(srv, "stop_running_session", { target });
   const errors = tabs.flatMap((t) => t.errors).filter(Boolean);
   console.log("画面のエラー:", errors.length, JSON.stringify([...new Set(errors)]));
-  fs.rmSync(profile, { recursive: true, force: true });
 }
 
+let failed = false;
 try {
   await main();
 } catch (e) {
+  failed = true;
   console.error("失敗:", e);
 } finally {
   try { cdp?.close(); } catch {}
   await sleep(500);
+  // 使い捨てのプロフィールは、ブラウザを止めて(ファイルを持たなくなって)から消す(先に消すと EPERM になる)。
   if (browser) killTreeIfMine(browser.pid, { log: () => {} });
   cleanupStarted();
-  await sleep(1000);
-  try { fs.rmSync(root, { recursive: true, force: true }); } catch {}
-  process.exit(0);
+  await sleep(1500);
+  for (const dir of [profileDir, root]) {
+    if (!dir) continue;
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch (e) {
+      failed = true;
+      console.error("使い捨てのフォルダを消せません(" + dir + "): " + (e.code ?? e));
+    }
+  }
+  // 失敗したら、0 以外で終わる。
+  process.exit(failed ? 1 : 0);
 }

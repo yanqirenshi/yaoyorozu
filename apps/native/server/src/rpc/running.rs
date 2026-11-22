@@ -50,7 +50,8 @@ pub async fn start_running_session(
     body: Bytes,
 ) -> Result<Json<RunningSessionDto>, ApiError> {
     let args: StartArgs = parse_args(&body)?;
-    let dto = crate::running::start_running_session(&ctx, args.profile_id, args.request).await?;
+    let dto =
+        crate::running::start_running_session(&ctx, args.profile_id, args.request).await?;
     Ok(Json(dto))
 }
 
@@ -94,6 +95,7 @@ pub async fn get_running_session(
             slot.session.clone(),
             slot.available_models.clone(),
             slot.progress_seq,
+            slot.turn_events.snapshot(),
         )
     })))
 }

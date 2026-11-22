@@ -67,6 +67,7 @@ fn slot() -> RunningSessionSlot {
         process: Arc::new(StubProcess),
         available_models: Vec::new(),
         subscribers: Vec::new(),
+        turn_events: Default::default(),
     }
 }
 
@@ -575,4 +576,48 @@ async fn without_a_console_port_no_ticket_is_issued_and_nobody_gets_in() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn connections_that_have_not_shown_a_ticket_are_limited() {
+    let f = start().await;
+    // 何も送らない接続で枠を使い切る。
+    let mut idle = Vec::new();
+    for _ in 0..server::ws::MAX_UNAUTHENTICATED {
+        idle.push(connect(&f).await);
+    }
+    // 65 本目は、アップグレードの時点で 503。
+    let r = connect_with(&f, "/ws", Some(&origin_ok()), None).await;
+    assert_eq!(r.err(), Some(StatusCode::SERVICE_UNAVAILABLE));
+    // 券を出して確かめを終えた接続は、枠を返す(1 本空けると、また通る)。
+    let first = idle.remove(0);
+    drop(first);
+    for _ in 0..100 {
+        if f.ctx
+            .running
+            .unauthenticated
+            .load(std::sync::atomic::Ordering::SeqCst)
+            < server::ws::MAX_UNAUTHENTICATED
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let mut again = connect(&f).await;
+    let ticket = issue_ticket(&f).await;
+    again
+        .send(text(
+            serde_json::json!({"type": "ticket", "ticket": ticket}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(next_text(&mut again).await.unwrap()["type"], "ready");
+    // 確かめを終えた分は数えない。
+    assert!(
+        f.ctx
+            .running
+            .unauthenticated
+            .load(std::sync::atomic::Ordering::SeqCst)
+            < server::ws::MAX_UNAUTHENTICATED
+    );
 }
