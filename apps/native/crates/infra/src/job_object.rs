@@ -11,10 +11,12 @@ use windows::core::BOOL;
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JobObjectExtendedLimitInformation,
-    SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
-use windows::Win32::System::Threading::GetCurrentProcess;
+use windows::Win32::System::Threading::{
+    GetCurrentProcess, OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+};
 
 /// ジョブのハンドル。プロセスの終わりまで閉じない(閉じると子孫が止まる)。
 struct JobHandle(#[allow(dead_code)] HANDLE);
@@ -60,6 +62,70 @@ pub fn place_current_process_in_kill_on_close_job() -> Result<(), String> {
         let _ = JOB.set(JobHandle(job));
     }
     Ok(())
+}
+
+/// **会話 1 つ専用のジョブ**(サーバのジョブの中の入れ子。Windows 8 以降)。claude を 1 つ起動するたびに、その
+/// プロセスを入れる。以後その子孫(切り離して起動した子・親が先に終わった孫を含む)は、このジョブに残る。
+/// [`terminate`](Self::terminate) で、ジョブの中を**ジョブごと**止める。閉じる(`Drop`)と、`KILL_ON_JOB_CLOSE` で
+/// 中身も止まる(会話の控えを忘れるとき・サーバの終了)。
+pub struct ConversationJob(HANDLE);
+
+// ハンドルはプロセス内のどのスレッドからも使えるカーネルオブジェクトへの参照。
+unsafe impl Send for ConversationJob {}
+unsafe impl Sync for ConversationJob {}
+
+impl ConversationJob {
+    /// 起動した `pid` のプロセスを、新しい専用のジョブへ入れる。入れられない環境(入れ子にできない・権限が無い)
+    /// では `Err`(呼び出し側がログに出して、今の動き = 子だけを止める、のまま続ける)。
+    pub fn assign(pid: u32) -> Result<Self, String> {
+        // SAFETY: 引数は有効な値。作ったハンドルは、失敗したら閉じる。
+        unsafe {
+            let job = CreateJobObjectW(None, windows::core::PCWSTR::null())
+                .map_err(|e| format!("会話用のジョブを作れません: {e}"))?;
+            let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            if let Err(e) = SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                &info as *const _ as *const std::ffi::c_void,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            ) {
+                let _ = CloseHandle(job);
+                return Err(format!("会話用のジョブの設定に失敗しました: {e}"));
+            }
+            let process = match OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, false, pid) {
+                Ok(process) => process,
+                Err(e) => {
+                    let _ = CloseHandle(job);
+                    return Err(format!("プロセスを開けません(PID {pid}): {e}"));
+                }
+            };
+            let assigned = AssignProcessToJobObject(job, process);
+            let _ = CloseHandle(process);
+            if let Err(e) = assigned {
+                let _ = CloseHandle(job);
+                return Err(format!("会話用のジョブへ入れません(PID {pid}): {e}"));
+            }
+            Ok(Self(job))
+        }
+    }
+
+    /// ジョブの中のプロセスを、全部止める(子孫を残さない)。
+    pub fn terminate(&self) {
+        // SAFETY: `self.0` は有効なジョブのハンドル。
+        unsafe {
+            let _ = TerminateJobObject(self.0, 1);
+        }
+    }
+}
+
+impl Drop for ConversationJob {
+    fn drop(&mut self) {
+        // SAFETY: `self.0` は有効なハンドル(二重に閉じない)。閉じると、中のプロセスも止まる。
+        unsafe {
+            let _ = CloseHandle(self.0);
+        }
+    }
 }
 
 /// 自分がいずれかのジョブに入っているか(確認用)。

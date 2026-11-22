@@ -888,7 +888,8 @@ pub async fn start_running_session(
             progress_seq: 0,
             project: resumed_project,
             session: started.session,
-            process: started.process,
+            // 会話用のジョブへ入れる(停止のとき、切り離された子孫も止める)。
+            process: crate::jobbed_process::JobbedProcess::wrap(started.process),
             available_models: Vec::new(),
             subscribers: Vec::new(),
         };

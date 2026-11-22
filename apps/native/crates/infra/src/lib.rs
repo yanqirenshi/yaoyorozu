@@ -49,7 +49,9 @@ pub use github_api_client::{GithubApiClient, DEVICE_FLOW_SCOPE};
 pub use github_auth_log::{token_fingerprint, GithubAuthLog};
 pub use hub_layout_store::FileHubLayoutStore;
 pub use hub_tuning_store::FileHubTuningStore;
-pub use job_object::{current_process_is_in_a_job, place_current_process_in_kill_on_close_job};
+pub use job_object::{
+    current_process_is_in_a_job, place_current_process_in_kill_on_close_job, ConversationJob,
+};
 pub use keyring_token_store::KeyringTokenStore;
 pub use layout_store::FileLayoutStore;
 pub use local_api_port_store::FileLocalApiPortStore;

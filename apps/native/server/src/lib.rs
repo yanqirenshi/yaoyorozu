@@ -7,6 +7,7 @@ pub mod dto;
 pub mod error;
 pub mod events;
 pub mod folders;
+pub mod jobbed_process;
 pub mod lock;
 pub mod progress;
 pub mod redact;
