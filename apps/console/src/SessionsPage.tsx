@@ -206,6 +206,20 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 送信・起動の結果の知らせ(失敗・負けた旨)は、起こした会話ごとに持つ。会話の取り直し(`setError(null)`)では消えず、
+  // 閉じるか、その会話で次に送信・起動するまで残る(別の会話へ移っても、戻れば見える)。
+  const [notices, setNotices] = useState<Readonly<Record<string, string>>>({});
+  const setNotice = useCallback((id: string, message: string | null) => {
+    setNotices((prev) => {
+      if (message === null) {
+        if (!(id in prev)) return prev;
+        const rest = { ...prev };
+        delete rest[id];
+        return rest;
+      }
+      return { ...prev, [id]: message };
+    });
+  }, []);
   // 接続が切れている間の案内(会話のページ送りなどが失敗する理由を見分けるため)は AppShell が出す。
   // 「データ」ボタンで開いているメッセージの uuid(閉じていれば null。issue #313)。
   const [rawLineUuid, setRawLineUuid] = useState<string | null>(null);
@@ -324,9 +338,10 @@ function SessionsPage({ nav }: SessionsPageProps) {
         return refreshSessionInPlace(projectParam, sessionParam);
       }
     },
-    // 起こした会話のものだけを出す(待っている間に別の会話へ移ったら、移った先には出さない)。
+    // 起こした会話の知らせは、その会話に結びつけて持つ(別の会話へ移っても、移った先には出さず、戻れば出す)。
     onError: (message, forSessionId) => {
-      if (forSessionId === undefined || forSessionId === nav.session) setError(message);
+      if (forSessionId === undefined) setError(message);
+      else setNotice(forSessionId, message);
     },
     getMessageUuids: () => messagesRef.current.flatMap((m) => (m.uuid ? [m.uuid] : [])),
   });
@@ -528,6 +543,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
   // 未起動のとき、メッセージ無しで起動だけする(issue #484)。送信時の自動起動と同じ `ensureStarted` を使う。
   const handleStartRunning = () => {
     if (!projectParam || !sessionParam || !resolvedProfileId) return;
+    setNotice(sessionParam, null);
     void startRunning({
       profileId: resolvedProfileId,
       project: projectParam,
@@ -697,6 +713,7 @@ function SessionsPage({ nav }: SessionsPageProps) {
       return;
     }
     setError(null);
+    setNotice(sessionParam, null);
     // 送った会話。送信の要求が返るまでの間に別の会話へ切り替えても、後片付け(下書きを消す)は、送った会話に対して行う。
     const sentSession = sessionParam;
     const sent = await sendToSession({
@@ -1059,6 +1076,14 @@ function SessionsPage({ nav }: SessionsPageProps) {
             )}
             <div className="conversation-scroll">
               {error && <p className="error">{error}</p>}
+              {sessionParam && notices[sessionParam] && (
+                <p className="error" role="alert">
+                  {notices[sessionParam]}{" "}
+                  <button type="button" onClick={() => setNotice(sessionParam, null)}>
+                    閉じる
+                  </button>
+                </p>
+              )}
               {!hasTarget ? (
                 <p>
                   {targetFolders.length === 0

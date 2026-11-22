@@ -126,9 +126,22 @@ export function useRunningSession({
   const segmentIdRef = useRef(0);
   // 「終了」ボタンで自分から止めたか(意図した終了はエラーとして出さない)。
   const stoppedByUserRef = useRef(false);
-  // 送信・起動の最中の会話(起こした会話にだけ「送信中…」「起動中…」を出す)。
-  const [busySession, setBusySession] = useState<string | null>(null);
-  const [startingSession, setStartingSession] = useState<string | null>(null);
+  // 送信・起動の最中の会話(起こした会話にだけ「送信中…」「起動中…」を出す)。送信・起動は、起こした会話に結びつけて
+  // 最後まで進める(別の会話へ移っても止めない)ので、会話ごとに持つ。
+  const [busySessions, setBusySessions] = useState<ReadonlySet<string>>(() => new Set());
+  const [startingSessions, setStartingSessions] = useState<ReadonlySet<string>>(() => new Set());
+  const markIn = useCallback(
+    (setter: (update: (prev: ReadonlySet<string>) => ReadonlySet<string>) => void, id: string, on: boolean) => {
+      setter((prev) => {
+        if (prev.has(id) === on) return prev;
+        const next = new Set(prev);
+        if (on) next.add(id);
+        else next.delete(id);
+        return next;
+      });
+    },
+    [],
+  );
   // 切り替え(モデル・権限モード)の結果を待っている間。
   const [switching, setSwitching] = useState(false);
   const sessionIdRef = useRef(sessionId);
@@ -265,23 +278,37 @@ export function useRunningSession({
     [handleProgress],
   );
 
+  /**
+   * 会話 `id` の実行中セッションを取り直して返す(無ければ `null`)。表示へ反映するのは、その会話がいま表示中のときだけ
+   * (送信・起動を、起こした会話に結びつけて進めるために、表示していない会話の状態も取れるようにしてある)。
+   */
+  const refreshFor = useCallback(
+    async (id: string | null): Promise<RunningSessionDto | null> => {
+      try {
+        const target = id ? pickForSession(await listRunningSessions(), id) : null;
+        const next = target ? await getRunningSession(target) : null;
+        // 取得の間に別の会話へ移っていたら、表示には反映しない(結果は、呼んだ側がその会話のために使う)。
+        if (sessionIdRef.current !== id) return next;
+        applyRunning(next);
+        // つなぎ直しのあとの最初の取り直しの「ここまで」で、ためてあった途中経過の続きを足す(2 回目以降は何もしない)。
+        if (next) mergerRef.current.setFloor(next.progress_seq).forEach((m) => handleProgress(m.item));
+        return next;
+      } catch (e) {
+        if (sessionIdRef.current === id) callbacks.current.onError(messageOf(e));
+        else if (id) callbacks.current.onError(messageOf(e), id);
+        return sessionIdRef.current === id ? runningRef.current : null;
+      }
+    },
+    [applyRunning, handleProgress],
+  );
+
   /** 表示中の会話の実行中セッションを取り直す(無ければ `null`)。 */
   const refresh = useCallback(async (): Promise<RunningSessionDto | null> => {
     const id = sessionIdRef.current;
-    try {
-      const target = id ? pickForSession(await listRunningSessions(), id) : null;
-      const next = target ? await getRunningSession(target) : null;
-      // 取得の間に会話が切り替わっていたら、古い結果は使わない。
-      if (sessionIdRef.current !== id) return runningRef.current;
-      applyRunning(next);
-      // つなぎ直しのあとの最初の取り直しの「ここまで」で、ためてあった途中経過の続きを足す(2 回目以降は何もしない)。
-      if (next) mergerRef.current.setFloor(next.progress_seq).forEach((m) => handleProgress(m.item));
-      return next;
-    } catch (e) {
-      callbacks.current.onError(messageOf(e));
-      return runningRef.current;
-    }
-  }, [applyRunning, handleProgress]);
+    const next = await refreshFor(id);
+    // 取得の間に会話が切り替わっていたら、古い結果は使わない。
+    return sessionIdRef.current === id ? next : runningRef.current;
+  }, [refreshFor]);
 
   // 表示中の会話が変わったら、その会話の実行中セッションを探し直す(返答中の表示は会話ごと)。
   useEffect(() => {
@@ -360,43 +387,42 @@ export function useRunningSession({
     };
   }, [refresh, resetLive]);
 
-  /** 状態が条件を満たすまで、Query で取り直しながら待つ(楽観更新しない)。 */
+  /** 会話 `id` の状態が条件を満たすまで、Query で取り直しながら待つ(楽観更新しない)。表示中でなくても待つ。 */
   const waitUntil = useCallback(
-    async (predicate: (s: RunningSessionDto | null) => boolean, timeoutMs: number) => {
+    async (id: string, predicate: (s: RunningSessionDto | null) => boolean, timeoutMs: number) => {
       const deadline = Date.now() + timeoutMs;
       for (;;) {
-        const s = await refresh();
+        const s = await refreshFor(id);
         if (predicate(s)) return s;
         if (Date.now() > deadline) return s;
         await sleep(100);
       }
     },
-    [refresh],
+    [refreshFor],
   );
 
   /**
-   * 起動の失敗を、利用者へ知らせるか決める(起こした会話 `forSessionId` にだけ出す)。
+   * 起動の失敗を、利用者へ知らせるか決める(起こした会話 `forSessionId` に結びつけて知らせる。画面は、その会話を
+   * 表示したときに出す)。
    * - 同じ会話をほかのタブが起動している(409 の `starting`・`running`)なら、状態を取り直し、実行中になるのを少し待つ
    *   (勝ったほうが、まだ台帳に載せる前のことがある)。実行中になれば、エラーは出さない。ただし**送信**のときは、
    *   発言は送られていないので、「ほかのタブがこの会話を起動しました。もう一度送信してください」と知らせる(下書きは残す)。
    * - 待っても実行中にならない種類(同時数の上限など)は、待たずにすぐ出す。
-   * - 待っている間に別の会話へ移ったら、取り直しも通知もしない(移った先に出さない)。
+   * - 待っている間に別の会話へ移っても、待つのをやめない(結果は、その会話へ戻ったときに見える)。
    */
   const reportStartFailure = useCallback(
     async (e: unknown, forSessionId: string, sending: boolean) => {
-      const stillHere = () => sessionIdRef.current === forSessionId;
       if (!shouldWaitForRunning(e)) {
-        await refresh();
-        if (stillHere()) callbacks.current.onError(messageOf(e), forSessionId);
+        await refreshFor(forSessionId);
+        callbacks.current.onError(messageOf(e), forSessionId);
         return;
       }
-      let next = await refresh();
+      let next = await refreshFor(forSessionId);
       const deadline = Date.now() + BUSY_WAIT_MS;
-      while (stillHere() && !(next && next.process_state !== "exited") && Date.now() < deadline) {
+      while (!(next && next.process_state !== "exited") && Date.now() < deadline) {
         await sleep(300);
-        next = await refresh();
+        next = await refreshFor(forSessionId);
       }
-      if (!stillHere()) return;
       if (shouldShowStartError(e, next)) {
         callbacks.current.onError(messageOf(e), forSessionId);
       } else if (sending && busyKind(e) !== null) {
@@ -406,7 +432,7 @@ export function useRunningSession({
         );
       }
     },
-    [refresh],
+    [refreshFor],
   );
 
   /**
@@ -427,7 +453,9 @@ export function useRunningSession({
       /** 再開時に選ぶモデル(`--model`。省略・null は CLI の既定。issue #445)。 */
       model?: StartModelDto | null;
     }): Promise<RunningSessionDto> => {
-      const current = runningRef.current;
+      // 起こした会話に結びつけて進める(別の会話へ移っても、この会話の状態を見て、最後まで進める)。
+      const shown = () => sessionIdRef.current === args.sessionId;
+      let current = shown() ? runningRef.current : await refreshFor(args.sessionId);
       const alive = current !== null && current.process_state !== "exited";
       if (!alive) {
         if (!args.project) {
@@ -444,15 +472,24 @@ export function useRunningSession({
           name: args.name?.trim() ? args.name.trim() : null,
           model: args.model ?? null,
         });
-        applyRunning(started);
+        if (shown()) applyRunning(started);
+        current = started;
       }
-      const target = runningRef.current?.target;
+      const target = current?.target;
       if (!target) {
         throw new Error("実行中のセッションが見つかりません");
       }
-      // 送る前に購読しておく(送信直後の途中経過を取りこぼさない)。
-      await ensureSubscribed(target);
+      // 送る前に購読しておく(送信直後の途中経過を取りこぼさない)。表示している会話だけ(購読は表示中の 1 つ)。
+      if (shown()) {
+        await ensureSubscribed(target);
+        // 購読の間に別の会話へ移っていたら、いま表示している会話の購読へ戻す。
+        if (!shown()) {
+          const now = runningRef.current;
+          void ensureSubscribed(now && now.process_state !== "exited" ? now.target : null);
+        }
+      }
       const ready = await waitUntil(
+        args.sessionId,
         (s) => s === null || s.process_state !== "starting",
         START_TIMEOUT_MS,
       );
@@ -464,7 +501,7 @@ export function useRunningSession({
       }
       return ready;
     },
-    [applyRunning, ensureSubscribed, waitUntil],
+    [applyRunning, ensureSubscribed, refreshFor, waitUntil],
   );
 
   /**
@@ -482,30 +519,34 @@ export function useRunningSession({
       text: string;
       images: string[];
     }): Promise<boolean> =>
-      exclusive("send", false, async () => {
-      setBusySession(args.sessionId);
-      stoppedByUserRef.current = false;
-      segmentOpenRef.current = false;
-      updateLive(() => ({
-        pendingLine: { text: args.text, imageCount: args.images.length, uuid: null },
-        segments: [],
-        tools: [],
-        baselineUuids: callbacks.current.getMessageUuids(),
-      }));
-      try {
-        const ready = await ensureStarted(args);
-        await sendToRunningSession(ready.target, args.text, args.images);
-        return true;
-      } catch (e) {
-        resetLive();
-        // 取り直してから、エラーを出すか決める(同時の起動で負けて 409 でも、実行中になっていれば出さない)。
-        await reportStartFailure(e, args.sessionId, true);
-        return false;
-      } finally {
-        setBusySession(null);
-      }
+      // 送信は、送った会話に結びつけて、最後まで進める(起動 → 送信)。同じ会話の同時の送信だけを断る。
+      exclusive(`send:${args.sessionId}`, false, async () => {
+        markIn(setBusySessions, args.sessionId, true);
+        stoppedByUserRef.current = false;
+        if (sessionIdRef.current === args.sessionId) {
+          segmentOpenRef.current = false;
+          updateLive(() => ({
+            pendingLine: { text: args.text, imageCount: args.images.length, uuid: null },
+            segments: [],
+            tools: [],
+            baselineUuids: callbacks.current.getMessageUuids(),
+          }));
+        }
+        try {
+          const ready = await ensureStarted(args);
+          await sendToRunningSession(ready.target, args.text, args.images);
+          return true;
+        } catch (e) {
+          // 表示を片付けるのは、まだその会話を表示しているときだけ(移った先の返答中の表示を消さない)。
+          if (sessionIdRef.current === args.sessionId) resetLive();
+          // 取り直してから、エラーを出すか決める(同時の起動で負けて 409 でも、実行中になっていれば出さない)。
+          await reportStartFailure(e, args.sessionId, true);
+          return false;
+        } finally {
+          markIn(setBusySessions, args.sessionId, false);
+        }
       }),
-    [ensureStarted, exclusive, refresh, reportStartFailure, resetLive, updateLive],
+    [ensureStarted, exclusive, markIn, reportStartFailure, resetLive, updateLive],
   );
 
   // メッセージ無しで起動だけする(issue #484)。「起動」ボタンから呼ぶ。`send` と同じ
@@ -520,8 +561,8 @@ export function useRunningSession({
       name?: string | null;
       model?: StartModelDto | null;
     }): Promise<boolean> =>
-      exclusive("start", false, async () => {
-        setStartingSession(args.sessionId);
+      exclusive(`start:${args.sessionId}`, false, async () => {
+        markIn(setStartingSessions, args.sessionId, true);
         try {
           await ensureStarted(args);
           return true;
@@ -529,10 +570,10 @@ export function useRunningSession({
           await reportStartFailure(e, args.sessionId, false);
           return false;
         } finally {
-          setStartingSession(null);
+          markIn(setStartingSessions, args.sessionId, false);
         }
       }),
-    [ensureStarted, exclusive, refresh, reportStartFailure],
+    [ensureStarted, exclusive, markIn, reportStartFailure],
   );
 
   const respond = useCallback(
@@ -629,7 +670,7 @@ export function useRunningSession({
   }, [exclusive, refresh, resetLive]);
 
   // 送信中・起動中は、起こした会話にだけ出す(別の会話へ移ったら、移った先には出さない)。
-  const busy = busySession !== null && busySession === sessionId;
-  const starting = startingSession !== null && startingSession === sessionId;
+  const busy = sessionId !== null && busySessions.has(sessionId);
+  const starting = sessionId !== null && startingSessions.has(sessionId);
   return { running, live, busy, switching, send, start, starting, respond, interrupt, switchTo, stop };
 }
