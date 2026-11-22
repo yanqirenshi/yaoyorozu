@@ -13,7 +13,6 @@
 //
 // 本物の `%APPDATA%\com.yaoyorozu.native`・`~/.claude` には触れない(USERPROFILE/HOME も使い捨ての場所へ差し替える)。
 
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import {

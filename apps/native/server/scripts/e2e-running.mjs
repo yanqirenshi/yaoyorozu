@@ -8,7 +8,7 @@
 //
 // 止めるのは、**このスクリプトが起動した PID とその子孫だけ**(名前一致の一括終了はしない)。
 
-import { spawn, execFileSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import {

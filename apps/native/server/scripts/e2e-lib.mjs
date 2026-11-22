@@ -8,10 +8,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { alive, descendantsOf, isMine, killIfMine, killTreeIfMine, recordIdentity } from "./proc-safety.mjs";
+import { alive, aliveMany, descendantsOf, isMine, killIfMine, killTreeIfMine, recordIdentity, recordIdentityWithStart } from "./proc-safety.mjs";
 
 // プロセスの生死の判定・子孫の取得・停止は、`proc-safety.mjs`(PID と開始時刻の組で、自分が起動したものか確かめる)を使う。
-export { alive, killIfMine, recordIdentity };
+export { alive, aliveMany, killIfMine, recordIdentity };
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const nativeDir = path.resolve(here, "..", "..");
@@ -79,12 +79,18 @@ export function startServer({ dataDir = dirs.data, port = nextPort++ } = {}) {
   const pidFile = path.join(root, `server-${port}.pid`);
   const command = `${consoleApi}
 [K]::SetConsoleCtrlHandler([IntPtr]::Zero, $false) | Out-Null
-$p = Start-Process -FilePath '${serverExe}' -WindowStyle Hidden -PassThru -RedirectStandardOutput '${out}' -RedirectStandardError '${err}'; $p.Id | Out-File -Encoding ascii '${pidFile}'`;
+$p = Start-Process -FilePath '${serverExe}' -WindowStyle Hidden -PassThru -RedirectStandardOutput '${out}' -RedirectStandardError '${err}'
+# PID と開始時刻を、起動した直後に同時に出す(あとで表を取りに行く間に、PID が別のものになる余地を無くす)
+$c = (Get-CimInstance Win32_Process -Filter "ProcessId=$($p.Id)").CreationDate.Ticks
+"$($p.Id),$c" | Out-File -Encoding ascii '${pidFile}'`;
   // 標準入出力は捨てる(つながったままだと、子のサーバがパイプを持ち続けて、この呼び出しが終わらない)。
   execFileSync("powershell", ["-NoProfile", "-Command", command], { env: serverEnv(dataDir, port), stdio: "ignore" });
-  const pid = Number(fs.readFileSync(pidFile, "utf8").trim());
-  // 起動した直後に、PID と開始時刻の組を控える(止める前に、自分が起動したものか確かめるため)。
-  recordIdentity(pid);
+  const [pidText, startText] = fs.readFileSync(pidFile, "utf8").trim().split(",");
+  const pid = Number(pidText);
+  // 起動した PowerShell が同時に出した PID と開始時刻の組を控える(止める前に、自分が起動したものか確かめるため)。
+  // 開始時刻が取れていなければ、いまの表から控える(起動の直後なので、ほぼ同じ)。
+  if (startText) recordIdentityWithStart(pid, startText);
+  else recordIdentity(pid);
   startedPids.push(pid);
   const read = (f) => (fs.existsSync(f) ? fs.readFileSync(f, "utf8") : "");
   const log = { join: () => read(out) + read(err) };
