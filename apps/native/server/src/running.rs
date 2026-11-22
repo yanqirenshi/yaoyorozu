@@ -18,7 +18,7 @@ use crate::state::{resolve_effective_projects_dir, RunningSessionSlot, ServerSta
 use crate::AppContext;
 use app::{
     AddressedRunningSessionEvent, AppError, RunningSessionEvent, RunningSessionEventSink,
-    RunningSessionRef,
+    RunningSessionRef, SessionSource,
 };
 use domain::{GitLedger, ProcessState, RunningSessionByApp, Settings};
 use infra::{
@@ -26,7 +26,7 @@ use infra::{
     FileRestorableRunningSessionsStore, FileRunningSessionSource, FileSystemRepository,
     SystemGitStateSource,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
@@ -556,6 +556,97 @@ async fn prepare_start_worktree(
 // 起動
 // ---------------------------------------------------------------------------
 
+/// 会話 ID の正規の形(小文字)。比べる・控えに書く・claude へ渡すときは、すべてこの値を使う。
+fn canonical_session_id(session_id: &str) -> String {
+    session_id.to_ascii_lowercase()
+}
+
+/// 再開する会話の作業フォルダ(cwd)が、リポジトリの外のときの文面(フルパスは入れない)。
+const RESUME_OUTSIDE_MESSAGE: &str =
+    "再開する会話の作業フォルダが、このプロファイルのリポジトリ(またはその worktree)の中にありません";
+
+/// 再開する会話の作業フォルダが、プロファイルのリポジトリか、台帳にあるその worktree の中にあることを確かめる。
+/// 外なら `cwd_missing`(422)。台帳に無い worktree かもしれないので、外と判断する前に台帳を 1 回だけ取り直す。
+async fn ensure_resume_target_in_project(
+    ctx: &AppContext,
+    projects_root: &Path,
+    project: &str,
+    session_id: &str,
+    repository: Option<&Path>,
+) -> Result<(), AppError> {
+    let Some(repository) = repository else {
+        return Err(AppError::InvalidInput(
+            "プロファイルにリポジトリが設定されていません".to_string(),
+        ));
+    };
+    match resume_target_check_once(ctx, projects_root, project, session_id, repository).await {
+        Err(AppError::CwdMissing(m)) if m == RESUME_OUTSIDE_MESSAGE => {
+            if reload_git_ledger(ctx).await.is_err() {
+                return Err(AppError::CwdMissing(m));
+            }
+            resume_target_check_once(ctx, projects_root, project, session_id, repository).await
+        }
+        other => other,
+    }
+}
+
+async fn resume_target_check_once(
+    ctx: &AppContext,
+    projects_root: &Path,
+    project: &str,
+    session_id: &str,
+    repository: &Path,
+) -> Result<(), AppError> {
+    let ledger = ctx.state.lock().await.git_ledger.clone();
+    let index = app::WorktreeIndex::from_ledger(&ledger, repository);
+    let (root, project, session_id, repository) = (
+        projects_root.to_path_buf(),
+        project.to_string(),
+        session_id.to_string(),
+        repository.to_path_buf(),
+    );
+    tokio::task::spawn_blocking(move || {
+        resume_target_check(&root, &project, &session_id, &repository, &index)
+    })
+    .await
+    .unwrap_or_else(|_| Err(background_failed()))
+}
+
+/// 会話ファイルに記録された cwd を、パスの検査(UNC・デバイスの形・ネットワークのドライブを断る)に通し、
+/// 実体のパスへ解決したうえで、リポジトリか台帳の worktree の中にあるかを見る(リンクで外へ出るものは外)。
+fn resume_target_check(
+    projects_root: &Path,
+    project: &str,
+    session_id: &str,
+    repository: &Path,
+    index: &app::WorktreeIndex,
+) -> Result<(), AppError> {
+    if !domain::is_valid_project_dir_name(project) {
+        return Err(AppError::InvalidInput(
+            "不正なプロジェクト名です".to_string(),
+        ));
+    }
+    if !domain::is_valid_session_id(session_id) {
+        return Err(AppError::InvalidInput("不正なセッションIDです".to_string()));
+    }
+    let outside = || AppError::CwdMissing(RESUME_OUTSIDE_MESSAGE.to_string());
+    let cwd =
+        FileSystemRepository::new(projects_root.to_path_buf()).session_cwd(project, session_id)?;
+    let cwd = crate::folders::guard_folder_path(&cwd.to_string_lossy()).map_err(|_| outside())?;
+    let real = std::fs::canonicalize(&cwd).map_err(|_| {
+        AppError::CwdMissing("再開する会話の作業フォルダが見つかりません".to_string())
+    })?;
+    let inside = std::iter::once(repository)
+        .chain(index.worktree_folders())
+        .filter_map(|folder| std::fs::canonicalize(folder).ok())
+        .any(|folder| real.starts_with(&folder));
+    if inside {
+        Ok(())
+    } else {
+        Err(outside())
+    }
+}
+
 /// 実行中セッションを起動する。`Resume` は既存の会話を `--resume` で、`New` は新しい会話を
 /// `--session-id`(サーバが決めた UUID v4)で開く。同じ会話の二重起動(同時の再開を含む)と上限は
 /// `session_busy`。起動先(リポジトリ・worktree)は、登録済みのプロファイルのリポジトリと、実際の
@@ -565,6 +656,11 @@ pub async fn start_running_session(
     profile_id: Option<String>,
     request: StartRunningSessionDto,
 ) -> Result<RunningSessionDto, AppError> {
+    // 会話 ID は、ここ 1 か所で小文字にそろえる(二重起動の判断・控え・claude へ渡す値が、すべて同じ値になる)。
+    let mut request = request;
+    if let StartRunningSessionDto::Resume { session_id, .. } = &mut request {
+        *session_id = canonical_session_id(session_id);
+    }
     let session_id = match &request {
         StartRunningSessionDto::Resume { session_id, .. } => session_id.clone(),
         StartRunningSessionDto::New { .. } => app::new_session_id(),
@@ -613,6 +709,22 @@ pub async fn start_running_session(
             return Err(e);
         }
     };
+
+    // 再開する会話は、このプロファイルのリポジトリ(と、台帳のその worktree)のものだけ(worktree を作る前に確かめる)。
+    if let StartRunningSessionDto::Resume {
+        project,
+        session_id,
+        ..
+    } = &request
+    {
+        if let Err(e) =
+            ensure_resume_target_in_project(ctx, &root, project, session_id, repository.as_deref())
+                .await
+        {
+            release(&mut *ctx.state.lock().await);
+            return Err(e);
+        }
+    }
 
     // 起動する worktree(新規の既定はリポジトリ本体。再開で指定が無ければ、会話ファイルの cwd)。
     let (spec, sync) = match &request {

@@ -178,6 +178,28 @@ async function main() {
   const rtarget = refOf(resumed);
   check("再開 → 待機", !!(await waitState(srv, rtarget, "idle")));
 
+  // ---- 再開の入口: 会話 ID の大文字小文字・作業フォルダ ----
+  const upper = await rpc(srv, "start_running_session", { request: { ...resumeBody.request, session_id: convId.toUpperCase() } });
+  check("守り: 同じ会話を、ID の大文字小文字を変えて再開しても二重には開かない(409)", upper.status === 409, `${upper.status} ${upper.text.slice(0, 120)}`);
+  const writeConv = (id, cwd) =>
+    fs.writeFileSync(
+      path.join(projects, projectName, `${id}.jsonl`),
+      JSON.stringify({ type: "user", sessionId: id, cwd, message: { role: "user", content: "hi" } }) + "\n",
+    );
+  const subId = "3a392392-0000-4000-8000-0000000000ab";
+  const outId = "3a392392-0000-4000-8000-0000000000ac";
+  const subDir = path.join(dirs.repo, "sub-dir");
+  const outDir = path.join(root, "outside-dir");
+  fs.mkdirSync(subDir, { recursive: true });
+  fs.mkdirSync(outDir, { recursive: true });
+  writeConv(subId, subDir);
+  writeConv(outId, outDir);
+  const sub = await rpc(srv, "start_running_session", { request: { ...resumeBody.request, session_id: subId, name: "e2e-sub" } });
+  check("再開: リポジトリの下のフォルダで始めた会話は再開できる", sub.status === 200, `${sub.status} ${sub.text.slice(0, 160)}`);
+  if (sub.status === 200) await rpc(srv, "stop_running_session", { target: refOf(sub.json) });
+  const out = await rpc(srv, "start_running_session", { request: { ...resumeBody.request, session_id: outId, name: "e2e-out" } });
+  check("守り: リポジトリの外のフォルダで始めた会話は再開できない(422。文面にパスを出さない)", out.status === 422 && !out.text.includes("outside-dir"), `${out.status} ${out.text.slice(0, 160)}`);
+
   // ---- Ctrl+C: 穏やかに止まり、claude は残らない ----
   // 標準入力を閉じても終了しない claude(HANG)でも、残らない(穏やかに止められなければ強制終了する)。
   await rpc(srv, "send_to_running_session", { target: rtarget, text: "HANG", images: [] });
