@@ -15,8 +15,8 @@ use crate::error::ApiError;
 use crate::progress::MAX_SUBSCRIPTIONS_PER_CONNECTION;
 use crate::rpc::{blocking, parse_args};
 use crate::running::{
-    changed_event, find_slot, find_slot_mut, now_ms, stop_running_sessions_for,
-    try_with_archived_store, with_restorable_store, RUNNING_SESSION_CHANGED_EVENT,
+    changed_event, find_slot, find_slot_mut, now_ms, try_with_archived_store,
+    with_restorable_store, RUNNING_SESSION_CHANGED_EVENT,
 };
 use crate::state::Subscription;
 use crate::AppContext;
@@ -392,8 +392,8 @@ pub async fn archive_session(
     }
     // 会話 ID は小文字にそろえて、比べる・印に書く。
     let session_id = crate::session_ids::canonical(&args.session_id);
-    stop_running_sessions_for(&ctx, &session_id).await;
-    try_with_archived_store(&ctx, move |store| app::archive_session(store, &session_id)).await?;
+    // 印を先に付け、起動している最中なら終わるまで待って止め、再開の控えからも外す(`archive_session_settled`)。
+    crate::running::archive_session_settled(&ctx, &session_id).await?;
     notify_session_changed(&ctx, &args.project);
     Ok(Json(()))
 }

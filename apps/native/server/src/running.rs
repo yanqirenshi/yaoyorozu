@@ -1236,6 +1236,51 @@ pub async fn stop_all_running_sessions(ctx: &AppContext) {
     }
 }
 
+/// 起動している最中の会話を、アーカイブの側が待つ上限。
+const ARCHIVE_WAIT_FOR_START: Duration = Duration::from_secs(60);
+
+/// 会話をアーカイブする。結果は、必ず「印あり・動いていない・再開の控えにも無い」に落ち着く。
+///
+/// - 印を**先に**付ける(自動再開の、起動の直前の確かめが、印を見られるように)。
+/// - その会話が**起動している最中**(`starting_session_ids` にある)なら、起動が終わるまで待ってから止める
+///   (起動の最中は、実行中の一覧にまだ載っていないので、停止が何も止めないため)。確かめる→止める、の順なので、
+///   起動が終わった直後の 1 回でも、実行中になったものを止められる。
+/// - 利用者が起動した(印を外す)ものと重なったときに備えて、止めたあと、もう一度印を付ける。
+/// - 止めたものは、再開の控えからも外す(戻したあとの次の起動で、自動再開されない)。
+pub async fn archive_session_settled(ctx: &AppContext, session_id: &str) -> Result<(), AppError> {
+    let archive =
+        |id: String| move |store: &FileArchivedSessionsStore| app::archive_session(store, &id);
+    try_with_archived_store(ctx, archive(session_id.to_string())).await?;
+    let deadline = std::time::Instant::now() + ARCHIVE_WAIT_FOR_START;
+    let mut waited = false;
+    loop {
+        let starting = ctx
+            .state
+            .lock()
+            .await
+            .starting_session_ids
+            .iter()
+            .any(|id| id == session_id);
+        stop_running_sessions_for(ctx, session_id).await;
+        if !starting || std::time::Instant::now() >= deadline {
+            break;
+        }
+        waited = true;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    if waited {
+        try_with_archived_store(ctx, archive(session_id.to_string())).await?;
+    }
+    let forgotten = session_id.to_string();
+    with_restorable_store(
+        ctx,
+        "実行中セッションの控えからの削除",
+        move |store| app::forget_running_session(store, &forgotten),
+    )
+    .await;
+    Ok(())
+}
+
 /// `session_id` に一致する、終了していない実行中セッションを**全部**止める(プロファイルをまたいで探す)。
 pub async fn stop_running_sessions_for(ctx: &AppContext, session_id: &str) {
     let targets: Vec<(RunningSessionByApp, Arc<dyn app::RunningProcess>)> = {
