@@ -108,6 +108,7 @@ mod tests {
                     model: Some("opus".to_string()),
                     name: Some("実装:APP".to_string()),
                     worktree_id: "main-worktree".to_string(),
+                    worktree_path: None,
                 },
                 RestorableRunningSession {
                     profile_id: "default".to_string(),
@@ -117,6 +118,7 @@ mod tests {
                     model: None,
                     name: None,
                     worktree_id: "wt-1".to_string(),
+                    worktree_path: None,
                 },
             ],
         }

@@ -1031,13 +1031,33 @@ pub fn start_restoring_running_sessions(ctx: AppContext) {
                 continue;
             }
 
+            // 台帳を作り直して worktree の ID が振り直されていても、覚えていたフォルダで台帳から引き直す。
+            // 引き直せなかったものは、控えから外す(起動のたびに同じ警告をくり返さない)。
+            let (ledger, settings) = {
+                let guard = ctx.state.lock().await;
+                (guard.git_ledger.clone(), guard.settings.clone())
+            };
+            let worktree = match resolve_restore_worktree(&ledger, &settings, &planned) {
+                Ok(worktree) => worktree,
+                Err(reason) => {
+                    warn_restore_skipped(&ctx, &name, &reason).await;
+                    let forgotten = planned.session_id.clone();
+                    with_restorable_store(
+                        &ctx,
+                        "実行中セッションの控えからの削除",
+                        move |store| app::forget_running_session(store, &forgotten),
+                    )
+                    .await;
+                    continue;
+                }
+            };
             let request = StartRunningSessionDto::Resume {
                 project: planned.project,
                 session_id: planned.session_id,
                 mode: planned.mode.into(),
                 name: planned.name,
                 model: planned.model.map(Into::into),
-                worktree: planned.worktree.map(WorktreeSpecDto::from),
+                worktree: worktree.map(WorktreeSpecDto::from),
                 // 復元では origin/main の最新化をしない(勝手にブランチを動かさない)。
                 sync_origin_main: Some(false),
             };
@@ -1047,6 +1067,38 @@ pub fn start_restoring_running_sessions(ctx: AppContext) {
             }
         }
     });
+}
+
+/// 控えの worktree を、台帳から引く。ID で引ければそのまま。引けないときは、覚えていたフォルダで引き直す
+/// (台帳に無いフォルダでは起動しない)。リポジトリ本体・リポジトリ外・worktree の指定が無いものは、そのまま。
+pub fn resolve_restore_worktree(
+    ledger: &GitLedger,
+    settings: &Settings,
+    planned: &app::PlannedRestore,
+) -> Result<Option<app::WorktreeSpec>, String> {
+    let Some(app::WorktreeSpec::Existing { worktree_id }) = &planned.worktree else {
+        return Ok(planned.worktree.clone());
+    };
+    let repository = app::resolve_profile(settings, Some(&planned.profile_id))
+        .map_err(|e| e.to_string())?
+        .repository_path
+        .clone()
+        .ok_or_else(|| "プロファイルにリポジトリが設定されていません".to_string())?;
+    let index = app::WorktreeIndex::from_ledger(ledger, &repository);
+    if index.path_of(worktree_id).is_some() {
+        return Ok(planned.worktree.clone());
+    }
+    let Some(path) = &planned.worktree_path else {
+        return Err("覚えていた worktree が台帳に見つかりません".to_string());
+    };
+    let found = index.id_of(std::path::Path::new(path));
+    if found == domain::MAIN_WORKTREE_ID {
+        Ok(Some(app::WorktreeSpec::Main))
+    } else if found == domain::OUTSIDE_WORKTREE_ID {
+        Err("覚えていた worktree のフォルダが台帳に見つかりません".to_string())
+    } else {
+        Ok(Some(app::WorktreeSpec::Existing { worktree_id: found }))
+    }
 }
 
 /// 起動した 1 件が「起動中」を抜けるまで待つ(次の控えを起こす前に。上限つき)。
