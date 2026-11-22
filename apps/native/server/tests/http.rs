@@ -28,6 +28,7 @@ fn app() -> axum::Router {
         data_dir: Arc::new(std::path::PathBuf::from(".")),
         watcher: Arc::new(std::sync::Mutex::new(None)),
         save_lane: Arc::new(tokio::sync::Mutex::new(())),
+        file_lane: Arc::new(tokio::sync::Mutex::new(())),
         shutdown: rx,
     })
 }

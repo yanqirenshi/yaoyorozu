@@ -1,7 +1,6 @@
 use app::{AppError, ProjectSettingsFile, ProjectSettingsStore};
 use domain::ClaudeSettingsFile;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -69,22 +68,7 @@ impl ProjectSettingsStore for FileProjectSettingsStore {
                 AppError::Io(format!("{} の作成に失敗しました: {e}", parent.display()))
             })?;
         }
-        let tmp_path = PathBuf::from(format!("{}.tmp", path.display()));
-
-        let mut file = fs::File::create(&tmp_path).map_err(|e| {
-            AppError::Io(format!("{} の作成に失敗しました: {e}", tmp_path.display()))
-        })?;
-        file.write_all(content.as_bytes()).map_err(|e| {
-            AppError::Io(format!(
-                "{} への書き込みに失敗しました: {e}",
-                tmp_path.display()
-            ))
-        })?;
-        file.sync_all().map_err(|e| {
-            AppError::Io(format!("{} の同期に失敗しました: {e}", tmp_path.display()))
-        })?;
-        fs::rename(&tmp_path, &path)
-            .map_err(|e| AppError::Io(format!("{} への置換に失敗しました: {e}", path.display())))?;
+        crate::write_atomic(&path, content.as_bytes())?;
 
         Ok(())
     }

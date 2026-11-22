@@ -35,6 +35,7 @@ fn ctx_with_repo(dir: &Path, repo: Option<&Path>) -> AppContext {
         data_dir: Arc::new(dir.to_path_buf()),
         watcher: Arc::new(std::sync::Mutex::new(None)),
         save_lane: Arc::new(tokio::sync::Mutex::new(())),
+        file_lane: Arc::new(tokio::sync::Mutex::new(())),
         shutdown: rx,
     }
 }

@@ -72,6 +72,7 @@ async fn run() -> Result<(), String> {
         data_dir: Arc::new(data_dir.clone()),
         watcher: Arc::new(std::sync::Mutex::new(None)),
         save_lane: Arc::new(tokio::sync::Mutex::new(())),
+        file_lane: Arc::new(tokio::sync::Mutex::new(())),
         shutdown: shutdown_rx,
     };
     match projects_root {

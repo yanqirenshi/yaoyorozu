@@ -238,6 +238,8 @@ pub async fn save_project_claude_md(
 ) -> Result<Json<()>, ApiError> {
     let args: SaveMdArgs = parse_args(&body)?;
     let repo_dir = repository_dir_for_profile(&ctx, args.profile_id.as_deref()).await?;
+    // 「更新時刻を確かめる → 書く」を、ほかの保存に割り込まれずにひとまとまりで行う。
+    let _lane = ctx.file_lane.lock().await;
     blocking(move || {
         let store = infra::FileClaudeMdStore::new();
         app::save_claude_md(
@@ -372,6 +374,7 @@ pub async fn save_project_settings_file(
 ) -> Result<Json<()>, ApiError> {
     let args: SaveProjectSettingsArgs = parse_args(&body)?;
     let repo_dir = repository_dir_for_profile(&ctx, args.profile_id.as_deref()).await?;
+    let _lane = ctx.file_lane.lock().await;
     blocking(move || {
         let store = infra::FileProjectSettingsStore::new();
         app::save_project_settings_file(

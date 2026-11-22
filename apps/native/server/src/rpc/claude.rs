@@ -9,7 +9,9 @@
 use crate::dto::{ClaudeDirPageDto, ClaudeMdDto, ClaudeSettingsDto};
 use crate::error::ApiError;
 use crate::rpc::{blocking, parse_args};
+use crate::AppContext;
 use axum::body::Bytes;
+use axum::extract::State;
 use axum::Json;
 use serde::Deserialize;
 
@@ -30,8 +32,13 @@ pub struct SaveArgs {
     expected_modified_at_ms: Option<u64>,
 }
 
-pub async fn save_user_claude_md(body: Bytes) -> Result<Json<()>, ApiError> {
+pub async fn save_user_claude_md(
+    State(ctx): State<AppContext>,
+    body: Bytes,
+) -> Result<Json<()>, ApiError> {
     let args: SaveArgs = parse_args(&body)?;
+    // 「更新時刻を確かめる → 書く」を、ほかの保存に割り込まれずにひとまとまりで行う。
+    let _lane = ctx.file_lane.lock().await;
     blocking(move || {
         let claude_dir = infra::claude_home_dir()?;
         let store = infra::FileClaudeMdStore::new();
@@ -55,8 +62,12 @@ pub async fn get_claude_settings_file() -> Result<Json<ClaudeSettingsDto>, ApiEr
     Ok(Json(dto))
 }
 
-pub async fn save_claude_settings_file(body: Bytes) -> Result<Json<()>, ApiError> {
+pub async fn save_claude_settings_file(
+    State(ctx): State<AppContext>,
+    body: Bytes,
+) -> Result<Json<()>, ApiError> {
     let args: SaveArgs = parse_args(&body)?;
+    let _lane = ctx.file_lane.lock().await;
     blocking(move || {
         let store = infra::FileClaudeSettingsStore::new();
         app::save_claude_settings(&store, &args.content, args.expected_modified_at_ms)
