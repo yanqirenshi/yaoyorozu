@@ -586,13 +586,15 @@ const RESUME_OUTSIDE_MESSAGE: &str =
 
 /// 再開する会話の作業フォルダが、プロファイルのリポジトリか、台帳にあるその worktree の中にあることを確かめる。
 /// 外なら `cwd_missing`(422)。台帳に無い worktree かもしれないので、外と判断する前に台帳を 1 回だけ取り直す。
+/// 戻り値は、確かめた**実体のパス**(起動の作業フォルダに、これをそのまま使う。確かめたあとに会話ファイルを
+/// 読み直さない)。
 async fn ensure_resume_target_in_project(
     ctx: &AppContext,
     projects_root: &Path,
     project: &str,
     session_id: &str,
     repository: Option<&Path>,
-) -> Result<(), AppError> {
+) -> Result<PathBuf, AppError> {
     let Some(repository) = repository else {
         return Err(AppError::InvalidInput(
             "プロファイルにリポジトリが設定されていません".to_string(),
@@ -615,7 +617,7 @@ async fn resume_target_check_once(
     project: &str,
     session_id: &str,
     repository: &Path,
-) -> Result<(), AppError> {
+) -> Result<PathBuf, AppError> {
     let ledger = ctx.state.lock().await.git_ledger.clone();
     let index = app::WorktreeIndex::from_ledger(&ledger, repository);
     let (root, project, session_id, repository) = (
@@ -639,7 +641,7 @@ fn resume_target_check(
     session_id: &str,
     repository: &Path,
     index: &app::WorktreeIndex,
-) -> Result<(), AppError> {
+) -> Result<PathBuf, AppError> {
     if !domain::is_valid_project_dir_name(project) {
         return Err(AppError::InvalidInput(
             "不正なプロジェクト名です".to_string(),
@@ -660,7 +662,11 @@ fn resume_target_check(
         .filter_map(|folder| std::fs::canonicalize(folder).ok())
         .any(|folder| real.starts_with(&folder));
     if inside {
-        Ok(())
+        // `\\?\` 付きの実体のパスは、claude の作業フォルダにそのまま渡せる形(`C:\…`)へ戻す。
+        let text = real.to_string_lossy().to_string();
+        Ok(PathBuf::from(
+            text.strip_prefix(r"\\?\").unwrap_or(&text).to_string(),
+        ))
     } else {
         Err(outside())
     }
@@ -730,18 +736,21 @@ pub async fn start_running_session(
     };
 
     // 再開する会話は、このプロファイルのリポジトリ(と、台帳のその worktree)のものだけ(worktree を作る前に確かめる)。
+    let mut verified_cwd: Option<PathBuf> = None;
     if let StartRunningSessionDto::Resume {
         project,
         session_id,
         ..
     } = &request
     {
-        if let Err(e) =
-            ensure_resume_target_in_project(ctx, &root, project, session_id, repository.as_deref())
-                .await
+        match ensure_resume_target_in_project(ctx, &root, project, session_id, repository.as_deref())
+            .await
         {
-            release(&mut *ctx.state.lock().await);
-            return Err(e);
+            Ok(real) => verified_cwd = Some(real),
+            Err(e) => {
+                release(&mut *ctx.state.lock().await);
+                return Err(e);
+            }
         }
     }
 
@@ -777,6 +786,14 @@ pub async fn start_running_session(
                 return Err(e);
             }
         };
+    // 再開で worktree の指定が無いときは、確かめた実体のパスを作業フォルダとして渡す(会話ファイルを読み直さない)。
+    let worktree = match (worktree, verified_cwd) {
+        (None, Some(path)) => {
+            let worktree_id = worktree_index.id_of(&path);
+            Some(app::ResolvedWorktree { path, worktree_id })
+        }
+        (worktree, _) => worktree,
+    };
 
     let (tx, rx) = mpsc::unbounded_channel();
     let sink: Arc<dyn RunningSessionEventSink> = Arc::new(ChannelSink(tx));

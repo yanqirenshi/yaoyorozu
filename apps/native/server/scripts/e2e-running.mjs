@@ -193,11 +193,15 @@ async function main() {
   const outDir = path.join(root, "outside-dir");
   fs.mkdirSync(subDir, { recursive: true });
   fs.mkdirSync(outDir, { recursive: true });
-  writeConv(subId, subDir);
+  // 会話ファイルには、別の書き方(大文字)で記録する: 起動の作業フォルダは、確かめた実体のパスになる。
+  writeConv(subId, subDir.toUpperCase());
   writeConv(outId, outDir);
   const sub = await rpc(srv, "start_running_session", { request: { ...resumeBody.request, session_id: subId, name: "e2e-sub" } });
   check("再開: リポジトリの下のフォルダで始めた会話は再開できる", sub.status === 200, `${sub.status} ${sub.text.slice(0, 160)}`);
-  if (sub.status === 200) await rpc(srv, "stop_running_session", { target: refOf(sub.json) });
+  if (sub.status === 200) {
+    check("再開の作業フォルダは、確かめた実体のパス(会話ファイルの書き方のままではない)", slash(sub.json.cwd ?? "") === slash(fs.realpathSync.native(subDir)), `${sub.json.cwd}`);
+    await rpc(srv, "stop_running_session", { target: refOf(sub.json) });
+  }
   const out = await rpc(srv, "start_running_session", { request: { ...resumeBody.request, session_id: outId, name: "e2e-out" } });
   check("守り: リポジトリの外のフォルダで始めた会話は再開できない(422。文面にパスを出さない)", out.status === 422 && !out.text.includes("outside-dir"), `${out.status} ${out.text.slice(0, 160)}`);
 
