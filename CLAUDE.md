@@ -7,6 +7,7 @@ npm workspaces によるモノレポ構成。
 AIを利用したITプロダクト開発をサポートするアプリ。ネイティブアプリとWebアプリの2つを構築するが、両者の役割・機能は別物として明確に分ける。
 
 - **ネイティブアプリ**(`apps/native`): Claude Code / Gemini / Codex などのAIコーディングエージェントをラップし、GitHubを使ったタスク管理を行う。yaoyorozuとしてのプロダクト開発方法(プロセスなど)を確立し、ユーザーがプロダクト開発をしやすくすることを目指す。
+  - **ブラウザで使う形へ移行中**(2026-11-22 決定、[#620](https://github.com/yanqirenshi/yaoyorozu/issues/620))。Tauri をやめ、Rust のサーバ(`apps/native/server`)+ Next.js の画面(`apps/console`)にする。移行の間、Tauri 版(`apps/native/tauri`・`apps/native/react`)は**凍結**する(不具合の修正だけ。新しい機能は足さない)。
 - **Webアプリ**(`apps/web`): プロダクトの情報(仕様など)を管理する。AIと人とのコミュニケーションに利用し、情報を断片化させないための場とする。
   - **図のデータの管理は `hub/` へ移した**(2026-11-14、ユーザー判断)。WBS・構成図・ポンチ絵・サイトマップ・Classes・TM は `hub/data/` が正。apps/web に残っているのはデザインシステム(`/ui`)など、まだ移していないものだけ。
 - **ドキュメントサイト**(`hub/`): iHub(`@yanqirenshi/ihub.core`・`@yanqirenshi/ihub.srv`)で作った、プロダクトの情報を管理するサイト。データは `hub/data/*.json`(フォーマットは ihub.srv の JSON Schema)。画面からのドラッグなどの変更は、API サーバーがそのまま `hub/data/` に書き込む。移行元との対応は `hub/data/README.md`。iHub 本体の不具合・機能不足は、hub 側で回避せず iHub のリポジトリで直してもらう(例: クラス図。iHub #171)
@@ -30,10 +31,14 @@ Claude Code で以下のセッションに役割を分けて対応する。
 - **実装:APP (画面:/settings)**: Tauri + TypeScript + React によるネイティブアプリの構築
 - **実装:APP (画面:/claude)**: Tauri + TypeScript + React によるネイティブアプリの構築
 - **実装:Web**: Next.js によるプロダクト情報管理Webアプリの構築
+- **【WebApp化】 実装**: `apps/native/server/`(Rust の axum サーバ)と `apps/console/`(Next.js)の実装(#620)
+- **【WebApp化】 テスト**: 【WebApp化】の PR の検証。実装の確認をなぞらず、独立に確かめる。結果は PR にコメントで残す。固定ブランチは持たない(PR の先頭の一時 worktree で確かめる)
+- **【WebApp化】 調査**: 【WebApp化】の設計の前の、事実の調査。結果はイシューにコメントで残す。固定ブランチは持たない
+- ※ 【WebApp化】の 3 つへの依頼の起点は、ユーザーの指示、またはデザイン (全体)。PR のマージの判断はデザイン (全体)。移行の間、「実装:APP」系のセッションへ新しい機能の依頼は出さない(Tauri 版は凍結)
 - **Lab (PM)**: 機能化についての調査、理解など。PoC の企画・取りまとめを行う。
 - **Lab (PoC:実装)**: PoC の実装を行う。
 - **Lab (PoC:検証)**: PoC の検証(実測・実機での確認など)を行う。
-- **運用:リリース**: apps/native のリリース作業の実施。`/release <バージョン>` スキル(`.claude/skills/release/`)を実行し、バージョン更新 → タグ push → MSI ビルド確認 → GitHub Releases での公開までを行う。**main でのアプリ起動(動作確認用の `npm run native:dev`)もこのセッションに依頼して実施する**(2026-09-19 決定。他セッションは main 上でアプリを起動しない)。**app の使い分け(2026-09-30 決定)**: セッションを動かす(日々の作業)のは**インストール済みの MSI 版**の app。開発版(`native:dev`)は**動作確認専用**で、別の識別子(identifier)・別のポートで起動し、日々の作業用の app と分ける。開発版で全セッションを動かさない(開発版の起動し直しや main のソースの書き換えで再起動し、動かしている全セッションが止まるため)
+- **運用:リリース**: apps/native のリリース作業の実施。`/release <バージョン>` スキル(`.claude/skills/release/`)を実行し、バージョン更新 → タグ push → MSI ビルド確認 → GitHub Releases での公開までを行う。**main でのアプリ起動(動作確認用の `npm run native:dev`)もこのセッションに依頼して実施する**(2026-09-19 決定。他セッションは main 上でアプリを起動しない)。**2026-11-22 時点で、MSI 版の app は使っていない**(セッションは Claude Desktop の上で動いている。ブラウザで使う形へ移行中のため。#620)。以下の「app の使い分け」は、MSI 版を使っていたときの決定で、Tauri 版を確かめるときのために残す。**app の使い分け(2026-09-30 決定)**: セッションを動かす(日々の作業)のは**インストール済みの MSI 版**の app。開発版(`native:dev`)は**動作確認専用**で、別の識別子(identifier)・別のポートで起動し、日々の作業用の app と分ける。開発版で全セッションを動かさない(開発版の起動し直しや main のソースの書き換えで再起動し、動かしている全セッションが止まるため)
 - **管理**: このプロジェクト自体の管理、Claude Codeの利用方法の整理・実装
 
 ## 並行作業のルール
@@ -41,6 +46,9 @@ Claude Code で以下のセッションに役割を分けて対応する。
 - **セッションごとに固定のブランチを持ち、使い続ける**(タスクごとにブランチを作り直さない)。ブランチ名は下表のとおり。
 - 作業の流れ: タスク着手前に `git merge origin/main` で固定ブランチを最新化 → 作業・コミット → PR → マージ。**マージ後もブランチは削除しない**(次のタスクで同じブランチを使う)。
 - 同一ブランチ・同一ワーキングツリーを複数セッションで同時に変更しない。
+- **プロセスを止めるときは、PID だけで止めない**。控えた PID が、いまも自分の起動したものかを、開始時刻かコマンドラインで確かめてから止める(PID は使い回される。2026-11-23 に、確認スクリプトの後片付けで、無関係のプロセスを止めたおそれがあった)。確認スクリプトの後片付けは `apps/native/server/scripts/proc-safety.mjs` を通す(PID と開始時刻の組で確かめる。`/T` を使わない)。
+- **相手のセッションが作業中のときは、追加の指示を送らない**。報告が届いてから、まとめて送る。PR を出したあとに、条件を足さない(検証の対象が動くため。2026-11-23 に、行き違いが続いた)。
+- **公開リポジトリなので、まだ直っていない公開版の弱い点に当たる記述を、PR・イシュー・コミットに書かない**(セッション間メッセージでだけ伝える)。
 - **プロセスを止めるときは、自分が起動した PID だけを対象にする**(`taskkill /PID <pid> /T`)。`taskkill /IM <名前>` のようなプロセス名一致の一括終了はしない。全セッションが1つの app(WebView2)の上で動いているため、名前一致の一括終了は自分以外のすべてのセッションを巻き込む(2026-09-29 に `msedgewebview2.exe` の一括終了で app と全セッションが止まった)。残骸を探すときは、コマンドライン(一時プロフィール名など)で自分が起動したものに絞る。
 - イシューには「対象画面」と「共有層(`crates/`、`tauri/`、`react/src/api/`、dock・共通コンポーネント等)に触るか」を明示する。共有層に触る変更は画面別セッションではなく **実装:APP(共通)** が担当する。
 - 例外: CLAUDE.md・`.claude/rules/`・`.claude/skills/` などドキュメントのみの小変更は main へ直接コミットしてよい(現行運用のまま)。運用:リリース は main 上で作業する(`/release` スキルの前提)。
@@ -58,6 +66,7 @@ Claude Code で以下のセッションに役割を分けて対応する。
 | 実装:APP (画面:/settings) | `session/impl-app-settings` |
 | 実装:APP (画面:/claude) | `session/impl-app-claude` |
 | 実装:Web | `session/impl-web` |
+| 【WebApp化】 実装 | `session/webapp-impl` |
 | Lab (PM) | `session/lab` |
 | Lab (PoC:実装) | `session/lab-poc-impl` |
 | Lab (PoC:検証) | `session/lab-poc-verify` |
@@ -66,7 +75,7 @@ Claude Code で以下のセッションに役割を分けて対応する。
 
 ## セッション間コミュニケーション
 
-セッションどうしはセッション間メッセージ(CLI のツール `ListAgents` で相手を**表示名**で特定 → `SendMessage`)で直接やり取りしてよい。全セッションは yaoyorozu app(インストール済みの MSI 版)から起動する(2026-09-29 に Claude Desktop から移行完了。手順は `docs/desktop-to-app-migration.md`)。相手が app で起動していないと一覧に現れず届かないので、その場合はイシューに書き、ユーザーに起動を頼む。実行中の相手には送らない(ツール呼び出しの合間に割り込むため。app の状態表示で確認できる)。
+セッションどうしはセッション間メッセージ(CLI のツール `ListAgents` で相手を**表示名**で特定 → `SendMessage`)で直接やり取りしてよい。**2026-11-22 時点で、全セッションは Claude Desktop の上で動いている**(MSI 版の app は使っていない。2026-09-29 に app へ移ったが、ブラウザで使う形への移行(#620)のあいだは Desktop に戻している)。相手が一覧に現れないときは届かないので、その場合はイシューに書き、ユーザーに起動を頼む。実行中の相手には送らない(ツール呼び出しの合間に割り込むため。上の「並行作業のルール」)。
 
 - **自由にやり取りしてよいもの**: 完了・進捗の報告、設計や実装についての相談・質問、調査依頼(→ Lab (PM))とその結果報告、レビュー依頼、共有層に触る必要が判明した際の引き継ぎ相談(画面別 → 実装:APP(共通))。
 - **実装イシューの割り当て(作業依頼)の起点**は、ユーザーの指示、またはユーザーの指示を受けたデザイン (全体) からのメッセージのみとする。他のセッションが独断で新しい作業を振らない(勝手なタスク連鎖の防止)。
@@ -78,7 +87,9 @@ Claude Code で以下のセッションに役割を分けて対応する。
 ## 構成
 
 - `apps/web` — Next.js製のWebアプリ。WBS/構成図/UIデザイン/サイトマップ/Classes/TM図を表示するドキュメンテーションツール。図のデータの管理は `hub/` へ移した(2026-11-14)
-- `apps/native` — Tauri v2製のネイティブアプリ。Claude Codeのセッション履歴ビューア(開発中)
+- `apps/native` — Tauri v2製のネイティブアプリ。Claude Codeのセッション履歴ビューア(開発中)。移行の間は凍結(#620)
+- `apps/native/server` — Rust(axum)のサーバ。`apps/native/crates/*` をそのまま使い、claude CLI の起動・状態・保存を受け持つ。127.0.0.1:14210。データは `%APPDATA%\com.yaoyorozu.server`(MSI 版の `com.yaoyorozu.native` とは別)
+- `apps/console` — Next.js の画面。ブラウザから使う。画面と `/api/*` の中継(トークンを付けてサーバへ渡す)だけを持つ。127.0.0.1:3200
 - `hub/` — iHub で作ったドキュメントサイト。プロダクトの情報(WBS・構成図・ポンチ絵・サイトマップ・Classes・TM)の正は `hub/data/`。npm workspaces には入れていない(依存は `hub/node_modules` に別に入る)
 - `yyz/` — このリポジトリ(yaoyorozu)自身の仕様データ。Webアプリが実行時に読む(`{リポジトリ}/yyz/spec/*.json`、詳細は `.claude/rules/web.md` §2)。**2026-11-14 に `hub/data/` へ移した移行元で、以後は更新しない**(正は `hub/data/`。ここを直しても hub には反映されない)
 
@@ -92,12 +103,21 @@ Claude Code で以下のセッションに役割を分けて対応する。
 npm install          # 依存関係インストール(ワークスペース共通、ルート node_modules にまとめてインストールされる)
 npm run web:dev       # Webアプリ (http://localhost:3000)
 npm run native:dev    # ネイティブアプリ (Tauri desktop window)
+npm run server:dev    # Rust のサーバ (127.0.0.1:14210)。手動で起動する。YAOYOROZU_CONSOLE_PORT=3200 を付ける(下の注)
+npm run console:dev   # ブラウザで使う画面 (http://127.0.0.1:3200)
+npm run diff-commands # Tauri 版の command とサーバの /rpc の対応表(「まだ」の一覧)
 npm run web:build
 npm run native:build
 npm install --prefix hub     # hub の依存関係インストール(ワークスペースとは別。初回は 10 分ほどかかる)
 npm start --prefix hub       # hub (画面 http://localhost:3100、API サーバー http://127.0.0.1:4000)
 npm run test:data --prefix hub   # hub/data がスキーマとルールに合っているかを検査する
 ```
+
+### サーバと console を起動する(#620)
+
+- サーバを起動するときは、console のポートを環境変数 `YAOYOROZU_CONSOLE_PORT` で渡す(渡さないと、通知と途中経過の WebSocket は誰も通らない)。
+- 確認では、偽の claude(`YAOYOROZU_SERVER_FAKE_CLAUDE`)と、使い捨てのデータフォルダを使う。環境変数・確認スクリプトの一覧は `apps/native/server/README.md`。
+- サーバを止めると、サーバが起動した claude はすべて止まる。ブラウザを閉じても止まらない。
 
 ### hub で図を確かめる(worktree から)
 
@@ -121,6 +141,7 @@ IHUB_API_PORT=4010 PORT=3110 BROWSER=none npx concurrently -k -n web,api "react-
 
 - `apps/web`(Next.js): [.claude/rules/web.md](.claude/rules/web.md) を参照(`apps/web/**` を編集する際に自動的に読み込まれる)
 - `apps/native`(Tauri v2): [.claude/rules/native.md](.claude/rules/native.md) を参照(`apps/native/**` を編集する際に自動的に読み込まれる)
+- `apps/native/server`・`apps/console`(ブラウザで使う形): [.claude/rules/console.md](.claude/rules/console.md) を参照(`apps/native/server/**`・`apps/console/**` を編集する際に自動的に読み込まれる)。native.md と食い違うときは、console.md を優先する
 - `hub/`(iHub): 使い方は iHub のマニュアル(https://yanqirenshi.github.io/iHub/)を参照。データのフォーマットは `hub/node_modules/@yanqirenshi/ihub.srv/src/schemas/`
 
 ## rules ディレクトリ
