@@ -96,6 +96,9 @@ function SettingsPage() {
   const [deleteTarget, setDeleteTarget] = useState<ProfileSummaryDto | null>(null);
   // 右ペイン(ProfileSettingsPane)へ、自分の操作の直後に取り直しを促す(issue #299)。
   const [refreshToken, setRefreshToken] = useState(0);
+  // 利用者がこのタブの一覧でプロファイルを選んだとき(右ペインは、入力を捨てて、選んだものへ表示を移す)。
+  const [moveToken, setMoveToken] = useState(0);
+  const paneGuardRef = useRef<{ confirmMove: () => boolean } | null>(null);
   // 書き込み(追加・削除・切替)の応答待ち。待っている間は、書き込みのボタンを押せなくする。
   const [busy, setBusy] = useState(false);
 
@@ -175,7 +178,15 @@ function SettingsPage() {
 
   const handleSwitchProfileFromList = (profileId: string) => {
     if (profileId === activeProfileId) return;
-    runWrite(() => switchProfile(profileId).then(() => reloadAll()));
+    // 入力が残っているときは、移る前に確かめを 1 回はさむ(断れば何も変えない)。
+    if (paneGuardRef.current && !paneGuardRef.current.confirmMove()) return;
+    runWrite(() =>
+      switchProfile(profileId).then(() => {
+        // 自分が選んだので、右ペインは確かめなしに移す(「アクティブが変わりました」の知らせは出さない)。
+        setMoveToken((n) => n + 1);
+        return reloadAll();
+      }),
+    );
   };
 
   return (
@@ -238,6 +249,8 @@ function SettingsPage() {
         <ProfileSettingsPane
           profileId={null}
           refreshToken={refreshToken}
+          moveToken={moveToken}
+          guardRef={paneGuardRef}
           onProfileRenamed={loadSettingsData}
         />
       </Suspense>

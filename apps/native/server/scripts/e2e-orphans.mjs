@@ -7,11 +7,10 @@
 //
 // 止めるのは、このスクリプトが起動した PID とその子孫だけ(作らせた孫など、残ったものも PID を指定して止める)。
 
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import {
-  alive, cleanupStarted, recordIdentity, check, dirs, openSse, projects, refOf, results, root, rpc, sendCtrlC, sleep, slash, startedPids, startServer,
+  alive, aliveMany, cleanupStarted, recordIdentity, check, dirs, openSse, projects, refOf, results, root, rpc, sendCtrlC, sleep, slash, startedPids, startServer,
   waitHealthy, waitState,
 } from "./e2e-lib.mjs";
 
@@ -37,6 +36,9 @@ async function makeOrphans(srv, tab, target, label) {
 }
 
 async function main() {
+  // 異常終了する会話(EXIT)の偽の claude は、このファイルができるまで終わらない(サーバの環境を通って渡る)。
+  const exitSignal = path.join(root, "exit-signal");
+  process.env.FAKE_CLAUDE_EXIT_SIGNAL_FILE = exitSignal;
   const srv = startServer();
   await waitHealthy(srv);
   const settings = await rpc(srv, "get_settings");
@@ -58,32 +60,35 @@ async function main() {
   const b = await start("orphans-b");
   const [aChild, aGrand] = await makeOrphans(srv, tab, a, "a");
   const [bChild, bGrand] = await makeOrphans(srv, tab, b, "b");
-  check("作らせた子と孫が、どちらの会話でも生きている", [aChild, aGrand, bChild, bGrand].every(alive), `a: ${aChild},${aGrand} b: ${bChild},${bGrand}`);
+  check("作らせた子と孫が、どちらの会話でも生きている", aliveMany([aChild, aGrand, bChild, bGrand]).every(Boolean), `a: ${aChild},${aGrand} b: ${bChild},${bGrand}`);
 
   // 会話 a だけを止める。
   const stopped = await rpc(srv, "stop_running_session", { target: a });
   check("会話 a を止める", stopped.status === 200 && !!(await waitState(srv, a, "exited", 15000)), stopped.text);
   await sleep(800);
-  check("止めた会話の、切り離した子が残らない", !alive(aChild), `PID ${aChild}`);
-  check("止めた会話の、親のいない孫が残らない", !alive(aGrand), `PID ${aGrand}`);
-  check("止めていない会話の子孫は、巻き込まれない", alive(bChild) && alive(bGrand), `b: ${bChild},${bGrand}`);
+  const [aChildAlive, aGrandAlive, bChildAlive, bGrandAlive] = aliveMany([aChild, aGrand, bChild, bGrand]);
+  check("止めた会話の、切り離した子が残らない", !aChildAlive, `PID ${aChild}`);
+  check("止めた会話の、親のいない孫が残らない", !aGrandAlive, `PID ${aGrand}`);
+  check("止めていない会話の子孫は、巻き込まれない", bChildAlive && bGrandAlive, `b: ${bChild},${bGrand}`);
 
   // 会話 b も止めると、b の分も 0 件。
   await rpc(srv, "stop_running_session", { target: b });
   await waitState(srv, b, "exited", 15000);
   await sleep(800);
-  check("会話 b を止めると、b の子孫も 0 件", !alive(bChild) && !alive(bGrand), `b: ${bChild},${bGrand}`);
+  check("会話 b を止めると、b の子孫も 0 件", aliveMany([bChild, bGrand]).every((x) => !x), `b: ${bChild},${bGrand}`);
   tab.close();
 
   // ---- claude が自分で(異常終了で)終わったときも、子孫が残らない ----
   const tab2 = await openSse(srv);
   const c = await start("orphans-c");
   const [cChild, cGrand] = await makeOrphans(srv, tab2, c, "EXIT");
-  check("(異常終了する会話)子と孫が、生きている", alive(cChild) && alive(cGrand), `${cChild},${cGrand}`);
+  // 偽の claude は、合図のファイルができるまで終わらない: 子と孫が生きているのを確かめ終えてから、合図を出す。
+  check("(異常終了する会話)子と孫が、生きている", aliveMany([cChild, cGrand]).every(Boolean), `${cChild},${cGrand}`);
+  fs.writeFileSync(exitSignal, "go");
   check("claude が自分で終わった(終了状態になる)", !!(await waitState(srv, c, "exited", 15000)));
   await sleep(1000);
   tab2.close();
-  check("claude が自分で終わったあと、切り離した子と孫も残らない", !alive(cChild) && !alive(cGrand), `${cChild},${cGrand}`);
+  check("claude が自分で終わったあと、切り離した子と孫も残らない", aliveMany([cChild, cGrand]).every((x) => !x), `${cChild},${cGrand}`);
 
   // ---- 起動の直後に子を作る偽の claude(会話用のジョブへ入れられる前に作られた子)----
   // 起動したあとで PID をジョブへ入れるので、入れる前に作られた子は、会話のジョブの外(サーバのジョブの中)に残る。

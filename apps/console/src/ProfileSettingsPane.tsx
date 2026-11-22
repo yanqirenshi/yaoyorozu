@@ -48,6 +48,11 @@ type ProfileSettingsPaneProps = {
   refreshToken?: number;
   // このペインでプロファイル名を変えたとき(呼び出し側の一覧の取り直し用)。
   onProfileRenamed?: () => void;
+  // 利用者が、このタブの一覧でプロファイルを選んだとき(値が変わるたびに、入力を捨てて、選んだ(新しい)アクティブへ表示を移す)。
+  // 「アクティブなプロファイルが変わりました」の知らせは、利用者が選んだのではない変更(ほかのタブ)のときだけ出す。
+  moveToken?: number;
+  // 呼び出し側が、移る前の確かめ(入力が残っていれば 1 回)を、このペインへ頼むための窓口。
+  guardRef?: { current: { confirmMove: () => boolean } | null };
 };
 
 // パスの確認結果の 1 行の文言。
@@ -129,6 +134,8 @@ function ProfileSettingsPane({
   profileId,
   refreshToken = 0,
   onProfileRenamed,
+  moveToken = 0,
+  guardRef,
 }: ProfileSettingsPaneProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -252,7 +259,11 @@ function ProfileSettingsPane({
           return;
         }
         setHoldNotice(null);
-        if (force || shown !== targetId) touchedRef.current = false;
+        if (force || shown !== targetId) {
+          touchedRef.current = false;
+          // 別のプロファイルへ移るときは、前のプロファイルの「保存しました」を持ち越さない。
+          setSaved(false);
+        }
         const targetChanged =
           loadedTargetRef.current !== null && loadedTargetRef.current !== targetId;
         loadedTargetRef.current = targetId;
@@ -302,9 +313,25 @@ function ProfileSettingsPane({
     [profileId, shouldApply, clearStale],
   );
 
+  // 利用者がこのタブの一覧で選んだとき(`moveToken` が変わったとき)は、入力を捨てて移す(確かめは、選ぶ前に済んでいる)。
+  const lastMoveTokenRef = useRef(moveToken);
   useEffect(() => {
-    void loadSettingsData().finally(() => setLoading(false));
-  }, [loadSettingsData, refreshToken]);
+    const userMoved = moveToken !== lastMoveTokenRef.current;
+    lastMoveTokenRef.current = moveToken;
+    void loadSettingsData(userMoved).finally(() => setLoading(false));
+  }, [loadSettingsData, refreshToken, moveToken]);
+
+  // 呼び出し側(プロファイルの一覧)が、選ぶ前に、入力が残っていれば確かめを 1 回はさむための窓口。
+  useEffect(() => {
+    if (!guardRef) return;
+    guardRef.current = {
+      confirmMove: () =>
+        !dirtyRef.current || window.confirm("入力中の内容は失われます。選んだプロファイルへ移りますか?"),
+    };
+    return () => {
+      guardRef.current = null;
+    };
+  }, [guardRef]);
 
   useEffect(() => {
     const unlistenPromise = onSettingsUpdated(() => {
@@ -396,6 +423,10 @@ function ProfileSettingsPane({
       setError("設定を読み込めていません。取り直してからやり直してください");
       return;
     }
+    if (holdNotice === "deleted") {
+      setError("表示しているプロファイルは削除されたため、保存できません。新しいアクティブへ移ってください");
+      return;
+    }
     savingRef.current = true;
     setSaving(true);
     setError(null);
@@ -451,7 +482,7 @@ function ProfileSettingsPane({
   // 伸びてフォーム末尾が見えなくなるため、保存ボタンを「対象フォルダ」見出しの行の右端に、
   // 保存結果・エラーをその行の下に置く。他のタブではフォーム末尾に置く。
   const saveButton = (
-    <button type="submit" className="settings-save" disabled={saving}>
+    <button type="submit" className="settings-save" disabled={saving || holdNotice === "deleted"}>
       {saving ? "保存中…" : "保存"}
     </button>
   );

@@ -17,16 +17,16 @@ import { execFileSync } from "node:child_process";
 const identities = new Map();
 
 const LIST_SCRIPT =
-  "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId),$($_.ParentProcessId),$($_.CreationDate.Ticks),$($_.Name)\" }";
+  "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId),$($_.ParentProcessId),$($_.CreationDate.Ticks),$($_.Name),$($_.CommandLine)\" }";
 
 /** いまの全プロセスの表(pid → {ppid, created, name})。 */
 export function processTable() {
   const out = execFileSync("powershell", ["-NoProfile", "-Command", LIST_SCRIPT], { encoding: "utf8" });
   const table = new Map();
   for (const line of out.split(/\r?\n/)) {
-    const [pid, ppid, created, ...name] = line.split(",");
+    const [pid, ppid, created, name, ...cmd] = line.split(",");
     if (!pid || !Number(pid)) continue;
-    table.set(Number(pid), { ppid: Number(ppid), created: String(created ?? ""), name: name.join(",").trim().toLowerCase() });
+    table.set(Number(pid), { ppid: Number(ppid), created: String(created ?? ""), name: (name ?? "").trim().toLowerCase(), cmd: cmd.join(",").trim() });
   }
   return table;
 }
@@ -43,6 +43,14 @@ export function recordIdentity(pid, table = null) {
   if (start === null) return false;
   identities.set(pid, start);
   return true;
+}
+
+/**
+ * 起動した側が、PID と開始時刻を**同時に**知ったときの控え(起動した PowerShell が、起動の直後に両方を出す)。
+ * 表を取りに行く間に PID が別のものになる余地が無い。
+ */
+export function recordIdentityWithStart(pid, start) {
+  identities.set(pid, String(start));
 }
 
 /** 控えを、指定の開始時刻で直接入れる(テスト用)。 */
@@ -64,14 +72,48 @@ export function isMine(pid, table = null) {
  * 生きているか。控えのあるものは、開始時刻まで見る(PID が別のプロセスに再利用されていたら、死んだ扱い)。
  * 控えの無いものは、PID が存在するかだけ(止める判断には使わない)。
  */
-export function alive(pid) {
+export function alive(pid, table = null) {
   try {
     process.kill(pid, 0);
   } catch {
     return false;
   }
   if (!identities.has(pid)) return true;
-  return isMine(pid);
+  // `filter(alive)` のように、配列の添字が第 2 引数で来ても、表と取り違えない。
+  return isMine(pid, table instanceof Map ? table : null);
+}
+
+/** 複数の PID の生死を、プロセスの表 1 回の取得で調べる(表の取得は 1 回 0.3〜0.6 秒かかる)。 */
+export function aliveMany(pids) {
+  const live = pids.filter((pid) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  const need = live.some((pid) => identities.has(pid));
+  const table = need ? processTable() : null;
+  return pids.map((pid) => live.includes(pid) && (!identities.has(pid) || isMine(pid, table)));
+}
+
+/** 止める対象の状態: mine(自分のもの)/ gone(もう終わっている)/ mismatch(別のものになっている)/ unknown(控えが無い)。 */
+function standing(pid, table) {
+  const row = table.get(pid);
+  if (!identities.has(pid)) return row ? "unknown" : "gone";
+  if (!row) return "gone";
+  return row.created === identities.get(pid) ? "mine" : "mismatch";
+}
+
+function why(state, pid) {
+  if (state === "gone") return `  止めません: PID ${pid} は、すでに終わっています`;
+  if (state === "mismatch") return `  止めません: PID ${pid} は、控えた開始時刻と違います(別のプロセスに再利用された)`;
+  return `  止めません: PID ${pid} は、起動した控えがありません`;
+}
+
+function describe(pid, row) {
+  return `PID ${pid} 開始 ${row?.created ?? "?"} ${(row?.cmd ?? "").slice(0, 200)}`;
 }
 
 /**
@@ -103,15 +145,15 @@ export function descendantsOf(root) {
 /**
  * 控えのあるプロセス 1 つを止める。開始時刻が一致しなければ止めない(`false`。ログに出す)。`/T` は使わない。
  */
-export function killIfMine(pid, { log = console.log } = {}) {
-  if (!isMine(pid)) {
-    if (alive(pid) || hasIdentity(pid)) {
-      log(`  止めません: PID ${pid} は、自分が起動したものか確かめられません(開始時刻が違う・控えが無い)`);
-    }
+export function killIfMine(pid, { log = console.log, table = processTable() } = {}) {
+  const state = standing(pid, table);
+  if (state !== "mine") {
+    if (state !== "gone" || hasIdentity(pid)) log(why(state, pid));
     return false;
   }
   try {
     execFileSync("taskkill", ["/PID", String(pid), "/F"], { stdio: "pipe" });
+    log(`  止めました: ${describe(pid, table.get(pid))}`);
     return true;
   } catch {
     return false;
@@ -123,13 +165,12 @@ export function killIfMine(pid, { log = console.log } = {}) {
  * 止めた PID の一覧を返す。
  */
 export function killTreeIfMine(root, { log = console.log } = {}) {
-  if (!isMine(root)) {
-    if (alive(root) || hasIdentity(root)) {
-      log(`  止めません: PID ${root} は、自分が起動したものか確かめられません(開始時刻が違う・控えが無い)`);
-    }
+  const table = processTable();
+  const state = standing(root, table);
+  if (state !== "mine") {
+    if (state !== "gone" || hasIdentity(root)) log(why(state, root));
     return [];
   }
-  const table = processTable();
   const tree = verifiedDescendants(root, table);
   const killed = [];
   for (const { pid, created } of [...tree].reverse()) {
@@ -137,11 +178,12 @@ export function killTreeIfMine(root, { log = console.log } = {}) {
     if (currentStart(pid) !== created) continue;
     try {
       execFileSync("taskkill", ["/PID", String(pid), "/F"], { stdio: "pipe" });
+      log(`  止めました: ${describe(pid, table.get(pid))}`);
       killed.push(pid);
     } catch {
       // すでに終わっている。
     }
   }
-  if (killIfMine(root, { log })) killed.push(root);
+  if (killIfMine(root, { log, table })) killed.push(root);
   return killed;
 }

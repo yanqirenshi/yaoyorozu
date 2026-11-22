@@ -14,7 +14,6 @@
 // 止めるのは、このスクリプトが起動した PID とその子孫だけ。
 
 
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
