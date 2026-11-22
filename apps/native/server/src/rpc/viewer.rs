@@ -270,6 +270,14 @@ pub struct CheckImageArgs {
     existing_count: usize,
 }
 
+/// 画像の添付の上限(サーバ独自の Query)。数字は `domain` の定数から求める(画面に数字を持たせない)。
+pub async fn get_attachment_limits() -> Json<crate::dto::AttachmentLimitsDto> {
+    Json(crate::dto::AttachmentLimitsDto {
+        max_image_bytes: (domain::MAX_IMAGE_BASE64_LEN as u64) * 3 / 4,
+        max_images: domain::MAX_IMAGES_PER_MESSAGE,
+    })
+}
+
 /// 画像を 1 枚添付しようとしたときの事前検証(形式・サイズ・枚数。issue #349)。
 pub async fn check_image_attachment(body: Bytes) -> Result<Json<()>, ApiError> {
     let args: CheckImageArgs = parse_args(&body)?;

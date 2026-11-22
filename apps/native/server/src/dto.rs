@@ -1829,6 +1829,16 @@ pub struct PendingWarningDto {
     pub message: String,
 }
 
+/// 画像の添付の上限(`get_attachment_limits`。この構成だけの Query)。上限の数字は、サーバ(`domain`)の 1 か所から出す
+/// (画面は、これを使って文面を作る)。
+#[derive(Serialize, Clone)]
+pub struct AttachmentLimitsDto {
+    /// 画像 1 枚の、元のバイト数の上限(base64 の上限から求めた値)。
+    pub max_image_bytes: u64,
+    /// 1 回の送信に付けられる画像の枚数。
+    pub max_images: usize,
+}
+
 /// `check_folder` の戻り値(Tauri 版のフォルダ選択ダイアログの代わり。サーバ独自の Query)。
 #[derive(Serialize, Clone)]
 pub struct FolderCheckDto {

@@ -695,3 +695,14 @@ async fn an_automatic_restore_does_not_start_an_archived_conversation_and_keeps_
         "印は外さない"
     );
 }
+
+// --- 16. 画像の上限の数字は、サーバの 1 か所から出す ---
+
+#[tokio::test]
+async fn the_attachment_limits_come_from_the_server() {
+    let f = fixture();
+    let (status, body) = call(&f.ctx, "get_attachment_limits", serde_json::json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["max_image_bytes"], 3_750_000);
+    assert_eq!(body["max_images"], 5);
+}

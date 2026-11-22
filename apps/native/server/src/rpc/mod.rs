@@ -89,6 +89,10 @@ pub fn routes() -> Router<AppContext> {
             post(viewer::get_session_line_images),
         )
         .route(
+            "/rpc/get_attachment_limits",
+            post(viewer::get_attachment_limits),
+        )
+        .route(
             "/rpc/check_image_attachment",
             post(viewer::check_image_attachment)
                 .layer(DefaultBodyLimit::max(IMAGE_CHECK_BODY_LIMIT)),
