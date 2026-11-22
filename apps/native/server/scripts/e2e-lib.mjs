@@ -64,7 +64,8 @@ let nextPort = 14300 + Math.floor(Math.random() * 400);
 // ホーム(USERPROFILE/HOME)は差し替えない。データフォルダ・リポジトリだけが使い捨て。
 export const real = process.argv.includes("--real");
 const serverEnv = (dataDir, port) => {
-  const env = { ...process.env, YAOYOROZU_DATA_DIR: dataDir, YAOYOROZU_SERVER_PORT: String(port) };
+  // YAOYOROZU_CONSOLE_PORT: `/ws` が通す Origin(Next の画面のポート)。
+  const env = { ...process.env, YAOYOROZU_DATA_DIR: dataDir, YAOYOROZU_SERVER_PORT: String(port), YAOYOROZU_CONSOLE_PORT: String(consolePort) };
   if (real) {
     delete env.YAOYOROZU_SERVER_FAKE_CLAUDE;
     return env;
@@ -130,7 +131,6 @@ export const viaNext = process.argv.includes("--next");
 const consolePort = 3300 + Math.floor(Math.random() * 90);
 export const nextBase = `http://127.0.0.1:${consolePort}`;
 const rpcUrl = (srv, command) => (viaNext ? `${nextBase}/api/rpc/${command}` : `${srv.base}/rpc/${command}`);
-const eventsUrl = (srv) => (viaNext ? `${nextBase}/api/events` : `${srv.base}/events`);
 const authHeaders = (srv) => (viaNext ? { origin: nextBase } : { authorization: `Bearer ${token(srv)}` });
 
 export async function startNext() {
@@ -168,50 +168,53 @@ export async function rpc(srv, command, body = {}, { raw } = {}) {
   return { status: r.status, json, text };
 }
 
-// ---- SSE ----
-export async function openSse(srv) {
-  const ctl = new AbortController();
-  const res = await fetch(eventsUrl(srv), {
-    headers: authHeaders(srv),
-    signal: ctl.signal,
-  });
+// ---- WebSocket(通知と途中経過。ブラウザと同じ: 券をもらい、最初のメッセージで券を送る) ----
+// 戻り値の `events` は、`{name, data}` の並び(通知はイベント名のまま、途中経過は `running-session:progress` で
+// `data` が `{subscription_id, seq, progress}`)。購読は、その接続の上のメッセージで行う(`subscribe`)。
+export const consoleOrigin = nextBase;
+export async function openWs(srv, { origin = consoleOrigin, ticket: givenTicket } = {}) {
+  let ticket = givenTicket;
+  if (ticket === undefined) {
+    const issued = await rpc(srv, "issue_ws_ticket", {});
+    ticket = issued.json?.ticket;
+    if (!ticket) throw new Error(`券をもらえません: ${issued.status} ${issued.text}`);
+  }
+  const ws = new WebSocket(`ws://127.0.0.1:${srv.port}/ws`, { headers: { origin } });
   const events = [];
-  let connectionId = null;
-  let closed = false;
   const waiters = [];
-  (async () => {
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buf = "";
+  const requests = new Map();
+  let nextRequest = 1;
+  let ready = false;
+  let closed = false;
+  const wake = () => waiters.splice(0).forEach((w) => w());
+  ws.addEventListener("open", () => ws.send(JSON.stringify({ type: "ticket", ticket })));
+  ws.addEventListener("message", (e) => {
+    let m;
     try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        let i;
-        while ((i = buf.indexOf("\n\n")) >= 0) {
-          const block = buf.slice(0, i);
-          buf = buf.slice(i + 2);
-          let name = "message";
-          let data = "";
-          for (const line of block.split("\n")) {
-            if (line.startsWith("event:")) name = line.slice(6).trim();
-            else if (line.startsWith("data:")) data += line.slice(5).trim();
-          }
-          if (!name || name === "message") continue;
-          let parsed = null;
-          try {
-            parsed = JSON.parse(data);
-          } catch {}
-          if (name === "connection") connectionId = parsed.connection_id;
-          events.push({ name, data: parsed });
-          waiters.forEach((w) => w());
-        }
-      }
-    } catch {}
+      m = JSON.parse(String(e.data));
+    } catch {
+      return;
+    }
+    if (m.type === "ready") ready = true;
+    else if (m.type === "event") events.push({ name: m.name, data: m.data });
+    else if (m.type === "progress") events.push({ name: "running-session:progress", data: m.data });
+    else if (m.type === "ping") ws.send(JSON.stringify({ type: "pong" }));
+    else if (m.type === "subscribed" || m.type === "subscribe_failed") {
+      const r = requests.get(m.request_id);
+      requests.delete(m.request_id);
+      if (r) m.type === "subscribed" ? r.resolve(m.subscription_id) : r.reject(Object.assign(new Error(m.message), { code: m.code }));
+    }
+    wake();
+  });
+  ws.addEventListener("close", () => {
     closed = true;
-    waiters.forEach((w) => w());
-  })();
+    requests.forEach((r) => r.reject(new Error("closed")));
+    wake();
+  });
+  ws.addEventListener("error", () => {
+    closed = true;
+    wake();
+  });
   const waitFor = async (pred, ms = 8000) => {
     const end = Date.now() + ms;
     for (;;) {
@@ -224,17 +227,30 @@ export async function openSse(srv) {
       });
     }
   };
-  await waitFor((e) => e.name === "connection");
+  const end = Date.now() + 8000;
+  while (!ready && !closed && Date.now() < end) await new Promise((r) => { waiters.push(r); setTimeout(r, 50); });
   return {
     events,
-    get connectionId() {
-      return connectionId;
+    get ready() {
+      return ready;
     },
     get closed() {
       return closed;
     },
     waitFor,
-    close: () => ctl.abort(),
+    /** この接続の上で購読する。購読 ID を返す(失敗は `code` つきの例外)。 */
+    subscribe(target) {
+      const id = nextRequest++;
+      return new Promise((resolve, reject) => {
+        requests.set(id, { resolve, reject });
+        ws.send(JSON.stringify({ type: "subscribe", request_id: id, target }));
+      });
+    },
+    unsubscribe(subscriptionId) {
+      ws.send(JSON.stringify({ type: "unsubscribe", subscription_id: subscriptionId }));
+    },
+    send: (message) => ws.send(typeof message === "string" ? message : JSON.stringify(message)),
+    close: () => ws.close(),
   };
 }
 

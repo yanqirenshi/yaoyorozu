@@ -1,6 +1,6 @@
 // 実行中セッション(段階 3)のサーバ側の確認。**使い捨て**のデータフォルダ・ホーム・リポジトリ・
 // 会話フォルダを作り、偽の claude(`crates/infra/tests/fake_claude.cjs`)でサーバを実際に起動して、
-// HTTP(`/rpc`)と SSE(`/events`)から一通りを確かめる。本物の `%APPDATA%\com.yaoyorozu.native`・
+// HTTP(`/rpc`)と WebSocket(`/ws`)から一通りを確かめる。本物の `%APPDATA%\com.yaoyorozu.native`・
 // `~/.claude`・他のセッションの claude には触れない(USERPROFILE/HOME も使い捨ての場所へ差し替える)。
 //
 // 使い方(`apps/native` で `cargo build -p server` のあと):
@@ -12,7 +12,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import {
-  alive, cleanupStarted, killIfMine, recordIdentity, check, descendants, dirs, nextBase, openSse, projectName, projects, refOf, results, root, rpc,
+  alive, cleanupStarted, killIfMine, recordIdentity, check, descendants, dirs, nextBase, openWs, projectName, projects, refOf, results, root, rpc,
   runServerOnce, sendCtrlC, sleep, slash, startNext, startServer, startedPids, token, viaNext, waitHealthy, waitState,
 } from "./e2e-lib.mjs";
 
@@ -44,9 +44,9 @@ async function main() {
   check("設定(リポジトリ・会話フォルダ)の保存", upd.status === 200, upd.text);
 
   // ---- 2 つのタブ(接続) ----
-  const tabA = await openSse(srv);
-  const tabB = await openSse(srv);
-  check("接続の ID が別々に配られる", tabA.connectionId && tabB.connectionId && tabA.connectionId !== tabB.connectionId, `${tabA.connectionId}, ${tabB.connectionId}`);
+  const tabA = await openWs(srv);
+  const tabB = await openWs(srv);
+  check("2 つのタブが、それぞれ券でつながる(ready)", tabA.ready && tabB.ready);
 
   // ---- 起動の防御 ----
   let r = await rpc(srv, "start_running_session", { request: { kind: "new", mode: "bogus", name: null } });
@@ -63,8 +63,13 @@ async function main() {
   check("守り: クライアントのパスは使われない(余分な項目は無視され、起動先はプロファイルのリポジトリ)", r.status === 200 && slash(r.json.cwd ?? "").toLowerCase().startsWith(slash(dirs.repo).toLowerCase()), `${r.status} cwd=${r.json?.cwd}`);
   if (r.status === 200) await rpc(srv, "stop_running_session", { target: refOf(r.json) });
 
-  r = await rpc(srv, "subscribe_running_session_progress", { target: { pid_domain: "x", pid: 1, started_at: 1 }, connectionId: "00000000-0000-4000-8000-000000000000" });
-  check("守り: 無い接続への購読は 404", r.status === 404, `${r.status}`);
+  let missing = null;
+  try {
+    await tabA.subscribe({ pid_domain: "x", pid: 1, started_at: 1 });
+  } catch (e) {
+    missing = e;
+  }
+  check("守り: 無い会話への購読は not_found(接続は閉じない)", missing?.code === "not_found" && !tabA.closed, `${missing?.code}`);
 
   // ---- 新規セッションの起動 ----
   r = await rpc(srv, "start_running_session", { request: { kind: "new", mode: "default", name: "e2e-a", sync_origin_main: false } });
@@ -80,8 +85,8 @@ async function main() {
   check("守り: 動いている同じ会話の二重起動は 409(session_busy)", dup.status === 409 && dup.json?.code === "session_busy", `${dup.status} ${dup.text}`);
 
   // ---- 購読(2 つのタブ) ----
-  const subA = (await rpc(srv, "subscribe_running_session_progress", { target, connectionId: tabA.connectionId })).json;
-  const subB = (await rpc(srv, "subscribe_running_session_progress", { target, connectionId: tabB.connectionId })).json;
+  const subA = await tabA.subscribe(target);
+  const subB = await tabB.subscribe(target);
   check("購読 ID が返る", Number.isInteger(subA) && Number.isInteger(subB) && subA !== subB, `${subA}, ${subB}`);
 
   // ---- 送信 → 途中経過 ----
@@ -101,7 +106,11 @@ async function main() {
   r = await rpc(srv, "send_to_running_session", { target, text: "after close", images: [] });
   const gotA2 = await tabA.waitFor((e) => e.name === "running-session:progress" && e.data.progress.event?.kind === "text_delta" && JSON.stringify(e.data).includes("after close"));
   check("1 つのタブを閉じても、もう一方は途中経過を受け取り続ける", r.status === 200 && !!gotA2);
-  r = await rpc(srv, "unsubscribe_running_session_progress", { subscriptionId: subA, connectionId: tabB.connectionId });
+  // 別の接続(C)が、A の購読 ID を指して購読解除を送っても、A の購読は外れない(購読解除は、その接続の購読だけ)。
+  const tabX = await openWs(srv);
+  tabX.unsubscribe(subA);
+  await sleep(300);
+  tabX.close();
   r = await rpc(srv, "send_to_running_session", { target, text: "still A", images: [] });
   check("守り: 他の接続の購読は外せない(購読 ID だけでは外れない)", !!(await tabA.waitFor((e) => JSON.stringify(e.data).includes("still A"))));
   await waitState(srv, target, "idle");
@@ -155,9 +164,9 @@ async function main() {
   await sleep(500);
   const stillAlive = claudePids.filter(alive);
   check("ブラウザ(全タブ)を閉じても claude は動き続ける", stillAlive.length === claudePids.length, `${stillAlive.length}/${claudePids.length}`);
-  const tabC = await openSse(srv);
+  const tabC = await openWs(srv);
   const seen = (await rpc(srv, "get_running_session", { target })).json;
-  check("開き直すと状態が見える", seen?.process_state === "idle" && tabC.connectionId);
+  check("開き直すと状態が見える", seen?.process_state === "idle" && tabC.ready);
   tabC.close();
 
   // ---- 停止(利用者の操作)→ 控えから外れる ----
@@ -231,8 +240,8 @@ async function main() {
     if (!restored) await sleep(150);
   }
   check("サーバの再起動で、前回のセッションが自動で再開される", !!restored);
-  const tabD = await openSse(srv2);
-  check("再起動後の接続にも状態が見える(リロード不要で取り直せる)", !!tabD.connectionId && !!restored);
+  const tabD = await openWs(srv2);
+  check("再起動後の接続にも状態が見える(リロード不要で取り直せる)", tabD.ready && !!restored);
   tabD.close();
 
   // ---- 二重起動(同じデータフォルダ) ----
