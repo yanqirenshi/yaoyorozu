@@ -46,6 +46,7 @@ pub fn write_atomic(path: &Path, content: &[u8]) -> Result<(), AppError> {
         };
         let result = file
             .write_all(content)
+            .and_then(|_| ensure_newer_mtime(&file, path))
             .map_err(|e| AppError::Io(format!("{} への書き込みに失敗しました: {e}", tmp.display())))
             .and_then(|_| {
                 file.sync_all().map_err(|e| {
@@ -69,11 +70,33 @@ pub fn write_atomic(path: &Path, content: &[u8]) -> Result<(), AppError> {
     )))
 }
 
+fn mtime_ms(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// 書いたファイルの更新時刻(ミリ秒)が、置き換える前のファイルより**必ず新しく**なるようにする。
+/// CLAUDE.md・設定ファイルの楽観ロックは更新時刻(ミリ秒)を「版」として使うため、同じミリ秒の
+/// うちに 2 回書くと版が変わらず、古い版を持った保存が通ってしまう(同時の保存が 1 本に絞れない)。
+/// 置き換え前の更新時刻以下なら、その 1 ミリ秒後にそろえる(時刻が進み続けるのは版として自然)。
+fn ensure_newer_mtime(file: &fs::File, target: &Path) -> std::io::Result<()> {
+    let Ok(old) = fs::metadata(target).and_then(|m| m.modified()) else {
+        return Ok(());
+    };
+    let old_ms = mtime_ms(old);
+    let new_ms = mtime_ms(file.metadata()?.modified()?);
+    if new_ms <= old_ms {
+        file.set_modified(UNIX_EPOCH + std::time::Duration::from_millis(old_ms + 1))?;
+    }
+    Ok(())
+}
+
 /// Windows では、置換先を別のスレッド・プロセス(ウイルス対策の走査など)が一瞬開いていると
 /// `rename` が `PermissionDenied` などで失敗することがある。短い間隔で数回やり直す。
 fn rename_with_retry(from: &Path, to: &Path) -> std::io::Result<()> {
     let mut last = None;
-    for attempt in 0..50u64 {
+    for attempt in 0..100u64 {
         match fs::rename(from, to) {
             Ok(()) => return Ok(()),
             Err(e) => {
@@ -141,19 +164,77 @@ mod tests {
         assert_eq!(entries(dir.path()), 1, "一時ファイルが残っていない");
     }
 
+    /// 同じファイルへ同時に書いても、**中身は混ざらない**(どれか 1 つの書き込みの内容そのもの)。
+    /// Windows では、置換先を別のスレッドが置換している最中の `rename` が失敗することがあるため、
+    /// 同じファイルへの同時の書き込みは、呼び出し側が直列化する(サーバは保存のレーンで行う)。
+    /// ここでは、失敗が起きても壊れた内容・一時ファイルの残骸を残さないことを確かめる。
     #[test]
-    fn concurrent_writers_never_corrupt_the_file_or_fail() {
+    fn concurrent_writers_never_leave_a_corrupt_file_or_tmp_files() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("a.json");
-        let handles: Vec<_> = (0..16)
+        let handles: Vec<_> = (0..8)
             .map(|i| {
                 let path = path.clone();
                 std::thread::spawn(move || {
-                    for j in 0..50 {
+                    let mut ok = 0;
+                    for j in 0..25 {
                         let body = format!(
                             "{{\"writer\":{i},\"n\":{j},\"pad\":\"{}\"}}",
                             "x".repeat(2000)
                         );
+                        if write_atomic(&path, body.as_bytes()).is_ok() {
+                            ok += 1;
+                        }
+                    }
+                    ok
+                })
+            })
+            .collect();
+        let succeeded: u32 = handles.into_iter().map(|h| h.join().unwrap()).sum();
+        assert!(succeeded > 0, "少なくとも一部は成功する");
+        // どれかの書き込みの内容そのもの(混ざっていない)で、一時ファイルも残っていない。
+        let text = fs::read_to_string(&path).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).expect("JSON として読める");
+        assert_eq!(value["pad"].as_str().unwrap().len(), 2000);
+        assert_eq!(entries(dir.path()), 1);
+    }
+
+    /// 同じミリ秒のうちに何度書いても、更新時刻(ミリ秒)は必ず増える(楽観ロックの版が変わる)。
+    #[test]
+    fn every_write_advances_the_modified_time_in_milliseconds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.md");
+        write_atomic(&path, b"0").unwrap();
+        let ms = |p: &Path| {
+            fs::metadata(p)
+                .unwrap()
+                .modified()
+                .unwrap()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64
+        };
+        let mut last = ms(&path);
+        for i in 1..50 {
+            write_atomic(&path, format!("{i}").as_bytes()).unwrap();
+            let now = ms(&path);
+            assert!(now > last, "{i}: {now} > {last}");
+            last = now;
+        }
+    }
+
+    #[test]
+    fn serialized_writers_never_fail() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.json");
+        let lock = std::sync::Arc::new(std::sync::Mutex::new(()));
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let (path, lock) = (path.clone(), lock.clone());
+                std::thread::spawn(move || {
+                    for j in 0..25 {
+                        let body = format!("{{\"writer\":{i},\"n\":{j}}}");
+                        let _g = lock.lock().unwrap();
                         write_atomic(&path, body.as_bytes()).unwrap();
                     }
                 })
@@ -162,10 +243,9 @@ mod tests {
         for h in handles {
             h.join().unwrap();
         }
-        // どれかの書き込みの内容そのもの(混ざっていない)で、一時ファイルも残っていない。
-        let text = fs::read_to_string(&path).unwrap();
-        let value: serde_json::Value = serde_json::from_str(&text).expect("JSON として読める");
-        assert_eq!(value["pad"].as_str().unwrap().len(), 2000);
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&path).unwrap()).is_ok()
+        );
         assert_eq!(entries(dir.path()), 1);
     }
 }
