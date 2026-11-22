@@ -68,7 +68,7 @@ const rpcMod = read("apps", "native", "server", "src", "rpc", "mod.rs");
 const serverCommands = new Set(
   [...rpcMod.matchAll(/"\/rpc\/([a-z_]+)"/g)].map((m) => m[1]).filter((n) => n !== "command"),
 );
-const serverSrc = ["lib.rs", "main.rs", "watcher.rs", "running.rs", join("rpc", "settings.rs"), join("rpc", "viewer.rs"), join("rpc", "claude.rs"), join("rpc", "running.rs")]
+const serverSrc = ["lib.rs", "main.rs", "watcher.rs", "running.rs", "scan.rs", join("rpc", "hub.rs"), join("rpc", "settings.rs"), join("rpc", "viewer.rs"), join("rpc", "claude.rs"), join("rpc", "running.rs")]
   .map((f) => {
     try {
       return read("apps", "native", "server", "src", f);
@@ -106,6 +106,13 @@ function status(name: string, built: Set<string>, notBuilt: Set<string>) {
 // Tauri 版との、引数・動きの違い(command 名の突き合わせでは見えないもの)。
 const DIFFERENCES: [string, string][] = [
   ["update_settings", "`profileId` は必須(省略・null は 400。アクティブへは保存しない。削除済みなら 404)。`expectedRevision`(保存先のプロファイルの版)と `expectedGlobalRevision`(全体の欄の版)も必須(どちらかが古ければ 409)。版はプロファイルごと(`get_settings` は `revision` と `global_revision` を返す)"],
+  ["start_running_session", "`profileId` は必須(省略・null は 400)。タブごとに別のプロファイルを開くので、「アクティブ」に頼らない"],
+  ["get_project_claude_md・save_project_claude_md・list_rules・get_rule・list_skills・get_skill・get_project_settings_file・save_project_settings_file・get_yyz_scaffold_status・create_yyz_scaffold", "`profileId` は必須(省略・null は 400)。`get_settings` だけは省略を残す(プロファイルの一覧とアクティブを返すため)。画面がプロファイルを指定せずに開かれているとき(`/settings`・`/profiles`)は、api 層が呼ぶ時点のアクティブの ID を引いて付ける"],
+  ["reconcile_git_state", "**始めたらすぐ応える**(終わりは `pc:data_loaded`)。走っている最中の 2 回目は、新しく始めずに応える(二重に走らせない)。Tauri 版は、git の観測と全件の走査が終わるまで応えない"],
+  ["get_hub_layout・get_hub_tuning", "`revision`(ファイルの中身の指紋。JavaScript の数として正確に扱える 52 ビット)を返す"],
+  ["save_hub_layout・save_hub_tuning", "`expectedRevision` は必須(省略は 400・合わなければ 409 `hub_conflict`)。保存は専用のレーンと `write_atomic` を通り、新しい `revision` を返す。保存したら `hub-layout:updated`・`hub-tuning:updated`(この構成だけのイベント)を出す。`save_hub_layout` は、Tauri 版と同じ「丸ごと置き換え」の形"],
+  ["get_running_session", "`turn_events`(進行中のターンのここまでの途中経過。連番つき。ターンが終わると空)を返す。凍結・切り替えのあとの画面が、ターンの途中から表示を続けられる"],
+  ["(イベント)pc:sessions_updated", "worktree を新しく作って起動し、台帳を取り直したときにも出す(Tauri 版は出しておらず、新しい worktree のノードは次の取り直しまで出なかった)"],
 ];
 
 const mark = (b: boolean) => (b ? "○" : "―");

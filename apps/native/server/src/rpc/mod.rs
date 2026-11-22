@@ -6,6 +6,7 @@
 //! 突き合わせのスクリプト(`scripts/diff-commands.ts`)がこの 1 行を読む。
 
 pub mod claude;
+pub mod hub;
 pub mod running;
 pub mod settings;
 pub mod viewer;
@@ -139,6 +140,12 @@ pub fn routes() -> Router<AppContext> {
             post(claude::save_claude_settings_file),
         )
         .route("/rpc/list_claude_dir", post(claude::list_claude_dir))
+        .route("/rpc/get_pc", post(hub::get_pc))
+        .route("/rpc/reconcile_git_state", post(hub::reconcile_git_state))
+        .route("/rpc/get_hub_layout", post(hub::get_hub_layout))
+        .route("/rpc/save_hub_layout", post(hub::save_hub_layout))
+        .route("/rpc/get_hub_tuning", post(hub::get_hub_tuning))
+        .route("/rpc/save_hub_tuning", post(hub::save_hub_tuning))
         .route(
             "/rpc/start_running_session",
             post(running::start_running_session),

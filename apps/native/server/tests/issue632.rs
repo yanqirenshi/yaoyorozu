@@ -48,11 +48,30 @@ fn fixture() -> Fixture {
     Fixture { dir, ctx }
 }
 
+/// `profileId` が必須の command(省略・null は 400。タブごとに別のプロファイルを開くので、「アクティブ」に頼らない)。
+/// これらの呼び出しの便宜のため、指定の無い呼び出しには、いまのアクティブを補う(省略が 400 になることは `tests/hub.rs` で確かめる)。
+const PROFILE_REQUIRED: &[&str] = &[
+    "start_running_session",
+    "get_project_claude_md",
+    "save_project_claude_md",
+    "list_rules",
+    "get_rule",
+    "list_skills",
+    "get_skill",
+    "get_project_settings_file",
+    "save_project_settings_file",
+    "get_yyz_scaffold_status",
+    "create_yyz_scaffold",
+];
+
 async fn call(
     ctx: &AppContext,
     command: &str,
     mut body: serde_json::Value,
 ) -> (StatusCode, serde_json::Value) {
+    if PROFILE_REQUIRED.contains(&command) && body.get("profileId").is_none() {
+        body["profileId"] = serde_json::json!(ctx.state.lock().await.settings.active_profile_id);
+    }
     if command == "update_settings" {
         let guard = ctx.state.lock().await;
         if body.get("profileId").is_none() {
@@ -796,6 +815,7 @@ async fn archiving_while_a_session_is_starting_waits_then_stops_it_and_forgets_i
                 process: Arc::new(StopFlagProcess(stopped.clone())),
                 available_models: Vec::new(),
                 subscribers: Vec::new(),
+                turn_events: Default::default(),
             });
         guard.starting_session_ids.retain(|id| id != session);
     }

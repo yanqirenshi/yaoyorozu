@@ -290,8 +290,22 @@ export function useRunningSession({
         // 取得の間に別の会話へ移っていたら、表示には反映しない(結果は、呼んだ側がその会話のために使う)。
         if (sessionIdRef.current !== id) return next;
         applyRunning(next);
-        // つなぎ直しのあとの最初の取り直しの「ここまで」で、ためてあった途中経過の続きを足す(2 回目以降は何もしない)。
-        if (next) mergerRef.current.setFloor(next.progress_seq).forEach((m) => handleProgress(m.item));
+        // 切り替え・つなぎ直しのあとの最初の取り直しの「ここまで」で、進行中のターンのここまでの分(`turn_events`)を先頭に、
+        // ためてあった途中経過の続きを足す(2 回目以降は何もしない)。凍結・切り替えのあとでも、ターンの途中から表示が続く。
+        if (next) {
+          const merger = mergerRef.current;
+          if (merger.awaitingFloor() && next.turn_events.length > 0) {
+            // これまでの表示(前の会話の残り・古い断片)は捨てて、控えから作り直す。
+            resetLive();
+            updateLive((prev) => ({ ...prev, baselineUuids: callbacks.current.getMessageUuids() }));
+          }
+          merger
+            .setFloor(
+              next.progress_seq,
+              next.turn_events.map((e) => ({ seq: e.seq, item: e.event })),
+            )
+            .forEach((m) => handleProgress(m.item));
+        }
         return next;
       } catch (e) {
         if (sessionIdRef.current === id) callbacks.current.onError(messageOf(e));
@@ -299,7 +313,7 @@ export function useRunningSession({
         return sessionIdRef.current === id ? runningRef.current : null;
       }
     },
-    [applyRunning, handleProgress],
+    [applyRunning, handleProgress, resetLive, updateLive],
   );
 
   /** 表示中の会話の実行中セッションを取り直す(無ければ `null`)。 */

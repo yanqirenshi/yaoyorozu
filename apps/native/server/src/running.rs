@@ -57,11 +57,17 @@ pub struct RunningServices {
     pub connections: Connections,
     /// `/ws` につなぐための使い捨ての券(メモリにだけ持つ)。
     pub tickets: crate::ws::Tickets,
+    /// `/ws` につながっていて、まだ券の確かめを終えていない接続の数(上限 [`crate::ws::MAX_UNAUTHENTICATED`])。
+    pub unauthenticated: Arc<std::sync::atomic::AtomicUsize>,
     /// `/ws` が通す Origin(Next の画面のもの。空なら、誰も通さない)。
     pub allowed_origins: Arc<Vec<String>>,
     /// `running-sessions.json`・`archived-sessions.json`・`git-ledger.json` の保存のレーン
     /// (ロックの順は「レーン → 状態」の一方向)。
     pub store_lane: Arc<tokio::sync::Mutex<()>>,
+    /// `hub-layout.json`・`hub-tuning.json` の保存のレーン(版の確かめと書き込みを、ひとまとまりに行う)。
+    pub hub_lane: Arc<tokio::sync::Mutex<()>>,
+    /// Git 台帳の更新(読む → 観測する → 保存して差し替える)をひとまとまりにする(起動時の再開・ハブの読み込み・worktree の作成が重なっても、台帳の ID が食い違わない)。
+    pub ledger_lane: Arc<tokio::sync::Mutex<()>>,
     /// claude の起動の差し替え(確認用)。`None` は本物。
     pub claude_override: Option<ClaudeOverride>,
 }
@@ -388,8 +394,18 @@ fn spawn_event_loop(
                                 || exit_code.is_some()
                                 || models_listed;
                             // 途中経過には、このセッションの連番を付ける(購読者がいなくても進める。取り直しの「ここまで」)。
-                            let subscribers = if addressed.as_progress().is_some() {
+                            let subscribers = if let Some(progress) = addressed.as_progress() {
                                 slot.progress_seq += 1;
+                                // 進行中のターンの控え(凍結・切り替えのあとの画面が、途中から表示を始められる)。
+                                let finished = matches!(
+                                    progress.event,
+                                    domain::ProgressEvent::TurnFinished { .. }
+                                );
+                                slot.turn_events.record(
+                                    slot.progress_seq,
+                                    crate::dto::ProgressEventDto::from(progress.event),
+                                    finished,
+                                );
                                 slot.subscribers.clone()
                             } else {
                                 Vec::new()
@@ -511,6 +527,7 @@ fn reconcile_ledger(settings: &Settings, previous: &GitLedger) -> GitLedger {
 
 /// 台帳を、登録済みプロファイルの Git の状態に合わせて更新して保存する。
 pub async fn reload_git_ledger(ctx: &AppContext) -> Result<(), AppError> {
+    let _ledger_lane = ctx.running.ledger_lane.lock().await;
     let (settings, previous, path) = {
         let guard = ctx.state.lock().await;
         (
@@ -579,6 +596,8 @@ async fn prepare_start_worktree(
         index
     } else {
         reload_git_ledger(ctx).await?;
+        // 新しい worktree が台帳に載った。ハブが取り直せるように知らせる(Tauri 版は出しておらず、次の取り直しまで出なかった)。
+        ctx.events.emit(crate::scan::SESSIONS_UPDATED_EVENT, &());
         let ledger = ctx.state.lock().await.git_ledger.clone();
         app::WorktreeIndex::from_ledger(&ledger, repository)
     };
@@ -977,12 +996,14 @@ async fn start_running_session_inner(
             process: crate::jobbed_process::JobbedProcess::wrap(started.process),
             available_models: Vec::new(),
             subscribers: Vec::new(),
+            turn_events: Default::default(),
         };
         let dto = RunningSessionDto::from_session(
             slot.project.as_deref(),
             slot.session.clone(),
             slot.available_models.clone(),
             slot.progress_seq,
+            slot.turn_events.snapshot(),
         );
         let payload = changed_event(&slot.session, None);
         let remembered = slot.session.clone();

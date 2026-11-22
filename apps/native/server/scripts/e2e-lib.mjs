@@ -154,7 +154,24 @@ export async function startNext() {
   throw new Error("next start が起動しません(先に apps/console で next build を)");
 }
 
+// `profileId` が必須の command(省略・null は 400)。確認スクリプトの便宜のため、指定の無い呼び出しには、いまのアクティブを補う
+// (省略が 400 になることは `e2e-hub.mjs` が `omitProfile` で確かめる)。
+const PROFILE_REQUIRED = new Set([
+  "start_running_session", "get_project_claude_md", "save_project_claude_md", "list_rules", "get_rule", "list_skills", "get_skill",
+  "get_project_settings_file", "save_project_settings_file", "get_yyz_scaffold_status", "create_yyz_scaffold",
+]);
+async function activeProfileId(srv) {
+  if (!srv.activeProfileId) {
+    const r = await fetch(rpcUrl(srv, "get_settings"), { method: "POST", headers: { ...authHeaders(srv), "content-type": "application/json" }, body: "{}" });
+    srv.activeProfileId = (await r.json()).active_profile_id;
+  }
+  return srv.activeProfileId;
+}
+
 export async function rpc(srv, command, body = {}, { raw } = {}) {
+  if (raw === undefined && PROFILE_REQUIRED.has(command) && body.profileId === undefined) {
+    body = { ...body, profileId: await activeProfileId(srv) };
+  }
   const r = await fetch(rpcUrl(srv, command), {
     method: "POST",
     headers: { ...authHeaders(srv), "content-type": "application/json" },

@@ -10,6 +10,9 @@
 // - 「ここまで」が分かる前に届いた断片(購読のほうが先に張れたとき)は、ためておき、「ここまで」が分かったら、
 //   続きの分だけを番号の順に渡す。
 //
+// - 取り直しの応答が、進行中のターンのここまでの途中経過(`turn_events`)を持っているときは、「ここまで」を決めるとき、
+//   それを先頭に番号の順で返す(凍結・切り替えのあと、ターンの途中から表示を始められる)。
+//
 // 会話の切り替え・つなぎ直しのたびに `begin()` で最初からにする。「ここまで」は、その直後の最初の取り直し 1 回だけを使う
 // (返答の最中に状態が変わるたびの取り直しで、まだ届いていない断片まで捨てないため)。
 
@@ -46,17 +49,27 @@ export function createProgressMerger<T>() {
       }
       return take(seq, item);
     },
+    /** 「ここまで」がまだ分かっていないか(`begin` のあと、最初の `setFloor` の前)。 */
+    awaitingFloor(): boolean {
+      return floor === null;
+    },
     /**
-     * 取り直しの「ここまで」の番号。最初の 1 回だけ使う(`begin` のあと)。ためてあった分のうち、それより
+     * 取り直しの「ここまで」の番号。最初の 1 回だけ使う(`begin` のあと)。`replay`(進行中のターンのここまでの途中経過。
+     * 番号が「ここまで」以下のもの)があれば、それを先頭に、番号の順に返す。そのあと、ためてあった分のうち、「ここまで」より
      * 後のものを、番号の順に返す。
      */
-    setFloor(progressSeq: number): Merged<T>[] {
+    setFloor(progressSeq: number, replay: { seq: number; item: T }[] = []): Merged<T>[] {
       if (floor !== null) return [];
       floor = progressSeq;
-      last = progressSeq;
+      last = 0;
+      const replayed = [...replay]
+        .filter((r) => r.seq <= progressSeq)
+        .sort((a, b) => a.seq - b.seq)
+        .flatMap((r) => take(r.seq, r.item));
+      last = Math.max(last, progressSeq);
       const pending = buffer.sort((a, b) => a.seq - b.seq);
       buffer = [];
-      return pending.flatMap((p) => take(p.seq, p.item));
+      return [...replayed, ...pending.flatMap((p) => take(p.seq, p.item))];
     },
   };
 }

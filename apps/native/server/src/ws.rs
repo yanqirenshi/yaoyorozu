@@ -5,6 +5,7 @@
 //! - **トークンはブラウザへ渡さない**。代わりに、タブは中継を通して**使い捨ての券**をもらい(`issue_ws_ticket`。
 //!   ほかの rpc と同じ守り = トークン・Origin・Host)、`/ws` へつないだあとの**最初のメッセージ**で券を送る。
 //!   券は URL(クエリ)に入れない(ログ・履歴に残るため)。クエリのある要求は、それだけで断る。
+//! - 券の確かめを終える前の接続は、同時に [`MAX_UNAUTHENTICATED`] 本まで(超えたら 503)。
 //! - 券は、乱数から作る(UUID v4 を 3 つ = 360 ビット以上)。有効は 30 秒・**1 回だけ**・メモリにだけ持つ・未使用の数に上限。
 //!   券の確かめの前は、何も送らず、ほかのメッセージも受け付けない。5 秒以内に正しい券が来なければ閉じる。
 //! - アップグレードの要求で **Host**(127.0.0.1:<ポート> / localhost:<ポート>)と **Origin** を確かめる。Origin は、
@@ -38,6 +39,9 @@ pub const CONSOLE_PORT_ENV_VAR: &str = "YAOYOROZU_CONSOLE_PORT";
 pub const TICKET_TTL: Duration = Duration::from_secs(30);
 /// 未使用の券の数の上限。
 pub const MAX_PENDING_TICKETS: usize = 64;
+/// つながっていて、まだ券の確かめを終えていない接続の数の上限(超えたら、アップグレードの時点で断る = 503)。
+/// 何も送らない接続を大量に開かれても、サーバのメモリ・待ち受けが膨らまない(5 秒で閉じるので、通常の利用者には届かない数)。
+pub const MAX_UNAUTHENTICATED: usize = 64;
 /// つないだあと、最初のメッセージ(券)が来るまでの待ち。
 pub const FIRST_MESSAGE_TIMEOUT: Duration = Duration::from_secs(5);
 /// タブから受け取るメッセージの大きさの上限(バイト)。
@@ -171,9 +175,33 @@ pub async fn ws_handler(State(ctx): State<AppContext>, request: Request) -> Resp
         Ok(ws) => ws,
         Err(rejection) => return rejection.into_response(),
     };
+    // 券の確かめを終える前の接続の数に上限を付ける(確かめを終える・閉じるまで、1 本分を数える)。
+    let Some(pending) = PendingConnection::take(&ctx.running.unauthenticated) else {
+        return refuse(StatusCode::SERVICE_UNAVAILABLE, "接続が多すぎます");
+    };
     ws.max_message_size(MAX_CLIENT_MESSAGE_BYTES)
         .max_frame_size(MAX_CLIENT_MESSAGE_BYTES)
-        .on_upgrade(move |socket| serve(ctx, socket))
+        .on_upgrade(move |socket| serve(ctx, socket, pending))
+}
+
+/// 券の確かめを終える前の接続 1 本分の枠。落とすと(確かめを終えた・閉じた)枠が空く。
+struct PendingConnection(Arc<std::sync::atomic::AtomicUsize>);
+
+impl PendingConnection {
+    fn take(counter: &Arc<std::sync::atomic::AtomicUsize>) -> Option<Self> {
+        use std::sync::atomic::Ordering;
+        if counter.fetch_add(1, Ordering::SeqCst) >= MAX_UNAUTHENTICATED {
+            counter.fetch_sub(1, Ordering::SeqCst);
+            return None;
+        }
+        Some(Self(counter.clone()))
+    }
+}
+
+impl Drop for PendingConnection {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 /// 接続が終わったとき(閉じられたとき・外されたとき)に、その接続の表と購読を片づける。
@@ -220,7 +248,7 @@ async fn send_text(socket: &mut WebSocket, text: String) -> bool {
     )
 }
 
-async fn serve(ctx: AppContext, mut socket: WebSocket) {
+async fn serve(ctx: AppContext, mut socket: WebSocket, pending: PendingConnection) {
     // 1. 最初のメッセージは券。券の確かめの前は、何も送らない。
     let first = tokio::time::timeout(FIRST_MESSAGE_TIMEOUT, socket.recv()).await;
     let ticket_ok = match first {
@@ -234,6 +262,8 @@ async fn serve(ctx: AppContext, mut socket: WebSocket) {
         close_with(&mut socket, POLICY_VIOLATION, "認証に失敗しました").await;
         return;
     }
+    // 券の確かめを終えた: 枠を返す。
+    drop(pending);
 
     // 2. 接続を開く(接続の ID は、サーバの中だけで使う)。
     let mut opened = ctx.running.connections.open();

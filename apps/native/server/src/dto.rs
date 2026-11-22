@@ -1553,6 +1553,16 @@ pub struct RunningSessionDto {
     pub permission_requests: Vec<PermissionRequestDto>,
     /// このセッションが送り出した途中経過の最後の番号(ここまでは、この応答の状態に反映済み)。
     pub progress_seq: u64,
+    /// 進行中のターンの、ここまでの途中経過(連番つき。`progress_seq` まで)。凍結・切り替えのあとの画面が、ターンの途中から
+    /// 表示を始められる。ターンが終わると空(確定した内容は会話ファイルにある)。大きくなりすぎたときは、古いほうが欠ける。
+    pub turn_events: Vec<TurnEventDto>,
+}
+
+/// 進行中のターンの途中経過 1 件(連番つき)。
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct TurnEventDto {
+    pub seq: u64,
+    pub event: ProgressEventDto,
 }
 
 impl RunningSessionDto {
@@ -1561,10 +1571,12 @@ impl RunningSessionDto {
         session: domain::RunningSessionByApp,
         available_models: Vec<app::AvailableModel>,
         progress_seq: u64,
+        turn_events: Vec<TurnEventDto>,
     ) -> Self {
         let version = session.base.version.clone();
         Self {
             progress_seq,
+            turn_events,
             peer_messaging: version.as_deref().and_then(app::supports_peer_messaging),
             peer_messaging_warning: version.as_deref().and_then(app::peer_messaging_warning),
             cli_version: version,

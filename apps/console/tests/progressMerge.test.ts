@@ -56,3 +56,34 @@ test("「ここまで」は、begin のあとの最初の 1 回だけ使う(返�
   assert.deepEqual(m.setFloor(9), []);
   assert.deepEqual(items(m.push(7, "7")), ["7"]); // 床は 5 のまま(9 には動かない)
 });
+
+test("進行中のターンのここまでの分(replay)は、「ここまで」を決めるとき先頭に渡し、続きは重ならずにつながる", () => {
+  const m = createProgressMerger<string>();
+  m.begin();
+  assert.equal(m.awaitingFloor(), true);
+  // 「ここまで」が分かる前に届いた断片(うち 1 つは replay と重なる)。
+  m.push(43, "43");
+  m.push(41, "41"); // 重なり
+  const merged = m.setFloor(42, [
+    { seq: 42, item: "42" },
+    { seq: 40, item: "40" },
+    { seq: 41, item: "41" },
+    { seq: 99, item: "99" }, // 「ここまで」より後のものは、replay からは渡さない
+  ]);
+  // replay は番号の順で先頭、そのあと、ためてあった「ここまで」より後の分(43)。重なり(41)は 1 回だけ。
+  assert.deepEqual(items(merged), ["40", "41", "42", "43"]);
+  assert.equal(m.awaitingFloor(), false);
+  assert.deepEqual(items(m.push(44, "44")), ["44"]);
+  assert.deepEqual(items(m.push(43, "43")), [], "渡した番号以下は渡さない");
+});
+
+test("replay の先頭が欠けていても(古いほうが捨てられた)、あるものを渡す", () => {
+  const m = createProgressMerger<string>();
+  m.begin();
+  const merged = m.setFloor(300, [
+    { seq: 271, item: "271" },
+    { seq: 272, item: "272" },
+  ]);
+  assert.deepEqual(items(merged), ["271", "272"]);
+  assert.deepEqual(items(m.push(301, "301")), ["301"]);
+});

@@ -282,6 +282,9 @@ export type AddressedProgressDto = {
   event: ProgressEventDto;
 };
 
+// 進行中のターンの途中経過 1 件(連番つき。`get_running_session` の `turn_events`)。
+export type TurnEventDto = { seq: number; event: ProgressEventDto };
+
 // 途中経過に付く、会話ごとの連番(1 から。取り直しの `progress_seq` と突き合わせる。`progressMerge.ts`)。
 export type ProgressSeq = number;
 
@@ -358,6 +361,8 @@ export type RunningSessionDto = {
   permission_requests: PermissionRequestDto[];
   // この会話が送り出した途中経過の最後の番号(ここまでは、この応答の状態に反映済み)。
   progress_seq: number;
+  /** 進行中のターンの、ここまでの途中経過(連番つき。`progress_seq` まで)。凍結・切り替えのあとの表示の続きに使う。ターンが終わると空。 */
+  turn_events: TurnEventDto[];
 };
 
 // 選べるモデル(value を set_model に渡す)。
