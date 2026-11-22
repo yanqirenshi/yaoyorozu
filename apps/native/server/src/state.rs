@@ -2,9 +2,10 @@
 //! `tauri/src/state.rs` から写した: `resolve_effective_projects_dir`・`store_loaded_session`。
 
 use crate::dto::PendingWarningDto;
-use domain::{LogLine, Settings};
+use domain::{GitLedger, LogLine, Settings};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// 設定の `claude_projects_dir` と既定値(`~/.claude/projects/`)から、実際に使うルートを求める。
 ///
@@ -27,6 +28,38 @@ pub fn resolve_effective_projects_dir(settings: &Settings) -> Result<PathBuf, ap
     ))
 }
 
+/// ファイルの状態(更新時刻のミリ秒, サイズ)。変わったかの判定に使う。
+pub type FileFingerprint = (u64, u64);
+
+/// 「飛ばした会話ファイル」の警告 1 件の、対象のファイル。
+#[derive(Clone, Debug)]
+pub struct SkipSource {
+    pub project: String,
+    pub file_name: String,
+    pub fingerprint: FileFingerprint,
+}
+
+/// 途中経過の購読 1 件。**接続の ID と購読の ID だけ**を持つ(送り先の実体は `progress::Connections` が持つ。
+/// 状態のロックの中で、送り先を触らないため)。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Subscription {
+    pub id: u64,
+    pub conn_id: u64,
+}
+
+/// サーバが起動して持っている実行中セッション 1 つ(Tauri 版 `RunningSessionSlot` の写し)。
+pub struct RunningSessionSlot {
+    /// 会話ファイルのあるプロジェクトフォルダ名。再開のときだけ(新規は会話ファイルができるまで分からない)。
+    pub project: Option<String>,
+    pub session: domain::RunningSessionByApp,
+    /// 子プロセスの操作口(標準入力への書き込み・中断・停止)。
+    pub process: Arc<dyn app::RunningProcess>,
+    /// CLI が報告した、選べるモデル。
+    pub available_models: Vec<app::AvailableModel>,
+    /// 途中経過の購読(購読が無い間の出来事は捨てる。状態・答え待ちは Query で取れる)。
+    pub subscribers: Vec<Subscription>,
+}
+
 pub struct ServerState {
     pub settings: Settings,
     pub save_path: PathBuf,
@@ -36,10 +69,28 @@ pub struct ServerState {
     /// 起動直後に出て取りこぼした警告の控え(`list_pending_warnings`)。
     pub warnings: Vec<PendingWarningDto>,
     pub next_warning_id: u64,
+    /// 「飛ばした会話ファイル」の警告(控えの id → 対象のファイルと、そのときのファイルの状態)。
+    pub skip_sources: HashMap<u64, Vec<SkipSource>>,
+    /// 閉じられた「飛ばした会話ファイル」の警告(プロジェクト, ファイル名 → 閉じたときのファイルの状態)。
+    /// **そのファイルが変わるまで**、同じ警告を出さない。
+    pub dismissed_skips: HashMap<(String, String), FileFingerprint>,
     /// セッションを開いたときに組み立てた `LogLine` のキャッシュ(会話ファイルのパスがキー)。
     pub loaded_log_lines: HashMap<PathBuf, Vec<LogLine>>,
     /// 解析済みメッセージのキャッシュ(issue #350)。ファイルの状態とセットで持つ。
     pub loaded_messages: HashMap<PathBuf, app::CachedMessages>,
+    /// 起動した実行中セッション。終了しても、同じ会話を起動し直して置き換えるか、上限を超えて忘れるまで残す。
+    pub running_sessions: Vec<RunningSessionSlot>,
+    /// 起動している最中の会話の ID(起動は数秒かかりうるので、同じ会話・上限超えの同時の起動を止める)。
+    pub starting_session_ids: Vec<String>,
+    /// 途中経過の購読 ID の連番。
+    pub next_subscription_id: u64,
+    /// Claude.ai の利用状況(アカウント単位。最後に取れた値)。
+    pub claude_usage: app::ClaudeUsageSnapshot,
+    /// 利用状況の定期取得が動いているか。
+    pub usage_polling_active: bool,
+    /// Git 台帳(最小。`git-ledger.json`。worktree の ID と実体の対応に使う)。
+    pub git_ledger: GitLedger,
+    pub git_ledger_path: PathBuf,
 }
 
 impl ServerState {
@@ -50,8 +101,17 @@ impl ServerState {
             settings_recovery_pending: recovered_from_corruption,
             warnings: Vec::new(),
             next_warning_id: 1,
+            skip_sources: HashMap::new(),
+            dismissed_skips: HashMap::new(),
             loaded_log_lines: HashMap::new(),
             loaded_messages: HashMap::new(),
+            running_sessions: Vec::new(),
+            starting_session_ids: Vec::new(),
+            next_subscription_id: 1,
+            claude_usage: app::ClaudeUsageSnapshot::default(),
+            usage_polling_active: false,
+            git_ledger: GitLedger::default(),
+            git_ledger_path: PathBuf::new(),
         }
     }
 
@@ -77,6 +137,58 @@ impl ServerState {
             return None;
         }
         Some(self.push_warning(kind, message))
+    }
+
+    /// 「飛ばした会話ファイル」の警告を積む。同じプロジェクトの前の同種の警告は、置き換える(対象が変わるため)。
+    /// 同じ内容がすでにあるときは積まない(`None`)。
+    pub fn push_skip_warning(
+        &mut self,
+        project: &str,
+        message: String,
+        sources: Vec<SkipSource>,
+    ) -> Option<u64> {
+        if self
+            .warnings
+            .iter()
+            .any(|w| w.kind == "app:warning" && w.message == message)
+        {
+            return None;
+        }
+        // 同じプロジェクトの、前の「飛ばした」警告(対象のファイルが変わった・直った)を取り除く。
+        let stale: Vec<u64> = self
+            .skip_sources
+            .iter()
+            .filter(|(_, v)| v.iter().all(|s| s.project == project))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in stale {
+            self.skip_sources.remove(&id);
+            self.warnings.retain(|w| w.id != id);
+        }
+        let id = self.push_warning("app:warning", message);
+        self.skip_sources.insert(id, sources);
+        Some(id)
+    }
+
+    /// 警告を閉じる。「飛ばした会話ファイル」の警告なら、そのファイルが変わるまで同じ警告を出さない。
+    pub fn dismiss_warning(&mut self, id: u64) {
+        self.warnings.retain(|w| w.id != id);
+        if let Some(sources) = self.skip_sources.remove(&id) {
+            for s in sources {
+                self.dismissed_skips
+                    .insert((s.project, s.file_name), s.fingerprint);
+            }
+        }
+    }
+
+    /// 閉じた(または閉じられた)接続の購読を、全部外す。
+    pub fn drop_connection_subscriptions(&mut self, conn_ids: &[u64]) {
+        if conn_ids.is_empty() {
+            return;
+        }
+        for slot in &mut self.running_sessions {
+            slot.subscribers.retain(|s| !conn_ids.contains(&s.conn_id));
+        }
     }
 
     /// 読み直した会話をキャッシュへ入れる(遅れて終わった古い読みが新しいキャッシュを

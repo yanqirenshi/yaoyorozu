@@ -42,6 +42,20 @@ pub enum LocalFolderPathError {
 }
 
 impl LocalFolderPathError {
+    /// すべての理由(エラーの文面を決まった説明として扱うための一覧)。
+    pub const ALL: [Self; 10] = [
+        Self::Empty,
+        Self::TooLong,
+        Self::ControlCharacter,
+        Self::NetworkOrDevice,
+        Self::NotDriveAbsolute,
+        Self::ExtraColon,
+        Self::InvalidCharacter,
+        Self::ParentDirectory,
+        Self::DotsOnlyComponent,
+        Self::ReservedDeviceName,
+    ];
+
     /// 画面にそのまま出せるメッセージ。
     pub fn message(self) -> &'static str {
         match self {
@@ -86,7 +100,7 @@ fn is_reserved_device_name(component: &str) -> bool {
     ) {
         return true;
     }
-    // COM1〜COM9・LPT1〜LPT9(`¹`・`²`・`³` も)。
+    // COM0〜COM9・LPT0〜LPT9(`¹`・`²`・`³` も)。
     let numbered = base
         .strip_prefix("COM")
         .or_else(|| base.strip_prefix("LPT"));
@@ -94,7 +108,7 @@ fn is_reserved_device_name(component: &str) -> bool {
         let mut it = rest.chars();
         matches!(
             (it.next(), it.next()),
-            (Some('1'..='9' | '¹' | '²' | '³'), None)
+            (Some('0'..='9' | '¹' | '²' | '³'), None)
         )
     })
 }
@@ -110,7 +124,7 @@ impl LocalFolderPath {
         if text.chars().count() > MAX_LEN {
             return Err(E::TooLong);
         }
-        if text.chars().any(crate::is_control_or_invisible) {
+        if crate::contains_forbidden_invisible_or_control(text) {
             return Err(E::ControlCharacter);
         }
         let chars: Vec<char> = text.chars().collect();
@@ -322,6 +336,8 @@ mod tests {
             "C:\\a\\com\u{b2}.txt",
             "C:\\a\\LPT\u{b3}",
             "C:\\a\\COM1",
+            r"C:\a\COM0",
+            r"C:\a\lpt0.txt",
             r"C:\a\CONIN$",
             r"C:\a\conout$",
             r"C:\a\CONIN$.txt",
@@ -334,7 +350,6 @@ mod tests {
         }
         // 予約名に見えて、そうでないもの。
         for good in [
-            r"C:\a\COM0",
             r"C:\a\COM10",
             r"C:\a\COMX",
             r"C:\a\CONINX",
@@ -388,13 +403,34 @@ mod tests {
     }
 
     #[test]
-    fn rejects_zero_width_and_bidirectional_control_characters() {
+    fn rejects_invisible_and_direction_changing_characters_by_unicode_property() {
         for c in [
-            '\u{200B}', '\u{200C}', '\u{200D}', '\u{200E}', '\u{200F}', '\u{202A}', '\u{202B}',
-            '\u{202C}', '\u{202D}', '\u{202E}', '\u{2060}', '\u{2063}', '\u{2066}', '\u{2069}',
+            '\u{200B}',
+            '\u{200E}',
+            '\u{200F}',
+            '\u{202A}',
+            '\u{202B}',
+            '\u{202C}',
+            '\u{202D}',
+            '\u{202E}',
+            '\u{2060}',
+            '\u{2063}',
+            '\u{2066}',
+            '\u{2069}',
             '\u{FEFF}',
+            '\u{061C}',
+            '\u{2028}',
+            '\u{2029}',
+            '\u{3164}',
+            '\u{115F}',
+            '\u{1160}',
+            '\u{FFA0}',
+            '\u{00AD}',
+            '\u{034F}',
+            '\u{180E}',
+            '\u{E0041}',
         ] {
-            let path = format!("C:\\repo{c}\\x");
+            let path = format!("C:\\repo{c}x\\y");
             assert_eq!(
                 LocalFolderPath::parse(&path).unwrap_err(),
                 LocalFolderPathError::ControlCharacter,
@@ -404,5 +440,34 @@ mod tests {
         }
         // 見える日本語・絵文字などは通る。
         assert!(LocalFolderPath::parse("C:\\日本語\\フォルダ\\😀").is_ok());
+    }
+
+    #[test]
+    fn zwj_and_zwnj_are_allowed_only_between_visible_characters() {
+        // 絵文字の結合・ZWNJ を使う言語の名前は通す。
+        for ok in [
+            "C:\\work\\👨\u{200D}💻",
+            "C:\\work\\\u{2764}\u{FE0F}\u{200D}🔥",
+            "C:\\work\\می\u{200C}خواهم",
+            "C:\\work\\a\u{FE0F}b",
+        ] {
+            assert!(LocalFolderPath::parse(ok).is_ok(), "{ok:?}");
+        }
+        // 前後に見える文字が無い(区切り・空白・端の)ZWJ・ZWNJ・異体字セレクタは断る。
+        for bad in [
+            "C:\\work\\\u{200D}a",
+            "C:\\work\\a\u{200D}",
+            "C:\\work\\a\u{200D}\\b",
+            "C:\\work\\a \u{200D}b",
+            "C:\\work\\a\u{200C}\u{200C}b",
+            "C:\\work\\\u{FE0F}a",
+            "C:\\work\\ \u{FE0F}a",
+        ] {
+            assert_eq!(
+                LocalFolderPath::parse(bad).unwrap_err(),
+                LocalFolderPathError::ControlCharacter,
+                "{bad:?}"
+            );
+        }
     }
 }

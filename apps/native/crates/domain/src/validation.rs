@@ -20,16 +20,72 @@ pub fn is_valid_json_object(content: &str) -> bool {
     )
 }
 
-/// 制御文字(改行・NUL・タブなど)、または「見えない・表示の向きを変える」文字か。
-/// ゼロ幅の文字(U+200B〜U+200F)、双方向の制御(U+202A〜U+202E・U+2066〜U+2069)、
-/// 単語の結合・不可視の演算子(U+2060〜U+2065)、BOM(U+FEFF)。名前やパスに入れると、
-/// 見えない名前・表示の向きを変える名前(`…exe.txt` に見える `…txt.exe` など)を作れてしまう。
-pub fn is_control_or_invisible(c: char) -> bool {
-    c.is_control()
-        || matches!(
-            c,
-            '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}'
-        )
+/// 文字が「断る対象の見えない文字」か。**Unicode の性質**で決める(範囲の並べ書きだと抜ける。
+/// U+061C・U+2028・U+3164 など): 制御文字(Cc)・行と段落の区切り(Zl・Zp)・書式の文字(Cf。ゼロ幅・
+/// 双方向の制御・BOM・ソフトハイフン・タグ文字など)・既定で無視される文字(Default_Ignorable_Code_Point。
+/// ハングルの埋め草 U+3164・U+115F・U+1160・U+FFA0、異体字セレクタ、結合用の U+034F など)。
+fn is_invisible_or_control(c: char) -> bool {
+    use icu_properties::props::{DefaultIgnorableCodePoint, GeneralCategory};
+    use icu_properties::{CodePointMapData, CodePointSetData};
+    matches!(
+        CodePointMapData::<GeneralCategory>::new().get(c),
+        GeneralCategory::Control
+            | GeneralCategory::LineSeparator
+            | GeneralCategory::ParagraphSeparator
+            | GeneralCategory::Format
+    ) || CodePointSetData::new::<DefaultIgnorableCodePoint>().contains(c)
+}
+
+/// 異体字セレクタ(U+FE00〜U+FE0F、U+E0100〜U+E01EF)。見える文字の直後なら通す(絵文字の表示指定など)。
+fn is_variation_selector(c: char) -> bool {
+    matches!(c, '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}')
+}
+
+/// 前後の文字との関係で、通してよい見えない文字(ZWJ・ZWNJ・異体字セレクタ)か。
+/// - ZWJ(U+200D)・ZWNJ(U+200C): **前後に見える文字がある**場合だけ(絵文字の `👨‍💻` や、ZWNJ を使う
+///   言語の名前を断らないため)。前後の見える文字は、異体字セレクタの直後(`❤️‍🔥`)も含む。
+/// - 異体字セレクタ: **見える文字の直後**だけ。
+fn allowed_joiner(c: char, prev_visible: bool, next_visible: bool) -> bool {
+    match c {
+        '\u{200C}' | '\u{200D}' => prev_visible && next_visible,
+        _ if is_variation_selector(c) => prev_visible,
+        _ => false,
+    }
+}
+
+/// 見える文字か(空白・制御・見えない文字・異体字セレクタ以外)。
+fn is_visible(c: char) -> bool {
+    // パスの区切りは「見える文字」に数えない(`repo<ZWJ>\x` のように、区切りの隣で見えない文字を許さない)。
+    !c.is_whitespace() && !is_invisible_or_control(c) && !matches!(c, '\\' | '/')
+}
+
+/// 名前・パスに、**断る対象の制御文字・見えない文字**(改行・NUL・タブ・ゼロ幅・向きを変える文字・
+/// ハングルの埋め草など)が含まれるか。ZWJ・ZWNJ は前後に見える文字があるときだけ、異体字セレクタは
+/// 見える文字の直後だけ通す。名前やパスに入れると、見えない名前・表示の向きを変える名前
+/// (`…exe.txt` に見える `…txt.exe` など)を作れてしまう。
+pub fn contains_forbidden_invisible_or_control(text: &str) -> bool {
+    let chars: Vec<char> = text.chars().collect();
+    // 直前の文字が「見える文字」(または、それにつく異体字セレクタ)か。
+    let mut prev_visible = false;
+    for (i, &c) in chars.iter().enumerate() {
+        if is_invisible_or_control(c) {
+            let next_visible = chars.get(i + 1).copied().is_some_and(is_visible);
+            if !allowed_joiner(c, prev_visible, next_visible) {
+                return true;
+            }
+            // 通した見えない文字の直後は、「見える文字につながっている」とみなす(`❤` `FE0F` `ZWJ` `🔥`)。
+            // ZWJ の直後は次の文字が見えることを上で確かめている。異体字セレクタのあとはつながりを保つ。
+            prev_visible = is_variation_selector(c);
+        } else {
+            prev_visible = is_visible(c);
+        }
+    }
+    false
+}
+
+/// 名前に、見える文字が 1 つ以上あるか(空白や、見えない文字だけの名前を断る)。
+pub fn has_visible_character(text: &str) -> bool {
+    text.chars().any(is_visible)
 }
 
 /// `session_id` がファイルパスの構築に使って安全な形式(英数字とハイフンのみ)

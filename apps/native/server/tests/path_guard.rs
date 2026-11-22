@@ -39,6 +39,7 @@ fn fixture() -> Fixture {
         save_lane: Arc::new(tokio::sync::Mutex::new(())),
         file_lane: Arc::new(tokio::sync::Mutex::new(())),
         shutdown: rx,
+        running: Default::default(),
     };
     Fixture {
         _dir: dir,
@@ -56,6 +57,10 @@ async fn call(
     let mut body = body;
     if command == "update_settings" && body.get("expectedRevision").is_none() {
         body["expectedRevision"] = serde_json::json!(ctx.state.lock().await.settings.revision);
+    }
+    // 保存先のプロファイルが無い呼び出しには、いまのアクティブを補う(省略のテストは `"profileId": null` で明示する)。
+    if command == "update_settings" && body.get("profileId").is_none() {
+        body["profileId"] = serde_json::json!(ctx.state.lock().await.settings.active_profile_id);
     }
     let req = Request::builder()
         .method("POST")

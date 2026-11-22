@@ -153,6 +153,11 @@ impl WorktreeIndex {
             .map(|(folder, _)| folder.clone())
     }
 
+    /// 台帳の worktree(リポジトリ本体を除く)のフォルダ。
+    pub fn worktree_folders(&self) -> impl Iterator<Item = &Path> {
+        self.entries.iter().map(|(folder, _)| folder.as_path())
+    }
+
     /// `path` が台帳の worktree(リポジトリ本体を除く)として引けるか。
     pub fn knows(&self, path: &Path) -> bool {
         self.entries

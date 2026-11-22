@@ -268,6 +268,20 @@ fn fingerprint_of(file: &fs::File, path: &Path) -> Result<FileFingerprint, AppEr
     })
 }
 
+/// claude が作っている最中のファイルか(空、または 1 MB 以下で改行がまだ 1 つも無い)。
+fn is_being_created(path: &Path) -> bool {
+    use std::io::Read;
+    const LIMIT: u64 = 1024 * 1024;
+    let Ok(file) = fs::File::open(path) else {
+        return false;
+    };
+    let mut buf = Vec::new();
+    if file.take(LIMIT + 1).read_to_end(&mut buf).is_err() {
+        return false;
+    }
+    buf.is_empty() || (buf.len() as u64 <= LIMIT && !buf.contains(&b'\n'))
+}
+
 fn to_millis(time: std::io::Result<std::time::SystemTime>) -> u64 {
     time.ok()
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
@@ -575,6 +589,10 @@ impl SessionSource for FileSystemRepository {
                     cwd: scanned.cwd,
                     git_branch: scanned.git_branch,
                 }),
+                Err(_) if is_being_created(&path) => {
+                    // claude が作っている最中(空、または 1 行目がまだ書き終わっていない)のファイルは、
+                    // 壊れたものとして警告せず、静かに飛ばす(次の一覧で読める)。
+                }
                 Err(e) => {
                     // 詳しい理由(パスを含む)はログへ。画面にはファイル名だけを知らせる。
                     eprintln!(
@@ -1358,6 +1376,20 @@ mod tests {
     }
 
     #[test]
+    fn list_sessions_lenient_ignores_files_being_created_silently() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        fs::write(project_dir.join("empty.jsonl"), "").unwrap();
+        // 1 行目が書き終わっていない(改行が無い)ファイル。
+        fs::write(project_dir.join("partial.jsonl"), r#"{"type":"user","sess"#).unwrap();
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let (sessions, skipped) = repo.list_sessions_lenient("proj").unwrap();
+        assert!(sessions.is_empty());
+        assert!(skipped.is_empty(), "{skipped:?}");
+    }
+
+    #[test]
     fn list_sessions_lenient_skips_broken_files_and_returns_the_rest() {
         let dir = tempfile::tempdir().unwrap();
         let project_dir = dir.path().join("proj");
@@ -1373,7 +1405,11 @@ mod tests {
             "これは JSON ではない\n{ 壊れ",
         )
         .unwrap();
-        fs::write(project_dir.join("binary.jsonl"), [0xff, 0xfe, 0x00, 0x80]).unwrap();
+        fs::write(
+            project_dir.join("binary.jsonl"),
+            [0xff, 0xfe, 0x00, 0x80, b'\n'],
+        )
+        .unwrap();
 
         let repo = FileSystemRepository::new(dir.path().to_path_buf());
         // 従来の一覧は、壊れたファイルが 1 つあると全体が失敗する。

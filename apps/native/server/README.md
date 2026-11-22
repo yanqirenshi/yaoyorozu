@@ -113,12 +113,15 @@ CLAUDE.md・設定ファイル(`~/.claude` と、プロファイルのリポジ�
 `settings.json` に版(`revision`。保存のたびに 1 つ増える番号。**スキーマの `version`(7)は上げない**: 追加するだけの項目で、無い既存のファイルは版 0 として読める。
 上げると、古い版のアプリが未知のバージョンの破損ファイルとして退避してしまうため)を持たせた。`get_settings` が返し、`update_settings` は
 **`expectedRevision`(どの版を元にした変更か。必須)**を受け取り、今の版と違えば 409 `settings_conflict`(「設定がほかで変更されています。取り直してからやり直してください」)で断る。
-別のタブが変えた別の欄を、古い値で黙って戻さないため。応答は保存後の版 `{revision}`。プロファイルの操作(作成・改名・切替・削除)は ID で対象を指す操作なので版の確かめは要らないが、版は進める。
+別のタブが変えた別の欄を、古い値で黙って戻さないため。応答は保存後の版 `{revision}`。プロファイルの操作(作成・改名・切替・削除)は ID で対象を指す操作なので版の確かめは要らない。**どれも版を進めない**(進めると、設定画面が開いたままの別タブの保存が、無関係な操作のせいで 409 になる)。
+
+**Tauri 版との違い: `update_settings` の `profileId` は必須**(省略・null は 400 `invalid_input`)。「アクティブのプロファイルへ保存する」動きをサーバから無くしたので、別タブで切替・作成があっても、保存はいつも画面が読み込んだプロファイルへ書かれる(切替で版を進める必要が無い)。そのプロファイルが削除されていたら 404 `not_found`(別のプロファイルへは書かない)。版は `u64` の上限で止まる(あふれても落ちない)。
 
 ## エラーの文面(サーバのパスを出さない)
 
 I/O のエラーは `"<フルパス> が見つかりません: …"` のようにサーバのフォルダ構成(ユーザー名・ホーム・データフォルダ)を含む。クライアントへ返す `message` からは、
 エラーを DTO にする**1 か所**(`dto.rs` の `From<app::AppError> for AppErrorDto`。`redact.rs`)で、パスを `…\<最後のフォルダ>\<名前>`(プロジェクト名・ファイル名まで)に絞る。
+パスの先頭がサーバのユーザーのホームなら `~\…` に短くする(大文字小文字・`/` と `\` の違いを区別しない)。
 詳しい内容(フルパスを含む)はサーバのログ(標準エラー。`[エラーの詳細] …`)へ出す。どの `/rpc` のハンドラも `app::AppError` を `ApiError` に変換して返す(`?`・`blocking`)ので、
 すべての口がここを通る(個別に直していない)。
 
@@ -126,6 +129,13 @@ I/O のエラーは `"<フルパス> が見つかりません: …"` のよう�
 
 壊れた・読めない会話ファイルが 1 つあっても、それを飛ばして残りを返す(`app::list_sessions_lenient`)。飛ばしたファイル名(パスではない)は、画面の警告(`app:warning` と、
 `list_pending_warnings` の控え。同じ内容は 1 回だけ)で知らせる。
+警告を閉じると(`dismiss_pending_warning`)、**そのファイルが変わる(更新時刻かサイズが変わる)まで**同じ警告を出さない。変わればまた出る。
+空のファイルと、1 行目がまだ書き終わっていない(1 MB 以下で改行が無い)ファイルは、claude が作っている最中とみなし、警告に数えず静かに飛ばす。
+
+## パス・名前の見えない文字
+
+パスとプロファイル名は、Unicode の性質(制御・行/段落区切り・書式・既定で無視される符号位置)で見えない文字を断る(`domain::contains_forbidden_invisible_or_control`。`icu_properties` を使う)。
+ZWJ・ZWNJ・異体字セレクタは、前後に見える文字があるときだけ許す(絵文字の連結・ペルシャ語など)。予約名は `COM0`〜`COM9`・`LPT0`〜`LPT9`(上付き数字を含む)・`CONIN$`・`CONOUT$`。
 
 ## 通知(`session:changed`)の間引き
 
@@ -147,3 +157,72 @@ I/O のエラーは `"<フルパス> が見つかりません: …"` のよう�
   (`folders.rs`・`infra::drive_kind`)。`subst` のドライブは、解決した先がローカルなら固定ドライブとして返るので通る。
 - プロファイル名(`domain::ProfileName`)も、ゼロ幅・双方向の制御文字を断る。
 - 設定ファイル(`save_claude_settings_file`・`save_project_settings_file`)は、JSON の最上位がオブジェクトでなければ 400(`domain::is_valid_json_object`)。
+
+## 実行中セッション(段階 3: claude を起動したまま持つ)
+
+`tauri/src/running_session.rs` の 14 command(`start_running_session`・`list_running_sessions`・`get_running_session`・`subscribe_running_session_progress`・`unsubscribe_running_session_progress`・`send_to_running_session`・`respond_permission`・`interrupt_running_session`・`switch_running_session`・`stop_running_session`・`get_claude_usage`・`archive_session`・`unarchive_session`・`rename_session`)と、
+イベント(`running-session:changed`・`claude-usage:updated`・`app:warning`・`session:changed`)を写した。中身は `src/running.rs`(イベントループ・利用状況の定期取得・起動・自動再開・終了時の停止)、受け口は `src/rpc/running.rs`。
+
+- **自動再開**: 起動時に、**このデータフォルダの `running-sessions.json` だけ**を読み、前回動かしていたものを 1 件ずつ再開する(使い捨てのデータフォルダでは空)。再開できなかったものは飛ばして `app:warning` に出す(控えからは消さない)。
+  **新規に始めたばかりで会話ファイルがまだ無いセッションは、再開できない**(Tauri 版と同じ。会話ファイルのあるフォルダ名が控えに入らないため)。会話ファイルができたあと、一覧から再開(`resume`)したものは、次の起動で自動再開される。
+- **終了**: 利用者が `stop_running_session` で止めたものは控えから外れる。サーバが終わるとき(Ctrl+C・コンソールを閉じる・ログオフ・シャットダウン)に止まったものは、控えに残り、次の起動で再開される。
+- **保存**: `running-sessions.json`・`archived-sessions.json`・`git-ledger.json` は `infra::write_atomic` で書き、**保存のレーン**(`RunningServices.store_lane`。ロックの順は「レーン → 状態」)を通す。
+- **Git 台帳(最小)**: `git-ledger.json` を読み、起動時の再開の前と、起動先の worktree を新しく作ったときに、登録済みプロファイルのリポジトリの Git の状態と突き合わせて保存する(`ServerState.git_ledger`)。
+  ハブへの表示と `reconcile_git_state` command は段階 4。
+- **利用状況**: 動いているセッションがあるあいだ、最初の 1 回は待たずに、以後 5 分おきとターン終了ごとに取得する。`get_claude_usage` は持っている値を返すだけ。
+
+### 途中経過(`/events` の SSE。接続ごと)
+
+- 途中経過(文字の断片・ツールの開始など。順序が大事)は、**同じ `GET /events`** の SSE で、イベント名 `running-session:progress`、本文 `{subscription_id, progress}`(`progress` は今の `AddressedProgressDto`)として流れる。
+  通知(`running-session:changed` など。取りこぼしてよい)は、これまでどおり放送(`EventBus`)。`/events` はこの 2 つを 1 本に束ねる。
+- 接続したときの**最初のイベントは `connection`**(本文 `{connection_id}`)。購読の登録(`subscribe_running_session_progress` の `connectionId`)にはこの ID を使う。購読を外すとき(`unsubscribe_running_session_progress`)は、購読の ID とその接続の ID を渡す(**ほかの接続の購読は外せない**)。1 接続の購読は 64 まで。
+- **接続の表(接続の ID → 有限の送り口。`src/progress.rs`)は状態とは別のロック**。購読が持つのは「接続の ID と購読の ID」だけで、イベントループは**状態のロックの外で、待たない送信(`try_send`)**をする。
+  送り口(512 件)があふれた(遅い・止まったクライアントの)接続は、**その接続の購読を全部外して SSE を閉じる**。ブラウザは自動でつなぎ直し、画面は購読し直して `get_running_session` で状態を取り直す(途中経過は捨ててよい。状態・答え待ちは Query で取れる)。
+  接続が終わったとき(タブを閉じたとき)も、表と購読を片づける。
+- 1 タブ 1 本の SSE のまま(#629)。複数タブでの接続の共有は作っていない。「購読の登録・配送」と「接続」を分けてあるので、接続の持ち方だけを後から差し替えられる。
+- ブラウザ(全タブ)を閉じても claude は動き続ける。開き直すと、`list_running_sessions`・`get_running_session` で状態が見える。
+
+### 守り(起動・送信の入口)
+
+- 起動先(リポジトリ・worktree・プロファイル)は、**登録済みプロファイルのリポジトリと、実際の `git worktree list`(台帳)から引けるものだけ**。クライアントのパスは受け取らない(余分な項目は無視される)。
+- claude の引数に、クライアントの文字列をそのまま使わない: 権限モード・起動時のモデルは**列挙**(`RunningPermissionModeDto`・`StartModelDto`。範囲外は 400)、表示名は 100 文字以内・制御文字なし、起動中のモデル切り替えは英数字と `-_.:[]` だけ(`app::begin_switch_running_session`)、ブランチ名は先頭の `-` などを断る。
+- **同じ会話の二重起動は 409(`session_busy`)**。判断と「起動している最中」の印づけを同じ状態のロックの中で行うので、**同時に来た再開のうち通るのは 1 本だけ**。外部(ターミナルなど)で動いている同じ会話も `find_running` で断る。
+- **本文の大きさ**: ふつうの command は 2MB まで(超えると 413)。`send_to_running_session` だけ、画像の上限(5 枚 × 5,000,000 文字の base64)に合わせて **26MB** まで(超えると 413)。Next の中継(`apps/console`)は本文を貯めて転送するだけで、この大きさでも切らない(`--next` で確認)。
+- 長い起動(worktree の最新化)は、サーバは応答を保留するだけで途中で切らない。中継の fetch の待ち時間は既定(5 分)。
+- 起動した子プロセスには、親(Claude Desktop など)由来の起動元の印を引き継がない(`DESKTOP_LINEAGE_ENV_VARS` を除く。Tauri 版と同じ処理)。
+
+### プロセスの寿命(ジョブオブジェクト・`server.lock`・終了)
+
+- **ジョブオブジェクト**: 起動のいちばん最初に、**サーバ自身を `KILL_ON_JOB_CLOSE` のジョブへ入れる**(`infra::job_object`。ブレークアウトは許さない)。
+  サーバが(強制終了・クラッシュを含めて)死ぬと、ジョブのハンドルが閉じられ、OS がジョブの中のプロセスを止める。**対象は、サーバの子孫のうち、このジョブに残るもの**: ふつうの方法で起動された claude とその子プロセス、git、npm など。サーバが死ぬと止まる。
+  入れなかったときは、ログに出して起動を続ける。入れたあと、`IsProcessInJob` で確かめてログに出す(`ジョブへの所属: 確認済み`)。
+  **守れないもの**:
+  - 親子の関係なく起動されたプロセス(タスクスケジューラ・COM・`ShellExecute`・WMI 経由で起動されたもの)。
+  - **Store 版(MSIX パッケージ)のアプリ**。確かめたのは Store 版の `pwsh` で、サーバのジョブの外にある「抜けることを許すジョブ」に入り、Ctrl+C・強制終了のあとも残った。
+    そのアプリから `CREATE_BREAKAWAY_FROM_JOB` で起動された子も同じ。Store 版の Python など、ほかのパッケージのアプリは確かめていない。
+  - claude が切り離して(`detached`)起動した子とその子は、1 つの会話を止めたあとも、**サーバが動いている間は残る**。サーバが終わるとジョブが止める。
+  守り方(サーバ自身をジョブへ入れる)は、この点では変えていない。
+- **穏やかな終了**: Ctrl+C のほか、コンソールを閉じる・ログオフ・シャットダウン(`tokio::signal::windows` の `ctrl_close`・`ctrl_logoff`・`ctrl_shutdown`)でも、SSE を閉じ、claude を並行して止める(標準入力を閉じる → 待つ → 強制終了)。
+  OS が合図から打ち切るまでは約 5 秒なので、止める時間の上限は 4 秒。**間に合わなかった分はジョブオブジェクトが止める**。
+  (Ctrl+C を「無視する」属性は子へ引き継がれる。サーバを起動する側がその属性を付けていると Ctrl+C が効かない。確認では起動の前に解除している。)
+- **起動のとき、前のサーバの残りの claude**: 既存の `find_running` の断り(同じ会話は動いていると 409)に任せる。
+- **`server.lock`**: データフォルダの `server.lock` を、データフォルダを実体のパスに解決した**直後・一時ファイルの掃除・トークン・ポートの書き込みより前**に、共有なし(`share_mode(0)`)で開き、プロセスが終わるまで持つ。
+  2 つ目のサーバは `このデータフォルダはほかのサーバが使っています` で起動を断られ、トークン・ポートを書き換えない。強制終了でも OS がハンドルを閉じるので、ロックが残り続けることはない。
+
+### 確認用の偽の claude
+
+環境変数 `YAOYOROZU_SERVER_FAKE_CLAUDE=<fake_claude.cjs のパス>`(`crates/infra/tests/fake_claude.cjs`)を付けて起動すると、claude の代わりに `node <そのファイル>` を起動する(認証・課金・実際の会話に触れない)。確認専用。起動のログに出る。
+
+```bash
+cargo build -p server
+node server/scripts/e2e-running.mjs          # サーバへ直接
+node server/scripts/e2e-running.mjs --next   # Next の中継(apps/console を next build したあと)を通して
+node server/scripts/e2e-real-claude.mjs --real   # 本物の claude を 1 セッションだけ(使い捨てのリポジトリ。下)
+```
+
+`e2e-running.mjs` は、**使い捨て**のデータフォルダ・ホーム(`USERPROFILE`/`HOME`)・リポジトリ・会話フォルダで、偽の claude を実際に起動し、起動 → 送信 → 途中経過 → 権限 → 中断 → 切り替え → 停止 → 再開 → Ctrl+C → 再起動 → 自動再開 → 二重起動の拒否 → 強制終了(子孫 0 件)までを確かめる。
+共通部分は `e2e-lib.mjs`。止めるのは、スクリプトが起動した PID とその子孫だけ。`cargo test -p server --test running` は、claude を起動しない部分(SSE の接続・あふれ・購読の守り・本文の大きさ)の確認。
+
+`e2e-real-claude.mjs --real` は、**本物の claude を 1 セッションだけ**、使い捨てのデータフォルダ・リポジトリで起動する(起動 → 1 往復 → 停止 → 再開 → Ctrl+C → 子孫 0 件 → サーバの再起動 → 自動再開)。
+本物の claude は `~/.claude` の認証が要るのでホームは差し替えない。作る会話は 1 つだけで、終わりにそのフォルダ(`~/.claude/projects/` の、使い捨てのリポジトリ用のもの)を消す。
+claude の認証が切れていると、モデルの応答が認証エラーで失敗する(サーバの不具合ではない。`claude auth login` で入り直すと通る)。

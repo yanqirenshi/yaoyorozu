@@ -63,7 +63,7 @@ const rpcMod = read("apps", "native", "server", "src", "rpc", "mod.rs");
 const serverCommands = new Set(
   [...rpcMod.matchAll(/"\/rpc\/([a-z_]+)"/g)].map((m) => m[1]).filter((n) => n !== "command"),
 );
-const serverSrc = ["lib.rs", "main.rs", "watcher.rs", join("rpc", "settings.rs"), join("rpc", "viewer.rs"), join("rpc", "claude.rs")]
+const serverSrc = ["lib.rs", "main.rs", "watcher.rs", "running.rs", join("rpc", "settings.rs"), join("rpc", "viewer.rs"), join("rpc", "claude.rs"), join("rpc", "running.rs")]
   .map((f) => {
     try {
       return read("apps", "native", "server", "src", f);
@@ -72,9 +72,15 @@ const serverSrc = ["lib.rs", "main.rs", "watcher.rs", join("rpc", "settings.rs")
     }
   })
   .join("\n");
-const serverEvents = new Set(
-  [...serverSrc.matchAll(/\.emit\(\s*"([^"]+)"/g)].map((m) => m[1]),
-);
+// 定数で渡されるイベント名(`pub const X_EVENT: &str = "..."`)も解決する。SSE にだけ流すもの
+// (`Event::default().event(...)`。途中経過と接続の ID)も拾う。
+const serverConsts = new Map<string, string>();
+for (const m of serverSrc.matchAll(/const (\w+): &str = "([^"]+)"/g)) serverConsts.set(m[1], m[2]);
+const serverEvents = new Set<string>();
+for (const m of serverSrc.matchAll(/\.(?:emit|event)\(\s*(?:"([^"]+)"|(?:\w+::)*([A-Z][A-Z_]+))/g)) {
+  const name = m[1] ?? serverConsts.get(m[2]);
+  if (name) serverEvents.add(name);
+}
 
 // --- フロント ---
 const consoleApi = read("apps", "console", "src", "api", "index.ts");
@@ -89,6 +95,11 @@ function status(name: string, built: Set<string>, notBuilt: Set<string>) {
   if (notBuilt.has(name)) return "作らない";
   return built.has(name) ? "実装済み" : "まだ";
 }
+// Tauri 版との、引数・動きの違い(command 名の突き合わせでは見えないもの)。
+const DIFFERENCES: [string, string][] = [
+  ["update_settings", "`profileId` は必須(省略・null は 400。アクティブへは保存しない。削除済みなら 404)。`expectedRevision` も必須(古ければ 409)"],
+];
+
 const mark = (b: boolean) => (b ? "○" : "―");
 
 let missing = 0;
@@ -107,6 +118,9 @@ const apiNotInServer = [...consoleCommands].filter((c) => !serverCommands.has(c)
 const serverNotInApi = [...serverCommands].filter((c) => !consoleCommands.has(c));
 lines.push(`フロント api にあるがサーバに無い command: ${apiNotInServer.length ? apiNotInServer.join("、") : "なし"}`);
 lines.push(`サーバにあるがフロント api に無い command: ${serverNotInApi.length ? serverNotInApi.join("、") : "なし"}`);
+
+lines.push("", "Tauri 版との違い:");
+for (const [name, text] of DIFFERENCES) lines.push(`- ${name}: ${text}`);
 
 const eventList = [...tauriEvents].sort();
 lines.push("", `### イベント(Tauri ${eventList.length} 種)`, "");

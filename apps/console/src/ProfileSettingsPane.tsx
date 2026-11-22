@@ -340,6 +340,12 @@ function ProfileSettingsPane({
     // 保存中の再送信(Enter の連打・ダブルクリック)は無視する。
     // 状態(`saving`)は再描画までの間は古いままなので、同じ瞬間の 2 回目は ref で止める。
     if (saving || savingRef.current) return;
+    // 保存先は、いま画面に読み込んでいるプロファイル(必ず ID で指す。アクティブへ保存する動きは無い)。
+    const targetProfileId = loadedTargetRef.current;
+    if (!targetProfileId) {
+      setError("設定を読み込めていません。取り直してからやり直してください");
+      return;
+    }
     savingRef.current = true;
     setSaving(true);
     setError(null);
@@ -353,7 +359,7 @@ function ProfileSettingsPane({
         claude_projects_dir: claudeProjectsDir.trim() || null,
         restore_running_sessions: restoreRunningSessions,
       },
-      profileId,
+      targetProfileId,
       loadedRevisionRef.current ?? -1,
     )
       .then((result) => {

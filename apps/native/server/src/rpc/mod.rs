@@ -6,12 +6,14 @@
 //! 突き合わせのスクリプト(`scripts/diff-commands.ts`)がこの 1 行を読む。
 
 pub mod claude;
+pub mod running;
 pub mod settings;
 pub mod viewer;
 
 use crate::error::ApiError;
 use crate::AppContext;
 use axum::body::Bytes;
+use axum::extract::DefaultBodyLimit;
 use axum::routing::post;
 use axum::Router;
 use serde::de::DeserializeOwned;
@@ -42,6 +44,11 @@ where
         })
         .map_err(ApiError::from)
 }
+
+/// 本文の大きさの上限(既定は axum の 2MB)。`send_to_running_session` だけ、画像の上限
+/// (5 枚 × 5,000,000 文字の base64 = 25MB。`domain::image_attachment`)に本文を足した 26MB まで広げる。
+/// 超えると 413。ほかの command は 2MB のまま。
+pub const SEND_BODY_LIMIT: usize = 26 * 1024 * 1024;
 
 /// 未知の command。
 async fn unknown_command() -> ApiError {
@@ -122,5 +129,46 @@ pub fn routes() -> Router<AppContext> {
             post(claude::save_claude_settings_file),
         )
         .route("/rpc/list_claude_dir", post(claude::list_claude_dir))
+        .route(
+            "/rpc/start_running_session",
+            post(running::start_running_session),
+        )
+        .route(
+            "/rpc/list_running_sessions",
+            post(running::list_running_sessions),
+        )
+        .route(
+            "/rpc/get_running_session",
+            post(running::get_running_session),
+        )
+        .route(
+            "/rpc/subscribe_running_session_progress",
+            post(running::subscribe_running_session_progress),
+        )
+        .route(
+            "/rpc/unsubscribe_running_session_progress",
+            post(running::unsubscribe_running_session_progress),
+        )
+        .route(
+            "/rpc/send_to_running_session",
+            post(running::send_to_running_session).layer(DefaultBodyLimit::max(SEND_BODY_LIMIT)),
+        )
+        .route("/rpc/respond_permission", post(running::respond_permission))
+        .route(
+            "/rpc/interrupt_running_session",
+            post(running::interrupt_running_session),
+        )
+        .route(
+            "/rpc/switch_running_session",
+            post(running::switch_running_session),
+        )
+        .route(
+            "/rpc/stop_running_session",
+            post(running::stop_running_session),
+        )
+        .route("/rpc/get_claude_usage", post(running::get_claude_usage))
+        .route("/rpc/archive_session", post(running::archive_session))
+        .route("/rpc/unarchive_session", post(running::unarchive_session))
+        .route("/rpc/rename_session", post(running::rename_session))
         .route("/rpc/{command}", post(unknown_command))
 }

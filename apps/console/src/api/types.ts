@@ -42,7 +42,7 @@ export type PingEvent = {
   n: number;
 };
 
-// 設定の保存(`update_settings`)の入力。対象はアクティブ(または指定)プロファイルの 3 項目 +
+// 設定の保存(`update_settings`)の入力。対象は指定したプロファイル(必須)の 3 項目 +
 // グローバル項目の `claude_projects_dir`。`apps/native/react/src/api/types.ts` と同じ。
 export type SettingsInputDto = {
   repository_path: string | null;
@@ -61,6 +61,8 @@ export type SettingsCorruptedEvent = {
 // `app:warning` イベントのペイロード(処理は続くが、利用者に伝えたいこと)。
 export type AppWarningEvent = {
   message: string;
+  // サーバの控えの id(あれば。閉じるとき `dismissPendingWarning` に渡す)。
+  id?: number;
 };
 
 // 起動直後に出て、画面が取りこぼした警告の控え(`list_pending_warnings`。この構成だけの Query)。

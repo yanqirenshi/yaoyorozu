@@ -23,7 +23,7 @@ use serde::Deserialize;
 use std::path::PathBuf;
 
 /// 有効なセッションのルート(`~/.claude/projects` か、設定の上書き)。
-async fn effective_projects_dir(ctx: &AppContext) -> Result<PathBuf, ApiError> {
+pub(crate) async fn effective_projects_dir(ctx: &AppContext) -> Result<PathBuf, ApiError> {
     let settings = ctx.state.lock().await.settings.clone();
     Ok(resolve_effective_projects_dir(&settings)?)
 }
@@ -107,7 +107,44 @@ async fn notify_skipped_sessions(ctx: &AppContext, project: &str, skipped: &[Str
     if skipped.is_empty() {
         return;
     }
-    let mut names = skipped.to_vec();
+    // 各ファイルの今の状態(更新時刻のミリ秒, サイズ)。閉じられた警告は、ファイルが変わるまで出さない。
+    let root = match effective_projects_dir(ctx).await {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+    let mut sources: Vec<crate::state::SkipSource> = Vec::new();
+    {
+        let state = ctx.state.lock().await;
+        for name in skipped {
+            let fingerprint = std::fs::metadata(root.join(project).join(name))
+                .map(|m| {
+                    let ms = m
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    (ms, m.len())
+                })
+                .unwrap_or((0, 0));
+            if state
+                .dismissed_skips
+                .get(&(project.to_string(), name.clone()))
+                == Some(&fingerprint)
+            {
+                continue;
+            }
+            sources.push(crate::state::SkipSource {
+                project: project.to_string(),
+                file_name: name.clone(),
+                fingerprint,
+            });
+        }
+    }
+    if sources.is_empty() {
+        return;
+    }
+    let mut names: Vec<String> = sources.iter().map(|s| s.file_name.clone()).collect();
     names.sort();
     let shown: Vec<&str> = names.iter().take(5).map(String::as_str).collect();
     let more = names.len().saturating_sub(shown.len());
@@ -125,10 +162,15 @@ async fn notify_skipped_sessions(ctx: &AppContext, project: &str, skipped: &[Str
         .state
         .lock()
         .await
-        .push_warning_once("app:warning", message.clone());
-    if pushed.is_some() {
-        ctx.events
-            .emit("app:warning", &crate::dto::AppWarningEventDto { message });
+        .push_skip_warning(project, message.clone(), sources);
+    if let Some(id) = pushed {
+        ctx.events.emit(
+            "app:warning",
+            &crate::dto::AppWarningEventDto {
+                message,
+                id: Some(id),
+            },
+        );
     }
 }
 

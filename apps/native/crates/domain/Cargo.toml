@@ -12,3 +12,6 @@ serde_json = "1"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 # 添付画像(base64)の検証専用(issue #349)。純粋計算のみでI/Oは持たない。
 base64 = "0.22"
+# 見えない文字・向きを変える文字の判定(Unicode の性質: 一般カテゴリ・Default_Ignorable_Code_Point)。
+# 純粋な表だけでI/Oは持たない。url の依存として、すでにビルドに入っているクレート。
+icu_properties = "2"

@@ -34,6 +34,7 @@ fn ctx(dir: &Path, repo: &Path) -> AppContext {
         save_lane: Arc::new(tokio::sync::Mutex::new(())),
         file_lane: Arc::new(tokio::sync::Mutex::new(())),
         shutdown: rx,
+        running: Default::default(),
     }
 }
 

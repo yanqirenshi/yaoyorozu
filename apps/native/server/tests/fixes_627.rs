@@ -37,6 +37,7 @@ fn fixture() -> Fixture {
         save_lane: Arc::new(tokio::sync::Mutex::new(())),
         file_lane: Arc::new(tokio::sync::Mutex::new(())),
         shutdown: rx,
+        running: Default::default(),
     };
     Fixture { dir, ctx }
 }
@@ -50,6 +51,10 @@ async fn call(
     let mut body = body;
     if command == "update_settings" && body.get("expectedRevision").is_none() {
         body["expectedRevision"] = serde_json::json!(ctx.state.lock().await.settings.revision);
+    }
+    // 保存先のプロファイルが無い呼び出しには、いまのアクティブを補う(省略のテストは `"profileId": null` で明示する)。
+    if command == "update_settings" && body.get("profileId").is_none() {
+        body["profileId"] = serde_json::json!(ctx.state.lock().await.settings.active_profile_id);
     }
     let req = Request::builder()
         .method("POST")
@@ -156,7 +161,8 @@ async fn an_update_based_on_an_old_revision_is_refused_and_does_not_revert_other
 }
 
 #[tokio::test]
-async fn expected_revision_is_required_and_profile_operations_advance_the_revision() {
+async fn expected_revision_and_profile_id_are_required_and_profile_operations_do_not_advance_the_revision(
+) {
     let f = fixture();
     let (status, body) = call(
         &f.ctx,
@@ -167,27 +173,71 @@ async fn expected_revision_is_required_and_profile_operations_advance_the_revisi
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["code"], "invalid_input");
 
-    let r = revision(&f.ctx).await;
+    // 保存先(profileId)の省略・null は 400(「アクティブへ保存する」動きは無い)。
+    let r0 = revision(&f.ctx).await;
+    for profile_id in [serde_json::Value::Null] {
+        let (status, body) = call(
+            &f.ctx,
+            "update_settings",
+            serde_json::json!({"input": input(None, None), "profileId": profile_id, "expectedRevision": r0}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["code"], "invalid_input");
+    }
+    let original = f.ctx.state.lock().await.settings.active_profile_id.clone();
+
+    // プロファイルの操作(作成・改名・切替・削除)は、どれも版を進めない(別タブの保存を 409 にしない)。
     let (_, created) = call(&f.ctx, "create_profile", serde_json::json!({"name": "x"})).await;
-    let r_create = revision(&f.ctx).await;
-    assert!(r_create > r);
     let id = created["id"].as_str().unwrap().to_string();
+    assert_eq!(revision(&f.ctx).await, r0, "作成");
     call(
         &f.ctx,
         "rename_profile",
         serde_json::json!({"profileId": id, "name": "y"}),
     )
     .await;
-    let r_rename = revision(&f.ctx).await;
-    assert!(r_rename > r_create);
+    assert_eq!(revision(&f.ctx).await, r0, "改名");
     call(
         &f.ctx,
         "switch_profile",
         serde_json::json!({"profileId": id}),
     )
     .await;
-    assert!(revision(&f.ctx).await > r_rename);
+    assert_eq!(revision(&f.ctx).await, r0, "切替");
+
+    // 前の版のままの別タブの保存は、切替・作成のあとでも 200 で、もとのプロファイルへ書かれる。
+    let (status, body) = call(
+        &f.ctx,
+        "update_settings",
+        serde_json::json!({
+            "input": input(Some("C:/repo-original"), None),
+            "profileId": original, "expectedRevision": r0
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    {
+        let guard = f.ctx.state.lock().await;
+        let find = |pid: &str| {
+            guard
+                .settings
+                .profiles
+                .iter()
+                .find(|p| p.id == pid)
+                .unwrap()
+                .repository_path
+                .clone()
+        };
+        assert_eq!(
+            find(&original).map(|p| p.display().to_string().replace('\\', "/")),
+            Some("C:/repo-original".to_string())
+        );
+        assert_eq!(find(&id), None, "いまアクティブのほうへは書かれない");
+    }
+
     // プロファイルの操作は ID で対象を指すので、版の指定は要らない(古い版でも通る)。
+    // 編集中のプロファイルが削除されていたら、別のプロファイルへ書かず 404。
     let (status, _) = call(
         &f.ctx,
         "delete_profile",
@@ -195,6 +245,15 @@ async fn expected_revision_is_required_and_profile_operations_advance_the_revisi
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+    let r1 = revision(&f.ctx).await;
+    let (status, body) = call(
+        &f.ctx,
+        "update_settings",
+        serde_json::json!({"input": input(Some("C:/repo-deleted"), None), "profileId": id, "expectedRevision": r1}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["code"], "not_found");
 }
 
 // --- 2. エラーの文面にフルパスを出さない ---
@@ -335,7 +394,10 @@ async fn a_broken_conversation_file_is_skipped_and_the_rest_is_listed_with_one_w
     )
     .unwrap();
     std::fs::write(proj.join("broken.jsonl"), "壊れた内容\n{ 途中").unwrap();
-    std::fs::write(proj.join("binary.jsonl"), [0xff, 0xfe, 0x00]).unwrap();
+    std::fs::write(proj.join("binary.jsonl"), [0xff, 0xfe, 0x00, b'\n']).unwrap();
+    // 作成の途中(空・1 行目が書きかけ)のファイルは、警告に数えない。
+    std::fs::write(proj.join("empty.jsonl"), "").unwrap();
+    std::fs::write(proj.join("partial.jsonl"), r#"{"type":"user","sess"#).unwrap();
     let (status, _) = call(
         &f.ctx,
         "update_settings",
@@ -374,6 +436,7 @@ async fn a_broken_conversation_file_is_skipped_and_the_rest_is_listed_with_one_w
         "{}",
         ev.data
     );
+    assert!(!ev.data.contains("empty.jsonl") && !ev.data.contains("partial.jsonl"));
     assert!(!ev.data.contains(&forward(f.dir.path())));
     let (_, pending) = call(&f.ctx, "list_pending_warnings", serde_json::json!({})).await;
     assert_eq!(pending.as_array().unwrap().len(), 1);
@@ -389,6 +452,37 @@ async fn a_broken_conversation_file_is_skipped_and_the_rest_is_listed_with_one_w
     assert_eq!(status, StatusCode::OK);
     let (_, pending) = call(&f.ctx, "list_pending_warnings", serde_json::json!({})).await;
     assert_eq!(pending.as_array().unwrap().len(), 1);
+
+    // 閉じた警告は、そのファイルが変わるまで出ない。変わったらまた出る。
+    let id = pending[0]["id"].clone();
+    let (status, _) = call(
+        &f.ctx,
+        "dismiss_pending_warning",
+        serde_json::json!({"id": id}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    call(
+        &f.ctx,
+        "list_sessions",
+        serde_json::json!({"project": "proj1"}),
+    )
+    .await;
+    let (_, pending) = call(&f.ctx, "list_pending_warnings", serde_json::json!({})).await;
+    assert_eq!(pending.as_array().unwrap().len(), 0, "閉じた警告が復活した");
+    std::fs::write(proj.join("broken.jsonl"), "また壊れた内容\n{ 途中 2").unwrap();
+    call(
+        &f.ctx,
+        "list_sessions",
+        serde_json::json!({"project": "proj1"}),
+    )
+    .await;
+    let (_, pending) = call(&f.ctx, "list_pending_warnings", serde_json::json!({})).await;
+    assert_eq!(
+        pending.as_array().unwrap().len(),
+        1,
+        "ファイルが変わったので再び出る"
+    );
 }
 
 // --- 6. データフォルダの古い一時ファイルの掃除 ---
@@ -465,7 +559,14 @@ async fn paths_and_names_that_slipped_through_before_are_refused_consistently() 
         assert_eq!(b1["message"], b2["message"], "判定が食い違わない: {bad:?}");
     }
     // 名前(ゼロ幅・向きを変える文字)。
-    for bad in ["\u{200B}", "a\u{200D}b", "\u{202E}gpj.exe", "x\u{2066}"] {
+    for bad in [
+        "\u{200B}",
+        "\u{200D}a",
+        "a\u{200C} b",
+        "\u{202E}gpj.exe",
+        "x\u{2066}",
+        "\u{3164}",
+    ] {
         let (status, body) = call(&f.ctx, "create_profile", serde_json::json!({"name": bad})).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{bad:?}: {body}");
     }
@@ -531,4 +632,25 @@ async fn a_mapped_network_drive_is_refused_before_anything_touches_it() {
         "存在の確認をしないので速い"
     );
     let _: PathBuf = PathBuf::new();
+}
+
+#[tokio::test]
+async fn the_fixed_explanation_for_a_refused_path_is_returned_whole() {
+    let f = fixture();
+    use domain::LocalFolderPathError as E;
+    for (raw, expected) in [
+        (r"\\?\C:\x", E::NetworkOrDevice),
+        (r"C", E::NotDriveAbsolute),
+        (r"\\host\share\x", E::NetworkOrDevice),
+        (r"C:\a\..\b", E::ParentDirectory),
+    ] {
+        let (status, body) = call(
+            &f.ctx,
+            "update_settings",
+            serde_json::json!({"input": input(Some(raw), None)}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["message"], expected.message(), "{raw}");
+    }
 }
