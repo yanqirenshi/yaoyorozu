@@ -182,18 +182,42 @@ async fn expected_revision_is_required_and_profile_operations_advance_the_revisi
     let r_rename = revision(&f.ctx).await;
     // 改名は版を進めない(進めると、設定画面の更新が不要に 409 になる)。
     assert_eq!(r_rename, r_create);
+    // いまアクティブのプロファイルへの切替(何も変わらない)は、版を進めない。
     call(
         &f.ctx,
         "switch_profile",
         serde_json::json!({"profileId": id}),
     )
     .await;
-    assert!(revision(&f.ctx).await > r_rename);
+    assert_eq!(revision(&f.ctx).await, r_rename);
+    let (_, other) = call(&f.ctx, "create_profile", serde_json::json!({"name": "z"})).await;
+    let other = other["id"].as_str().unwrap().to_string();
+    let r_other = revision(&f.ctx).await;
+    assert!(r_other > r_rename, "作成はアクティブが変わるので進む");
+    // アクティブでないプロファイルの削除は、版を進めない。
+    call(
+        &f.ctx,
+        "delete_profile",
+        serde_json::json!({"profileId": id}),
+    )
+    .await;
+    assert_eq!(revision(&f.ctx).await, r_other);
+    // 別のプロファイルへの切替は(保存先の既定が変わるので)進む。
+    let (_, third) = call(&f.ctx, "create_profile", serde_json::json!({"name": "w"})).await;
+    let third = third["id"].as_str().unwrap().to_string();
+    let r_third = revision(&f.ctx).await;
+    call(
+        &f.ctx,
+        "switch_profile",
+        serde_json::json!({"profileId": other}),
+    )
+    .await;
+    assert!(revision(&f.ctx).await > r_third);
     // プロファイルの操作は ID で対象を指すので、版の指定は要らない(古い版でも通る)。
     let (status, _) = call(
         &f.ctx,
         "delete_profile",
-        serde_json::json!({"profileId": id}),
+        serde_json::json!({"profileId": third}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -575,4 +599,25 @@ async fn a_mapped_network_drive_is_refused_before_anything_touches_it() {
         "存在の確認をしないので速い"
     );
     let _: PathBuf = PathBuf::new();
+}
+
+#[tokio::test]
+async fn the_fixed_explanation_for_a_refused_path_is_returned_whole() {
+    let f = fixture();
+    use domain::LocalFolderPathError as E;
+    for (raw, expected) in [
+        (r"\\?\C:\x", E::NetworkOrDevice),
+        (r"C", E::NotDriveAbsolute),
+        (r"\\host\share\x", E::NetworkOrDevice),
+        (r"C:\a\..\b", E::ParentDirectory),
+    ] {
+        let (status, body) = call(
+            &f.ctx,
+            "update_settings",
+            serde_json::json!({"input": input(Some(raw), None)}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["message"], expected.message(), "{raw}");
+    }
 }

@@ -175,17 +175,17 @@ pub async fn update_settings(
 /// 戻り値に使う値を返す。
 async fn change_settings<T>(
     ctx: &AppContext,
-    advances_revision: bool,
     change: impl FnOnce(&domain::Settings) -> Result<(domain::Settings, T), app::AppError>,
 ) -> Result<T, ApiError> {
     let extra = {
         let mut guard = ctx.state.lock().await;
         let (mut updated, extra) = change(&guard.settings)?;
-        // 版は、`update_settings` が読み書きする内容(そのプロファイルの設定の欄、対象にするプロファイル
-        // = アクティブ)が変わるときに進める。名前の変更は、`update_settings` の確かめる内容を変えないので進めない
-        // (自分のタブの名前変更のあとに、設定の保存が 409 にならない)。あふれない足し算にする(`revision` は
-        // 人が手で書けるファイルの値。上限のままでも落ちない)。
-        updated.revision = if advances_revision {
+        // 版は、`update_settings` が確かめる欄が変わるときだけ進める。この流れの操作(切替・作成・削除・
+        // 名前の変更)は、どのプロファイルの欄(リポジトリ・GitHub・フォルダ)にも触れない。変わりうるのは、
+        // `profileId` を省いたときの保存先(アクティブなプロファイル)だけなので、アクティブが変わったときに限って
+        // 進める(自分のタブの名前変更や、アクティブでないプロファイルの削除のあとに、別タブの保存が 409 にならない)。
+        // あふれない足し算にする(`revision` は人が手で書けるファイルの値。上限のままでも落ちない)。
+        updated.revision = if updated.active_profile_id != guard.settings.active_profile_id {
             guard.settings.revision.saturating_add(1)
         } else {
             guard.settings.revision
@@ -209,8 +209,8 @@ pub async fn switch_profile(
     body: Bytes,
 ) -> Result<Json<()>, ApiError> {
     let args: ProfileIdRequired = parse_args(&body)?;
-    // アクティブなプロファイルが変わる(`update_settings` の既定の対象が変わる)ので、版を進める。
-    change_settings(&ctx, true, |s| {
+    // アクティブが変わるときだけ版が進む(`change_settings`)。
+    change_settings(&ctx, |s| {
         Ok((app::switch_profile(s, &args.profile_id)?, ()))
     })
     .await?;
@@ -227,8 +227,8 @@ pub async fn create_profile(
     body: Bytes,
 ) -> Result<Json<ProfileSummaryDto>, ApiError> {
     let args: CreateProfileArgs = parse_args(&body)?;
-    // 作ったプロファイルがアクティブになるので、版を進める。
-    let created = change_settings(&ctx, true, |s| {
+    // 作ったプロファイルがアクティブになるので、版が進む(`change_settings`)。
+    let created = change_settings(&ctx, |s| {
         let (updated, created) = app::create_profile_checked(s, args.name)?;
         Ok((updated, created))
     })
@@ -244,7 +244,7 @@ pub async fn delete_profile(
     body: Bytes,
 ) -> Result<Json<()>, ApiError> {
     let args: ProfileIdRequired = parse_args(&body)?;
-    change_settings(&ctx, true, |s| {
+    change_settings(&ctx, |s| {
         Ok((app::delete_profile(s, &args.profile_id)?, ()))
     })
     .await?;
@@ -263,8 +263,8 @@ pub async fn rename_profile(
     body: Bytes,
 ) -> Result<Json<()>, ApiError> {
     let args: RenameProfileArgs = parse_args(&body)?;
-    // 名前だけの変更。版は進めない。
-    change_settings(&ctx, false, |s| {
+    // 名前だけの変更。アクティブは変わらないので、版は進まない。
+    change_settings(&ctx, |s| {
         Ok((app::rename_profile(s, &args.profile_id, &args.name)?, ()))
     })
     .await?;

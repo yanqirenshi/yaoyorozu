@@ -42,6 +42,20 @@ pub enum LocalFolderPathError {
 }
 
 impl LocalFolderPathError {
+    /// すべての理由(エラーの文面を決まった説明として扱うための一覧)。
+    pub const ALL: [Self; 10] = [
+        Self::Empty,
+        Self::TooLong,
+        Self::ControlCharacter,
+        Self::NetworkOrDevice,
+        Self::NotDriveAbsolute,
+        Self::ExtraColon,
+        Self::InvalidCharacter,
+        Self::ParentDirectory,
+        Self::DotsOnlyComponent,
+        Self::ReservedDeviceName,
+    ];
+
     /// 画面にそのまま出せるメッセージ。
     pub fn message(self) -> &'static str {
         match self {

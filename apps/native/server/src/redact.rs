@@ -23,9 +23,17 @@ pub fn redact_paths(message: &str) -> String {
 pub fn redact_paths_with_home(message: &str, home: Option<&str>) -> String {
     let home = home.and_then(parse_home);
     let chars: Vec<char> = message.chars().collect();
+    let fixed = fixed_sentences();
     let mut out = String::with_capacity(message.len());
     let mut i = 0;
     while i < chars.len() {
+        // サーバが決めた説明の文(パスの検査が断った理由)は、中の例(`\\ホスト\…`・`C:\Users\you\…` など)を
+        // パスとみなして縮めない。実際のパスの値(説明の外)だけを縮める。
+        if let Some(sentence) = fixed.iter().find(|f| chars[i..].starts_with(f)) {
+            out.extend(sentence.iter());
+            i += sentence.len();
+            continue;
+        }
         match path_start(&chars, i) {
             Some((drive, body_start)) => {
                 let (segments, end) = read_path(&chars, body_start);
@@ -39,6 +47,16 @@ pub fn redact_paths_with_home(message: &str, home: Option<&str>) -> String {
         }
     }
     out
+}
+
+/// 縮めない決まった説明の文(長い順。長い文が短い文の一部を含まないように)。
+fn fixed_sentences() -> Vec<Vec<char>> {
+    let mut all: Vec<Vec<char>> = domain::LocalFolderPathError::ALL
+        .iter()
+        .map(|e| e.message().chars().collect())
+        .collect();
+    all.sort_by_key(|f| std::cmp::Reverse(f.len()));
+    all
 }
 
 /// ホームのフォルダ(ドライブ + セグメント)。
@@ -287,6 +305,25 @@ mod tests {
         assert_eq!(
             redact_paths_with_home(r"C:\Users\x\.claude\a.md が無い", None),
             "…\\.claude\\a.md が無い"
+        );
+    }
+
+    #[test]
+    fn the_fixed_explanations_are_kept_whole_and_only_the_path_values_are_shortened() {
+        for e in domain::LocalFolderPathError::ALL {
+            assert_eq!(redact_paths_with_home(e.message(), HOME), e.message());
+        }
+        // 説明の文の前後に実際のパスがあれば、そちらだけが縮む。
+        let text = format!(
+            "D:\\a\\b\\c.json を保存できません: {}",
+            domain::LocalFolderPathError::NetworkOrDevice.message()
+        );
+        assert_eq!(
+            redact_paths_with_home(&text, HOME),
+            format!(
+                "…\\b\\c.json を保存できません: {}",
+                domain::LocalFolderPathError::NetworkOrDevice.message()
+            )
         );
     }
 
