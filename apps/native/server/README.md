@@ -29,6 +29,7 @@ cargo run -p server --manifest-path apps/native/Cargo.toml --target-dir <別の 
   実在する一番深い親を解決してから残りを足す)。名前が `com.yaoyorozu.native` のフォルダ、または本物の
   `%APPDATA%\com.yaoyorozu.native` を同じ方法で解決したもの自身かその下なら断る。`:` を含む名前(代替データストリーム)など
   フォルダにできない指定も、何も書く前に断る(断った場合に `.tmp` を含む残骸は残らない)。
+- 一時ファイルは**新規作成に限る**(`data_files.rs`。リンクが残っていてもリンク先を書き換えない)。
 - データフォルダの中身: `settings.json`(起動時に読む。無ければ既定値。**壊れているときは `settings.json.corrupt.<時刻>` へ退避して既定値で起動し、古い版のときは新しい版へ書き直す**。どちらも既存の infra(`FileSettingsStore`)の動きで、サーバ自身は書き込まない)、`server-token`(起動のたびに作り直す)、
   `server-port`(実際のポート)。Next の中継が `server-token`・`server-port` を読む。
 
@@ -38,6 +39,10 @@ cargo run -p server --manifest-path apps/native/Cargo.toml --target-dir <別の 
 |---|---|---|
 | `GET /health` | 不要 | `{ok, version}` |
 | `POST /rpc/list_projects` | 必要 | 本文 `{}` → `ProjectDto[]` |
+| `POST /rpc/<command>` | 必要 | 実装している command の一覧は `npm run diff-commands`(Tauri 版との突き合わせの表)で出す。本文 = 今の command の引数(camelCase)、応答 = 今の DTO |
+| `POST /rpc/list_pending_warnings` | 必要 | **この構成だけの Query**。起動直後に出て、画面が取りこぼした警告(設定ファイルの破損)の控え。`settings:corrupted` はイベントでなくこちらで取る(画面は開いたときと `onReconnected` で取る) |
+| `POST /rpc/dismiss_pending_warning` | 必要 | 警告を閉じる(控えから消す)。本文 `{id}` |
+| `POST /rpc/check_folder` | 必要 | **この構成だけの Query**。Tauri 版のフォルダ選択ダイアログの代わり。本文 `{path}`(絶対パスだけ。`..`・`:` を含む形は 400)→ `{path, exists, is_dir, is_git_repository}`。読み書きはしない |
 | `POST /rpc/get_settings` | 必要 | 本文 `{profileId?: string \| null}`(キーは今のフロントと同じ camelCase)→ `SettingsDto` |
 | `GET /events` | 必要 | SSE。イベント名 = `event:`、ペイロード = `data:` の JSON。段階 1 は 2 秒おきの `ping`(`{n}`) |
 

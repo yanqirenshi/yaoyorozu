@@ -134,3 +134,60 @@ impl From<app::AppError> for AppErrorDto {
         }
     }
 }
+/// `update_settings` の引数。対象はアクティブプロファイル(3項目)+グローバル
+/// 項目(`claude_projects_dir`)(issue #72)。スキーマ `version` はフロントが
+/// 関知しない(常に現行バージョンとして保存する)ため含めない。プロファイル自体
+/// (新規作成・削除・名前変更・切り替え)は別コマンドで扱うため、
+/// `domain::Settings` への直接変換(`From`)は用意しない(呼び出し側の
+/// `update_settings` コマンドが現在のアクティブプロファイルを書き換える)。
+#[derive(Deserialize, Clone)]
+pub struct SettingsInputDto {
+    pub repository_path: Option<String>,
+    pub github_project: Option<GithubProjectDto>,
+    pub selected_project_folders: Vec<String>,
+    /// `null` は「既定に戻す」を意味する。
+    pub claude_projects_dir: Option<String>,
+    /// app の起動時に、前回動かしていた実行中セッションを再開するか(issue #459)。
+    /// 省略(`null`)は「変えない」。設定画面の UI は続きのイシューで足す。
+    #[serde(default)]
+    pub restore_running_sessions: Option<bool>,
+}
+
+/// `settings:corrupted` イベントのペイロード。
+#[derive(Serialize, Clone)]
+pub struct SettingsCorruptedEventDto {
+    pub message: String,
+}
+
+/// `app:warning` イベントのペイロード(native.md §3.2)。
+#[derive(Serialize, Clone)]
+pub struct AppWarningEventDto {
+    pub message: String,
+}
+
+/// 起動直後に出て取りこぼした警告の控え(`list_pending_warnings`。Tauri 版には無い、
+/// サーバ独自の Query)。`kind` はイベント名と同じ(`settings:corrupted` | `app:warning`)。
+#[derive(Serialize, Clone)]
+pub struct PendingWarningDto {
+    pub id: u64,
+    pub kind: String,
+    pub message: String,
+}
+
+/// `check_folder` の戻り値(Tauri 版のフォルダ選択ダイアログの代わり。サーバ独自の Query)。
+#[derive(Serialize, Clone)]
+pub struct FolderCheckDto {
+    /// 確認したパス(解決後の表示用)。
+    pub path: String,
+    pub exists: bool,
+    pub is_dir: bool,
+    /// 直下に `.git`(フォルダまたはファイル)があるか。
+    pub is_git_repository: bool,
+}
+
+/// 会話ファイルの変更の通知(`session:changed`)。変更があったことだけを知らせ、データ本体は Query で取り直す。
+#[derive(Serialize, Clone)]
+pub struct SessionChangedEventDto {
+    pub project: String,
+    pub agent: AgentKindDto,
+}

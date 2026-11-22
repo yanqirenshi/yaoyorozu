@@ -16,6 +16,7 @@
     "native:build": "npm run tokens && npm run tauri:build --workspace=native",
     "console:dev": "npm run tokens && npm run dev --workspace=console",
     "server:dev": "cargo run -p server --manifest-path apps/native/Cargo.toml --target-dir apps/native/target/server",
+    "diff-commands": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/diff-commands.ts",
     "web:check-diagram": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON apps/web/scripts/check-diagram.ts"
   }
 }

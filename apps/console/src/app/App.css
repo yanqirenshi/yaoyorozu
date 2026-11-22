@@ -3224,3 +3224,17 @@ button.claude-explorer-name {
   font-size: var(--text-dns-14n-150-size);
   color: var(--text-secondary);
 }
+
+/* フォルダ選択ダイアログの代わりの、パスの手入力欄(Tauri 版には無い。この構成だけ)。 */
+.settings-folder-picker-text {
+  flex-wrap: wrap;
+}
+
+.settings-folder-path-input {
+  flex: 1;
+  min-width: 240px;
+}
+
+.settings-folder-check {
+  font-size: 0.85rem;
+}
