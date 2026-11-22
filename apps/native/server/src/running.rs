@@ -3,9 +3,9 @@
 //! 自動再開・終了時の停止)。command(`/rpc`)の受け口は `rpc/running.rs`。
 //!
 //! Tauri 版との違い:
-//! - 画面への配送は Channel ではなく、**同じ `/events` の SSE**(`progress.rs`)。購読は「接続の ID と
+//! - 画面への配送は Channel ではなく、**`/ws` の WebSocket**(`progress.rs`)。購読は「接続の ID と
 //!   購読の ID」だけを持ち、配る側は状態のロックの外で、待たない送信をする。
-//! - イベント(`emit`)は `EventBus`(SSE)へ。
+//! - イベント(`emit`)は `EventBus`(WebSocket)へ。
 //! - 控え・アーカイブ・台帳の保存は、データフォルダの JSON を `write_atomic` で書き、**保存のレーン**を通す。
 //! - claude の起動は、環境変数で偽物(`fake_claude.cjs`)へ差し替えられる(確認用。README 参照)。
 
@@ -37,7 +37,7 @@ pub const RUNNING_SESSION_CHANGED_EVENT: &str = "running-session:changed";
 pub const APP_WARNING_EVENT: &str = "app:warning";
 /// Claude.ai の利用状況が更新されたことの通知。
 pub const CLAUDE_USAGE_CHANGED_EVENT: &str = "claude-usage:updated";
-/// 途中経過(SSE の接続ごと。購読の ID つき)。
+/// 途中経過(WebSocket の接続ごと。購読の ID つき)。
 pub const RUNNING_SESSION_PROGRESS_EVENT: &str = "running-session:progress";
 
 /// 利用状況の定期取得の間隔(5 分おき)。
@@ -53,8 +53,12 @@ pub const FAKE_CLAUDE_ENV_VAR: &str = "YAOYOROZU_SERVER_FAKE_CLAUDE";
 /// 実行中セッションまわりの、サーバ全体で共有するもの。
 #[derive(Clone, Default)]
 pub struct RunningServices {
-    /// SSE の接続の表。
+    /// WebSocket(`/ws`)の接続の表。
     pub connections: Connections,
+    /// `/ws` につなぐための使い捨ての券(メモリにだけ持つ)。
+    pub tickets: crate::ws::Tickets,
+    /// `/ws` が通す Origin(Next の画面のもの。空なら、誰も通さない)。
+    pub allowed_origins: Arc<Vec<String>>,
     /// `running-sessions.json`・`archived-sessions.json`・`git-ledger.json` の保存のレーン
     /// (ロックの順は「レーン → 状態」の一方向)。
     pub store_lane: Arc<tokio::sync::Mutex<()>>,

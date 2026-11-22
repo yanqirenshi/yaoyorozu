@@ -612,7 +612,7 @@ pub struct GithubAuthFailedEventDto {
 
 /// `code` の一覧はフロントの分岐先(native.md §3.4)。メッセージ文字列では
 /// なく必ずこの `code` で分岐すること。
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 pub struct AppErrorDto {
     pub code: String,
     pub message: String,

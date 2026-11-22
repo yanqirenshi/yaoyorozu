@@ -40,6 +40,7 @@ pub fn status_for_code(code: &str) -> StatusCode {
 }
 
 /// ハンドラの失敗。本文は `AppErrorDto`。
+#[derive(Debug)]
 pub struct ApiError(pub AppErrorDto);
 
 impl ApiError {

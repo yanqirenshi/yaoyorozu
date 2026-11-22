@@ -1,7 +1,7 @@
 //! イベントの配信(Tauri の `AppHandle.emit` に当たるもの)。
 //!
-//! 差し替えやすいよう小さな型にまとめる。配信先は `GET /events`(SSE)。
-//! イベント名は SSE の `event:`、ペイロードは `data:` の JSON。
+//! 差し替えやすいよう小さな型にまとめる。配信先は `/ws`(WebSocket。`ws.rs`)。
+//! イベント名とペイロード(JSON)は、そのまま WebSocket のメッセージ(`{type:"event", name, data}`)になる。
 
 use serde::Serialize;
 use tokio::sync::broadcast;

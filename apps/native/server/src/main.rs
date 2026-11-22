@@ -73,7 +73,7 @@ async fn run() -> Result<(), String> {
     let mut state = ServerState::new(loaded.settings, save_path, loaded.recovered_from_corruption);
     if loaded.recovered_from_corruption {
         // issue #538: 本当に内容が壊れていた場合と、読めなかっただけの場合を文言で区別する。
-        // 起動直後は誰も SSE を購読していないので、控えに積んで `list_pending_warnings` で取ってもらう。
+        // 起動直後は誰も WebSocket でつないでいないので、控えに積んで `list_pending_warnings` で取ってもらう。
         let message = if loaded.evacuated {
             "設定ファイルが破損していたため、初期状態に戻しました。設定を再度行ってください。"
         } else {
@@ -93,7 +93,7 @@ async fn run() -> Result<(), String> {
     state.git_ledger_path = git_ledger_path;
     // 閉じた警告の印(サーバを起動し直しても、閉じた警告を出し直さない)。
     state.dismissed_skips = server::dismissed::load(&data_dir);
-    // 台帳が壊れていて退避したときは、ログと保留中の警告に出す(起動直後は誰も SSE を購読していないので、控えへ積む)。
+    // 台帳が壊れていて退避したときは、ログと保留中の警告に出す(起動直後は誰も WebSocket でつないでいないので、控えへ積む)。
     for name in ledger_watch.evacuated() {
         let message = ledger_watch.message(&name);
         eprintln!("{message}");
@@ -122,6 +122,12 @@ async fn run() -> Result<(), String> {
         shutdown: shutdown_rx,
         running: RunningServices {
             claude_override,
+            // `/ws` が通す Origin は、Next の画面のポート(YAOYOROZU_CONSOLE_PORT)から作る。未設定なら、`/ws` は誰も通さない。
+            allowed_origins: Arc::new(server::ws::origins_from_env_value(
+                std::env::var(server::ws::CONSOLE_PORT_ENV_VAR)
+                    .ok()
+                    .as_deref(),
+            )),
             ..Default::default()
         },
     };

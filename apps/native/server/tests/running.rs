@@ -1,5 +1,6 @@
 //! 実行中セッションまわり(段階 3)の、claude を起動しないで確かめられるもの:
-//! 途中経過の SSE(接続の ID・あふれたら閉じる・閉じたら購読を片づける)、購読の守り、本文の大きさの上限。
+//! 途中経過の接続(あふれたら閉じる・閉じたら購読を片づける)、購読の守り、本文の大きさの上限。
+//! WebSocket の入口そのもの(券・Origin・Host など)は `ws.rs`。
 //! claude を実際に(偽物で)起動する確認は `server/scripts/e2e-running.mjs`。
 
 use axum::body::Body;
@@ -121,28 +122,21 @@ async fn call_raw(
     )
 }
 
-async fn open_events(ctx: &AppContext) -> (Body, String) {
-    let req = Request::builder()
-        .uri("/events")
-        .header("host", format!("127.0.0.1:{PORT}"))
-        .header("authorization", format!("Bearer {TOKEN}"))
-        .body(Body::empty())
-        .unwrap();
-    let res = router(ctx.clone()).oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
-    let mut body = res.into_body();
-    let frame = body.frame().await.unwrap().unwrap();
-    let text = String::from_utf8_lossy(frame.data_ref().unwrap()).to_string();
-    assert!(text.contains("event: connection"), "{text}");
-    let id = text
-        .split("\"connection_id\":\"")
-        .nth(1)
-        .unwrap()
-        .split('"')
-        .next()
-        .unwrap()
-        .to_string();
-    (body, id)
+/// 接続を 1 本開く(WebSocket の券の確かめのあとと同じ。接続の ID は、サーバの中だけで使う)。
+fn open_connection(ctx: &AppContext) -> (server::progress::OpenedConnection, String) {
+    let opened = ctx.running.connections.open();
+    let id = opened.id.clone();
+    (opened, id)
+}
+
+/// 購読する(WebSocket の `subscribe` メッセージと同じ処理)。
+async fn subscribe(
+    ctx: &AppContext,
+    conn_id: &str,
+    target: &serde_json::Value,
+) -> Result<u64, server::error::ApiError> {
+    let target: server::dto::RunningSessionRefDto = serde_json::from_value(target.clone()).unwrap();
+    server::rpc::running::subscribe_progress(ctx, conn_id, target.into()).await
 }
 
 fn message(n: u64) -> ProgressMessage {
@@ -159,27 +153,22 @@ async fn subscribers(ctx: &AppContext) -> Vec<Subscription> {
 }
 
 #[tokio::test]
-async fn the_first_event_is_the_connection_id_and_each_connection_is_distinct() {
+async fn each_connection_gets_its_own_random_id() {
     let (ctx, _) = ctx_with_one_session();
-    let (_a, id_a) = open_events(&ctx).await;
-    let (_b, id_b) = open_events(&ctx).await;
+    let (_a, id_a) = open_connection(&ctx);
+    let (_b, id_b) = open_connection(&ctx);
     assert_ne!(id_a, id_b);
+    assert_eq!(id_a.len(), 36, "UUID の形: {id_a}");
     assert!(ctx.running.connections.is_open(&id_a) && ctx.running.connections.is_open(&id_b));
 }
 
 #[tokio::test]
 async fn a_connection_that_overflows_is_closed_and_its_subscriptions_are_dropped() {
     let (ctx, target) = ctx_with_one_session();
-    let (mut slow, slow_id) = open_events(&ctx).await;
-    let (_fine, fine_id) = open_events(&ctx).await;
-    for conn in [slow_id.clone(), fine_id.clone()] {
-        let (status, _) = call(
-            &ctx,
-            "subscribe_running_session_progress",
-            serde_json::json!({"target": target, "connectionId": conn}),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
+    let (mut slow, slow_id) = open_connection(&ctx);
+    let (_fine, fine_id) = open_connection(&ctx);
+    for conn in [&slow_id, &fine_id] {
+        subscribe(&ctx, conn, &target).await.unwrap();
     }
     assert_eq!(subscribers(&ctx).await.len(), 2);
 
@@ -197,6 +186,7 @@ async fn a_connection_that_overflows_is_closed_and_its_subscriptions_are_dropped
         ctx.running.connections.is_open(&fine_id),
         "ほかの接続は残る"
     );
+    assert!(*slow.kicked.borrow(), "閉じる合図が出る");
 
     // 配る側がまとめて外す(イベントループが行う処理と同じ)。
     ctx.state
@@ -207,102 +197,55 @@ async fn a_connection_that_overflows_is_closed_and_its_subscriptions_are_dropped
     assert_eq!(left.len(), 1);
     assert_eq!(left[0].conn_id, fine_id);
 
-    // あふれた SSE は、たまっていた分を渡し終えたら閉じる(つなぎ直しは、ブラウザが自動で行う)。
-    let ended = tokio::time::timeout(Duration::from_secs(5), async {
-        while slow.frame().await.is_some() {}
-    })
-    .await;
-    assert!(ended.is_ok(), "あふれた接続の SSE が閉じない");
-}
-
-#[tokio::test]
-async fn closing_a_stream_removes_its_connection_and_subscriptions() {
-    let (ctx, target) = ctx_with_one_session();
-    let (body, id) = open_events(&ctx).await;
-    let (status, _) = call(
-        &ctx,
-        "subscribe_running_session_progress",
-        serde_json::json!({"target": target, "connectionId": id}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(subscribers(&ctx).await.len(), 1);
-
-    drop(body); // タブを閉じた(接続が切れた)
-    let cleaned = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if !ctx.running.connections.is_open(&id) && subscribers(&ctx).await.is_empty() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await;
-    assert!(cleaned.is_ok(), "閉じた接続の表と購読が片づかない");
+    // あふれた接続の受け取り口は、たまっていた分を捨てて終わる(画面は、つなぎ直して購読し直す)。
+    let ended = tokio::time::timeout(Duration::from_secs(5), slow.receiver.recv()).await;
+    assert!(
+        matches!(ended, Ok(None)),
+        "あふれた接続の受け取り口が終わらない"
+    );
 }
 
 #[tokio::test]
 async fn subscribing_needs_an_open_connection_and_unsubscribing_is_per_connection() {
     let (ctx, target) = ctx_with_one_session();
-    let (status, body) = call(
-        &ctx,
-        "subscribe_running_session_progress",
-        serde_json::json!({"target": target, "connectionId": "00000000-0000-4000-8000-000000000000"}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let err = subscribe(&ctx, "00000000-0000-4000-8000-000000000000", &target)
+        .await
+        .expect_err("無い接続への購読は断る");
+    assert_eq!(err.0.code, "not_found");
 
-    let (_a, id_a) = open_events(&ctx).await;
-    let (_b, id_b) = open_events(&ctx).await;
-    let (_, sub_a) = call(
-        &ctx,
-        "subscribe_running_session_progress",
-        serde_json::json!({"target": target, "connectionId": id_a}),
-    )
-    .await;
+    let (_a, id_a) = open_connection(&ctx);
+    let (_b, id_b) = open_connection(&ctx);
+    let sub_a = subscribe(&ctx, &id_a, &target).await.unwrap();
     // 別の接続(b)からは、a の購読を外せない。
-    let (status, _) = call(
-        &ctx,
-        "unsubscribe_running_session_progress",
-        serde_json::json!({"subscriptionId": sub_a, "connectionId": id_b}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
+    server::rpc::running::unsubscribe_progress(&ctx, &id_b, sub_a).await;
     assert_eq!(subscribers(&ctx).await.len(), 1);
-    call(
-        &ctx,
-        "unsubscribe_running_session_progress",
-        serde_json::json!({"subscriptionId": sub_a, "connectionId": id_a}),
-    )
-    .await;
+    server::rpc::running::unsubscribe_progress(&ctx, &id_a, sub_a).await;
     assert!(subscribers(&ctx).await.is_empty());
 
-    // 無い会話への購読は、接続があっても 404(購読を残さない)。
-    let (status, _) = call(
+    // 無い会話への購読は、接続があっても not_found(購読を残さない)。
+    let err = subscribe(
         &ctx,
-        "subscribe_running_session_progress",
-        serde_json::json!({"target": {"pid_domain": "x", "pid": 1, "started_at": 1}, "connectionId": id_a}),
+        &id_a,
+        &serde_json::json!({"pid_domain": "x", "pid": 1, "started_at": 1}),
     )
-    .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    .await
+    .expect_err("無い会話への購読は断る");
+    assert_eq!(err.0.code, "not_found");
     assert!(subscribers(&ctx).await.is_empty());
 }
 
 #[tokio::test]
 async fn one_connection_cannot_hold_an_unbounded_number_of_subscriptions() {
     let (ctx, target) = ctx_with_one_session();
-    let (_a, id) = open_events(&ctx).await;
-    let mut last = StatusCode::OK;
+    let (_a, id) = open_connection(&ctx);
+    let mut last = None;
     for _ in 0..(server::progress::MAX_SUBSCRIPTIONS_PER_CONNECTION + 1) {
-        let (status, _) = call(
-            &ctx,
-            "subscribe_running_session_progress",
-            serde_json::json!({"target": target, "connectionId": id}),
-        )
-        .await;
-        last = status;
+        last = Some(subscribe(&ctx, &id, &target).await);
     }
-    assert_eq!(last, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        last.unwrap().expect_err("上限を超えたら断る").0.code,
+        "invalid_input"
+    );
     assert_eq!(
         subscribers(&ctx).await.len(),
         server::progress::MAX_SUBSCRIPTIONS_PER_CONNECTION
@@ -405,41 +348,20 @@ async fn check_image_attachment_accepts_a_body_for_the_largest_image_but_not_muc
 #[tokio::test]
 async fn connection_ids_are_random_so_an_old_id_never_hits_another_servers_connection() {
     // サーバを起動し直すと、接続の ID は振り直される。乱数(UUID)なので、古いサーバの ID は、新しいサーバの
-    // どの接続とも一致しない(古い ID での購読は 404、購読解除は何も起きない)。
-    let (old_server, target) = ctx_with_one_session();
-    let (_old_conn, old_id) = open_events(&old_server).await;
-    assert_eq!(old_id.len(), 36, "UUID の形: {old_id}");
+    // どの接続とも一致しない(古い ID での購読は not_found、購読解除は何も起きない)。
+    let (old_server, _) = ctx_with_one_session();
+    let (_old_conn, old_id) = open_connection(&old_server);
 
-    let (new_server, target) = {
-        let (ctx, t) = ctx_with_one_session();
-        let _ = &target;
-        (ctx, t)
-    };
-    let (_b, new_id) = open_events(&new_server).await;
+    let (new_server, target) = ctx_with_one_session();
+    let (_b, new_id) = open_connection(&new_server);
     assert_ne!(old_id, new_id);
-    // 新しいサーバで、B の購読。
-    let (_, sub_b) = call(
-        &new_server,
-        "subscribe_running_session_progress",
-        serde_json::json!({"target": target, "connectionId": new_id}),
-    )
-    .await;
+    let sub_b = subscribe(&new_server, &new_id, &target).await.unwrap();
     assert_eq!(subscribers(&new_server).await.len(), 1);
-    // 古い ID での購読は 404。購読 ID が同じでも、古い ID での購読解除は B の購読を外さない。
-    let (status, _) = call(
-        &new_server,
-        "subscribe_running_session_progress",
-        serde_json::json!({"target": target, "connectionId": old_id}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    let (status, _) = call(
-        &new_server,
-        "unsubscribe_running_session_progress",
-        serde_json::json!({"subscriptionId": sub_b, "connectionId": old_id}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
+    let err = subscribe(&new_server, &old_id, &target)
+        .await
+        .expect_err("古い ID での購読は断る");
+    assert_eq!(err.0.code, "not_found");
+    server::rpc::running::unsubscribe_progress(&new_server, &old_id, sub_b).await;
     assert_eq!(subscribers(&new_server).await.len(), 1, "B の購読は残る");
 }
 
@@ -459,16 +381,13 @@ async fn running_session_snapshot_carries_the_last_progress_sequence_number() {
 #[tokio::test]
 async fn subscribing_to_an_exited_session_is_not_found() {
     let (ctx, target) = ctx_with_one_session();
-    let (_a, id) = open_events(&ctx).await;
+    let (_a, id) = open_connection(&ctx);
     ctx.state.lock().await.running_sessions[0]
         .session
         .process_state = domain::ProcessState::Exited;
-    let (status, body) = call(
-        &ctx,
-        "subscribe_running_session_progress",
-        serde_json::json!({"target": target, "connectionId": id}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let err = subscribe(&ctx, &id, &target)
+        .await
+        .expect_err("終了したセッションへの購読は断る");
+    assert_eq!(err.0.code, "not_found");
     assert!(subscribers(&ctx).await.is_empty(), "購読を残さない");
 }

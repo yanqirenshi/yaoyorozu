@@ -151,14 +151,7 @@ pub fn routes() -> Router<AppContext> {
             "/rpc/get_running_session",
             post(running::get_running_session),
         )
-        .route(
-            "/rpc/subscribe_running_session_progress",
-            post(running::subscribe_running_session_progress),
-        )
-        .route(
-            "/rpc/unsubscribe_running_session_progress",
-            post(running::unsubscribe_running_session_progress),
-        )
+        .route("/rpc/issue_ws_ticket", post(running::issue_ws_ticket))
         .route(
             "/rpc/send_to_running_session",
             post(running::send_to_running_session).layer(DefaultBodyLimit::max(SEND_BODY_LIMIT)),

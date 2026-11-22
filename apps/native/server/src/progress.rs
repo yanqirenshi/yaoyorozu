@@ -1,15 +1,15 @@
-//! 途中経過(実行中セッションの出力)を、SSE(`/events`)の接続ごとに届ける仕組み。
+//! 途中経過(実行中セッションの出力)を、WebSocket(`/ws`)の接続ごとに届ける仕組み。
 //!
 //! - **接続の表**(接続の ID → 有限の送り口)は、**状態とは別のロック**で持つ。状態のロックの中で
 //!   送り先を触らない(購読が持つのは「接続の ID と購読の ID」だけ。`state::Subscription`)。
 //! - 配る側(会話ごとのイベントループ)は、状態のロックの**外**で、**待たない送信**(`try_send`)をする。
-//!   送り口がいっぱい(遅い・止まったクライアント)なら、その接続の購読を全部外して SSE を閉じる。
-//!   ブラウザは自動でつなぎ直し、画面は購読し直して `get_running_session` で状態を取り直す
+//!   送り口がいっぱい(遅い・止まったクライアント)なら、その接続の購読を全部外して WebSocket を閉じる。
+//!   画面は(自前で)つなぎ直し、購読し直して `get_running_session` で状態を取り直す
 //!   (途中経過は捨ててよい。状態は Query で取れる)。
 //! - 通知(`running-session:changed` など。取りこぼしてよい)は、これまでどおりの放送(`EventBus`)。
-//!   途中経過(順序が大事)は、接続ごとの待ち行列(`mpsc`)。`/events` はこの 2 つを 1 本の SSE に束ねる。
+//!   途中経過(順序が大事)は、接続ごとの待ち行列(`mpsc`)。`/ws` はこの 2 つを 1 本の WebSocket に束ねる。
 //!
-//! 接続の共有(複数タブで 1 本の SSE を使う)は、ここでは作らない(#629)。1 タブ 1 本のまま、
+//! 接続の共有(複数タブで 1 本の接続を使う)は、ここでは作らない(#629)。1 タブ 1 本のまま、
 //! 「購読の登録・配送」と「接続」を分けてあるので、後から接続の持ち方だけを差し替えられる。
 
 use std::collections::{HashMap, VecDeque};
@@ -64,7 +64,7 @@ impl Queue {
 
 struct Entry {
     queue: Arc<Queue>,
-    /// 接続を閉じる合図(SSE が `take_until` で待つ)。
+    /// 接続を閉じる合図(WebSocket の処理が待つ)。
     kick: watch::Sender<bool>,
     /// 件数の上限(テストで小さくできる)。
     max_len: usize,
@@ -77,7 +77,7 @@ struct Inner {
     table: Mutex<HashMap<String, Entry>>,
 }
 
-/// 開いている SSE の接続の表。
+/// 開いている WebSocket の接続の表。
 #[derive(Clone, Default)]
 pub struct Connections {
     inner: Arc<Inner>,
@@ -93,7 +93,7 @@ pub struct OpenedConnection {
     pub kicked: watch::Receiver<bool>,
 }
 
-/// 途中経過の受け取り口(SSE が 1 件ずつ取り出す)。
+/// 途中経過の受け取り口(WebSocket の処理が 1 件ずつ取り出す)。
 pub struct ProgressReceiver {
     queue: Arc<Queue>,
 }
@@ -133,7 +133,7 @@ impl Drop for ProgressReceiver {
 pub enum Delivery {
     Sent,
     /// 送り先が無い・いっぱい(件数か大きさ)・閉じている。接続は表から外し、たまっていた分をその場で捨て、
-    /// SSE を閉じる合図を出した。
+    /// WebSocket を閉じる合図を出した。
     Dropped,
 }
 
@@ -142,7 +142,7 @@ impl Connections {
         self.inner.table.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// 接続を開く(`/events` が 1 本つながるたびに 1 回)。
+    /// 接続を開く(`/ws` が券の確かめを通るたびに 1 回)。
     pub fn open(&self) -> OpenedConnection {
         self.open_with_limits(PROGRESS_QUEUE_LEN, PROGRESS_QUEUE_BYTES)
     }
