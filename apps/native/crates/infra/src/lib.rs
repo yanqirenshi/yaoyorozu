@@ -27,6 +27,7 @@ mod rules_store;
 mod running_session_source;
 mod session_source;
 mod settings_store;
+pub mod short_path;
 mod skills_store;
 mod web_dev_server;
 mod yyz_scaffold_writer;
@@ -62,6 +63,7 @@ pub use rules_store::FileRulesStore;
 pub use running_session_source::FileRunningSessionSource;
 pub use session_source::{FileSystemRepository, SessionFileRef, SessionFsChange, SessionWatcher};
 pub use settings_store::FileSettingsStore;
+pub use short_path::short_path_name;
 pub use skills_store::FileSkillsStore;
 pub use web_dev_server::{
     HttpWebAppProbe, NpmWebDevServerLauncher, PackageJsonWebAppRepositoryProbe,
