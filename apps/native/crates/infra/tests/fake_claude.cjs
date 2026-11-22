@@ -165,9 +165,21 @@ rl.on("line", (line) => {
       parent.stdout.on("data", (d) => (grandchild += String(d)));
       parent.on("exit", () => {
         delta(`orphans: ${detached.pid},${grandchild.trim()}`);
-        // EXIT つきなら、claude 自身が(異常終了で)自分で終わる。
-        if (text.includes("EXIT")) setTimeout(() => process.exit(3), 300);
-        else result(false);
+        // HANG つきなら、標準入力を閉じても終了しない(強制終了の確認用)。
+        if (text.includes("HANG")) hang = true;
+        // EXIT つきなら、claude 自身が(異常終了で)自分で終わる。合図(SIGNAL_FILE)があれば、それができるまで待ってから終わる
+        // (確認する側が、子孫が生きているのを確かめ終えたあとに、合図を出せる)。
+        if (text.includes("EXIT")) {
+          const signal = process.env.FAKE_CLAUDE_EXIT_SIGNAL_FILE;
+          const finish = () => process.exit(3);
+          if (signal) {
+            const t = setInterval(() => { if (fs.existsSync(signal)) { clearInterval(t); finish(); } }, 100);
+          } else {
+            setTimeout(finish, 300);
+          }
+        } else {
+          result(false);
+        }
       });
     } else if (text.includes("HANG")) {
       hang = true;

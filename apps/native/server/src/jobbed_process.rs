@@ -1,8 +1,9 @@
 //! claude の子プロセスに、**その会話用のジョブ**を結び付ける包み(`app::RunningProcess`)。
 //!
-//! 停止(`stop`)のとき、claude を穏やかに止めたあと、ジョブごと止める。切り離して起動された子・親が先に終わった
+//! 停止(`stop`)のとき、claude を穏やかに止めたあと(応答が無ければ claude 自身だけを強制終了し)、ジョブごと止める。
+//! ジョブへ入れられたときは、強制終了で `taskkill /T`(記録された親の PID で子孫をたどる)を使わない。切り離して起動された子・親が先に終わった
 //! 孫が、サーバが動いている間に残らない。ジョブに入れられない環境(入れ子にできない・権限が無い)では、包まずに
-//! 今の動き(claude 自身だけを止める)のまま続ける(ログに出す)。ほかの操作は、そのまま中身へ渡す。
+//! 代わりの道(従来どおり、強制終了のときに `taskkill /T` でプロセスツリーごと止める)のまま続ける(ログに出す)。ほかの操作は、そのまま中身へ渡す。
 
 use app::{AppError, RunningPermissionMode, RunningProcess};
 use domain::{ImageAttachment, PermissionResponse};
@@ -18,10 +19,14 @@ impl JobbedProcess {
     /// 起動した `process` を、その会話用のジョブへ入れて包む。入れられなければ、そのまま返す(ログに出す)。
     pub fn wrap(process: Arc<dyn RunningProcess>) -> Arc<dyn RunningProcess> {
         match ConversationJob::assign(process.pid()) {
-            Ok(job) => Arc::new(Self {
-                inner: process,
-                job,
-            }),
+            Ok(job) => {
+                // 子孫の後始末は、このジョブが持つ。強制終了は、claude 自身だけを止める(`taskkill /T` でたどらない)。
+                process.leave_descendants_to_job();
+                Arc::new(Self {
+                    inner: process,
+                    job,
+                })
+            }
             Err(e) => {
                 eprintln!("会話用のジョブを使えないため、停止は claude 自身だけを止めます: {e}");
                 process

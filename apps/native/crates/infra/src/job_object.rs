@@ -8,14 +8,15 @@
 
 use std::sync::OnceLock;
 use windows::core::BOOL;
-use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, STILL_ACTIVE};
 use windows::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JobObjectExtendedLimitInformation,
     SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 use windows::Win32::System::Threading::{
-    GetCurrentProcess, OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+    GetCurrentProcess, GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_SET_QUOTA, PROCESS_TERMINATE,
 };
 
 /// ジョブのハンドル。プロセスの終わりまで閉じない(閉じると子孫が止まる)。
@@ -124,6 +125,23 @@ impl Drop for ConversationJob {
         // SAFETY: `self.0` は有効なハンドル(二重に閉じない)。閉じると、中のプロセスも止まる。
         unsafe {
             let _ = CloseHandle(self.0);
+        }
+    }
+}
+
+/// `pid` のプロセスが存在するか(確認用)。
+pub fn process_exists(pid: u32) -> bool {
+    // SAFETY: 引数は有効な値。開けたハンドルは閉じる。
+    unsafe {
+        match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
+            Ok(handle) => {
+                let mut code = 0u32;
+                let alive =
+                    GetExitCodeProcess(handle, &mut code).is_ok() && code == STILL_ACTIVE.0 as u32;
+                let _ = CloseHandle(handle);
+                alive
+            }
+            Err(_) => false,
         }
     }
 }
