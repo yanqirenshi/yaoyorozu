@@ -11,7 +11,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import {
-  alive, check, dirs, openSse, projects, refOf, results, root, rpc, sendCtrlC, sleep, slash, startedPids, startServer,
+  alive, cleanupStarted, recordIdentity, check, dirs, openSse, projects, refOf, results, root, rpc, sendCtrlC, sleep, slash, startedPids, startServer,
   waitHealthy, waitState,
 } from "./e2e-lib.mjs";
 
@@ -30,6 +30,8 @@ async function makeOrphans(srv, tab, target, label) {
   void sub;
   if (!m) throw new Error("孫の PID が届きません");
   const pids = [Number(m[1]), Number(m[2])];
+  // 見つけた直後に、PID と開始時刻の組を控える(あとの生死の判定・後片付けが、PID の再利用に惑わされない)。
+  pids.forEach((p) => recordIdentity(p));
   spawned.push(...pids);
   return pids;
 }
@@ -96,6 +98,7 @@ async function main() {
   const t2 = refOf(r2.json);
   await waitState(srv2, t2, "idle");
   const early = Number(fs.readFileSync(earlyFile, "utf8"));
+  recordIdentity(early);
   spawned.push(early);
   check("起動の直後に作られた子が、生きている", alive(early), `PID ${early}`);
   await rpc(srv2, "stop_running_session", { target: t2 });
@@ -115,13 +118,8 @@ try {
   process.exitCode = 1;
 } finally {
   // 残ったものも、作らせた PID を指して止める(名前一致の一括終了はしない)。
-  for (const pid of [...spawned, ...startedPids]) {
-    if (alive(pid)) {
-      try {
-        execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "pipe" });
-      } catch {}
-    }
-  }
+  // 後片付け: PID と開始時刻の組が控えと一致する、自分が起動したものだけを止める(`proc-safety.mjs`)。
+  cleanupStarted(spawned);
   const failed = results.filter((x) => !x.ok).length;
   console.log(`\n${results.length - failed}/${results.length} 件が通りました`);
   try {
