@@ -3,7 +3,7 @@
  *
  *   node scripts/generate-tokens.ts
  *
- * 出力先は apps/web と apps/native の2か所。生成物はコミットする。
+ * 出力先は apps/web・apps/native・apps/console の3か所。生成物はコミットする。
  * apps/native は npm workspace として apps/web に依存しないため、
  * パッケージを新設せずファイルを配る方式を採っている(規約 web.md §7)。
  *
@@ -40,6 +40,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUTPUTS = [
   join(ROOT, "apps", "web", "src", "app", "tokens.css"),
   join(ROOT, "apps", "native", "react", "src", "tokens.css"),
+  join(ROOT, "apps", "console", "src", "app", "tokens.css"),
 ];
 
 /** 役割トークン名(color.primary)を CSS 変数名(--color-primary)にする。 */

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/domain", "crates/app", "crates/infra", "tauri"]
+members = ["crates/domain", "crates/app", "crates/infra", "tauri", "server"]
 
 # 開発ビルドのデバッグ情報を減らし、コンパイル・リンクを速くする(issue #561。
 # #559 の実測: tauri層1行変更が19.7秒→15.1秒(-23%)、target も半分に)。
