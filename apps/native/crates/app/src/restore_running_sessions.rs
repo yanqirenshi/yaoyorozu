@@ -40,17 +40,6 @@ pub fn remember_running_session(
         model: model.map(|m| m.as_cli_value().to_string()),
         name: session.base.name.clone(),
         worktree_id: session.worktree_id.clone(),
-        // 台帳の worktree(予約 ID 以外)のときだけ、フォルダも覚える。ID が振り直されても、場所で引き直せる。
-        worktree_path: (session.worktree_id != MAIN_WORKTREE_ID
-            && session.worktree_id != OUTSIDE_WORKTREE_ID)
-            .then(|| {
-                session
-                    .base
-                    .cwd
-                    .as_ref()
-                    .map(|p| p.to_string_lossy().to_string())
-            })
-            .flatten(),
     });
     store.save(&saved)
 }
@@ -120,8 +109,6 @@ pub struct PlannedRestore {
     /// 起動する worktree。`None` は「指定しない」(会話ファイルに記録された cwd で開く。
     /// リポジトリ外で動かしていた会話)。
     pub worktree: Option<WorktreeSpec>,
-    /// 覚えていた worktree のフォルダ(台帳の worktree のときだけ)。ID で引けないときに、場所で引き直す。
-    pub worktree_path: Option<String>,
 }
 
 /// 覚えていた1件を再開の指定へ変換する。会話ファイルのフォルダが分からないもの(新規に始めて
@@ -154,7 +141,6 @@ pub fn plan_restore(entry: &RestorableRunningSession) -> Result<PlannedRestore, 
         model: entry.model.as_deref().and_then(StartModel::from_cli_value),
         name: entry.name.clone(),
         worktree,
-        worktree_path: entry.worktree_path.clone(),
     })
 }
 
@@ -234,7 +220,6 @@ mod tests {
             model: Some("haiku".to_string()),
             name: Some("実装:APP".to_string()),
             worktree_id: MAIN_WORKTREE_ID.to_string(),
-            worktree_path: None,
         }
     }
 
@@ -252,35 +237,6 @@ mod tests {
         .unwrap();
 
         assert_eq!(store.sessions(), vec![entry("s1")]);
-    }
-
-    #[test]
-    fn remember_stores_the_worktree_folder_only_for_a_ledger_worktree() {
-        let store = FakeStore::new();
-        // 台帳の worktree(予約 ID ではない): フォルダも覚える。
-        let mut in_worktree = session("s1", None);
-        in_worktree.worktree_id = "wt-42".to_string();
-        in_worktree.base.cwd = Some(std::path::PathBuf::from(
-            "/repo/.claude/worktrees/feature-x",
-        ));
-        remember_running_session(&store, &in_worktree, "default", Some("proj-a"), None).unwrap();
-        // リポジトリ本体: 覚えない。
-        let mut main = session("s2", None);
-        main.base.cwd = Some(std::path::PathBuf::from("/repo"));
-        remember_running_session(&store, &main, "default", Some("proj-a"), None).unwrap();
-
-        let saved = store.sessions();
-        assert_eq!(
-            saved[0].worktree_path.as_deref(),
-            Some("/repo/.claude/worktrees/feature-x")
-        );
-        assert_eq!(saved[1].worktree_path, None);
-        // 再開の指定へ、そのまま引き継がれる(ID で引けないときの引き直しに使う)。
-        let planned = plan_restore(&saved[0]).unwrap();
-        assert_eq!(
-            planned.worktree_path.as_deref(),
-            Some("/repo/.claude/worktrees/feature-x")
-        );
     }
 
     #[test]
@@ -468,7 +424,6 @@ mod tests {
                 model: Some(StartModel::Haiku),
                 name: Some("実装:APP".to_string()),
                 worktree: Some(WorktreeSpec::Main),
-                worktree_path: None,
             }
         );
     }

@@ -268,35 +268,6 @@ fn fingerprint_of(file: &fs::File, path: &Path) -> Result<FileFingerprint, AppEr
     })
 }
 
-/// 作っている最中とみなす間(最後の更新からの時間)。これを過ぎても改行の無いファイルは、作っている最中ではなく、
-/// 壊れたファイルとして数える(警告に出る)。
-const CREATING_GRACE: std::time::Duration = std::time::Duration::from_secs(60);
-
-/// claude が作っている最中のファイルか(空、または 1 MB 以下で改行がまだ 1 つも無い。かつ、最後の更新から
-/// [`CREATING_GRACE`] 以内)。
-fn is_being_created(path: &Path) -> bool {
-    use std::io::Read;
-    const LIMIT: u64 = 1024 * 1024;
-    let Ok(file) = fs::File::open(path) else {
-        return false;
-    };
-    // 更新から時間がたっている(または更新時刻が読めない)ファイルは、作っている最中ではない。
-    let recent = file
-        .metadata()
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.elapsed().ok())
-        .is_some_and(|age| age < CREATING_GRACE);
-    if !recent {
-        return false;
-    }
-    let mut buf = Vec::new();
-    if file.take(LIMIT + 1).read_to_end(&mut buf).is_err() {
-        return false;
-    }
-    buf.is_empty() || (buf.len() as u64 <= LIMIT && !buf.contains(&b'\n'))
-}
-
 fn to_millis(time: std::io::Result<std::time::SystemTime>) -> u64 {
     time.ok()
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
@@ -581,48 +552,6 @@ impl SessionSource for FileSystemRepository {
                 })
             })
             .collect()
-    }
-
-    fn list_sessions_lenient(
-        &self,
-        project: &str,
-    ) -> Result<(Vec<SessionSummary>, Vec<String>), AppError> {
-        let project_dir = self.projects_dir.join(project);
-        let mut sessions = Vec::new();
-        let mut skipped = Vec::new();
-        for path in session_files_by_recency(&project_dir) {
-            let modified_at_ms = to_millis(fs::metadata(&path).and_then(|m| m.modified()));
-            match cached_or_scanned_summary(&path, modified_at_ms) {
-                Ok(scanned) => sessions.push(SessionSummary {
-                    id: scanned.id,
-                    title: scanned.title,
-                    custom_title: scanned
-                        .custom_title
-                        .map(|t| t.trim().to_string())
-                        .filter(|t| !t.is_empty()),
-                    modified_at_ms,
-                    cwd: scanned.cwd,
-                    git_branch: scanned.git_branch,
-                }),
-                Err(_) if is_being_created(&path) => {
-                    // claude が作っている最中(空、または 1 行目がまだ書き終わっていない)のファイルは、
-                    // 壊れたものとして警告せず、静かに飛ばす(次の一覧で読める)。
-                }
-                Err(e) => {
-                    // 詳しい理由(パスを含む)はログへ。画面にはファイル名だけを知らせる。
-                    eprintln!(
-                        "会話ファイルを読めないため一覧から飛ばしました: {} ({e:?})",
-                        path.display()
-                    );
-                    skipped.push(
-                        path.file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_default(),
-                    );
-                }
-            }
-        }
-        Ok((sessions, skipped))
     }
 
     fn list_parsed_sessions(&self, project: &str) -> Result<Vec<ParsedSession>, AppError> {
@@ -1388,81 +1317,6 @@ mod tests {
 
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].cwd.as_deref(), Some(WORKTREE_CWD));
-    }
-
-    #[test]
-    fn list_sessions_lenient_ignores_files_being_created_silently() {
-        let dir = tempfile::tempdir().unwrap();
-        let project_dir = dir.path().join("proj");
-        fs::create_dir_all(&project_dir).unwrap();
-        fs::write(project_dir.join("empty.jsonl"), "").unwrap();
-        // 1 行目が書き終わっていない(改行が無い)ファイル。
-        fs::write(project_dir.join("partial.jsonl"), r#"{"type":"user","sess"#).unwrap();
-        let repo = FileSystemRepository::new(dir.path().to_path_buf());
-        let (sessions, skipped) = repo.list_sessions_lenient("proj").unwrap();
-        assert!(sessions.is_empty());
-        assert!(skipped.is_empty(), "{skipped:?}");
-    }
-
-    #[test]
-    fn a_file_without_a_newline_is_counted_once_it_has_not_been_updated_for_a_while() {
-        let dir = tempfile::tempdir().unwrap();
-        let project_dir = dir.path().join("proj");
-        fs::create_dir_all(&project_dir).unwrap();
-        let stale_time = std::time::SystemTime::now() - std::time::Duration::from_secs(5 * 60);
-        for (name, content) in [
-            ("empty.jsonl", ""),
-            ("partial.jsonl", "これは JSON ではない"),
-        ] {
-            let path = project_dir.join(name);
-            fs::write(&path, content).unwrap();
-            fs::OpenOptions::new()
-                .write(true)
-                .open(&path)
-                .unwrap()
-                .set_modified(stale_time)
-                .unwrap();
-        }
-        // 更新したばかり(作っている最中)のファイルは、これまでどおり数えない。
-        fs::write(project_dir.join("fresh.jsonl"), r#"{"type":"user","sess"#).unwrap();
-        let repo = FileSystemRepository::new(dir.path().to_path_buf());
-        let (_, skipped) = repo.list_sessions_lenient("proj").unwrap();
-        let mut skipped = skipped;
-        skipped.sort();
-        assert_eq!(skipped, vec!["empty.jsonl", "partial.jsonl"]);
-    }
-
-    #[test]
-    fn list_sessions_lenient_skips_broken_files_and_returns_the_rest() {
-        let dir = tempfile::tempdir().unwrap();
-        let project_dir = dir.path().join("proj");
-        fs::create_dir_all(&project_dir).unwrap();
-        fs::write(
-            project_dir.join("good.jsonl"),
-            r#"{"type":"user","sessionId":"good","cwd":"/repo","message":{"content":"hello"}}"#,
-        )
-        .unwrap();
-        // セッション ID が取れない(中身が壊れている)ファイル。
-        fs::write(
-            project_dir.join("broken.jsonl"),
-            "これは JSON ではない\n{ 壊れ",
-        )
-        .unwrap();
-        fs::write(
-            project_dir.join("binary.jsonl"),
-            [0xff, 0xfe, 0x00, 0x80, b'\n'],
-        )
-        .unwrap();
-
-        let repo = FileSystemRepository::new(dir.path().to_path_buf());
-        // 従来の一覧は、壊れたファイルが 1 つあると全体が失敗する。
-        assert!(repo.list_sessions("proj").is_err());
-        // 壊れたファイルを飛ばして、残りを返す。飛ばしたのはファイル名だけ(パスではない)。
-        let (sessions, mut skipped) = repo.list_sessions_lenient("proj").unwrap();
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].id, "good");
-        skipped.sort();
-        assert_eq!(skipped, vec!["binary.jsonl", "broken.jsonl"]);
     }
 
     #[test]

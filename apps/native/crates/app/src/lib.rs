@@ -1,14 +1,13 @@
 use domain::{
-    extract_message_images, is_valid_claude_dir_path, is_valid_json, is_valid_json_object,
-    is_valid_project_dir_name, is_valid_rule_file_name, is_valid_session_id, is_valid_skill_name,
-    mark_failed_questions, order_messages_newest_first, paginate_messages, reconcile_branches,
-    reconcile_worktrees, repositories_from_profiles, sort_claude_dir_entries,
-    sort_projects_by_recency, sort_sessions_newest_first, validate_image_attachment,
-    validate_image_count, Camera, ClaudeDirEntry, ClaudeDirPage, ClaudeMdFile, ClaudeSettingsFile,
-    Conversation, GitLedger, GitRepositoryLedger, HubLayout, HubTuning, LogLine, Message,
-    MessageImage, NodeMove, NodePosition, ParsedSession, Project, RuleSummary, SessionSummary,
-    Settings, SkillSummary, CURRENT_GIT_LEDGER_VERSION, CURRENT_HUB_LAYOUT_VERSION,
-    CURRENT_HUB_TUNING_VERSION,
+    extract_message_images, is_valid_claude_dir_path, is_valid_json, is_valid_project_dir_name,
+    is_valid_rule_file_name, is_valid_session_id, is_valid_skill_name, mark_failed_questions,
+    order_messages_newest_first, paginate_messages, reconcile_branches, reconcile_worktrees,
+    repositories_from_profiles, sort_claude_dir_entries, sort_projects_by_recency,
+    sort_sessions_newest_first, validate_image_attachment, validate_image_count, Camera,
+    ClaudeDirEntry, ClaudeDirPage, ClaudeMdFile, ClaudeSettingsFile, Conversation, GitLedger,
+    GitRepositoryLedger, HubLayout, HubTuning, LogLine, Message, MessageImage, NodeMove,
+    NodePosition, ParsedSession, Project, RuleSummary, SessionSummary, Settings, SkillSummary,
+    CURRENT_GIT_LEDGER_VERSION, CURRENT_HUB_LAYOUT_VERSION, CURRENT_HUB_TUNING_VERSION,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -199,15 +198,6 @@ pub trait SessionSource {
     /// 指定プロジェクトの全セッションを一覧表示用に要約して返す(ビューア
     /// 左ペイン用。issue #33)。
     fn list_sessions(&self, project: &str) -> Result<Vec<SessionSummary>, AppError>;
-
-    /// `list_sessions` と同じ一覧を、**読めない・壊れた会話ファイルを飛ばして**返す。戻り値の 2 つ目は、
-    /// 飛ばした会話ファイルの名前(パスではない)。既定は `list_sessions` と同じ(飛ばさない)。
-    fn list_sessions_lenient(
-        &self,
-        project: &str,
-    ) -> Result<(Vec<SessionSummary>, Vec<String>), AppError> {
-        Ok((self.list_sessions(project)?, Vec::new()))
-    }
 
     /// 指定プロジェクトの全セッションを `ParsedSession`(`User::load_sessions`
     /// への入力。session_id/custom_title/ai_title/mode/slug/last_prompt、
@@ -747,28 +737,6 @@ pub fn list_sessions(
     let mut sessions = source.list_sessions(project)?;
     sort_sessions_newest_first(&mut sessions);
     Ok(sessions)
-}
-
-/// 一覧から飛ばした(読めなかった・壊れた)会話ファイルの名前と、残りの一覧。
-pub struct ListedSessions {
-    pub sessions: Vec<SessionSummary>,
-    /// 飛ばした会話ファイルの名前(パスではない)。
-    pub skipped_files: Vec<String>,
-}
-
-/// `list_sessions` の、壊れた会話ファイルに強い版。読めない・壊れたファイルが 1 つあっても、
-/// それを飛ばして残りを返す(以前は 1 つで一覧全体が失敗した)。飛ばしたファイル名は
-/// `skipped_files` で返す(画面に知らせるため)。サーバが使う。
-pub fn list_sessions_lenient(
-    source: &dyn SessionSource,
-    project: &str,
-) -> Result<ListedSessions, AppError> {
-    let (mut sessions, skipped_files) = source.list_sessions_lenient(project)?;
-    sort_sessions_newest_first(&mut sessions);
-    Ok(ListedSessions {
-        sessions,
-        skipped_files,
-    })
 }
 
 /// 画像を1枚添付しようとしたときの事前検証(ビューアの添付時。issue #349)。
@@ -1402,33 +1370,6 @@ pub fn create_profile(settings: &Settings, name: Option<String>) -> (Settings, d
     (updated, profile)
 }
 
-/// 名前を検証して空のプロファイルを作成し、アクティブにする(サーバ版の `create_profile`)。
-/// `name` が省略・空白だけなら既定名にする。**指定があるのに不正**(100 文字超・制御文字)なら
-/// `InvalidInput`。検証の規則は `domain::ProfileName`(`rename_profile` と同じ)。
-pub fn create_profile_checked(
-    settings: &Settings,
-    name: Option<String>,
-) -> Result<(Settings, domain::Profile), AppError> {
-    let checked = match name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
-        Some(raw) => Some(
-            domain::ProfileName::parse(raw)
-                .map_err(|e| AppError::InvalidInput(e.message().to_string()))?
-                .into_string(),
-        ),
-        None => None,
-    };
-    Ok(create_profile(settings, checked))
-}
-
-/// 設定に保存するパス・画面で確認するパスを検証する(同じ規則を 1 か所に置く。`domain::LocalFolderPath`)。
-/// このマシンのドライブ上の絶対パスだけを受け付け、UNC・デバイスの形・`..`・`:`・制御文字を断る
-/// (存在の確認の前に、形だけで断る)。空は `InvalidInput`(未設定を許すかは呼び出し側が決める)。
-pub fn validate_folder_path(raw: &str) -> Result<PathBuf, AppError> {
-    domain::LocalFolderPath::parse(raw)
-        .map(domain::LocalFolderPath::into_path_buf)
-        .map_err(|e| AppError::InvalidInput(e.message().to_string()))
-}
-
 /// プロファイルを削除する。最後の1件は削除できない(`InvalidInput`)。
 /// 存在しない `profile_id` は `NotFound`。アクティブプロファイルを削除した
 /// 場合は残りの先頭をアクティブにする(issue #72)。
@@ -1470,10 +1411,12 @@ pub fn rename_profile(
     profile_id: &str,
     name: &str,
 ) -> Result<Settings, AppError> {
-    let trimmed = domain::ProfileName::parse(name)
-        .map_err(|e| AppError::InvalidInput(e.message().to_string()))?
-        .into_string();
-    let trimmed = trimmed.as_str();
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::InvalidInput(
+            "プロファイル名を入力してください".to_string(),
+        ));
+    }
     if !settings.profiles.iter().any(|p| p.id == profile_id) {
         return Err(AppError::NotFound(
             "指定されたプロファイルが見つかりません".to_string(),
@@ -1576,24 +1519,6 @@ pub fn read_claude_settings(
     store.read()
 }
 
-/// 設定ファイル(`settings.json`・`settings.local.json`)として保存してよい内容かを確かめる。
-/// JSON として正しく、かつ**最上位がオブジェクト**であること(Claude Code はオブジェクトとして読む。
-/// 配列・数値・文字列・`null` だけの JSON は書かせない)。どちらも `InvalidInput`。
-fn validate_settings_json(content: &str) -> Result<(), AppError> {
-    if !is_valid_json(content) {
-        return Err(AppError::InvalidInput(
-            "JSONの形式が正しくありません".to_string(),
-        ));
-    }
-    if !is_valid_json_object(content) {
-        return Err(AppError::InvalidInput(
-            "設定ファイルは { } のオブジェクトで書いてください(配列・数値・文字列・null だけの JSON は保存できません)"
-                .to_string(),
-        ));
-    }
-    Ok(())
-}
-
 /// `~/.claude/settings.json` を保存する。壊れたJSONは書き込まず
 /// `InvalidInput` を返す(Claude Code本体が起動不能になる事故の防止。
 /// 整形はしない)。`expected_modified_at_ms` が実際の状態と一致しない場合は
@@ -1604,7 +1529,11 @@ pub fn save_claude_settings(
     content: &str,
     expected_modified_at_ms: Option<u64>,
 ) -> Result<(), AppError> {
-    validate_settings_json(content)?;
+    if !is_valid_json(content) {
+        return Err(AppError::InvalidInput(
+            "JSONの形式が正しくありません".to_string(),
+        ));
+    }
     let current_modified_at_ms = store.read()?.map(|f| f.modified_at_ms);
     if current_modified_at_ms != expected_modified_at_ms {
         return Err(AppError::FileConflict(
@@ -1634,7 +1563,11 @@ pub fn save_project_settings_file(
     content: &str,
     expected_modified_at_ms: Option<u64>,
 ) -> Result<(), AppError> {
-    validate_settings_json(content)?;
+    if !is_valid_json(content) {
+        return Err(AppError::InvalidInput(
+            "JSONの形式が正しくありません".to_string(),
+        ));
+    }
     let current_modified_at_ms = store.read(repo_dir, which)?.map(|f| f.modified_at_ms);
     if current_modified_at_ms != expected_modified_at_ms {
         return Err(AppError::FileConflict(
@@ -2700,70 +2633,6 @@ mod tests {
         let loaded = load_settings(&store).expect("should load settings");
         assert_eq!(loaded.settings, settings);
         assert!(!loaded.recovered_from_corruption);
-    }
-
-    #[test]
-    fn create_profile_checked_trims_and_uses_the_default_name_for_blank_input() {
-        let settings = Settings::default();
-        let (_, created) = create_profile_checked(&settings, Some("  work  ".to_string())).unwrap();
-        assert_eq!(created.name, "work");
-        for blank in [None, Some(String::new()), Some("   ".to_string())] {
-            let (_, created) = create_profile_checked(&settings, blank).unwrap();
-            assert_eq!(created.name, "新しいプロファイル");
-        }
-    }
-
-    #[test]
-    fn create_and_rename_profile_reject_invalid_names_with_the_same_rule() {
-        let settings = Settings::default();
-        let id = settings.profiles[0].id.clone();
-        let too_long = "a".repeat(101);
-        for bad in [too_long.as_str(), "a\nb", "a\0b", "a\tb"] {
-            assert!(
-                matches!(
-                    create_profile_checked(&settings, Some(bad.to_string())),
-                    Err(AppError::InvalidInput(_))
-                ),
-                "create should reject {bad:?}"
-            );
-            assert!(
-                matches!(
-                    rename_profile(&settings, &id, bad),
-                    Err(AppError::InvalidInput(_))
-                ),
-                "rename should reject {bad:?}"
-            );
-        }
-        assert!(matches!(
-            rename_profile(&settings, &id, "   "),
-            Err(AppError::InvalidInput(_))
-        ));
-        let renamed = rename_profile(&settings, &id, "  ok  ").unwrap();
-        assert_eq!(renamed.profiles[0].name, "ok");
-    }
-
-    #[test]
-    fn validate_folder_path_accepts_only_local_drive_absolute_paths() {
-        assert_eq!(
-            validate_folder_path(r"  C:\repo\a ").unwrap(),
-            PathBuf::from(r"C:\repo\a")
-        );
-        for bad in [
-            "",
-            "repo",
-            r"\\host\share\x",
-            r"\\?\C:\x",
-            r"\\.\PhysicalDrive0",
-            r"C:\a\..\b",
-            r"C:\a::$DATA",
-            "C:\\a\nb",
-            "C:x",
-        ] {
-            assert!(
-                matches!(validate_folder_path(bad), Err(AppError::InvalidInput(_))),
-                "should reject {bad:?}"
-            );
-        }
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use app::{AppError, LayoutStore};
 use std::fs;
-use std::path::Path;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// レイアウトの書き込みを1件ずつに直列化するロック。
@@ -46,7 +47,21 @@ impl LayoutStore for FileLayoutStore {
             })?;
         }
 
-        crate::write_atomic(path, json.as_bytes())?;
+        let tmp_path = PathBuf::from(format!("{}.tmp", path.display()));
+        let mut file = fs::File::create(&tmp_path).map_err(|e| {
+            AppError::Io(format!("{} の作成に失敗しました: {e}", tmp_path.display()))
+        })?;
+        file.write_all(json.as_bytes()).map_err(|e| {
+            AppError::Io(format!(
+                "{} への書き込みに失敗しました: {e}",
+                tmp_path.display()
+            ))
+        })?;
+        file.sync_all().map_err(|e| {
+            AppError::Io(format!("{} の同期に失敗しました: {e}", tmp_path.display()))
+        })?;
+        fs::rename(&tmp_path, path)
+            .map_err(|e| AppError::Io(format!("{} への置換に失敗しました: {e}", path.display())))?;
 
         Ok(())
     }

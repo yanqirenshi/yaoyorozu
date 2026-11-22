@@ -6,9 +6,6 @@
 //   ASK   → AskUserQuestion(選択肢の質問。2問・うち1問は複数選択)の問い合わせを出す
 //   PLAN  → ExitPlanMode(計画の承認)の問い合わせを出す
 //   SLOW  → 100ms ごとに text_delta を出し続け、interrupt で止まる
-//   (環境変数 FAKE_CLAUDE_EARLY_CHILD_FILE があれば、起動した直後に切り離した子を作り、その PID をそのファイルへ書く。
-//    会話用のジョブへ入れられる前に子が作られた場合の確認用)
-//   ORPHAN → 切り離した子(長く生きる)と、親が先に終わった孫(長く生きる)を作り、その PID を text_delta で返す
 //   HANG  → 標準入力を閉じても終了しない(kill されるまで生きている)
 //   ARGS  → 起動引数(argv)を text_delta で返す(--session-id / --name / --permission-mode / --settings の確認用)
 //   CWD   → 作業ディレクトリを text_delta で返す(worktree で起動されたことの確認用。issue #437)
@@ -19,12 +16,6 @@
 // system/init の model / permissionMode に反映する。issue #407)。
 const readline = require("readline");
 const fs = require("fs");
-
-if (process.env.FAKE_CLAUDE_EARLY_CHILD_FILE) {
-  const child = require("child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore" });
-  child.unref();
-  fs.writeFileSync(process.env.FAKE_CLAUDE_EARLY_CHILD_FILE, String(child.pid));
-}
 
 // 環境変数 FAKE_CLAUDE_SESSION_FILE があれば、実物の CLI と同じく会話ファイル(jsonl)へ
 // 行を追記する(送信した user 行と、確定した assistant 行)。画面の「作成中の表示が、確定した
@@ -149,38 +140,6 @@ rl.on("line", (line) => {
     } else if (text.includes("SLOW")) {
       let n = 0;
       slowTimer = setInterval(() => delta(String(++n)), 100);
-    } else if (text.includes("ORPHAN")) {
-      const { spawn } = require("child_process");
-      const forever = "setInterval(() => {}, 1000)";
-      // 切り離した子(長く生きる)。
-      const detached = spawn(process.execPath, ["-e", forever], { detached: true, stdio: "ignore" });
-      detached.unref();
-      // 孫(切り離して起動し、親はすぐ終わる = 親のいない孫)。孫の PID は、親の標準出力から受け取る。
-      const parent = spawn(
-        process.execPath,
-        ["-e", "const {spawn}=require('child_process');const g=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'});g.unref();console.log(g.pid);setTimeout(()=>process.exit(0),100)"],
-        { stdio: ["ignore", "pipe", "ignore"] },
-      );
-      let grandchild = "";
-      parent.stdout.on("data", (d) => (grandchild += String(d)));
-      parent.on("exit", () => {
-        delta(`orphans: ${detached.pid},${grandchild.trim()}`);
-        // HANG つきなら、標準入力を閉じても終了しない(強制終了の確認用)。
-        if (text.includes("HANG")) hang = true;
-        // EXIT つきなら、claude 自身が(異常終了で)自分で終わる。合図(SIGNAL_FILE)があれば、それができるまで待ってから終わる
-        // (確認する側が、子孫が生きているのを確かめ終えたあとに、合図を出せる)。
-        if (text.includes("EXIT")) {
-          const signal = process.env.FAKE_CLAUDE_EXIT_SIGNAL_FILE;
-          const finish = () => process.exit(3);
-          if (signal) {
-            const t = setInterval(() => { if (fs.existsSync(signal)) { clearInterval(t); finish(); } }, 100);
-          } else {
-            setTimeout(finish, 300);
-          }
-        } else {
-          result(false);
-        }
-      });
     } else if (text.includes("HANG")) {
       hang = true;
       result(false);

@@ -20,7 +20,6 @@ mod github_project_summary;
 mod hub_layout;
 mod hub_tuning;
 mod image_attachment;
-mod local_folder_path;
 mod log_line;
 mod message;
 mod message_image;
@@ -38,7 +37,6 @@ mod permission_suggestion;
 mod process_state;
 mod process_trigger;
 mod profile;
-mod profile_name;
 mod progress_event;
 mod project;
 mod project_item;
@@ -88,7 +86,6 @@ pub use image_attachment::{
     validate_image_attachment, validate_image_attachments, validate_image_count, ImageAttachment,
     ImageAttachmentError, ImageMediaType, MAX_IMAGES_PER_MESSAGE, MAX_IMAGE_BASE64_LEN,
 };
-pub use local_folder_path::{is_reserved_device_name, LocalFolderPath, LocalFolderPathError};
 pub use log_line::{
     convert_json_line_to_log_line, convert_session_line, AssistantLogLine, AttachmentLogLine,
     LogLine, LogLineBase, LogLineConversionError, SystemLogLine, UserLogLine,
@@ -112,7 +109,6 @@ pub use permission_suggestion::PermissionSuggestion;
 pub use process_state::ProcessState;
 pub use process_trigger::ProcessTrigger;
 pub use profile::Profile;
-pub use profile_name::{ProfileName, ProfileNameError, MAX_PROFILE_NAME_CHARS};
 pub use progress_event::ProgressEvent;
 pub use project::{sort_projects_by_recency, Project};
 pub use project_item::{ProjectItem, ProjectItemKind};
@@ -137,9 +133,8 @@ pub use subagent_meta::SubagentMeta;
 pub use timestamp::parse_iso_timestamp_to_epoch_ms;
 pub use user::User;
 pub use validation::{
-    contains_forbidden_invisible_or_control, contains_format_or_ignorable_character,
-    has_visible_character, is_valid_claude_dir_path, is_valid_json, is_valid_json_object,
-    is_valid_project_dir_name, is_valid_rule_file_name, is_valid_session_id, is_valid_skill_name,
+    is_valid_claude_dir_path, is_valid_json, is_valid_project_dir_name, is_valid_rule_file_name,
+    is_valid_session_id, is_valid_skill_name,
 };
 pub use viewer_target::ViewerTarget;
 pub use window_state::WindowState;

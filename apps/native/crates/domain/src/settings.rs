@@ -37,16 +37,6 @@ pub struct Settings {
     /// (再開する)になるようにするため。
     #[serde(default = "restore_running_sessions_default")]
     pub restore_running_sessions: bool,
-    /// **全体の欄**(`claude_projects_dir`・`restore_running_sessions`)の版(ローカルサーバが使う。これらが実際に変わる
-    /// ときだけ 1 つ増える)。プロファイルの欄の版は、プロファイルごと(`Profile::revision`)。`update_settings` は、
-    /// 保存先のプロファイルの版と、この全体の版の両方を「どの版を元にした変更か」として受け取り、どちらかが今と違えば
-    /// 競合として断る(別のタブが変えた別の欄を、古い値で黙って戻さないため)。
-    ///
-    /// **スキーマの `version`(7)は上げない**: 追加するだけの項目で、`#[serde(default)]` により、
-    /// この項目の無い既存の `settings.json`(v7)は版 0 として読める。`version` を上げると、
-    /// 古い版のアプリが、未知のバージョンの破損ファイルとして退避してしまう。
-    #[serde(default)]
-    pub revision: u64,
 }
 
 /// `restore_running_sessions` の既定(issue #459)。
@@ -63,7 +53,6 @@ impl Default for Settings {
             profiles: vec![profile],
             claude_projects_dir: None,
             restore_running_sessions: restore_running_sessions_default(),
-            revision: 0,
         }
     }
 }

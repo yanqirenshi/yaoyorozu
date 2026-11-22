@@ -153,11 +153,6 @@ impl WorktreeIndex {
             .map(|(folder, _)| folder.clone())
     }
 
-    /// 台帳の worktree(リポジトリ本体を除く)のフォルダ。
-    pub fn worktree_folders(&self) -> impl Iterator<Item = &Path> {
-        self.entries.iter().map(|(folder, _)| folder.as_path())
-    }
-
     /// `path` が台帳の worktree(リポジトリ本体を除く)として引けるか。
     pub fn knows(&self, path: &Path) -> bool {
         self.entries
@@ -213,14 +208,6 @@ pub fn validate_branch_name(name: &str) -> Result<(), AppError> {
     }
     if name.split('/').any(|part| part.starts_with('.')) {
         return invalid("`.` で始まる部分があります");
-    }
-    // 書式の文字(ゼロ幅・向きを変える文字など)・既定で無視される文字は、見た目と実体が食い違うので断る。
-    if domain::contains_format_or_ignorable_character(name) {
-        return invalid("見えない文字を含みます");
-    }
-    // `HEAD` は git の予約名。Windows のデバイス名(`con` など)は、参照のファイルを作れない。git へ渡す前に断る。
-    if name.eq_ignore_ascii_case("HEAD") || name.split('/').any(domain::is_reserved_device_name) {
-        return invalid("予約された名前です");
     }
     Ok(())
 }
@@ -537,51 +524,6 @@ mod tests {
         }
         assert!(validate_branch_name(&"x".repeat(201)).is_err());
         for good in ["main", "session/impl-app", "feature/x_y-1.2", "日本語"] {
-            assert!(validate_branch_name(good).is_ok(), "{good:?}");
-        }
-    }
-
-    #[test]
-    fn invisible_characters_and_reserved_names_are_rejected_in_branch_names() {
-        // 書式の文字(ゼロ幅・向きを変える文字)・既定で無視される文字・行の区切り。
-        for bad in [
-            "a\u{200B}b",
-            "a\u{202E}b",
-            "a\u{2028}b",
-            "a\u{3164}b",
-            "a\u{200D}b",
-            "a\u{FE0F}",
-        ] {
-            assert!(
-                matches!(validate_branch_name(bad), Err(AppError::InvalidInput(_))),
-                "{bad:?}"
-            );
-        }
-        // git の予約名と、Windows のデバイス名(どの部分でも)。
-        for bad in [
-            "HEAD",
-            "head",
-            "Head",
-            "con",
-            "CON",
-            "a/nul",
-            "x/com1/y",
-            "lpt\u{B9}",
-            "aux.txt",
-        ] {
-            assert!(
-                matches!(validate_branch_name(bad), Err(AppError::InvalidInput(_))),
-                "{bad:?}"
-            );
-        }
-        // 普通の名前は通る(HEAD や con を含むだけの名前・日本語)。
-        for good in [
-            "header",
-            "head-fix",
-            "console",
-            "feature/contact",
-            "日本語/ブランチ",
-        ] {
             assert!(validate_branch_name(good).is_ok(), "{good:?}");
         }
     }

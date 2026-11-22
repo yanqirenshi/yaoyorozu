@@ -301,10 +301,6 @@ pub trait RunningProcess: Send + Sync {
     /// 標準入力を閉じて終了を待つ(約1秒で終了する)。応答が無ければ強制終了する。
     /// 終了済みなら何もしない。
     fn stop(&self);
-    /// 子孫の後始末を、呼び出し側(サーバ)が持つ**会話ごとのジョブ**に任せる合図。以後、強制終了は、この子プロセス自身だけを
-    /// 止める(`taskkill /T` のように、記録された親の PID で子孫をたどらない)。既定は何もしない(従来どおり、
-    /// 強制終了のときにプロセスツリーごと止める。Tauri 版の動き)。
-    fn leave_descendants_to_job(&self) {}
 }
 
 /// 子プロセスを起動する(port。実装は infra)。
@@ -490,13 +486,9 @@ fn validate_name(name: Option<&str>) -> Result<Option<String>, AppError> {
     let Some(name) = name.map(str::trim).filter(|n| !n.is_empty()) else {
         return Ok(None);
     };
-    // プロファイル名と同じ規則(制御文字・見えない文字・向きを変える文字を断る。`domain` の Unicode の性質による判定)。
-    if name.chars().count() > MAX_NAME_CHARS
-        || domain::contains_forbidden_invisible_or_control(name)
-        || !domain::has_visible_character(name)
-    {
+    if name.chars().count() > MAX_NAME_CHARS || name.chars().any(char::is_control) {
         return Err(AppError::InvalidInput(format!(
-            "表示名は {MAX_NAME_CHARS} 文字以内で、改行・見えない文字・向きを変える文字を含めないでください"
+            "表示名は {MAX_NAME_CHARS} 文字以内で、改行などを含めないでください"
         )));
     }
     Ok(Some(name.to_string()))
@@ -1388,34 +1380,6 @@ mod tests {
         assert!(matches!(bad_session, Err(AppError::InvalidInput(_))));
         assert!(matches!(bad_project, Err(AppError::InvalidInput(_))));
         assert!(matches!(bad_name, Err(AppError::InvalidInput(_))));
-        assert!(launcher.started.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn a_display_name_with_invisible_characters_is_refused_before_starting() {
-        let launcher = FakeLauncher::with_pid(101);
-        for bad in [
-            "a\u{200B}b",
-            "a\u{202E}b",
-            "a\u{2028}b",
-            "\u{3164}x",
-            "\u{3164}",
-        ] {
-            let result = resume_running_session(
-                &FakeSource,
-                &launcher,
-                &FakeLedger::none(),
-                &[],
-                &[],
-                &ResumeRunningSession {
-                    name: Some(bad.to_string()),
-                    ..resume_request("s1")
-                },
-                sink(),
-                1,
-            );
-            assert!(matches!(result, Err(AppError::InvalidInput(_))), "{bad:?}");
-        }
         assert!(launcher.started.lock().unwrap().is_empty());
     }
 

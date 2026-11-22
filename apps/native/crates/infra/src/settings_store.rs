@@ -1,6 +1,7 @@
 use app::{AppError, LoadedSettings, SettingsStore};
 use domain::{GithubProject, Profile, Settings, CURRENT_SETTINGS_VERSION};
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -130,7 +131,6 @@ impl FileSettingsStore {
             repository_path: legacy.repository_path,
             github_project: legacy.github_project,
             selected_project_folders: legacy.selected_project_folders,
-            revision: 0,
         };
         let migrated = Settings {
             version: CURRENT_SETTINGS_VERSION,
@@ -139,7 +139,6 @@ impl FileSettingsStore {
             claude_projects_dir: legacy.claude_projects_dir,
             // この版には無い項目は既定で入れる(issue #459)。
             restore_running_sessions: Settings::default().restore_running_sessions,
-            revision: 0,
         };
         let _ = self.save(&migrated, false);
         migrated
@@ -154,7 +153,6 @@ impl FileSettingsStore {
             active_profile_id: v4.active_profile_id,
             claude_projects_dir: v4.claude_projects_dir,
             restore_running_sessions: Settings::default().restore_running_sessions,
-            revision: 0,
         };
         let _ = self.save(&migrated, false);
         migrated
@@ -169,7 +167,6 @@ impl FileSettingsStore {
             active_profile_id: v5.active_profile_id,
             claude_projects_dir: v5.claude_projects_dir,
             restore_running_sessions: Settings::default().restore_running_sessions,
-            revision: 0,
         };
         let _ = self.save(&migrated, false);
         migrated
@@ -184,7 +181,6 @@ impl FileSettingsStore {
             active_profile_id: v6.active_profile_id,
             claude_projects_dir: v6.claude_projects_dir,
             restore_running_sessions: Settings::default().restore_running_sessions,
-            revision: 0,
         };
         let _ = self.save(&migrated, false);
         migrated
@@ -308,7 +304,25 @@ impl SettingsStore for FileSettingsStore {
             let _ = fs::copy(&self.path, backup_path);
         }
 
-        crate::write_atomic(&self.path, json.as_bytes())?;
+        let tmp_path = PathBuf::from(format!("{}.tmp", self.path.display()));
+        let mut file = fs::File::create(&tmp_path).map_err(|e| {
+            AppError::Io(format!("{} の作成に失敗しました: {e}", tmp_path.display()))
+        })?;
+        file.write_all(json.as_bytes()).map_err(|e| {
+            AppError::Io(format!(
+                "{} への書き込みに失敗しました: {e}",
+                tmp_path.display()
+            ))
+        })?;
+        file.sync_all().map_err(|e| {
+            AppError::Io(format!("{} の同期に失敗しました: {e}", tmp_path.display()))
+        })?;
+        fs::rename(&tmp_path, &self.path).map_err(|e| {
+            AppError::Io(format!(
+                "{} への置換に失敗しました: {e}",
+                self.path.display()
+            ))
+        })?;
 
         Ok(())
     }
@@ -344,7 +358,6 @@ mod tests {
                 number: 51,
             }),
             selected_project_folders: vec!["proj1".to_string(), "proj2".to_string()],
-            revision: 0,
         };
         let settings = Settings {
             version: CURRENT_SETTINGS_VERSION,
@@ -352,7 +365,6 @@ mod tests {
             profiles: vec![profile],
             claude_projects_dir: Some(PathBuf::from(r"D:\custom\projects")),
             restore_running_sessions: false,
-            revision: 0,
         };
 
         store.save(&settings, false).expect("should save");
@@ -404,38 +416,6 @@ mod tests {
             1,
             "expected exactly one evacuated file"
         );
-    }
-
-    #[test]
-    fn a_v7_file_without_revision_loads_as_revision_zero_and_revision_round_trips() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("settings.json");
-        // `revision` を持たない(この項目が入る前の)v7 のファイル。
-        fs::write(
-            &path,
-            r#"{"version":7,"profiles":[{"id":"p1","name":"a","repository_path":null,"github_project":null,"selected_project_folders":[]}],"active_profile_id":"p1","claude_projects_dir":null,"restore_running_sessions":true}"#,
-        )
-        .unwrap();
-        let store = FileSettingsStore::new(path.clone());
-
-        let loaded = store.load().unwrap();
-        assert!(
-            !loaded.recovered_from_corruption,
-            "壊れた扱いにしない(退避しない)"
-        );
-        assert_eq!(loaded.settings.revision, 0);
-        assert_eq!(loaded.settings.version, 7, "スキーマの version は上げない");
-        assert!(!dir
-            .path()
-            .read_dir()
-            .unwrap()
-            .flatten()
-            .any(|e| e.file_name().to_string_lossy().contains("corrupt")));
-
-        let mut next = loaded.settings;
-        next.revision = 41;
-        store.save(&next, false).unwrap();
-        assert_eq!(store.load().unwrap().settings.revision, 41);
     }
 
     #[test]

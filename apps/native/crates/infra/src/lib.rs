@@ -1,12 +1,10 @@
 mod archived_sessions_store;
-mod atomic_file;
 mod claude_cli;
 mod claude_cli_process;
 mod claude_dir_store;
 mod claude_md_store;
 mod claude_settings_store;
 mod claude_stream_json;
-mod drive_kind;
 mod execution_environment_source;
 mod git_ledger_store;
 mod git_state_source;
@@ -16,7 +14,6 @@ mod github_api_client;
 mod github_auth_log;
 mod hub_layout_store;
 mod hub_tuning_store;
-pub mod job_object;
 mod keyring_token_store;
 mod layout_store;
 mod local_api_port_store;
@@ -27,20 +24,15 @@ mod rules_store;
 mod running_session_source;
 mod session_source;
 mod settings_store;
-pub mod short_path;
 mod skills_store;
 mod web_dev_server;
 mod yyz_scaffold_writer;
 
 pub use archived_sessions_store::FileArchivedSessionsStore;
-pub use atomic_file::{
-    is_write_atomic_tmp_name, remove_stale_write_atomic_tmp_files, write_atomic,
-};
 pub use claude_cli_process::ClaudeCliProcessLauncher;
 pub use claude_dir_store::{claude_home_dir, FileClaudeDirStore};
 pub use claude_md_store::FileClaudeMdStore;
 pub use claude_settings_store::FileClaudeSettingsStore;
-pub use drive_kind::{drive_kind, DriveKind};
 pub use execution_environment_source::WindowsExecutionEnvironmentSource;
 pub use git_ledger_store::FileGitLedgerStore;
 pub use git_state_source::SystemGitStateSource;
@@ -50,9 +42,6 @@ pub use github_api_client::{GithubApiClient, DEVICE_FLOW_SCOPE};
 pub use github_auth_log::{token_fingerprint, GithubAuthLog};
 pub use hub_layout_store::FileHubLayoutStore;
 pub use hub_tuning_store::FileHubTuningStore;
-pub use job_object::{
-    current_process_is_in_a_job, place_current_process_in_kill_on_close_job, ConversationJob,
-};
 pub use keyring_token_store::KeyringTokenStore;
 pub use layout_store::FileLayoutStore;
 pub use local_api_port_store::FileLocalApiPortStore;
@@ -63,7 +52,6 @@ pub use rules_store::FileRulesStore;
 pub use running_session_source::FileRunningSessionSource;
 pub use session_source::{FileSystemRepository, SessionFileRef, SessionFsChange, SessionWatcher};
 pub use settings_store::FileSettingsStore;
-pub use short_path::short_path_name;
 pub use skills_store::FileSkillsStore;
 pub use web_dev_server::{
     HttpWebAppProbe, NpmWebDevServerLauncher, PackageJsonWebAppRepositoryProbe,

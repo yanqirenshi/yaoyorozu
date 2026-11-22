@@ -162,7 +162,6 @@ impl RunningSessionLauncher for ClaudeCliProcessLauncher {
             exit,
             next_request: AtomicU64::new(1),
             pending,
-            tree_kill: std::sync::atomic::AtomicBool::new(true),
         };
         // `initialize` を送って、その応答を「起動できた」の合図にする(CLI は最初のターンまで
         // `system/init` を出さないため)。書けなければプロセスがすでに終わりかけており、
@@ -318,9 +317,6 @@ struct ClaudeCliProcess {
     next_request: AtomicU64,
     /// 送った切り替えの要求(応答が成功なら `SwitchApplied` にする。読み取りスレッドと共有)。
     pending: Arc<PendingSwitches>,
-    /// 強制終了のとき、プロセスツリーごと(`taskkill /T`)止めるか。呼び出し側が子孫をジョブで止めるときは `false`
-    /// (`RunningProcess::leave_descendants_to_job`)。
-    tree_kill: std::sync::atomic::AtomicBool,
 }
 
 impl ClaudeCliProcess {
@@ -400,11 +396,6 @@ impl RunningProcess for ClaudeCliProcess {
         self.write_line(&build_get_usage_line())
     }
 
-    fn leave_descendants_to_job(&self) {
-        self.tree_kill
-            .store(false, std::sync::atomic::Ordering::SeqCst);
-    }
-
     fn stop(&self) {
         // 標準入力を閉じる(CLI は約1秒で終了する)。
         drop(self.stdin.lock().unwrap_or_else(|e| e.into_inner()).take());
@@ -413,10 +404,8 @@ impl RunningProcess for ClaudeCliProcess {
         }
         // 応答が無い: 強制終了(台帳が残ることは承知の上。次に別の claude が起動したとき掃除される)。
         // `claude` が起動した孫プロセス(フック・MCP サーバなど)を残さないよう、可能なら
-        // プロセスツリーごと止める(子孫をジョブで止める呼び出し側は、`leave_descendants_to_job` で、ここを自身だけにする)。
-        if self.tree_kill.load(std::sync::atomic::Ordering::SeqCst) {
-            kill_process_tree(self.pid);
-        }
+        // プロセスツリーごと止める。
+        kill_process_tree(self.pid);
         let _ = self.child.lock().unwrap_or_else(|e| e.into_inner()).kill();
         self.exit.wait(KILL_EXIT_WAIT);
     }
@@ -757,77 +746,6 @@ mod tests {
             matches!(e, RunningSessionEvent::Exited { .. })
         });
         assert!(matches!(exited, RunningSessionEvent::Exited { .. }));
-    }
-
-    #[test]
-    #[ignore]
-    fn forced_stop_leaves_descendants_to_the_job_when_asked_and_kills_the_tree_otherwise() {
-        // 子孫を作ってから、標準入力を閉じても終了しない claude(ORPHAN HANG)。
-        let pids_of = |seen: &[RunningSessionEvent]| -> Option<(u32, u32)> {
-            seen.iter().find_map(|e| match e {
-                RunningSessionEvent::Progress(ProgressEvent::TextDelta { text }) => text
-                    .strip_prefix("orphans: ")
-                    .and_then(|rest| rest.split_once(','))
-                    .and_then(|(a, b)| Some((a.trim().parse().ok()?, b.trim().parse().ok()?))),
-                _ => None,
-            })
-        };
-        let exists = |pid: u32| crate::job_object::process_exists(pid);
-        for leave_to_job in [true, false] {
-            let dir = tempfile::tempdir().unwrap();
-            let (sink, rx) = sink();
-            let process = fake_launcher().start(&request(dir.path()), sink).unwrap();
-            // サーバと同じ: 会話用のジョブへ入れて、後始末をジョブに任せる。
-            let job = crate::ConversationJob::assign(process.pid()).ok();
-            if leave_to_job {
-                process.leave_descendants_to_job();
-            }
-            let mut seen = Vec::new();
-            process.send_user_message("ORPHAN HANG", &[]).unwrap();
-            wait_for(&rx, &mut seen, |e| {
-                matches!(
-                    e,
-                    RunningSessionEvent::Progress(ProgressEvent::TurnFinished { .. })
-                )
-            });
-            let (detached, grandchild) = pids_of(&seen).expect("子の PID が届く");
-            assert!(exists(detached), "子が生きている");
-
-            process.stop();
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            if leave_to_job {
-                // claude 自身だけを止める: 切り離した子は、ジョブが止めるまで残る(`taskkill /T` でたどらない)。
-                // (子が標準出力の端を持ち続けるので、`Exited` も、ジョブが子を止めるまでは来ない。)
-                assert!(
-                    exists(detached),
-                    "ジョブに任せたとき、強制終了は子孫をたどらない"
-                );
-                job.as_ref().unwrap().terminate();
-                wait_for(&rx, &mut seen, |e| {
-                    matches!(e, RunningSessionEvent::Exited { .. })
-                });
-                std::thread::sleep(std::time::Duration::from_millis(300));
-                assert!(!exists(detached), "ジョブを止めると、子孫も止まる");
-            } else {
-                // 既定(Tauri 版の動き): 親の PID をたどって、子孫を止める(`taskkill /T`)。
-                // 親のいない孫には届かない(だからサーバは、会話ごとのジョブに任せる)。
-                assert!(!exists(detached), "既定では、親をたどれる子孫を止める");
-                assert!(
-                    exists(grandchild),
-                    "親のいない孫には、taskkill /T が届かない"
-                );
-                // (孫が標準出力の端を持ち続けるので、`Exited` も、ジョブが孫を止めるまでは来ない。)
-                job.as_ref().unwrap().terminate();
-                wait_for(&rx, &mut seen, |e| {
-                    matches!(e, RunningSessionEvent::Exited { .. })
-                });
-                std::thread::sleep(std::time::Duration::from_millis(300));
-                assert!(!exists(grandchild), "ジョブを止めると、孫も止まる");
-            }
-            if let Some(job) = job {
-                job.terminate(); // 後始末(いずれの場合も、残りを止める)
-            }
-        }
     }
 
     #[test]

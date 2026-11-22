@@ -1,7 +1,8 @@
 use app::{AppError, ClaudeMdStore};
 use domain::ClaudeMdFile;
 use std::fs;
-use std::path::Path;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 const CLAUDE_MD_FILE_NAME: &str = "CLAUDE.md";
@@ -46,7 +47,22 @@ impl ClaudeMdStore for FileClaudeMdStore {
 
     fn write(&self, repo_dir: &Path, content: &str) -> Result<(), AppError> {
         let path = repo_dir.join(CLAUDE_MD_FILE_NAME);
-        crate::write_atomic(&path, content.as_bytes())?;
+        let tmp_path = PathBuf::from(format!("{}.tmp", path.display()));
+
+        let mut file = fs::File::create(&tmp_path).map_err(|e| {
+            AppError::Io(format!("{} の作成に失敗しました: {e}", tmp_path.display()))
+        })?;
+        file.write_all(content.as_bytes()).map_err(|e| {
+            AppError::Io(format!(
+                "{} への書き込みに失敗しました: {e}",
+                tmp_path.display()
+            ))
+        })?;
+        file.sync_all().map_err(|e| {
+            AppError::Io(format!("{} の同期に失敗しました: {e}", tmp_path.display()))
+        })?;
+        fs::rename(&tmp_path, &path)
+            .map_err(|e| AppError::Io(format!("{} への置換に失敗しました: {e}", path.display())))?;
 
         Ok(())
     }

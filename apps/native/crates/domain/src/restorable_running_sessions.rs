@@ -70,7 +70,6 @@ mod tests {
             model: None,
             name: None,
             worktree_id: "main-worktree".to_string(),
-            worktree_path: None,
         }
     }
 

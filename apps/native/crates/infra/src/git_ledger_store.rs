@@ -1,6 +1,7 @@
 use app::{AppError, GitLedgerStore};
 use domain::{GitLedger, CURRENT_GIT_LEDGER_VERSION};
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -71,7 +72,25 @@ impl GitLedgerStore for FileGitLedgerStore {
             })?;
         }
 
-        crate::write_atomic(&self.path, json.as_bytes())?;
+        let tmp_path = PathBuf::from(format!("{}.tmp", self.path.display()));
+        let mut file = fs::File::create(&tmp_path).map_err(|e| {
+            AppError::Io(format!("{} の作成に失敗しました: {e}", tmp_path.display()))
+        })?;
+        file.write_all(json.as_bytes()).map_err(|e| {
+            AppError::Io(format!(
+                "{} への書き込みに失敗しました: {e}",
+                tmp_path.display()
+            ))
+        })?;
+        file.sync_all().map_err(|e| {
+            AppError::Io(format!("{} の同期に失敗しました: {e}", tmp_path.display()))
+        })?;
+        fs::rename(&tmp_path, &self.path).map_err(|e| {
+            AppError::Io(format!(
+                "{} への置換に失敗しました: {e}",
+                self.path.display()
+            ))
+        })?;
 
         Ok(())
     }

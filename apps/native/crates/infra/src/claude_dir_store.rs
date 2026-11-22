@@ -29,15 +29,6 @@ impl FileClaudeDirStore {
     }
 }
 
-/// 文面に出す相対パス。空(= ルートそのもの)のときは、ルートの名前を出す(「 はディレクトリではありません」にしない)。
-fn shown(relative_path: &str) -> &str {
-    if relative_path.is_empty() {
-        "~/.claude"
-    } else {
-        relative_path
-    }
-}
-
 impl ClaudeDirStore for FileClaudeDirStore {
     /// `relative_path` の形式(`..` 等を含まないこと)は呼び出し側
     /// (`app::list_claude_dir`)で検証済みの前提。そのうえで、途中の
@@ -52,9 +43,8 @@ impl ClaudeDirStore for FileClaudeDirStore {
                 .split('/')
                 .filter(|segment| !segment.is_empty()),
         );
-        let dir = fs::canonicalize(&dir).map_err(|_| {
-            AppError::NotFound(format!("{} が見つかりません", shown(relative_path)))
-        })?;
+        let dir = fs::canonicalize(&dir)
+            .map_err(|_| AppError::NotFound(format!("{relative_path} が見つかりません")))?;
         if !dir.starts_with(&root) {
             return Err(AppError::InvalidInput(
                 "~/.claude の外は表示できません".to_string(),
@@ -62,8 +52,7 @@ impl ClaudeDirStore for FileClaudeDirStore {
         }
         if !dir.is_dir() {
             return Err(AppError::InvalidInput(format!(
-                "{} はディレクトリではありません",
-                shown(relative_path)
+                "{relative_path} はディレクトリではありません"
             )));
         }
 
@@ -176,20 +165,6 @@ mod tests {
 
         let error = store.list("").expect_err("should fail");
         assert!(matches!(error, AppError::NotFound(_)));
-    }
-
-    #[test]
-    fn the_message_for_a_root_that_is_not_a_directory_names_the_root() {
-        // ルートそのもの(空の相対パス)を指すときも、文面の先頭を空にしない。
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("not-a-dir");
-        fs::write(&file, "x").unwrap();
-        let store = FileClaudeDirStore::new(file);
-
-        let AppError::InvalidInput(message) = store.list("").expect_err("should fail") else {
-            panic!("InvalidInput のはず");
-        };
-        assert_eq!(message, "~/.claude はディレクトリではありません");
     }
 
     #[test]

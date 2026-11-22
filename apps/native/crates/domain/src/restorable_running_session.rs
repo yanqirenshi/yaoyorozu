@@ -26,26 +26,11 @@ pub struct RestorableRunningSession {
     pub name: Option<String>,
     /// 起動していた worktree の ID(Git 台帳の ID、または予約 ID)。
     pub worktree_id: String,
-    /// 起動していた worktree のフォルダ(台帳の worktree のときだけ)。台帳を作り直して ID が振り直されたとき、
-    /// この場所で台帳から引き直す。古い控え(この項目が無い)も読める。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worktree_path: Option<String>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn an_old_entry_without_a_worktree_path_is_still_read() {
-        let old = r#"{"profile_id":"default","project":"p","session_id":"s1","permission_mode":"default","model":null,"name":null,"worktree_id":"wt-1"}"#;
-        let entry: RestorableRunningSession = serde_json::from_str(old).unwrap();
-        assert_eq!(entry.worktree_path, None);
-        // パスが無いときは、書き出しにも出さない(古い版も読める形のまま)。
-        assert!(!serde_json::to_string(&entry)
-            .unwrap()
-            .contains("worktree_path"));
-    }
 
     #[test]
     fn roundtrips_through_json() {
@@ -57,7 +42,6 @@ mod tests {
             model: Some("opus".to_string()),
             name: Some("実装:APP".to_string()),
             worktree_id: "main-worktree".to_string(),
-            worktree_path: None,
         };
 
         let json = serde_json::to_string(&entry).unwrap();
