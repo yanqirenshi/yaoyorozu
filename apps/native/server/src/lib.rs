@@ -27,7 +27,7 @@ pub use state::ServerState;
 use std::convert::Infallible;
 use std::sync::Arc;
 use tokio::sync::{watch, Mutex};
-use tokio_stream::wrappers::{errors::BroadcastStreamRecvError, BroadcastStream, ReceiverStream};
+use tokio_stream::wrappers::{errors::BroadcastStreamRecvError, BroadcastStream};
 
 #[derive(Clone)]
 pub struct AppContext {
@@ -118,10 +118,16 @@ async fn events(
                 Err(BroadcastStreamRecvError::Lagged(_)) => None,
             }
         });
-    let progress = ReceiverStream::new(opened.receiver).map(|m| {
-        Ok(Event::default()
-            .event(running::RUNNING_SESSION_PROGRESS_EVENT)
-            .data(m.progress_json))
+    let progress = stream::unfold(opened.receiver, |mut receiver| async move {
+        let m = receiver.recv().await?;
+        Some((
+            Ok::<Event, Infallible>(
+                Event::default()
+                    .event(running::RUNNING_SESSION_PROGRESS_EVENT)
+                    .data(m.progress_json),
+            ),
+            receiver,
+        ))
     });
     let merged = first
         .chain(stream::select(notifications, progress))
