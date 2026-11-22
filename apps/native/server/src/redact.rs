@@ -13,15 +13,51 @@
 /// パスの終わりは、最後の区切りのあとの最初の空白(全角を含む)・`:`・`「」()` の前。
 /// ホームのフォルダは、環境変数(`USERPROFILE`・`HOME`)から求める。
 pub fn redact_paths(message: &str) -> String {
-    let home = std::env::var("USERPROFILE")
-        .ok()
-        .or_else(|| std::env::var("HOME").ok());
-    redact_paths_with_home(message, home.as_deref())
+    static HOMES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    let homes = HOMES.get_or_init(home_forms);
+    let refs: Vec<&str> = homes.iter().map(String::as_str).collect();
+    redact_paths_with_homes(message, &refs)
 }
 
-/// [`redact_paths`] の、ホームのフォルダを引数で受ける版(テスト用)。
+/// ホームのフォルダの、あらゆる書き方(起動時に 1 回だけ求める): 環境変数の値、実体のパス(`canonicalize`。
+/// ジャンクション・大文字小文字・`\\?\` を解決したもの)、それぞれの 8.3 形式(`TAROYA~1` など)。
+/// `subst` のドライブと、ホームの外のフォルダ名は、対象にしない。
+fn home_forms() -> Vec<String> {
+    let mut forms: Vec<String> = Vec::new();
+    let mut add = |text: String| {
+        if !text.is_empty() && !forms.iter().any(|f| f.eq_ignore_ascii_case(&text)) {
+            forms.push(text);
+        }
+    };
+    for var in ["USERPROFILE", "HOME"] {
+        let Ok(value) = std::env::var(var) else {
+            continue;
+        };
+        add(value.clone());
+        if let Some(short) = infra::short_path_name(&value) {
+            add(short);
+        }
+        if let Ok(real) = std::fs::canonicalize(&value) {
+            let real = real.to_string_lossy().to_string();
+            let real = real.strip_prefix(r"\\?\").unwrap_or(&real).to_string();
+            if let Some(short) = infra::short_path_name(&real) {
+                add(short);
+            }
+            add(real);
+        }
+    }
+    forms
+}
+
+/// [`redact_paths`] の、ホームのフォルダを 1 つ引数で受ける版(テスト用)。
 pub fn redact_paths_with_home(message: &str, home: Option<&str>) -> String {
-    let home = home.and_then(parse_home);
+    let homes: Vec<&str> = home.into_iter().collect();
+    redact_paths_with_homes(message, &homes)
+}
+
+/// ホームのフォルダの書き方が複数あるときの版。どれの下でも、ユーザー名を出さない。
+pub fn redact_paths_with_homes(message: &str, homes: &[&str]) -> String {
+    let home: Vec<Home> = homes.iter().filter_map(|h| parse_home(h)).collect();
     let chars: Vec<char> = message.chars().collect();
     let fixed = fixed_sentences();
     let mut out = String::with_capacity(message.len());
@@ -37,7 +73,7 @@ pub fn redact_paths_with_home(message: &str, home: Option<&str>) -> String {
         match path_start(&chars, i) {
             Some((drive, body_start)) => {
                 let (segments, end) = read_path(&chars, body_start);
-                out.push_str(&shorten(drive, &segments, home.as_ref()));
+                out.push_str(&shorten(drive, &segments, &home));
                 i = end;
             }
             None => {
@@ -155,22 +191,23 @@ fn read_path(chars: &[char], start: usize) -> (Vec<String>, usize) {
 fn relative_to_home<'a>(
     drive: Option<char>,
     segments: &'a [String],
-    home: Option<&Home>,
+    homes: &[Home],
 ) -> Option<&'a [String]> {
-    let home = home?;
-    if drive.is_none() || drive != home.drive || segments.len() < home.segments.len() {
-        return None;
-    }
-    let same = home
-        .segments
-        .iter()
-        .zip(segments)
-        .all(|(h, s)| h.to_lowercase() == s.to_lowercase());
-    same.then(|| &segments[home.segments.len()..])
+    homes.iter().find_map(|home| {
+        if drive.is_none() || drive != home.drive || segments.len() < home.segments.len() {
+            return None;
+        }
+        let same = home
+            .segments
+            .iter()
+            .zip(segments)
+            .all(|(h, s)| h.to_lowercase() == s.to_lowercase());
+        same.then(|| &segments[home.segments.len()..])
+    })
 }
 
-fn shorten(drive: Option<char>, segments: &[String], home: Option<&Home>) -> String {
-    if let Some(rest) = relative_to_home(drive, segments, home) {
+fn shorten(drive: Option<char>, segments: &[String], homes: &[Home]) -> String {
+    if let Some(rest) = relative_to_home(drive, segments, homes) {
         // ホームの下: ホームのフォルダより上(ユーザー名)は出さない。
         let rest: Vec<&str> = rest
             .iter()
@@ -338,5 +375,33 @@ mod tests {
             "{out}"
         );
         assert!(out.contains("proj\\s.jsonl"));
+    }
+
+    #[test]
+    fn every_form_of_the_home_folder_hides_the_user_name() {
+        // 実体のパスと 8.3 形式(`SECRET~1`)の両方を、ホームとして扱う。
+        let homes = [r"C:\Users\secret-user-long-name", r"C:\Users\SECRET~1"];
+        for text in [
+            r"C:\Users\SECRET~1\no-such-repo が見つかりません",
+            r"c:\users\secret-user-long-name\.claude\x.md が見つかりません",
+        ] {
+            let out = redact_paths_with_homes(text, &homes);
+            assert!(!out.to_lowercase().contains("secret"), "{out}");
+            assert!(out.starts_with('~'), "{out}");
+        }
+        // ホームでないもの(別のユーザー)は、これまでどおり、最後のフォルダと名前まで。
+        let other = redact_paths_with_homes(r"C:\Users\other\p\x.md が無い", &homes);
+        assert_eq!(other, "…\\p\\x.md が無い");
+    }
+
+    #[test]
+    fn the_real_home_forms_include_the_environment_value() {
+        let forms = home_forms();
+        if let Ok(v) = std::env::var("USERPROFILE") {
+            assert!(
+                forms.iter().any(|f| f.eq_ignore_ascii_case(&v)),
+                "{forms:?}"
+            );
+        }
     }
 }

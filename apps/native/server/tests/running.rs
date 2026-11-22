@@ -455,3 +455,20 @@ async fn running_session_snapshot_carries_the_last_progress_sequence_number() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["progress_seq"], 0, "{body}");
 }
+
+#[tokio::test]
+async fn subscribing_to_an_exited_session_is_not_found() {
+    let (ctx, target) = ctx_with_one_session();
+    let (_a, id) = open_events(&ctx).await;
+    ctx.state.lock().await.running_sessions[0]
+        .session
+        .process_state = domain::ProcessState::Exited;
+    let (status, body) = call(
+        &ctx,
+        "subscribe_running_session_progress",
+        serde_json::json!({"target": target, "connectionId": id}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert!(subscribers(&ctx).await.is_empty(), "購読を残さない");
+}

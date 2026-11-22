@@ -77,7 +77,10 @@ pub async fn list_sessions(
     let root = effective_projects_dir(&ctx).await?;
     let archived_path = ctx.data_dir.join("archived-sessions.json");
     let project = args.project.clone();
+    let watch = crate::corruption::Watch::start(&ctx.data_dir, "archived-sessions.json");
+    let data_dir = ctx.data_dir.as_ref().clone();
     let (list, skipped) = blocking(move || {
+        crate::session_ids::normalize_stores(&data_dir);
         let source = infra::FileSystemRepository::new(root);
         // 壊れた・読めない会話ファイルは飛ばして、残りを返す(1 つで一覧全体が失敗しない)。
         let listed = app::list_sessions_lenient(&source, &args.project)?;
@@ -87,7 +90,7 @@ pub async fn list_sessions(
             .sessions
             .into_iter()
             .map(|session| {
-                let is_archived = archived.is_archived(&session.id);
+                let is_archived = archived.is_archived(&crate::session_ids::canonical(&session.id));
                 let mut dto = SessionSummaryDto::from(session);
                 dto.archived = is_archived;
                 dto
@@ -96,6 +99,7 @@ pub async fn list_sessions(
         Ok((sessions, listed.skipped_files))
     })
     .await?;
+    watch.report(&ctx).await;
     notify_skipped_sessions(&ctx, &project, &skipped).await;
     Ok(Json(list))
 }
@@ -107,7 +111,7 @@ async fn notify_skipped_sessions(ctx: &AppContext, project: &str, skipped: &[Str
     if skipped.is_empty() {
         return;
     }
-    // 各ファイルの今の状態(更新時刻のミリ秒, サイズ)。閉じられた警告は、ファイルが変わるまで出さない。
+    // 各ファイルの今の指紋(サイズ, 先頭の中身。更新時刻は使わない)。閉じられた警告は、ファイルが実際に変わるまで出さない。
     let root = match effective_projects_dir(ctx).await {
         Ok(r) => r,
         Err(_) => return,
@@ -116,17 +120,7 @@ async fn notify_skipped_sessions(ctx: &AppContext, project: &str, skipped: &[Str
     {
         let state = ctx.state.lock().await;
         for name in skipped {
-            let fingerprint = std::fs::metadata(root.join(project).join(name))
-                .map(|m| {
-                    let ms = m
-                        .modified()
-                        .ok()
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| d.as_millis() as u64)
-                        .unwrap_or(0);
-                    (ms, m.len())
-                })
-                .unwrap_or((0, 0));
+            let fingerprint = crate::dismissed::fingerprint(&root.join(project).join(name));
             if state
                 .dismissed_skips
                 .get(&(project.to_string(), name.clone()))

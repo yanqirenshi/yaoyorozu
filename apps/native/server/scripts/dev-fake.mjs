@@ -40,6 +40,7 @@ async function main() {
     },
     profileId: settings.json.active_profile_id,
     expectedRevision: settings.json.revision,
+    expectedGlobalRevision: settings.json.global_revision,
   });
   if (upd.status !== 200) throw new Error(`設定の保存に失敗: ${upd.text}`);
 

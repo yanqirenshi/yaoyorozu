@@ -97,7 +97,7 @@ function status(name: string, built: Set<string>, notBuilt: Set<string>) {
 }
 // Tauri 版との、引数・動きの違い(command 名の突き合わせでは見えないもの)。
 const DIFFERENCES: [string, string][] = [
-  ["update_settings", "`profileId` は必須(省略・null は 400。アクティブへは保存しない。削除済みなら 404)。`expectedRevision` も必須(古ければ 409)"],
+  ["update_settings", "`profileId` は必須(省略・null は 400。アクティブへは保存しない。削除済みなら 404)。`expectedRevision`(保存先のプロファイルの版)と `expectedGlobalRevision`(全体の欄の版)も必須(どちらかが古ければ 409)。版はプロファイルごと(`get_settings` は `revision` と `global_revision` を返す)"],
 ];
 
 const mark = (b: boolean) => (b ? "○" : "―");

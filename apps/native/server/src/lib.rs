@@ -2,16 +2,20 @@
 
 pub mod auth;
 pub mod config;
+pub mod corruption;
 pub mod data_files;
+pub mod dismissed;
 pub mod dto;
 pub mod error;
 pub mod events;
 pub mod folders;
+pub mod jobbed_process;
 pub mod lock;
 pub mod progress;
 pub mod redact;
 pub mod rpc;
 pub mod running;
+pub mod session_ids;
 pub mod signals;
 pub mod state;
 pub mod watcher;
@@ -27,7 +31,7 @@ pub use state::ServerState;
 use std::convert::Infallible;
 use std::sync::Arc;
 use tokio::sync::{watch, Mutex};
-use tokio_stream::wrappers::{errors::BroadcastStreamRecvError, BroadcastStream, ReceiverStream};
+use tokio_stream::wrappers::{errors::BroadcastStreamRecvError, BroadcastStream};
 
 #[derive(Clone)]
 pub struct AppContext {
@@ -118,10 +122,16 @@ async fn events(
                 Err(BroadcastStreamRecvError::Lagged(_)) => None,
             }
         });
-    let progress = ReceiverStream::new(opened.receiver).map(|m| {
-        Ok(Event::default()
-            .event(running::RUNNING_SESSION_PROGRESS_EVENT)
-            .data(m.progress_json))
+    let progress = stream::unfold(opened.receiver, |mut receiver| async move {
+        let m = receiver.recv().await?;
+        Some((
+            Ok::<Event, Infallible>(
+                Event::default()
+                    .event(running::RUNNING_SESSION_PROGRESS_EVENT)
+                    .data(m.progress_json),
+            ),
+            receiver,
+        ))
     });
     let merged = first
         .chain(stream::select(notifications, progress))

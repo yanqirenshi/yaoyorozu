@@ -136,6 +136,10 @@ pub async fn subscribe_running_session_progress(
     }
     let id = guard.next_subscription_id;
     let slot = find_slot_mut(&mut guard, &target).ok_or_else(not_running)?;
+    // 終了したセッションは、もう途中経過が出ない(購読を残さない)。
+    if slot.session.process_state == ProcessState::Exited {
+        return Err(not_running());
+    }
     slot.subscribers.push(Subscription {
         id,
         conn_id: args.connection_id.clone(),
@@ -386,8 +390,9 @@ pub async fn archive_session(
     if !domain::is_valid_session_id(&args.session_id) {
         return Err(AppError::InvalidInput("不正なセッションIDです".to_string()).into());
     }
-    stop_running_sessions_for(&ctx, &args.session_id).await;
-    let session_id = args.session_id.clone();
+    // 会話 ID は小文字にそろえて、比べる・印に書く。
+    let session_id = crate::session_ids::canonical(&args.session_id);
+    stop_running_sessions_for(&ctx, &session_id).await;
     try_with_archived_store(&ctx, move |store| app::archive_session(store, &session_id)).await?;
     notify_session_changed(&ctx, &args.project);
     Ok(Json(()))
@@ -402,7 +407,7 @@ pub async fn unarchive_session(
     if !domain::is_valid_session_id(&args.session_id) {
         return Err(AppError::InvalidInput("不正なセッションIDです".to_string()).into());
     }
-    let session_id = args.session_id.clone();
+    let session_id = crate::session_ids::canonical(&args.session_id);
     try_with_archived_store(&ctx, move |store| {
         app::unarchive_session(store, &session_id)
     })
@@ -430,7 +435,12 @@ pub async fn rename_session(
     let notify_project = args.project.clone();
     blocking(move || {
         let source = infra::FileSystemRepository::new(root);
-        app::rename_session(&source, &args.project, &args.session_id, &args.title)
+        app::rename_session(
+            &source,
+            &args.project,
+            &crate::session_ids::canonical(&args.session_id),
+            &args.title,
+        )
     })
     .await?;
     notify_session_changed(&ctx, &notify_project);

@@ -323,9 +323,11 @@ pub struct SettingsDto {
     pub effective_projects_dir: String,
     /// app の起動時に、前回動かしていた実行中セッションを再開するか(issue #459)。
     pub restore_running_sessions: bool,
-    /// 設定の版(保存のたびに増える番号。この構成だけの項目)。`update_settings` に「どの版を元にした変更か」
-    /// として渡し、古ければ 409(`settings_conflict`)で断る。
+    /// 表示しているプロファイルの設定の版(そのプロファイルの欄が実際に変わるときだけ増える番号。この構成だけの項目)。
+    /// `update_settings` に「どの版を元にした変更か」として渡し、古ければ 409(`settings_conflict`)で断る。
     pub revision: u64,
+    /// 全体の欄(`claude_projects_dir`・`restore_running_sessions`)の版。これも `update_settings` に渡す。
+    pub global_revision: u64,
 }
 
 /// `update_settings` の引数。対象はアクティブプロファイル(3項目)+グローバル

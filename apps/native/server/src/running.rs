@@ -167,10 +167,16 @@ where
 {
     let path = ctx.data_dir.join("running-sessions.json");
     let _lane = ctx.running.store_lane.lock().await;
-    let result =
-        tokio::task::spawn_blocking(move || change(&FileRestorableRunningSessionsStore::new(path)))
-            .await
-            .unwrap_or_else(|_| Err(background_failed()));
+    let watch = crate::corruption::Watch::start(&ctx.data_dir, "running-sessions.json");
+    let data_dir = ctx.data_dir.as_ref().clone();
+    let result = tokio::task::spawn_blocking(move || {
+        // 読む前に、大文字を含む会話 ID を小文字にそろえる(同じ会話の行は 1 行にまとめる)。
+        crate::session_ids::normalize_stores(&data_dir);
+        change(&FileRestorableRunningSessionsStore::new(path))
+    })
+    .await
+    .unwrap_or_else(|_| Err(background_failed()));
+    watch.report(ctx).await;
     if let Err(e) = result {
         eprintln!("{what}に失敗しました: {e}");
     }
@@ -184,9 +190,16 @@ where
 {
     let path = ctx.data_dir.join("archived-sessions.json");
     let _lane = ctx.running.store_lane.lock().await;
-    tokio::task::spawn_blocking(move || change(&FileArchivedSessionsStore::new(path)))
-        .await
-        .unwrap_or_else(|_| Err(background_failed()))
+    let watch = crate::corruption::Watch::start(&ctx.data_dir, "archived-sessions.json");
+    let data_dir = ctx.data_dir.as_ref().clone();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::session_ids::normalize_stores(&data_dir);
+        change(&FileArchivedSessionsStore::new(path))
+    })
+    .await
+    .unwrap_or_else(|_| Err(background_failed()));
+    watch.report(ctx).await;
+    result
 }
 
 /// 起動・再開の「ついで」の処理用(失敗はログだけ)。
@@ -572,7 +585,7 @@ async fn prepare_start_worktree(
 
 /// 会話 ID の正規の形(小文字)。比べる・控えに書く・claude へ渡すときは、すべてこの値を使う。
 fn canonical_session_id(session_id: &str) -> String {
-    session_id.to_ascii_lowercase()
+    crate::session_ids::canonical(session_id)
 }
 
 /// 再開する会話の作業フォルダ(cwd)が、リポジトリの外のときの文面(フルパスは入れない)。
@@ -581,13 +594,15 @@ const RESUME_OUTSIDE_MESSAGE: &str =
 
 /// 再開する会話の作業フォルダが、プロファイルのリポジトリか、台帳にあるその worktree の中にあることを確かめる。
 /// 外なら `cwd_missing`(422)。台帳に無い worktree かもしれないので、外と判断する前に台帳を 1 回だけ取り直す。
+/// 戻り値は、確かめた**実体のパス**(起動の作業フォルダに、これをそのまま使う。確かめたあとに会話ファイルを
+/// 読み直さない)。
 async fn ensure_resume_target_in_project(
     ctx: &AppContext,
     projects_root: &Path,
     project: &str,
     session_id: &str,
     repository: Option<&Path>,
-) -> Result<(), AppError> {
+) -> Result<PathBuf, AppError> {
     let Some(repository) = repository else {
         return Err(AppError::InvalidInput(
             "プロファイルにリポジトリが設定されていません".to_string(),
@@ -610,7 +625,7 @@ async fn resume_target_check_once(
     project: &str,
     session_id: &str,
     repository: &Path,
-) -> Result<(), AppError> {
+) -> Result<PathBuf, AppError> {
     let ledger = ctx.state.lock().await.git_ledger.clone();
     let index = app::WorktreeIndex::from_ledger(&ledger, repository);
     let (root, project, session_id, repository) = (
@@ -634,7 +649,7 @@ fn resume_target_check(
     session_id: &str,
     repository: &Path,
     index: &app::WorktreeIndex,
-) -> Result<(), AppError> {
+) -> Result<PathBuf, AppError> {
     if !domain::is_valid_project_dir_name(project) {
         return Err(AppError::InvalidInput(
             "不正なプロジェクト名です".to_string(),
@@ -655,7 +670,11 @@ fn resume_target_check(
         .filter_map(|folder| std::fs::canonicalize(folder).ok())
         .any(|folder| real.starts_with(&folder));
     if inside {
-        Ok(())
+        // `\\?\` 付きの実体のパスは、claude の作業フォルダにそのまま渡せる形(`C:\…`)へ戻す。
+        let text = real.to_string_lossy().to_string();
+        Ok(PathBuf::from(
+            text.strip_prefix(r"\\?\").unwrap_or(&text).to_string(),
+        ))
     } else {
         Err(outside())
     }
@@ -725,18 +744,27 @@ pub async fn start_running_session(
     };
 
     // 再開する会話は、このプロファイルのリポジトリ(と、台帳のその worktree)のものだけ(worktree を作る前に確かめる)。
+    let mut verified_cwd: Option<PathBuf> = None;
     if let StartRunningSessionDto::Resume {
         project,
         session_id,
         ..
     } = &request
     {
-        if let Err(e) =
-            ensure_resume_target_in_project(ctx, &root, project, session_id, repository.as_deref())
-                .await
+        match ensure_resume_target_in_project(
+            ctx,
+            &root,
+            project,
+            session_id,
+            repository.as_deref(),
+        )
+        .await
         {
-            release(&mut *ctx.state.lock().await);
-            return Err(e);
+            Ok(real) => verified_cwd = Some(real),
+            Err(e) => {
+                release(&mut *ctx.state.lock().await);
+                return Err(e);
+            }
         }
     }
 
@@ -772,6 +800,14 @@ pub async fn start_running_session(
                 return Err(e);
             }
         };
+    // 再開で worktree の指定が無いときは、確かめた実体のパスを作業フォルダとして渡す(会話ファイルを読み直さない)。
+    let worktree = match (worktree, verified_cwd) {
+        (None, Some(path)) => {
+            let worktree_id = worktree_index.id_of(&path);
+            Some(app::ResolvedWorktree { path, worktree_id })
+        }
+        (worktree, _) => worktree,
+    };
 
     let (tx, rx) = mpsc::unbounded_channel();
     let sink: Arc<dyn RunningSessionEventSink> = Arc::new(ChannelSink(tx));
@@ -888,7 +924,8 @@ pub async fn start_running_session(
             progress_seq: 0,
             project: resumed_project,
             session: started.session,
-            process: started.process,
+            // 会話用のジョブへ入れる(停止のとき、切り離された子孫も止める)。
+            process: crate::jobbed_process::JobbedProcess::wrap(started.process),
             available_models: Vec::new(),
             subscribers: Vec::new(),
         };
@@ -965,7 +1002,13 @@ pub fn start_restoring_running_sessions(ctx: AppContext) {
         };
         let path = ctx.data_dir.join("running-sessions.json");
         let archived_path = ctx.data_dir.join("archived-sessions.json");
+        let watches = [
+            crate::corruption::Watch::start(&ctx.data_dir, "running-sessions.json"),
+            crate::corruption::Watch::start(&ctx.data_dir, "archived-sessions.json"),
+        ];
+        let data_dir = ctx.data_dir.as_ref().clone();
         let entries = tokio::task::spawn_blocking(move || {
+            crate::session_ids::normalize_stores(&data_dir);
             let archived =
                 app::load_archived_sessions(&FileArchivedSessionsStore::new(archived_path))?;
             app::sessions_to_restore(
@@ -976,6 +1019,9 @@ pub fn start_restoring_running_sessions(ctx: AppContext) {
         })
         .await
         .unwrap_or_else(|_| Err(background_failed()));
+        for watch in &watches {
+            watch.report(&ctx).await;
+        }
         let entries = match entries {
             Ok(entries) => entries,
             Err(e) => {
@@ -1018,13 +1064,33 @@ pub fn start_restoring_running_sessions(ctx: AppContext) {
                 continue;
             }
 
+            // 台帳を作り直して worktree の ID が振り直されていても、覚えていたフォルダで台帳から引き直す。
+            // 引き直せなかったものは、控えから外す(起動のたびに同じ警告をくり返さない)。
+            let (ledger, settings) = {
+                let guard = ctx.state.lock().await;
+                (guard.git_ledger.clone(), guard.settings.clone())
+            };
+            let worktree = match resolve_restore_worktree(&ledger, &settings, &planned) {
+                Ok(worktree) => worktree,
+                Err(reason) => {
+                    warn_restore_skipped(&ctx, &name, &reason).await;
+                    let forgotten = planned.session_id.clone();
+                    with_restorable_store(
+                        &ctx,
+                        "実行中セッションの控えからの削除",
+                        move |store| app::forget_running_session(store, &forgotten),
+                    )
+                    .await;
+                    continue;
+                }
+            };
             let request = StartRunningSessionDto::Resume {
                 project: planned.project,
                 session_id: planned.session_id,
                 mode: planned.mode.into(),
                 name: planned.name,
                 model: planned.model.map(Into::into),
-                worktree: planned.worktree.map(WorktreeSpecDto::from),
+                worktree: worktree.map(WorktreeSpecDto::from),
                 // 復元では origin/main の最新化をしない(勝手にブランチを動かさない)。
                 sync_origin_main: Some(false),
             };
@@ -1034,6 +1100,38 @@ pub fn start_restoring_running_sessions(ctx: AppContext) {
             }
         }
     });
+}
+
+/// 控えの worktree を、台帳から引く。ID で引ければそのまま。引けないときは、覚えていたフォルダで引き直す
+/// (台帳に無いフォルダでは起動しない)。リポジトリ本体・リポジトリ外・worktree の指定が無いものは、そのまま。
+pub fn resolve_restore_worktree(
+    ledger: &GitLedger,
+    settings: &Settings,
+    planned: &app::PlannedRestore,
+) -> Result<Option<app::WorktreeSpec>, String> {
+    let Some(app::WorktreeSpec::Existing { worktree_id }) = &planned.worktree else {
+        return Ok(planned.worktree.clone());
+    };
+    let repository = app::resolve_profile(settings, Some(&planned.profile_id))
+        .map_err(|e| e.to_string())?
+        .repository_path
+        .clone()
+        .ok_or_else(|| "プロファイルにリポジトリが設定されていません".to_string())?;
+    let index = app::WorktreeIndex::from_ledger(ledger, &repository);
+    if index.path_of(worktree_id).is_some() {
+        return Ok(planned.worktree.clone());
+    }
+    let Some(path) = &planned.worktree_path else {
+        return Err("覚えていた worktree が台帳に見つかりません".to_string());
+    };
+    let found = index.id_of(std::path::Path::new(path));
+    if found == domain::MAIN_WORKTREE_ID {
+        Ok(Some(app::WorktreeSpec::Main))
+    } else if found == domain::OUTSIDE_WORKTREE_ID {
+        Err("覚えていた worktree のフォルダが台帳に見つかりません".to_string())
+    } else {
+        Ok(Some(app::WorktreeSpec::Existing { worktree_id: found }))
+    }
 }
 
 /// 起動した 1 件が「起動中」を抜けるまで待つ(次の控えを起こす前に。上限つき)。
@@ -1098,7 +1196,8 @@ pub async fn stop_running_sessions_for(ctx: &AppContext, session_id: &str) {
             .running_sessions
             .iter()
             .filter(|slot| {
-                slot.session.base.session_id == session_id
+                crate::session_ids::canonical(&slot.session.base.session_id)
+                    == crate::session_ids::canonical(session_id)
                     && slot.session.process_state != ProcessState::Exited
             })
             .map(|slot| (slot.session.clone(), slot.process.clone()))

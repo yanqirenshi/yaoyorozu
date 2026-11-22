@@ -47,9 +47,13 @@ fn validate_title(title: &str) -> Result<String, AppError> {
             "表示名を入力してください".to_string(),
         ));
     }
-    if trimmed.chars().count() > MAX_NAME_CHARS || trimmed.chars().any(char::is_control) {
+    // プロファイル名と同じ規則(制御文字・見えない文字・向きを変える文字を断る。`domain` の Unicode の性質による判定)。
+    if trimmed.chars().count() > MAX_NAME_CHARS
+        || domain::contains_forbidden_invisible_or_control(trimmed)
+        || !domain::has_visible_character(trimmed)
+    {
         return Err(AppError::InvalidInput(format!(
-            "表示名は {MAX_NAME_CHARS} 文字以内で、改行などを含めないでください"
+            "表示名は {MAX_NAME_CHARS} 文字以内で、改行・見えない文字・向きを変える文字を含めないでください"
         )));
     }
     Ok(trimmed.to_string())
@@ -193,5 +197,32 @@ mod tests {
         let err = rename_session(&source, "proj-a", "s1", "name").unwrap_err();
 
         assert!(matches!(err, AppError::Io(_)));
+    }
+
+    #[test]
+    fn rejects_invisible_and_direction_changing_characters_in_a_title() {
+        let source = FakeSource::default();
+        for bad in [
+            "a\u{200B}b",
+            "a\u{202E}b",
+            "a\u{2028}b",
+            "\u{3164}",
+            "a\u{3164}",
+        ] {
+            assert!(
+                matches!(
+                    rename_session(&source, "proj-a", "s1", bad),
+                    Err(AppError::InvalidInput(_))
+                ),
+                "{bad:?}"
+            );
+        }
+        // ふつうの名前・絵文字・日本語は通る。
+        for good in ["日本語の名前", "👨\u{200D}💻 作業", "name-1"] {
+            assert!(
+                rename_session(&source, "proj-a", "s1", good).is_ok(),
+                "{good:?}"
+            );
+        }
     }
 }

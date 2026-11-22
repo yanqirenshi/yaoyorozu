@@ -55,12 +55,27 @@ async fn call(
 ) -> (StatusCode, serde_json::Value) {
     // update_settings は「どの版を元にした変更か」が必須。指定の無い呼び出しには、今の版を補う。
     let mut body = body;
-    if command == "update_settings" && body.get("expectedRevision").is_none() {
-        body["expectedRevision"] = serde_json::json!(ctx.state.lock().await.settings.revision);
-    }
     // 保存先のプロファイルが無い呼び出しには、いまのアクティブを補う(省略のテストは `"profileId": null` で明示する)。
     if command == "update_settings" && body.get("profileId").is_none() {
         body["profileId"] = serde_json::json!(ctx.state.lock().await.settings.active_profile_id);
+    }
+    // 版の指定が無い呼び出しには、保存先のプロファイルの版と、全体の欄の版を補う(版そのもののテストは明示する)。
+    if command == "update_settings" {
+        let guard = ctx.state.lock().await;
+        let target = body["profileId"].as_str().unwrap_or("").to_string();
+        let profile_revision = guard
+            .settings
+            .profiles
+            .iter()
+            .find(|p| p.id == target)
+            .map(|p| p.revision)
+            .unwrap_or(0);
+        if body.get("expectedRevision").is_none() {
+            body["expectedRevision"] = serde_json::json!(profile_revision);
+        }
+        if body.get("expectedGlobalRevision").is_none() {
+            body["expectedGlobalRevision"] = serde_json::json!(guard.settings.revision);
+        }
     }
     let req = Request::builder()
         .method("POST")

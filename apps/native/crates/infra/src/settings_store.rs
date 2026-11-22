@@ -130,6 +130,7 @@ impl FileSettingsStore {
             repository_path: legacy.repository_path,
             github_project: legacy.github_project,
             selected_project_folders: legacy.selected_project_folders,
+            revision: 0,
         };
         let migrated = Settings {
             version: CURRENT_SETTINGS_VERSION,
@@ -343,6 +344,7 @@ mod tests {
                 number: 51,
             }),
             selected_project_folders: vec!["proj1".to_string(), "proj2".to_string()],
+            revision: 0,
         };
         let settings = Settings {
             version: CURRENT_SETTINGS_VERSION,
