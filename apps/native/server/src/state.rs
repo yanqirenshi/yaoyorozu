@@ -151,6 +151,19 @@ pub struct ServerState {
     /// Git 台帳(最小。`git-ledger.json`。worktree の ID と実体の対応に使う)。
     pub git_ledger: GitLedger,
     pub git_ledger_path: PathBuf,
+    /// 現在の PC・ログインユーザー。`users[].sessions` は、ここに**常駐**する(素材 `user_sessions` が変わったとき、
+    /// `app::refresh_user_sessions` で更新する。`get_pc` は組み立てをしない)。起動直後は会話が空で、走査キューが埋める。
+    pub pc: domain::Pc,
+    /// 全プロジェクトを走査した `ParsedSession` の一覧(走査キューが埋める。永続化しない)。
+    pub user_sessions: Vec<domain::ParsedSession>,
+    /// `git_ledger`・`user_sessions` の読み込みが完了したか(`get_pc` の `data_loaded`)。起動時は `false`。
+    pub pc_data_loaded: bool,
+    /// 走査キューの世代番号。キューが始まるたびに増え、走っているものは、適用の前に自分の世代と比べる。
+    pub session_scan_generation: u64,
+    /// ファイル監視が検知した会話ファイルの変更の待ち行列(ハブの自動更新)。
+    pub session_rescan: app::RescanQueue,
+    /// 「git の観測 → 全件の走査」が走っているか(二重に走らせない)。
+    pub reload_running: bool,
 }
 
 impl ServerState {
@@ -172,6 +185,18 @@ impl ServerState {
             usage_polling_active: false,
             git_ledger: GitLedger::default(),
             git_ledger_path: PathBuf::new(),
+            // 実際の値は、起動のとき(`main`)に OS から作って差し替える。
+            pc: domain::Pc {
+                system_uuid: String::new(),
+                pc_name: String::new(),
+                description: String::new(),
+                users: Vec::new(),
+            },
+            user_sessions: Vec::new(),
+            pc_data_loaded: false,
+            session_scan_generation: 0,
+            session_rescan: app::RescanQueue::default(),
+            reload_running: false,
         }
     }
 

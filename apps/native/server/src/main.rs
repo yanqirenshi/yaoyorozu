@@ -71,6 +71,11 @@ async fn run() -> Result<(), String> {
     let events = EventBus::new();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut state = ServerState::new(loaded.settings, save_path, loaded.recovered_from_corruption);
+    // 現在の PC・ユーザー(OS から作る。会話は走査キューが埋める)。
+    match app::current_pc(&infra::WindowsExecutionEnvironmentSource::new()) {
+        Ok(pc) => state.pc = pc,
+        Err(e) => eprintln!("PC の情報を取得できませんでした(空で続けます): {e}"),
+    }
     if loaded.recovered_from_corruption {
         // issue #538: 本当に内容が壊れていた場合と、読めなかっただけの場合を文言で区別する。
         // 起動直後は誰も WebSocket でつないでいないので、控えに積んで `list_pending_warnings` で取ってもらう。
@@ -138,6 +143,13 @@ async fn run() -> Result<(), String> {
 
     // 前回動かしていた実行中セッションを、1 件ずつ再開する(データフォルダの控えだけを読む)。
     server::running::start_restoring_running_sessions(ctx.clone());
+    // ハブのデータ(Git 台帳の観測 → 全件の走査)を、バックグラウンドで読み込む(起動を待たせない)。
+    {
+        let ctx = ctx.clone();
+        tokio::spawn(async move {
+            server::scan::begin_reload(&ctx).await;
+        });
+    }
 
     // 配信の仕組みの確認用。段階 1 は定期的な ping だけ。
     tokio::spawn(async move {

@@ -64,6 +64,10 @@ pub struct RunningServices {
     /// `running-sessions.json`・`archived-sessions.json`・`git-ledger.json` の保存のレーン
     /// (ロックの順は「レーン → 状態」の一方向)。
     pub store_lane: Arc<tokio::sync::Mutex<()>>,
+    /// `hub-layout.json`・`hub-tuning.json` の保存のレーン(版の確かめと書き込みを、ひとまとまりに行う)。
+    pub hub_lane: Arc<tokio::sync::Mutex<()>>,
+    /// Git 台帳の更新(読む → 観測する → 保存して差し替える)をひとまとまりにする(起動時の再開・ハブの読み込み・worktree の作成が重なっても、台帳の ID が食い違わない)。
+    pub ledger_lane: Arc<tokio::sync::Mutex<()>>,
     /// claude の起動の差し替え(確認用)。`None` は本物。
     pub claude_override: Option<ClaudeOverride>,
 }
@@ -523,6 +527,7 @@ fn reconcile_ledger(settings: &Settings, previous: &GitLedger) -> GitLedger {
 
 /// 台帳を、登録済みプロファイルの Git の状態に合わせて更新して保存する。
 pub async fn reload_git_ledger(ctx: &AppContext) -> Result<(), AppError> {
+    let _ledger_lane = ctx.running.ledger_lane.lock().await;
     let (settings, previous, path) = {
         let guard = ctx.state.lock().await;
         (
@@ -591,6 +596,8 @@ async fn prepare_start_worktree(
         index
     } else {
         reload_git_ledger(ctx).await?;
+        // 新しい worktree が台帳に載った。ハブが取り直せるように知らせる(Tauri 版は出しておらず、次の取り直しまで出なかった)。
+        ctx.events.emit(crate::scan::SESSIONS_UPDATED_EVENT, &());
         let ledger = ctx.state.lock().await.git_ledger.clone();
         app::WorktreeIndex::from_ledger(&ledger, repository)
     };

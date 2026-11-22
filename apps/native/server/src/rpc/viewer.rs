@@ -288,13 +288,15 @@ pub async fn check_image_attachment(body: Bytes) -> Result<Json<()>, ApiError> {
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfileArgs {
-    profile_id: Option<String>,
+    /// 必須(省略・null は 400)。タブごとに別のプロファイルを開くので、「アクティブ」に頼らない。
+    profile_id: String,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveMdArgs {
-    profile_id: Option<String>,
+    /// 必須(省略・null は 400)。タブごとに別のプロファイルを開くので、「アクティブ」に頼らない。
+    profile_id: String,
     content: String,
     expected_modified_at_ms: Option<u64>,
 }
@@ -304,7 +306,7 @@ pub async fn get_project_claude_md(
     body: Bytes,
 ) -> Result<Json<ClaudeMdDto>, ApiError> {
     let args: ProfileArgs = parse_args(&body)?;
-    let repo_dir = repository_dir_for_profile(&ctx, args.profile_id.as_deref()).await?;
+    let repo_dir = repository_dir_for_profile(&ctx, Some(args.profile_id.as_str())).await?;
     let dto = blocking(move || {
         let store = infra::FileClaudeMdStore::new();
         Ok(ClaudeMdDto::from(app::read_claude_md(&store, &repo_dir)?))
@@ -318,7 +320,7 @@ pub async fn save_project_claude_md(
     body: Bytes,
 ) -> Result<Json<()>, ApiError> {
     let args: SaveMdArgs = parse_args(&body)?;
-    let repo_dir = repository_dir_for_profile(&ctx, args.profile_id.as_deref()).await?;
+    let repo_dir = repository_dir_for_profile(&ctx, Some(args.profile_id.as_str())).await?;
     // 「更新時刻を確かめる → 書く」を、ほかの保存に割り込まれずにひとまとまりで行う。
     let _lane = ctx.file_lane.lock().await;
     blocking(move || {
@@ -339,7 +341,7 @@ pub async fn list_rules(
     body: Bytes,
 ) -> Result<Json<Vec<RuleSummaryDto>>, ApiError> {
     let args: ProfileArgs = parse_args(&body)?;
-    let repo_dir = repository_dir_for_profile(&ctx, args.profile_id.as_deref()).await?;
+    let repo_dir = repository_dir_for_profile(&ctx, Some(args.profile_id.as_str())).await?;
     let rules = blocking(move || {
         let store = infra::FileRulesStore::new();
         let rules = app::list_rules(&store, &repo_dir)?;
@@ -355,7 +357,8 @@ pub async fn list_rules(
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetRuleArgs {
-    profile_id: Option<String>,
+    /// 必須(省略・null は 400)。タブごとに別のプロファイルを開くので、「アクティブ」に頼らない。
+    profile_id: String,
     file_name: String,
 }
 
@@ -365,7 +368,7 @@ pub async fn get_rule(
 ) -> Result<Json<RuleDto>, ApiError> {
     let args: GetRuleArgs = parse_args(&body)?;
     reject_colon(&args.file_name, "ファイル名")?;
-    let repo_dir = repository_dir_for_profile(&ctx, args.profile_id.as_deref()).await?;
+    let repo_dir = repository_dir_for_profile(&ctx, Some(args.profile_id.as_str())).await?;
     let dto = blocking(move || {
         let store = infra::FileRulesStore::new();
         let content = app::get_rule(&store, &repo_dir, &args.file_name)?;
@@ -380,7 +383,7 @@ pub async fn list_skills(
     body: Bytes,
 ) -> Result<Json<Vec<SkillSummaryDto>>, ApiError> {
     let args: ProfileArgs = parse_args(&body)?;
-    let repo_dir = repository_dir_for_profile(&ctx, args.profile_id.as_deref()).await?;
+    let repo_dir = repository_dir_for_profile(&ctx, Some(args.profile_id.as_str())).await?;
     let skills = blocking(move || {
         let store = infra::FileSkillsStore::new();
         let skills = app::list_skills(&store, &repo_dir)?;
@@ -396,7 +399,8 @@ pub async fn list_skills(
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetSkillArgs {
-    profile_id: Option<String>,
+    /// 必須(省略・null は 400)。タブごとに別のプロファイルを開くので、「アクティブ」に頼らない。
+    profile_id: String,
     name: String,
 }
 
@@ -406,7 +410,7 @@ pub async fn get_skill(
 ) -> Result<Json<SkillDto>, ApiError> {
     let args: GetSkillArgs = parse_args(&body)?;
     reject_colon(&args.name, "スキル名")?;
-    let repo_dir = repository_dir_for_profile(&ctx, args.profile_id.as_deref()).await?;
+    let repo_dir = repository_dir_for_profile(&ctx, Some(args.profile_id.as_str())).await?;
     let dto = blocking(move || {
         let store = infra::FileSkillsStore::new();
         let content = app::get_skill(&store, &repo_dir, &args.name)?;
@@ -419,7 +423,8 @@ pub async fn get_skill(
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetProjectSettingsArgs {
-    profile_id: Option<String>,
+    /// 必須(省略・null は 400)。タブごとに別のプロファイルを開くので、「アクティブ」に頼らない。
+    profile_id: String,
     which: ProjectSettingsFileDto,
 }
 
@@ -430,7 +435,7 @@ pub async fn get_project_settings_file(
     body: Bytes,
 ) -> Result<Json<ClaudeSettingsDto>, ApiError> {
     let args: GetProjectSettingsArgs = parse_args(&body)?;
-    let repo_dir = repository_dir_for_profile(&ctx, args.profile_id.as_deref()).await?;
+    let repo_dir = repository_dir_for_profile(&ctx, Some(args.profile_id.as_str())).await?;
     let dto = blocking(move || {
         let store = infra::FileProjectSettingsStore::new();
         let file = app::read_project_settings_file(&store, &repo_dir, args.which.into())?;
@@ -443,7 +448,8 @@ pub async fn get_project_settings_file(
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveProjectSettingsArgs {
-    profile_id: Option<String>,
+    /// 必須(省略・null は 400)。タブごとに別のプロファイルを開くので、「アクティブ」に頼らない。
+    profile_id: String,
     which: ProjectSettingsFileDto,
     content: String,
     expected_modified_at_ms: Option<u64>,
@@ -454,7 +460,7 @@ pub async fn save_project_settings_file(
     body: Bytes,
 ) -> Result<Json<()>, ApiError> {
     let args: SaveProjectSettingsArgs = parse_args(&body)?;
-    let repo_dir = repository_dir_for_profile(&ctx, args.profile_id.as_deref()).await?;
+    let repo_dir = repository_dir_for_profile(&ctx, Some(args.profile_id.as_str())).await?;
     let _lane = ctx.file_lane.lock().await;
     blocking(move || {
         let store = infra::FileProjectSettingsStore::new();
@@ -476,7 +482,7 @@ pub async fn get_yyz_scaffold_status(
     body: Bytes,
 ) -> Result<Json<YyzScaffoldStatusDto>, ApiError> {
     let args: ProfileArgs = parse_args(&body)?;
-    let repo_dir = repository_dir_for_profile(&ctx, args.profile_id.as_deref()).await?;
+    let repo_dir = repository_dir_for_profile(&ctx, Some(args.profile_id.as_str())).await?;
     let dto = blocking(move || {
         app::yyz_scaffold_status(&infra::FileYyzScaffoldWriter::new(), &repo_dir)
             .map(YyzScaffoldStatusDto::from)
@@ -492,7 +498,7 @@ pub async fn create_yyz_scaffold(
     body: Bytes,
 ) -> Result<Json<YyzScaffoldStatusDto>, ApiError> {
     let args: ProfileArgs = parse_args(&body)?;
-    let repo_dir = repository_dir_for_profile(&ctx, args.profile_id.as_deref()).await?;
+    let repo_dir = repository_dir_for_profile(&ctx, Some(args.profile_id.as_str())).await?;
     let dto = blocking(move || {
         app::create_yyz_scaffold(&infra::FileYyzScaffoldWriter::new(), &repo_dir)
             .map(YyzScaffoldStatusDto::from)

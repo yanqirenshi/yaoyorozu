@@ -1,5 +1,5 @@
 //! 会話ファイルの監視(`session:changed` イベント)。写し元: `tauri/src/lib.rs` の
-//! `start_session_watcher`。ハブの差分再走査(`session_scan_queue`)は段階 4 で足す。
+//! `start_session_watcher`。変更のあった会話ファイルは、ハブの差分再走査(`scan.rs`)へも渡す。
 //!
 //! 書き込みが続く会話(実行中のセッション)では、ファイル監視が 0.1 秒ごとに通知を出す。そのまま配ると、
 //! 画面が 0.1 秒ごとに一覧と会話を取り直す。**同じプロジェクトの通知は、最短 [`MIN_EMIT_INTERVAL`] の間隔で
@@ -96,7 +96,15 @@ impl ChangeThrottle {
 pub fn start_session_watcher(ctx: &AppContext, root: PathBuf) {
     let repo = infra::FileSystemRepository::new(root);
     let throttle = ChangeThrottle::new(ctx.events.clone(), MIN_EMIT_INTERVAL);
-    match repo.watch_projects(move |change| throttle.notify(change.project)) {
+    // 監視のスレッド(tokio の外)から、差分再走査を起こすための実行環境。
+    let handle = tokio::runtime::Handle::current();
+    let ctx_for_rescan = ctx.clone();
+    match repo.watch_projects(move |change| {
+        // ビューアの追従(プロジェクト単位)
+        throttle.notify(change.project);
+        // ハブの自動更新: 変更のあった会話ファイルだけを差分再走査する
+        crate::scan::enqueue_changed(ctx_for_rescan.clone(), &handle, change.conversation_files);
+    }) {
         Ok(new_watcher) => match ctx.watcher.lock() {
             Ok(mut guard) => *guard = Some(new_watcher),
             Err(poisoned) => *poisoned.into_inner() = Some(new_watcher),

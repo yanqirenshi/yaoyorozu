@@ -211,6 +211,19 @@ ZWJ・ZWNJ・異体字セレクタは、前後に見える文字があるとき�
 - 切れている間の通知・途中経過は失われる。画面は、つなぎ直したときの合図(`onReconnected`)で状態を取り直す。凍結されたタブ・スリープから戻ったタブは、接続が切れているので、同じ道で戻る。
 - ブラウザ(全タブ)を閉じても claude は動き続ける。開き直すと、`list_running_sessions`・`get_running_session` で状態が見える。
 
+### ハブ(段階 4 A。#639)
+
+写し元: `tauri/src/lib.rs` の `get_pc`・`reconcile_git_state`・`get_hub_layout`・`save_hub_layout`・`get_hub_tuning`・`save_hub_tuning`、`session_scan_queue.rs`(`src/scan.rs`・`src/rpc/hub.rs`)。
+
+- **常駐のツリー**: 現在の PC・ユーザーと、その下の会話(`ServerState.pc`)は、走査キューが埋める常駐の状態。`get_pc` は組み立ても走査もせず、このツリーに台帳・読み込み済みの行・アーカイブの印を差し込んで返す。
+- **起動時の読み込み**(バックグラウンド): Git 台帳の観測 → 全件の走査。`reconcile_git_state` も同じ道(`scan::begin_reload`)。**始めたらすぐ応え**、終わりは `pc:data_loaded` で知らせる。走っている最中は、新しく始めない(`reload_running`)。台帳の更新は、専用のレーンを通る(起動時の再開・ハブ・worktree の作成が重なっても、台帳の ID が食い違わない)。
+- **走査キュー**(Tauri 版と同じ): 会話ファイル(jsonl)単位に、更新時刻の降順・n 並列(既定 6。環境変数 `YAOYOROZU_SCAN_CONCURRENCY` で 1〜16)で走らせ、完了したものから反映して `pc:data_progress`(`{completed, total}`)を出す。世代番号で、再読み込みとの競合を防ぐ。
+- **差分再走査**: ファイル監視が検知した会話ファイルだけを、最短 1 秒の間隔でまとめて走査し、反映したら `pc:sessions_updated` を出す。worktree を新しく作って起動し、台帳を取り直したときにも出す(Tauri 版は出していなかった)。
+- **レイアウト・チューニングの版**: `get_hub_layout`・`get_hub_tuning` は `revision` を返す。**ファイルの中身の指紋**(FNV-1a 64 の下位 52 ビット)なので、サーバを起動し直しても、別の書き手が書いても、中身が変われば変わる。`save_*` は `expectedRevision` を必須で受け(省略は 400)、合わなければ 409(`hub_conflict`)。版の確かめと書き込みは専用のレーンの中でひとまとまりに行い、書き込みは `write_atomic`。保存したら `hub-layout:updated`・`hub-tuning:updated`(`{revision}`)を出す。
+- **`profileId` の必須化**: `start_running_session`・`get_project_claude_md`・`save_project_claude_md`・`list_rules`・`get_rule`・`list_skills`・`get_skill`・`get_project_settings_file`・`save_project_settings_file`・`get_yyz_scaffold_status`・`create_yyz_scaffold` は、`profileId` を必須にする(省略・null は 400)。`get_settings` だけは省略を残す。
+- **`get_running_session` の `turn_events`**: 進行中のターンのここまでの途中経過(連番つき。2MB・20,000 件まで。大きくなりすぎたら古いほうから捨てる)。ターンが終わると空。
+- 測定: `node server/scripts/e2e-hub-size.mjs`(`get_pc` の大きさ・時間、走査の最中の取り直し)。確認: `node server/scripts/e2e-hub.mjs`(守り・版・同時の保存・reconcile)、`cargo test -p server --test hub`。
+
 ### 守り(起動・送信の入口)
 
 - 起動先(リポジトリ・worktree・プロファイル)は、**登録済みプロファイルのリポジトリと、実際の `git worktree list`(台帳)から引けるものだけ**。クライアントのパスは受け取らない(余分な項目は無視される)。

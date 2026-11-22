@@ -41,7 +41,8 @@ fn background_failed() -> AppError {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StartArgs {
-    profile_id: Option<String>,
+    /// 必須(省略・null は 400)。
+    profile_id: String,
     request: StartRunningSessionDto,
 }
 
@@ -51,7 +52,7 @@ pub async fn start_running_session(
 ) -> Result<Json<RunningSessionDto>, ApiError> {
     let args: StartArgs = parse_args(&body)?;
     let dto =
-        crate::running::start_running_session(&ctx, args.profile_id, args.request).await?;
+        crate::running::start_running_session(&ctx, Some(args.profile_id), args.request).await?;
     Ok(Json(dto))
 }
 
