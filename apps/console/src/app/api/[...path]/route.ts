@@ -5,6 +5,7 @@
 // - SSE は本文をそのまま流す(まとめない・貯めない)。
 
 import { NextResponse, type NextRequest } from "next/server";
+import { bodyLimitFor } from "@/server/bodyLimits";
 import { readServerPort, readServerToken } from "@/server/localServer";
 
 export const dynamic = "force-dynamic";
@@ -71,12 +72,23 @@ async function relay(
   if (isEvents) headers.set("Accept", "text/event-stream");
 
   const hasBody = request.method !== "GET" && request.method !== "HEAD";
+  // 本文がサーバの上限を超えるものは、サーバへ送らずに 413 を返す(送ると、サーバが本文の途中で 413 を返して接続を
+  // 閉じ、こちらの fetch が失敗して 503 になることがある)。
+  const limit = bodyLimitFor(target);
+  const declared = Number(request.headers.get("content-length") ?? "0");
+  if (hasBody && declared > limit) {
+    return error("payload_too_large", "送ろうとしたデータが大きすぎます", 413);
+  }
+  const body = hasBody ? await request.arrayBuffer() : undefined;
+  if (body !== undefined && body.byteLength > limit) {
+    return error("payload_too_large", "送ろうとしたデータが大きすぎます", 413);
+  }
   let upstream: Response;
   try {
     upstream = await fetch(`http://127.0.0.1:${port}/${target}`, {
       method: request.method,
       headers,
-      body: hasBody ? await request.arrayBuffer() : undefined,
+      body,
       cache: "no-store",
       // ブラウザが切れたら、サーバへの接続も切る(SSE の購読が残らないように)。
       signal: request.signal,

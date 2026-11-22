@@ -6,6 +6,7 @@
 import { listen, openProgressSubscription } from "./events";
 import type {
   AppErrorDto,
+  AttachmentLimitsDto,
   AppWarningEvent,
   FolderCheckDto,
   PendingWarningDto,
@@ -488,4 +489,9 @@ export function onClaudeUsageUpdated(
   callback: (event: ClaudeUsageSnapshotDto) => void,
 ): Promise<() => void> {
   return listen<ClaudeUsageSnapshotDto>("claude-usage:updated", callback);
+}
+
+// 画像の添付の上限(この構成だけの Query)。上限を超えて 413 になったときの文面に使う(数字をサーバの 1 か所から取る)。
+export function getAttachmentLimits(): Promise<AttachmentLimitsDto> {
+  return invoke<AttachmentLimitsDto>("get_attachment_limits");
 }

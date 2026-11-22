@@ -1,5 +1,6 @@
 "use client";
 
+import { viewOfText } from "./largeText";
 import SafeMarkdownViewer from "./SafeMarkdownViewer";
 
 // 会話メッセージ本文の Markdown 描画(issue #319)。markdown.sitter の markdown-viewer を、
@@ -13,6 +14,16 @@ type MessageTextProps = {
 };
 
 function MessageText({ text }: MessageTextProps) {
+  // とても大きい発言(目安 1MB 超)は、Markdown として描かず、先頭だけを素の文字で出す(`largeText.ts`)。
+  const view = viewOfText(text);
+  if (view.large) {
+    return (
+      <div className="message-text message-text-large">
+        <pre className="message-text-large-body">{view.preview}</pre>
+        <p className="message-text-large-note">{view.note}</p>
+      </div>
+    );
+  }
   return <SafeMarkdownViewer text={text} foldable={false} className="message-text" />;
 }
 

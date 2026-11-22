@@ -464,6 +464,15 @@ fn spawn_event_loop(
                 .await;
             }
             if matches!(addressed.event, RunningSessionEvent::Exited { .. }) {
+                // claude が自分で終わったとき(異常終了を含む)も、会話のジョブを閉じる(切り離した子孫を残さない)。
+                // 終了済みの `stop` は claude には何もせず、ジョブだけを止める。
+                let process = {
+                    let guard = ctx.state.lock().await;
+                    find_slot(&guard, &target).map(|slot| slot.process.clone())
+                };
+                if let Some(process) = process {
+                    let _ = tokio::task::spawn_blocking(move || process.stop()).await;
+                }
                 break;
             }
         }
@@ -689,6 +698,29 @@ pub async fn start_running_session(
     profile_id: Option<String>,
     request: StartRunningSessionDto,
 ) -> Result<RunningSessionDto, AppError> {
+    start_running_session_inner(ctx, profile_id, request, false).await
+}
+
+/// 自動再開が、アーカイブ済みの会話を起動しないときの理由(ログだけ。警告にはしない)。
+pub const ARCHIVED_SKIP_REASON: &str = "アーカイブ済みのため、自動再開しません";
+
+/// 自動再開の起動(`start_running_session` と同じ処理で、起動の直前にアーカイブの印を確かめる)。
+pub async fn start_restored_session(
+    ctx: &AppContext,
+    profile_id: Option<String>,
+    request: StartRunningSessionDto,
+) -> Result<RunningSessionDto, AppError> {
+    start_running_session_inner(ctx, profile_id, request, true).await
+}
+
+/// [`start_running_session`] の本体。`restoring` が真(自動再開)のときは、起動の直前にアーカイブの印を確かめ、
+/// あれば起動せず、印も外さない(利用者が自分で再開したときに印が外れる動きは、そのまま)。
+async fn start_running_session_inner(
+    ctx: &AppContext,
+    profile_id: Option<String>,
+    request: StartRunningSessionDto,
+    restoring: bool,
+) -> Result<RunningSessionDto, AppError> {
     // 会話 ID は、ここ 1 か所で小文字にそろえる(二重起動の判断・控え・claude へ渡す値が、すべて同じ値になる)。
     let mut request = request;
     if let StartRunningSessionDto::Resume { session_id, .. } = &mut request {
@@ -824,6 +856,19 @@ pub async fn start_running_session(
     let session_id_for_task = session_id.clone();
     let launcher = ctx.running.launcher();
     // claude の起動は数秒かかりうるため、async ランタイムを塞がないようブロッキングスレッドで行う。
+    // 自動再開は、起動の直前に、アーカイブの印を確かめる(あれば起動しない。印も外さない)。
+    if restoring && is_resume {
+        let archived_id = session_id.clone();
+        let archived = try_with_archived_store(ctx, move |store| {
+            Ok(app::load_archived_sessions(store)?.is_archived(&archived_id))
+        })
+        .await
+        .unwrap_or(false);
+        if archived {
+            release(&mut *ctx.state.lock().await);
+            return Err(AppError::InvalidInput(ARCHIVED_SKIP_REASON.to_string()));
+        }
+    }
     let started =
         tokio::task::spawn_blocking(move || -> Result<app::StartedRunningSession, AppError> {
             match request {
@@ -964,8 +1009,8 @@ pub async fn start_running_session(
         },
     )
     .await;
-    if is_resume {
-        // 起動(再開)したら自動でアーカイブの印を外す。失敗しても起動自体は成功のまま返す。
+    if is_resume && !restoring {
+        // 利用者が起動(再開)したら自動でアーカイブの印を外す(自動再開は外さない)。失敗しても起動自体は成功のまま返す。
         let sid = session_id.clone();
         with_archived_store(ctx, "アーカイブの印の解除", move |store| {
             app::unarchive_session(store, &sid)
@@ -1094,8 +1139,11 @@ pub fn start_restoring_running_sessions(ctx: AppContext) {
                 // 復元では origin/main の最新化をしない(勝手にブランチを動かさない)。
                 sync_origin_main: Some(false),
             };
-            match start_running_session(&ctx, Some(planned.profile_id), request).await {
+            match start_restored_session(&ctx, Some(planned.profile_id), request).await {
                 Ok(dto) => wait_until_settled(&ctx, &dto.target.into()).await,
+                Err(AppError::InvalidInput(reason)) if reason == ARCHIVED_SKIP_REASON => {
+                    eprintln!("「{name}」は、{reason}");
+                }
                 Err(e) => warn_restore_skipped(&ctx, &name, &e.to_string()).await,
             }
         }
@@ -1186,6 +1234,51 @@ pub async fn stop_all_running_sessions(ctx: &AppContext) {
     if tokio::time::timeout(STOP_ALL_BUDGET, wait).await.is_err() {
         eprintln!("実行中セッションを止めきれませんでした(残りはジョブオブジェクトが止めます)");
     }
+}
+
+/// 起動している最中の会話を、アーカイブの側が待つ上限。
+const ARCHIVE_WAIT_FOR_START: Duration = Duration::from_secs(60);
+
+/// 会話をアーカイブする。結果は、必ず「印あり・動いていない・再開の控えにも無い」に落ち着く。
+///
+/// - 印を**先に**付ける(自動再開の、起動の直前の確かめが、印を見られるように)。
+/// - その会話が**起動している最中**(`starting_session_ids` にある)なら、起動が終わるまで待ってから止める
+///   (起動の最中は、実行中の一覧にまだ載っていないので、停止が何も止めないため)。確かめる→止める、の順なので、
+///   起動が終わった直後の 1 回でも、実行中になったものを止められる。
+/// - 利用者が起動した(印を外す)ものと重なったときに備えて、止めたあと、もう一度印を付ける。
+/// - 止めたものは、再開の控えからも外す(戻したあとの次の起動で、自動再開されない)。
+pub async fn archive_session_settled(ctx: &AppContext, session_id: &str) -> Result<(), AppError> {
+    let archive =
+        |id: String| move |store: &FileArchivedSessionsStore| app::archive_session(store, &id);
+    try_with_archived_store(ctx, archive(session_id.to_string())).await?;
+    let deadline = std::time::Instant::now() + ARCHIVE_WAIT_FOR_START;
+    let mut waited = false;
+    loop {
+        let starting = ctx
+            .state
+            .lock()
+            .await
+            .starting_session_ids
+            .iter()
+            .any(|id| id == session_id);
+        stop_running_sessions_for(ctx, session_id).await;
+        if !starting || std::time::Instant::now() >= deadline {
+            break;
+        }
+        waited = true;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    if waited {
+        try_with_archived_store(ctx, archive(session_id.to_string())).await?;
+    }
+    let forgotten = session_id.to_string();
+    with_restorable_store(
+        ctx,
+        "実行中セッションの控えからの削除",
+        move |store| app::forget_running_session(store, &forgotten),
+    )
+    .await;
+    Ok(())
 }
 
 /// `session_id` に一致する、終了していない実行中セッションを**全部**止める(プロファイルをまたいで探す)。

@@ -12,7 +12,7 @@ import { spawn, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import {
-  alive, check, descendants, dirs, nextBase, openSse, projectName, projects, refOf, results, root, rpc,
+  alive, cleanupStarted, killIfMine, recordIdentity, check, descendants, dirs, nextBase, openSse, projectName, projects, refOf, results, root, rpc,
   runServerOnce, sendCtrlC, sleep, slash, startNext, startServer, startedPids, token, viaNext, waitHealthy, waitState,
 } from "./e2e-lib.mjs";
 
@@ -251,7 +251,8 @@ async function main() {
   await waitState(srv2, restored.target, "idle");
   const snapshot = descendants(srv2.child.pid);
   console.log(`  強制終了の前の子孫: ${snapshot.join(",") || "(なし)"}`);
-  execFileSync("taskkill", ["/PID", String(srv2.child.pid), "/F"], { stdio: "pipe" });
+  // 強制終了(自分が起動したサーバだけ。PID と開始時刻を確かめてから)。
+  if (!killIfMine(srv2.child.pid)) throw new Error("強制終了の対象が、自分が起動したものか確かめられません");
   await srv2.exited;
   await sleep(1500);
   const left = snapshot.filter(alive);
@@ -265,8 +266,11 @@ async function main() {
     { stdio: ["ignore", "pipe", "ignore"], windowsHide: true },
   );
   const kidPid = await new Promise((resolve) => parent.stdout.once("data", (d) => resolve(Number(String(d).trim()))));
+  recordIdentity(parent.pid);
+  recordIdentity(kidPid);
   startedPids.push(parent.pid, kidPid);
-  execFileSync("taskkill", ["/PID", String(parent.pid), "/F"], { stdio: "pipe" });
+  // 対照実験の親を止める(自分が spawn したものを、PID と開始時刻を確かめてから)。
+  killIfMine(parent.pid);
   await sleep(500);
   check("対照: ジョブの外の親を殺すと、子は残る(この確認は「残る」を検出できる)", alive(kidPid), `子 PID ${kidPid} は ${alive(kidPid) ? "残った" : "消えた"}`);
 }
@@ -278,13 +282,8 @@ try {
   process.exitCode = 1;
 } finally {
   // 後始末: このスクリプトが起動したサーバだけを、PID 指定で止める(名前一致の一括終了はしない)。
-  for (const pid of startedPids) {
-    if (alive(pid)) {
-      try {
-        execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "pipe" });
-      } catch {}
-    }
-  }
+  // 後片付け: PID と開始時刻の組が控えと一致する、自分が起動したものだけを止める(`proc-safety.mjs`)。
+  cleanupStarted();
   const failed = results.filter((x) => !x.ok).length;
   console.log(`\n${results.length - failed}/${results.length} 件が通りました`);
   try {

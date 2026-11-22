@@ -95,9 +95,10 @@ impl fmt::Display for ImageAttachmentError {
             ),
             ImageAttachmentError::TooLarge { base64_len, max } => write!(
                 f,
-                "画像のサイズが上限を超えています(約{:.1}MB。上限は約{:.1}MB)",
-                decoded_megabytes(*base64_len),
-                decoded_megabytes(*max)
+                // 上限をわずかに超えたときも、大小が分かる桁で出す(画像の大きさは切り上げ、上限は切り捨て)。
+                "画像のサイズが上限を超えています(約{:.2}MB。上限は約{:.2}MB)",
+                (decoded_megabytes(*base64_len) * 100.0).ceil() / 100.0,
+                (decoded_megabytes(*max) * 100.0).floor() / 100.0
             ),
             ImageAttachmentError::TooMany { max, .. } => {
                 write!(f, "画像は1回の送信に{max}枚までです")
@@ -293,7 +294,7 @@ mod tests {
         }
         .to_string();
         assert!(
-            too_large.contains("6.0MB") && too_large.contains("3.8MB"),
+            too_large.contains("6.00MB") && too_large.contains("3.75MB"),
             "{too_large}"
         );
         assert!(ImageAttachmentError::TooMany { count: 6, max: 5 }
@@ -309,5 +310,28 @@ mod tests {
         );
         assert_eq!(ImageMediaType::from_mime("image/svg+xml"), None);
         assert_eq!(ImageMediaType::from_mime("text/html"), None);
+    }
+
+    #[test]
+    fn the_too_large_message_shows_digits_that_tell_the_size_from_the_limit() {
+        // 上限をわずかに超えたときも、同じ数字が並ばない(画像は切り上げ、上限は切り捨て)。
+        let just_over = ImageAttachmentError::TooLarge {
+            base64_len: MAX_IMAGE_BASE64_LEN + 1,
+            max: MAX_IMAGE_BASE64_LEN,
+        }
+        .to_string();
+        assert_eq!(
+            just_over,
+            "画像のサイズが上限を超えています(約3.76MB。上限は約3.75MB)"
+        );
+        let far_over = ImageAttachmentError::TooLarge {
+            base64_len: 8_000_000,
+            max: MAX_IMAGE_BASE64_LEN,
+        }
+        .to_string();
+        assert_eq!(
+            far_over,
+            "画像のサイズが上限を超えています(約6.00MB。上限は約3.75MB)"
+        );
     }
 }

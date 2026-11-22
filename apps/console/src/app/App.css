@@ -3255,3 +3255,17 @@ button.claude-explorer-name {
 .stale-notice button {
   flex: none;
 }
+
+/* とても大きい発言(目安 1MB 超): Markdown として描かず、先頭だけを素の文字で出す。 */
+.message-text-large-body {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
+
+.message-text-large-note {
+  margin: var(--space-2, 8px) 0 0;
+  color: var(--color-text-muted, inherit);
+  font-size: 0.85em;
+}

@@ -19,7 +19,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  alive, check, descendants, dirs, openSse, real, refOf, results, root, rpc, sendCtrlC, sleep, slash, startServer,
+  alive, cleanupStarted, check, descendants, dirs, openSse, real, refOf, results, root, rpc, sendCtrlC, sleep, slash, startServer,
   startedPids, waitHealthy, waitState,
 } from "./e2e-lib.mjs";
 
@@ -136,13 +136,8 @@ try {
   console.error("スクリプトの失敗:", e);
   process.exitCode = 1;
 } finally {
-  for (const pid of startedPids) {
-    if (alive(pid)) {
-      try {
-        execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "pipe" });
-      } catch {}
-    }
-  }
+  // 後片付け: PID と開始時刻の組が控えと一致する、自分が起動したものだけを止める(`proc-safety.mjs`)。
+  cleanupStarted();
   const failed = results.filter((x) => !x.ok).length;
   console.log(`\n${results.length - failed}/${results.length} 件が通りました`);
   try {

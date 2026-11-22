@@ -8,6 +8,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { alive, descendantsOf, isMine, killIfMine, killTreeIfMine, recordIdentity } from "./proc-safety.mjs";
+
+// プロセスの生死の判定・子孫の取得・停止は、`proc-safety.mjs`(PID と開始時刻の組で、自分が起動したものか確かめる)を使う。
+export { alive, killIfMine, recordIdentity };
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const nativeDir = path.resolve(here, "..", "..");
@@ -45,48 +49,13 @@ git("add", ".");
 git("commit", "-q", "-m", "init");
 
 // ---- プロセスの木 ----
+// 子孫(確かめたものだけ。親より前に始まったものは、親 PID が一致しても子とみなさない)。見つけたものは、PID と
+// 開始時刻の組を控える(あとの生死の判定が、PID の再利用に惑わされない)。コンソールのホスト(conhost.exe)は入れない。
 export function descendants(pid) {
-  const out = execFileSync(
-    "powershell",
-    [
-      "-NoProfile",
-      "-Command",
-      "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId),$($_.ParentProcessId),$($_.Name)\" }",
-    ],
-    { encoding: "utf8" },
-  );
-  const parentOf = new Map();
-  const names = new Map();
-  const children = new Map();
-  for (const line of out.split(/\r?\n/)) {
-    const [cs, ps, name] = line.split(",");
-    const c = Number(cs);
-    const p = Number(ps);
-    if (!c) continue;
-    names.set(c, (name ?? "").trim().toLowerCase());
-    parentOf.set(c, p);
-    if (!children.has(p)) children.set(p, []);
-    children.get(p).push(c);
-  }
-  const found = [];
-  const walk = (p) => {
-    for (const c of children.get(p) ?? []) {
-      // コンソールのホスト(conhost.exe)は、サーバ自身のコンソールのもの。子孫の数には入れない。
-      if (names.get(c) !== "conhost.exe") found.push(c);
-      walk(c);
-    }
-  };
-  walk(pid);
+  const found = descendantsOf(pid);
+  found.forEach((p) => recordIdentity(p));
   return found;
 }
-export const alive = (pid) => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-};
 
 // ---- サーバの起動 ----
 export const startedPids = [];
@@ -114,6 +83,8 @@ $p = Start-Process -FilePath '${serverExe}' -WindowStyle Hidden -PassThru -Redir
   // 標準入出力は捨てる(つながったままだと、子のサーバがパイプを持ち続けて、この呼び出しが終わらない)。
   execFileSync("powershell", ["-NoProfile", "-Command", command], { env: serverEnv(dataDir, port), stdio: "ignore" });
   const pid = Number(fs.readFileSync(pidFile, "utf8").trim());
+  // 起動した直後に、PID と開始時刻の組を控える(止める前に、自分が起動したものか確かめるため)。
+  recordIdentity(pid);
   startedPids.push(pid);
   const read = (f) => (fs.existsSync(f) ? fs.readFileSync(f, "utf8") : "");
   const log = { join: () => read(out) + read(err) };
@@ -126,6 +97,8 @@ $p = Start-Process -FilePath '${serverExe}' -WindowStyle Hidden -PassThru -Redir
 // 2 つ目のサーバ(断られる確認)。終了コードがほしいので、ふつうに起動して終わりを待つ。
 export function runServerOnce({ dataDir = dirs.data, port = nextPort++ } = {}) {
   const child = spawn(serverExe, [], { env: serverEnv(dataDir, port), windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  recordIdentity(child.pid);
+  startedPids.push(child.pid);
   const log = [];
   child.stdout.on("data", (d) => log.push(String(d)));
   child.stderr.on("data", (d) => log.push(String(d)));
@@ -163,6 +136,7 @@ export async function startNext() {
     windowsHide: true,
     stdio: "ignore",
   });
+  recordIdentity(child.pid);
   startedPids.push(child.pid);
   for (let i = 0; i < 100; i++) {
     try {
@@ -285,6 +259,8 @@ public static class K {
 
 // Ctrl+C を、サーバのコンソールへ送る(送る側は無視する設定にしてから)。
 export function sendCtrlC(pid) {
+  // 自分が起動したものでなければ送らない(PID が別のプロセスへ再利用されていると、そのコンソールへ Ctrl+C を送ってしまう)。
+  if (!isMine(pid)) return "refused(自分が起動したものか確かめられない)";
   const script = `${consoleApi}
 [K]::FreeConsole() | Out-Null
 if (-not [K]::AttachConsole(${pid})) { Write-Output "attach-failed"; exit 2 }
@@ -295,3 +271,14 @@ Start-Sleep -Milliseconds 300
   return execFileSync("powershell", ["-NoProfile", "-Command", script], { encoding: "utf8" }).trim();
 }
 
+
+/**
+ * 後片付け: このスクリプトが起動したもの(`startedPids` と、`extra`)を止める。**PID と開始時刻の組が控えと一致するものだけ**を、
+ * 確かめた子孫ごと、1 つずつ止める(一致しないものは止めず、ログに出す。名前一致・`/T` の一括終了はしない)。
+ * `extra` の PID は、見つけた直後に `recordIdentity` で控えたもの(控えが無ければ止めない)。
+ */
+export function cleanupStarted(extra = []) {
+  for (const pid of new Set([...extra, ...startedPids])) {
+    killTreeIfMine(pid);
+  }
+}

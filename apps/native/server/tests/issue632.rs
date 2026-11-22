@@ -627,3 +627,200 @@ async fn saving_the_same_values_does_not_advance_either_version() {
     assert_eq!(body["revision"], rev + 1);
     assert_eq!(body["global_revision"], global);
 }
+
+// --- 18. 自動再開は、アーカイブ済みの会話を起動しない ---
+
+#[tokio::test]
+async fn an_automatic_restore_does_not_start_an_archived_conversation_and_keeps_the_mark() {
+    let f = fixture();
+    let session = "0a1b2c3d-1111-4222-8333-444455556666";
+    let repo = f.dir.path().join("repo");
+    let projects = f.dir.path().join("projects");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::create_dir_all(projects.join("proj1")).unwrap();
+    let line = serde_json::json!({
+        "type": "user", "sessionId": session, "cwd": forward(&repo),
+        "message": {"role": "user", "content": "hello"}
+    });
+    std::fs::write(
+        projects.join("proj1").join(format!("{session}.jsonl")),
+        format!("{line}\n"),
+    )
+    .unwrap();
+    let (status, _) = call(
+        &f.ctx,
+        "update_settings",
+        serde_json::json!({"input": {
+            "repository_path": forward(&repo), "github_project": null,
+            "selected_project_folders": [], "claude_projects_dir": forward(&projects)
+        }}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    // 自動再開の途中(起動の直前)より前に、利用者がアーカイブした。
+    let (status, _) = call(
+        &f.ctx,
+        "archive_session",
+        serde_json::json!({"project": "proj1", "sessionId": session}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let request: server::dto::StartRunningSessionDto = serde_json::from_value(serde_json::json!({
+        "kind": "resume", "project": "proj1", "session_id": session,
+        "mode": "default", "name": null, "sync_origin_main": false
+    }))
+    .unwrap();
+    let profile = f.ctx.state.lock().await.settings.active_profile_id.clone();
+    let result = server::running::start_restored_session(&f.ctx, Some(profile), request).await;
+    assert!(
+        matches!(&result, Err(app::AppError::InvalidInput(m)) if m == server::running::ARCHIVED_SKIP_REASON),
+        "{result:?}"
+    );
+    assert!(
+        f.ctx.state.lock().await.running_sessions.is_empty(),
+        "起動していない"
+    );
+    assert!(
+        f.ctx.state.lock().await.starting_session_ids.is_empty(),
+        "起動中の印を残さない"
+    );
+    let marks: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(f.dir.path().join("archived-sessions.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        marks["session_ids"],
+        serde_json::json!([session]),
+        "印は外さない"
+    );
+}
+
+// --- 16. 画像の上限の数字は、サーバの 1 か所から出す ---
+
+#[tokio::test]
+async fn the_attachment_limits_come_from_the_server() {
+    let f = fixture();
+    let (status, body) = call(&f.ctx, "get_attachment_limits", serde_json::json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["max_image_bytes"], 3_750_000);
+    assert_eq!(body["max_images"], 5);
+}
+
+// --- 18(再検証)アーカイブは、起動している最中の会話も、必ず「印あり・動いていない・控えに無い」に落ち着かせる ---
+
+struct StopFlagProcess(Arc<std::sync::atomic::AtomicBool>);
+
+impl app::RunningProcess for StopFlagProcess {
+    fn pid(&self) -> u32 {
+        4243
+    }
+    fn pid_domain(&self) -> String {
+        "windows:test".to_string()
+    }
+    fn send_user_message(
+        &self,
+        _: &str,
+        _: &[domain::ImageAttachment],
+    ) -> Result<(), app::AppError> {
+        Ok(())
+    }
+    fn respond_permission(&self, _: &domain::PermissionResponse) -> Result<(), app::AppError> {
+        Ok(())
+    }
+    fn interrupt(&self) -> Result<(), app::AppError> {
+        Ok(())
+    }
+    fn set_model(&self, _: &str) -> Result<(), app::AppError> {
+        Ok(())
+    }
+    fn set_permission_mode(&self, _: app::RunningPermissionMode) -> Result<(), app::AppError> {
+        Ok(())
+    }
+    fn get_usage(&self) -> Result<(), app::AppError> {
+        Ok(())
+    }
+    fn stop(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[tokio::test]
+async fn archiving_while_a_session_is_starting_waits_then_stops_it_and_forgets_it() {
+    let f = fixture();
+    let session = "0a1b2c3d-1111-4222-8333-444455556666";
+    // 再開の控えに、この会話がある。
+    std::fs::write(
+        f.dir.path().join("running-sessions.json"),
+        format!(
+            r#"{{"version":1,"sessions":[{{"profile_id":"p","project":"proj1","session_id":"{session}","permission_mode":"default","model":null,"name":null,"worktree_id":"main-worktree"}}]}}"#
+        ),
+    )
+    .unwrap();
+    // 起動している最中(実行中の一覧には、まだ載っていない)。
+    f.ctx
+        .state
+        .lock()
+        .await
+        .starting_session_ids
+        .push(session.to_string());
+
+    let ctx = f.ctx.clone();
+    let archive =
+        tokio::spawn(async move { server::running::archive_session_settled(&ctx, session).await });
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    assert!(!archive.is_finished(), "起動している最中は、終わるまで待つ");
+    // 印は先に付いている(自動再開の、起動の直前の確かめが見られる)。
+    let marks: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(f.dir.path().join("archived-sessions.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(marks["session_ids"], serde_json::json!([session]));
+
+    // 起動が終わった(実行中の一覧に載り、起動の最中の印が外れる。同じロックの中)。
+    let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let mut guard = f.ctx.state.lock().await;
+        let base = domain::RunningSession::new(session, "windows:test", 4243, 1000);
+        guard
+            .running_sessions
+            .push(server::state::RunningSessionSlot {
+                progress_seq: 0,
+                project: Some("proj1".to_string()),
+                session: domain::RunningSessionByApp::new(
+                    base,
+                    "C:/repo".into(),
+                    "main-worktree",
+                    1000,
+                ),
+                process: Arc::new(StopFlagProcess(stopped.clone())),
+                available_models: Vec::new(),
+                subscribers: Vec::new(),
+            });
+        guard.starting_session_ids.retain(|id| id != session);
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(5), archive)
+        .await
+        .expect("起動が終わったら、アーカイブも終わる")
+        .unwrap()
+        .unwrap();
+
+    assert!(
+        stopped.load(std::sync::atomic::Ordering::SeqCst),
+        "起動が終わったものを止めた"
+    );
+    let marks: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(f.dir.path().join("archived-sessions.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(marks["session_ids"], serde_json::json!([session]), "印あり");
+    let ledger: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(f.dir.path().join("running-sessions.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        ledger["sessions"],
+        serde_json::json!([]),
+        "再開の控えからも外れている"
+    );
+}

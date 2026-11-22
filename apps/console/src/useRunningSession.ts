@@ -18,6 +18,7 @@ import {
 } from "@/api";
 import { createExclusive } from "./exclusive";
 import { createProgressMerger } from "./progressMerge";
+import { busyKind, shouldShowStartError, shouldWaitForRunning } from "./startError";
 import { selectableModeOf } from "./runningSessionLabels";
 import type {
   PermissionSuggestionDto,
@@ -66,6 +67,9 @@ const EMPTY_TURN: LiveTurn = { pendingLine: null, segments: [], tools: [], basel
 /** 切り替えの結果(現在値の変化)を待つ上限。 */
 const SWITCH_TIMEOUT_MS = 5000;
 
+/** 同時の起動で 409 になったとき、勝った起動が実行中になるのを待つ上限。 */
+const BUSY_WAIT_MS = 8000;
+
 /** 起動して待機になるまでの上限。 */
 const START_TIMEOUT_MS = 30000;
 
@@ -84,7 +88,8 @@ type Options = {
    */
   onTurnFinished: (target: RunningSessionDto | null) => Promise<void> | void;
   /** 画面のエラー表示へ出す(既存のバナー。#346)。 */
-  onError: (message: string) => void;
+  /** `forSessionId` は、その失敗を起こした会話(画面は、いま表示している会話のものだけを出す)。 */
+  onError: (message: string, forSessionId?: string) => void;
   /** いま一覧にある行の uuid(ターンの開始時に控える)。 */
   getMessageUuids: () => string[];
 };
@@ -121,7 +126,9 @@ export function useRunningSession({
   const segmentIdRef = useRef(0);
   // 「終了」ボタンで自分から止めたか(意図した終了はエラーとして出さない)。
   const stoppedByUserRef = useRef(false);
-  const [busy, setBusy] = useState(false);
+  // 送信・起動の最中の会話(起こした会話にだけ「送信中…」「起動中…」を出す)。
+  const [busySession, setBusySession] = useState<string | null>(null);
+  const [startingSession, setStartingSession] = useState<string | null>(null);
   // 切り替え(モデル・権限モード)の結果を待っている間。
   const [switching, setSwitching] = useState(false);
   const sessionIdRef = useRef(sessionId);
@@ -368,6 +375,41 @@ export function useRunningSession({
   );
 
   /**
+   * 起動の失敗を、利用者へ知らせるか決める(起こした会話 `forSessionId` にだけ出す)。
+   * - 同じ会話をほかのタブが起動している(409 の `starting`・`running`)なら、状態を取り直し、実行中になるのを少し待つ
+   *   (勝ったほうが、まだ台帳に載せる前のことがある)。実行中になれば、エラーは出さない。ただし**送信**のときは、
+   *   発言は送られていないので、「ほかのタブがこの会話を起動しました。もう一度送信してください」と知らせる(下書きは残す)。
+   * - 待っても実行中にならない種類(同時数の上限など)は、待たずにすぐ出す。
+   * - 待っている間に別の会話へ移ったら、取り直しも通知もしない(移った先に出さない)。
+   */
+  const reportStartFailure = useCallback(
+    async (e: unknown, forSessionId: string, sending: boolean) => {
+      const stillHere = () => sessionIdRef.current === forSessionId;
+      if (!shouldWaitForRunning(e)) {
+        await refresh();
+        if (stillHere()) callbacks.current.onError(messageOf(e), forSessionId);
+        return;
+      }
+      let next = await refresh();
+      const deadline = Date.now() + BUSY_WAIT_MS;
+      while (stillHere() && !(next && next.process_state !== "exited") && Date.now() < deadline) {
+        await sleep(300);
+        next = await refresh();
+      }
+      if (!stillHere()) return;
+      if (shouldShowStartError(e, next)) {
+        callbacks.current.onError(messageOf(e), forSessionId);
+      } else if (sending && busyKind(e) !== null) {
+        callbacks.current.onError(
+          "ほかのタブがこの会話を起動しました。もう一度送信してください(入力した内容は残してあります)",
+          forSessionId,
+        );
+      }
+    },
+    [refresh],
+  );
+
+  /**
    * 未起動なら起動して、待機になるまで待つ(起動済みならそのまま現在値を返す)。
    * `send`(メッセージ送信時の自動起動)と `start`(issue #484。「起動」ボタン)の
    * 両方から呼ぶ共通部分。呼び出し側は、呼ぶ前に `alive` を見て要不要を判断しなくてよい
@@ -441,7 +483,7 @@ export function useRunningSession({
       images: string[];
     }): Promise<boolean> =>
       exclusive("send", false, async () => {
-      setBusy(true);
+      setBusySession(args.sessionId);
       stoppedByUserRef.current = false;
       segmentOpenRef.current = false;
       updateLive(() => ({
@@ -456,20 +498,19 @@ export function useRunningSession({
         return true;
       } catch (e) {
         resetLive();
-        callbacks.current.onError(messageOf(e));
-        await refresh();
+        // 取り直してから、エラーを出すか決める(同時の起動で負けて 409 でも、実行中になっていれば出さない)。
+        await reportStartFailure(e, args.sessionId, true);
         return false;
       } finally {
-        setBusy(false);
+        setBusySession(null);
       }
       }),
-    [ensureStarted, exclusive, refresh, resetLive, updateLive],
+    [ensureStarted, exclusive, refresh, reportStartFailure, resetLive, updateLive],
   );
 
   // メッセージ無しで起動だけする(issue #484)。「起動」ボタンから呼ぶ。`send` と同じ
   // `ensureStarted` を使うので、起動時の引数(権限モード・モデル・表示名)は送信時の自動起動と
   // 揃う。起動中は `starting` で画面側がボタンを「起動中…」にする。
-  const [starting, setStarting] = useState(false);
   const start = useCallback(
     async (args: {
       profileId: string;
@@ -480,19 +521,18 @@ export function useRunningSession({
       model?: StartModelDto | null;
     }): Promise<boolean> =>
       exclusive("start", false, async () => {
-        setStarting(true);
+        setStartingSession(args.sessionId);
         try {
           await ensureStarted(args);
           return true;
         } catch (e) {
-          callbacks.current.onError(messageOf(e));
-          await refresh();
+          await reportStartFailure(e, args.sessionId, false);
           return false;
         } finally {
-          setStarting(false);
+          setStartingSession(null);
         }
       }),
-    [ensureStarted, exclusive, refresh],
+    [ensureStarted, exclusive, refresh, reportStartFailure],
   );
 
   const respond = useCallback(
@@ -588,5 +628,8 @@ export function useRunningSession({
     });
   }, [exclusive, refresh, resetLive]);
 
+  // 送信中・起動中は、起こした会話にだけ出す(別の会話へ移ったら、移った先には出さない)。
+  const busy = busySession !== null && busySession === sessionId;
+  const starting = startingSession !== null && startingSession === sessionId;
   return { running, live, busy, switching, send, start, starting, respond, interrupt, switchTo, stop };
 }

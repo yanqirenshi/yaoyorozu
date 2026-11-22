@@ -6,16 +6,18 @@ export default function StaleNotice({
   onReload,
   message = "ほかで変更されました。入力中の内容は残してあります。",
   disabled = false,
+  actionLabel = "取り直す",
 }: {
   onReload: () => void;
   message?: string;
   disabled?: boolean;
+  actionLabel?: string;
 }) {
   return (
     <p className="stale-notice" role="status" data-testid="stale-notice">
       <span>{message}</span>
       <button type="button" onClick={onReload} disabled={disabled}>
-        取り直す
+        {actionLabel}
       </button>
     </p>
   );

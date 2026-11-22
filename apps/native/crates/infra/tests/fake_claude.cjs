@@ -165,7 +165,9 @@ rl.on("line", (line) => {
       parent.stdout.on("data", (d) => (grandchild += String(d)));
       parent.on("exit", () => {
         delta(`orphans: ${detached.pid},${grandchild.trim()}`);
-        result(false);
+        // EXIT つきなら、claude 自身が(異常終了で)自分で終わる。
+        if (text.includes("EXIT")) setTimeout(() => process.exit(3), 300);
+        else result(false);
       });
     } else if (text.includes("HANG")) {
       hang = true;

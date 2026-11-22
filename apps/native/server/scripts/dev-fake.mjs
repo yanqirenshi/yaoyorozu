@@ -17,7 +17,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import {
-  alive, dirs, nextBase, projectName, projects, root, rpc, sendCtrlC, sleep, slash, startedPids, startNext, startServer,
+  alive, cleanupStarted, dirs, nextBase, projectName, projects, root, rpc, sendCtrlC, sleep, slash, startedPids, startNext, startServer,
   token, waitHealthy,
 } from "./e2e-lib.mjs";
 
@@ -81,12 +81,7 @@ try {
   console.error("スクリプトの失敗:", e);
   process.exitCode = 1;
 } finally {
-  for (const pid of startedPids) {
-    if (alive(pid)) {
-      try {
-        execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "pipe" });
-      } catch {}
-    }
-  }
+  // 後片付け: PID と開始時刻の組が控えと一致する、自分が起動したものだけを止める(`proc-safety.mjs`)。
+  cleanupStarted();
   console.log(`使い捨てのフォルダ: ${root}(確認が終わったら削除してよい)`);
 }

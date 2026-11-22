@@ -18,6 +18,7 @@ import type { ViewMode } from "@yanqirenshi/markdown.sitter";
 import {
   archiveSession,
   checkImageAttachment,
+  getAttachmentLimits,
   getProjectClaudeMd,
   getProjectSettingsFile,
   getSession,
@@ -41,6 +42,7 @@ import type {
   SessionSummaryDto,
   StartModelDto,
 } from "@/api";
+import { createDraftStore } from "./draftStore";
 import { readImageFile } from "./attachedImage";
 import type { AttachedImage } from "./attachedImage";
 import LiveTurnView from "./LiveTurnView";
@@ -95,6 +97,16 @@ const DISCARD_CONFIRM_MESSAGE = "編集内容を破棄しますか?保存して�
 // 1 行 = 1 セッション(セッション ID = 会話ファイル)。フォルダ名・セッション ID は英数字と `-` のみで、
 // `|` は含まれない。
 const SESSION_TAB_SEPARATOR = "|";
+
+/** 上限のバイト数を、MB(1,000,000 バイト)で、小数 2 桁(切り捨て)の文字にする。 */
+function formatLimitMegabytes(bytes: number): string {
+  return (Math.floor(bytes / 10_000) / 100).toFixed(2) + "MB";
+}
+
+/** 画像の大きさ(バイト)を、MB(1,000,000 バイト)で、小数 2 桁(切り上げ)の文字にする。 */
+function formatLimitMegabytesCeil(bytes: number): string {
+  return (Math.ceil(bytes / 10_000) / 100).toFixed(2) + "MB";
+}
 
 function sessionTabKey(folder: string, sessionId: string): string {
   return `${folder}${SESSION_TAB_SEPARATOR}${sessionId}`;
@@ -171,6 +183,16 @@ function SessionsPage({ nav }: SessionsPageProps) {
   }, [nav.session]);
   // このタブで新規に作ったセッションの ID(会話ファイルができたら、URL を `project` 付きの表示へ切り替える)。
   const newlyStartedRef = useRef<Set<string>>(new Set());
+  // 会話を切り替えたら、いまの入力を控え、切り替え先の会話の入力を出す(会話ごとの下書き)。
+  useEffect(() => {
+    const next = nav.session ?? null;
+    const prev = inputOwnerRef.current;
+    if (prev === next) return;
+    const restored = draftStoreRef.current.switch(prev, latestInputRef.current, next);
+    inputOwnerRef.current = next;
+    setDraft(restored.text);
+    setAttachments(restored.attachments);
+  }, [nav.session]);
   // 新規セッションの作成中(同じ瞬間の 2 回目を受け付けない。state でなく ref)。
   const creatingRef = useRef(false);
   const [messages, setMessages] = useState<MessageDto[]>([]);
@@ -197,6 +219,12 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const draftInputRef = useRef<HTMLTextAreaElement>(null);
   // 次に起動する実行中セッションの権限モード。
   const [mode, setMode] = useState<RunningPermissionModeDto>("default");
+  // 下書きと貼り付けた画像は、会話ごとに(このタブのメモリの中で)持つ。会話を切り替えると、その会話の下書きが出て、
+  // 戻ると元の下書きが戻る(切り替え先へ、そのまま送られない)。
+  const draftStoreRef = useRef(createDraftStore<AttachedImage>());
+  const latestInputRef = useRef({ text: "", attachments: [] as AttachedImage[] });
+  latestInputRef.current = { text: draft, attachments };
+  const inputOwnerRef = useRef<string | null>(nav.session ?? null);
   const viewParam = nav.view;
   const view: PaneView = PANE_VIEWS.includes(viewParam as PaneView)
     ? (viewParam as PaneView)
@@ -296,7 +324,10 @@ function SessionsPage({ nav }: SessionsPageProps) {
         return refreshSessionInPlace(projectParam, sessionParam);
       }
     },
-    onError: (message) => setError(message),
+    // 起こした会話のものだけを出す(待っている間に別の会話へ移ったら、移った先には出さない)。
+    onError: (message, forSessionId) => {
+      if (forSessionId === undefined || forSessionId === nav.session) setError(message);
+    },
     getMessageUuids: () => messagesRef.current.flatMap((m) => (m.uuid ? [m.uuid] : [])),
   });
 
@@ -598,19 +629,35 @@ function SessionsPage({ nav }: SessionsPageProps) {
     let count = attachments.length;
     for (const file of files) {
       try {
+        // 送る前に大きさを見て、上限(サーバの `get_attachment_limits`)を超える画像は、サーバへ送らずに断る
+        // (読み込み・送信の無駄と、本文が大きすぎて接続が切れるのを避ける)。
+        const limits = await getAttachmentLimits().catch(() => null);
+        if (limits && file.size > limits.max_image_bytes) {
+          setError(
+            "画像が大きすぎます(約" +
+              formatLimitMegabytesCeil(file.size) +
+              "。上限は 1 枚あたり約" +
+              formatLimitMegabytes(limits.max_image_bytes) +
+              ")",
+          );
+          continue;
+        }
         const image = await readImageFile(file);
         await checkImageAttachment(image.base64, count);
         count += 1;
         setAttachments((prev) => [...prev, image]);
       } catch (e) {
-        // 本文の上限を超えた(サーバが 413 で断った)ときは、上限の説明を出す(1 枚の上限は base64 で 5,000,000 文字 = 約 3.7MB)。
-        setError(
-          isAppError(e) && e.code === "payload_too_large"
-            ? "画像が大きすぎます(上限は 1 枚あたり約 3.7MB)"
-            : isAppError(e)
-              ? e.message
-              : String(e),
-        );
+        if (isAppError(e) && e.code === "payload_too_large") {
+          // 本文の上限を超えた(サーバが 413 で断った)。上限の数字は、サーバの 1 か所から取る(画面に持たない)。
+          const limits = await getAttachmentLimits().catch(() => null);
+          setError(
+            limits
+              ? "画像が大きすぎます(上限は 1 枚あたり約" + formatLimitMegabytes(limits.max_image_bytes) + ")"
+              : "画像が大きすぎます",
+          );
+        } else {
+          setError(isAppError(e) ? e.message : String(e));
+        }
       }
     }
   };
@@ -650,6 +697,8 @@ function SessionsPage({ nav }: SessionsPageProps) {
       return;
     }
     setError(null);
+    // 送った会話。送信の要求が返るまでの間に別の会話へ切り替えても、後片付け(下書きを消す)は、送った会話に対して行う。
+    const sentSession = sessionParam;
     const sent = await sendToSession({
       profileId: resolvedProfileId,
       project: projectParam,
@@ -661,10 +710,15 @@ function SessionsPage({ nav }: SessionsPageProps) {
       images: attachments.map((image) => image.base64),
     });
     if (sent) {
-      setDraft("");
-      setAttachments([]);
-      setResumeNameEdit(null);
-      setStartModel(null);
+      if (inputOwnerRef.current === sentSession) {
+        setDraft("");
+        setAttachments([]);
+        setResumeNameEdit(null);
+        setStartModel(null);
+      } else {
+        // 別の会話へ移っていた: いま表示している会話の入力には触らず、送った会話の下書きだけを捨てる。
+        draftStoreRef.current.clear(sentSession);
+      }
     }
   };
 
