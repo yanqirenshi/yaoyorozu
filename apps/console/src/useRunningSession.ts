@@ -18,6 +18,7 @@ import {
 } from "@/api";
 import { createExclusive } from "./exclusive";
 import { createProgressMerger } from "./progressMerge";
+import { isSessionBusy, shouldShowStartError } from "./startError";
 import { selectableModeOf } from "./runningSessionLabels";
 import type {
   PermissionSuggestionDto,
@@ -65,6 +66,9 @@ const EMPTY_TURN: LiveTurn = { pendingLine: null, segments: [], tools: [], basel
 
 /** 切り替えの結果(現在値の変化)を待つ上限。 */
 const SWITCH_TIMEOUT_MS = 5000;
+
+/** 同時の起動で 409 になったとき、勝った起動が実行中になるのを待つ上限。 */
+const BUSY_WAIT_MS = 8000;
 
 /** 起動して待機になるまでの上限。 */
 const START_TIMEOUT_MS = 30000;
@@ -368,6 +372,26 @@ export function useRunningSession({
   );
 
   /**
+   * 起動の失敗を、利用者へ知らせるか決める。状態を取り直して、同じ会話をほかのタブが同時に起動していた(409)なら、
+   * その起動が終わって実行中になるのを少し待つ(勝ったほうが、まだ台帳に載せる前のことがある)。実行中になれば、
+   * エラーは出さない。待っても実行中にならなければ出す。
+   */
+  const reportStartFailure = useCallback(
+    async (e: unknown) => {
+      let next = await refresh();
+      if (isSessionBusy(e)) {
+        const deadline = Date.now() + BUSY_WAIT_MS;
+        while (!(next && next.process_state !== "exited") && Date.now() < deadline) {
+          await sleep(300);
+          next = await refresh();
+        }
+      }
+      if (shouldShowStartError(e, next)) callbacks.current.onError(messageOf(e));
+    },
+    [refresh],
+  );
+
+  /**
    * 未起動なら起動して、待機になるまで待つ(起動済みならそのまま現在値を返す)。
    * `send`(メッセージ送信時の自動起動)と `start`(issue #484。「起動」ボタン)の
    * 両方から呼ぶ共通部分。呼び出し側は、呼ぶ前に `alive` を見て要不要を判断しなくてよい
@@ -456,14 +480,14 @@ export function useRunningSession({
         return true;
       } catch (e) {
         resetLive();
-        callbacks.current.onError(messageOf(e));
-        await refresh();
+        // 取り直してから、エラーを出すか決める(同時の起動で負けて 409 でも、実行中になっていれば出さない)。
+        await reportStartFailure(e);
         return false;
       } finally {
         setBusy(false);
       }
       }),
-    [ensureStarted, exclusive, refresh, resetLive, updateLive],
+    [ensureStarted, exclusive, refresh, reportStartFailure, resetLive, updateLive],
   );
 
   // メッセージ無しで起動だけする(issue #484)。「起動」ボタンから呼ぶ。`send` と同じ
@@ -485,14 +509,13 @@ export function useRunningSession({
           await ensureStarted(args);
           return true;
         } catch (e) {
-          callbacks.current.onError(messageOf(e));
-          await refresh();
+          await reportStartFailure(e);
           return false;
         } finally {
           setStarting(false);
         }
       }),
-    [ensureStarted, exclusive, refresh],
+    [ensureStarted, exclusive, refresh, reportStartFailure],
   );
 
   const respond = useCallback(

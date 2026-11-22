@@ -20,6 +20,7 @@ import type {
   ProjectDto,
   YyzScaffoldStatusDto,
 } from "@/api";
+import { shouldHoldDisplay } from "@/followActive";
 import StaleNotice from "@/StaleNotice";
 import Tabs, { tabPanelProps } from "@/Tabs";
 import { useRefreshGuard } from "@/useRefreshGuard";
@@ -203,6 +204,12 @@ function ProfileSettingsPane({
       baseline.restoreRunningSessions !== currentForm.restoreRunningSessions ||
       baseline.folders !== currentForm.folders);
   const { stale, shouldApply, clear: clearStale } = useRefreshGuard(dirty);
+  // 取り直しの完了(非同期)が最新の dirty を見るための ref。
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  // /settings(プロファイルを指定せず、アクティブへ追従する画面)で、入力中にアクティブが変わったとき、移さずに知らせる
+  // ための、新しいアクティブのプロファイルの ID(`null` は知らせ無し)。保存先は、いつも表示しているプロファイル。
+  const [activeChangedTo, setActiveChangedTo] = useState<string | null>(null);
   // 最後に読み込んだ対象プロファイル。対象そのものが変わったとき(切替・削除)は、入力中の内容は
   // 別のプロファイルのものなので、取り直しの結果で置き換える。
   const loadedTargetRef = useRef<string | null>(null);
@@ -223,6 +230,23 @@ function ProfileSettingsPane({
       .then((settings) => {
         const targetId = profileId ?? settings.active_profile_id;
         setProfile(settings.profiles.find((p) => p.id === targetId) ?? null);
+        // 入力中(未保存)にアクティブが変わったときは、表示を移さず、知らせる(`followActive.ts`)。
+        const shown = loadedTargetRef.current;
+        if (
+          shouldHoldDisplay({
+            followsActive: profileId == null,
+            shownId: shown,
+            activeId: targetId,
+            dirty: dirtyRef.current,
+            force,
+            shownStillExists: settings.profiles.some((p) => p.id === shown),
+          })
+        ) {
+          setProfile(settings.profiles.find((p) => p.id === shown) ?? null);
+          setActiveChangedTo(targetId);
+          return;
+        }
+        setActiveChangedTo(null);
         const targetChanged =
           loadedTargetRef.current !== null && loadedTargetRef.current !== targetId;
         loadedTargetRef.current = targetId;
@@ -459,6 +483,13 @@ function ProfileSettingsPane({
       )}
       {profileError && <p className="error">{profileError}</p>}
       {/* 入力中(未保存)の欄は、ほかのタブの変更・つなぎ直しで上書きしない。代わりにこの知らせを出す。 */}
+      {activeChangedTo && (
+        <StaleNotice
+          message="アクティブなプロファイルが変わりました。入力中の内容は、いま表示しているプロファイルのまま残してあります(保存先も、表示しているプロファイルです)。"
+          actionLabel="新しいアクティブへ移る"
+          onReload={() => void loadSettingsData(true)}
+        />
+      )}
       {stale && <StaleNotice onReload={() => void loadSettingsData(true)} />}
       <Tabs
         id="settings-tabs"

@@ -18,6 +18,7 @@ import type { ViewMode } from "@yanqirenshi/markdown.sitter";
 import {
   archiveSession,
   checkImageAttachment,
+  getAttachmentLimits,
   getProjectClaudeMd,
   getProjectSettingsFile,
   getSession,
@@ -41,6 +42,7 @@ import type {
   SessionSummaryDto,
   StartModelDto,
 } from "@/api";
+import { createDraftStore } from "./draftStore";
 import { readImageFile } from "./attachedImage";
 import type { AttachedImage } from "./attachedImage";
 import LiveTurnView from "./LiveTurnView";
@@ -95,6 +97,11 @@ const DISCARD_CONFIRM_MESSAGE = "編集内容を破棄しますか?保存して�
 // 1 行 = 1 セッション(セッション ID = 会話ファイル)。フォルダ名・セッション ID は英数字と `-` のみで、
 // `|` は含まれない。
 const SESSION_TAB_SEPARATOR = "|";
+
+/** 上限のバイト数を、MB(1,000,000 バイト)で、小数 2 桁(切り捨て)の文字にする。 */
+function formatLimitMegabytes(bytes: number): string {
+  return (Math.floor(bytes / 10_000) / 100).toFixed(2) + "MB";
+}
 
 function sessionTabKey(folder: string, sessionId: string): string {
   return `${folder}${SESSION_TAB_SEPARATOR}${sessionId}`;
@@ -171,6 +178,16 @@ function SessionsPage({ nav }: SessionsPageProps) {
   }, [nav.session]);
   // このタブで新規に作ったセッションの ID(会話ファイルができたら、URL を `project` 付きの表示へ切り替える)。
   const newlyStartedRef = useRef<Set<string>>(new Set());
+  // 会話を切り替えたら、いまの入力を控え、切り替え先の会話の入力を出す(会話ごとの下書き)。
+  useEffect(() => {
+    const next = nav.session ?? null;
+    const prev = inputOwnerRef.current;
+    if (prev === next) return;
+    const restored = draftStoreRef.current.switch(prev, latestInputRef.current, next);
+    inputOwnerRef.current = next;
+    setDraft(restored.text);
+    setAttachments(restored.attachments);
+  }, [nav.session]);
   // 新規セッションの作成中(同じ瞬間の 2 回目を受け付けない。state でなく ref)。
   const creatingRef = useRef(false);
   const [messages, setMessages] = useState<MessageDto[]>([]);
@@ -197,6 +214,12 @@ function SessionsPage({ nav }: SessionsPageProps) {
   const draftInputRef = useRef<HTMLTextAreaElement>(null);
   // 次に起動する実行中セッションの権限モード。
   const [mode, setMode] = useState<RunningPermissionModeDto>("default");
+  // 下書きと貼り付けた画像は、会話ごとに(このタブのメモリの中で)持つ。会話を切り替えると、その会話の下書きが出て、
+  // 戻ると元の下書きが戻る(切り替え先へ、そのまま送られない)。
+  const draftStoreRef = useRef(createDraftStore<AttachedImage>());
+  const latestInputRef = useRef({ text: "", attachments: [] as AttachedImage[] });
+  latestInputRef.current = { text: draft, attachments };
+  const inputOwnerRef = useRef<string | null>(nav.session ?? null);
   const viewParam = nav.view;
   const view: PaneView = PANE_VIEWS.includes(viewParam as PaneView)
     ? (viewParam as PaneView)
@@ -603,14 +626,17 @@ function SessionsPage({ nav }: SessionsPageProps) {
         count += 1;
         setAttachments((prev) => [...prev, image]);
       } catch (e) {
-        // 本文の上限を超えた(サーバが 413 で断った)ときは、上限の説明を出す(1 枚の上限は base64 で 5,000,000 文字 = 約 3.7MB)。
-        setError(
-          isAppError(e) && e.code === "payload_too_large"
-            ? "画像が大きすぎます(上限は 1 枚あたり約 3.7MB)"
-            : isAppError(e)
-              ? e.message
-              : String(e),
-        );
+        if (isAppError(e) && e.code === "payload_too_large") {
+          // 本文の上限を超えた(サーバが 413 で断った)。上限の数字は、サーバの 1 か所から取る(画面に持たない)。
+          const limits = await getAttachmentLimits().catch(() => null);
+          setError(
+            limits
+              ? "画像が大きすぎます(上限は 1 枚あたり約" + formatLimitMegabytes(limits.max_image_bytes) + ")"
+              : "画像が大きすぎます",
+          );
+        } else {
+          setError(isAppError(e) ? e.message : String(e));
+        }
       }
     }
   };

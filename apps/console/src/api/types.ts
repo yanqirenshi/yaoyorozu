@@ -431,3 +431,11 @@ export type ClaudeUsageSnapshotDto = {
   usage: ClaudeUsageDto | null;
   fetched_at_ms: number | null;
 };
+
+// 画像の添付の上限(`getAttachmentLimits`。この構成だけの Query)。上限の数字は、サーバの 1 か所から取る。
+export type AttachmentLimitsDto = {
+  // 画像 1 枚の、元のバイト数の上限。
+  max_image_bytes: number;
+  // 1 回の送信に付けられる画像の枚数。
+  max_images: number;
+};
