@@ -3224,3 +3224,34 @@ button.claude-explorer-name {
   font-size: var(--text-dns-14n-150-size);
   color: var(--text-secondary);
 }
+
+/* フォルダ選択ダイアログの代わりの、パスの手入力欄(Tauri 版には無い。この構成だけ)。 */
+.settings-folder-picker-text {
+  flex-wrap: wrap;
+}
+
+.settings-folder-path-input {
+  flex: 1;
+  min-width: 240px;
+}
+
+.settings-folder-check {
+  font-size: 0.85rem;
+}
+
+/* 「ほかで変更されました」の知らせ(StaleNotice)。入力中の欄を取り直しで上書きしない代わりに出す。 */
+.stale-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  color: var(--semantic-error-fg);
+  background-color: var(--semantic-error-bg);
+  border: 1px solid var(--semantic-error-border);
+  border-radius: 4px;
+}
+
+.stale-notice button {
+  flex: none;
+}

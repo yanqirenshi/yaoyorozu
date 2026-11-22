@@ -2,27 +2,26 @@
 
 pub mod auth;
 pub mod config;
+pub mod data_files;
 pub mod dto;
 pub mod error;
 pub mod events;
 pub mod rpc;
+pub mod state;
+pub mod watcher;
 
 use axum::extract::State;
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::routing::{get, post};
+use axum::routing::get;
 use axum::{middleware, Json, Router};
 use events::EventBus;
 use futures_util::{Stream, StreamExt};
 use serde::Serialize;
+pub use state::ServerState;
 use std::convert::Infallible;
 use std::sync::Arc;
 use tokio::sync::{watch, Mutex};
 use tokio_stream::wrappers::{errors::BroadcastStreamRecvError, BroadcastStream};
-
-/// 状態の唯一の置き場(Tauri 版 `AppState` の写し。段階 1 は設定だけ)。
-pub struct ServerState {
-    pub settings: domain::Settings,
-}
 
 #[derive(Clone)]
 pub struct AppContext {
@@ -31,6 +30,18 @@ pub struct AppContext {
     pub token: Arc<String>,
     pub port: u16,
     pub version: Arc<String>,
+    /// データフォルダ(解決済みの実体のパス)。
+    pub data_dir: Arc<std::path::PathBuf>,
+    /// 会話ファイルの監視。差し替えると前の監視は止まる。
+    pub watcher: Arc<std::sync::Mutex<Option<infra::SessionWatcher>>>,
+    /// 設定ファイルの保存のレーン。保存はここを 1 つずつ通る(ロックの順は「レーン → 状態」の一方向。
+    /// 状態のロックを持ったままレーンを待たない)。
+    pub save_lane: Arc<tokio::sync::Mutex<()>>,
+    /// ファイル(CLAUDE.md・設定ファイル)の保存のレーン。楽観ロックつきの保存は「今の更新時刻を確かめる →
+    /// 書く」をこの中でひとまとまりに行い、同じファイルへの保存どうしが間に割り込めないようにする
+    /// (同じ `expectedModifiedAtMs` で同時に来た保存は、通るのが 1 本だけで残りは競合になる)。
+    /// 低頻度の操作なので、ファイルごとではなく全体で 1 本にした(単純さを優先)。
+    pub file_lane: Arc<tokio::sync::Mutex<()>>,
     /// 終了の合図。SSE を閉じて、Ctrl+C で止まれるようにする。
     pub shutdown: watch::Receiver<bool>,
 }
@@ -70,9 +81,7 @@ pub fn router(ctx: AppContext) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/events", get(events))
-        .route("/rpc/list_projects", post(rpc::list_projects))
-        .route("/rpc/get_settings", post(rpc::get_settings))
-        .route("/rpc/{command}", post(rpc::unknown_command))
+        .merge(rpc::routes())
         .layer(middleware::from_fn_with_state(ctx.clone(), auth::guard))
         .with_state(ctx)
 }

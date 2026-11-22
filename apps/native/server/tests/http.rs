@@ -16,13 +16,19 @@ const TOKEN: &str = "test-token";
 fn app() -> axum::Router {
     let (_tx, rx) = watch::channel(false);
     router(AppContext {
-        state: Arc::new(Mutex::new(ServerState {
-            settings: domain::Settings::default(),
-        })),
+        state: Arc::new(Mutex::new(ServerState::new(
+            domain::Settings::default(),
+            std::path::PathBuf::from("settings.json"),
+            false,
+        ))),
         events: EventBus::new(),
         token: Arc::new(TOKEN.to_string()),
         port: PORT,
         version: Arc::new("0.0.0".to_string()),
+        data_dir: Arc::new(std::path::PathBuf::from(".")),
+        watcher: Arc::new(std::sync::Mutex::new(None)),
+        save_lane: Arc::new(tokio::sync::Mutex::new(())),
+        file_lane: Arc::new(tokio::sync::Mutex::new(())),
         shutdown: rx,
     })
 }

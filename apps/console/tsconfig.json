@@ -34,6 +34,7 @@
     "node_modules",
     // Next.js アプリの型チェック対象からは外す(Node で直接実行する CLI スクリプト。
     // apps/web/scripts/check-diagram.ts を参照)。
-    "scripts"
+    "scripts",
+    "tests"
   ]
 }

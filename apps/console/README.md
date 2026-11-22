@@ -57,8 +57,82 @@ useEffect(() => {
 }, []);
 ```
 
+### 入力中(未保存)の欄は、取り直しで上書きしない
+
+つなぎ直し(`onReconnected`)・他のタブの変更(`settings:updated`)・`session:changed` などの**自動の取り直しは、入力中の欄を上書きしない**。
+代わりに「ほかで変更されました」の知らせと「取り直す」ボタン(押すと今の入力を捨てて取り直す)を出す。未保存の変更が無ければ、今までどおり取り直す。
+
+- 部品: `src/useRefreshGuard.ts`(hook)と `src/StaleNotice.tsx`(知らせ + ボタン)。
+- 未保存かどうかは、画面が持つ dirty 状態、または「最後に読み込んだ(保存した)値と、今の入力値の比較」で持つ。
+- 保存に失敗したとき(サーバ停止など)は、入力も未保存の状態もそのまま残し、エラーだけを出す(つなぎ直しで消さない)。
+- 対象そのものが変わったとき(プロファイルの切替など)は、入力中の内容は別の対象のものなので、取り直しの結果で置き換える。
+  ファイルの編集画面(`ClaudeMdEditor`・`JsonFileEditor`)は、保存先が変わったら取り直すまで保存を止める。
+
+```ts
+const { stale, shouldApply, clear } = useRefreshGuard(dirty);   // dirty = 未保存の変更があるか
+
+const load = useCallback((force = false) =>
+  getSettings().then((settings) => {
+    setLabel(settings.label);                                   // 表示専用の部分は常に取り直す
+    if (force || shouldApply()) {                               // 未保存が無ければ(または force)欄へ入れる
+      setInput(settings.value);
+      setBaseline(settings.value);                              // 「読み込んだ値」(dirty の比較元)
+      clear();
+    }                                                           // 未保存があれば shouldApply() が stale を立てる
+  }), [shouldApply, clear]);
+
+// 保存できたら、その入力を「読み込んだ値」にする(失敗したら何もしない = 入力を残す)
+save(input).then(() => { setBaseline(input); clear(); });
+
+{stale && <StaleNotice onReload={() => void load(true)} />}     // 「取り直す」= 入力を捨てて取り直す
+```
+
+編集用の部品は `ref` で `refresh()`(自動の取り直し。未保存なら知らせを出す)と `reload()`(入力を捨てて取り直す。dock の「再読み込み」)を出す。
+自動の取り直しからは `refresh()` を呼ぶ(`/claude`・ビューアの `onReconnected` が手本)。
+
+### 書き込みボタンは、応答が返るまで押せなくする
+
+「追加」「保存」「削除する」「切替」「名前変更の確定」「作成」など、書き込み(や重い問い合わせ)を起こすボタンは、応答が返るまで `disabled` にし、
+ハンドラの先頭でも送信中なら何もしない(Enter の連打・ダブルクリックで 2 つできるのを防ぐ)。応答が返ったら(成功・失敗どちらでも)戻す。
+手本: `src/app/settings/page.tsx` の `runWrite`、`src/ProfileSettingsPane.tsx` の `saving`・`renaming`・`yyzCreating`。
+
 ## 確認
 
 ```bash
 npx tsc --noEmit        # apps/console で
+```
+
+## 画面(ルート)
+
+| ルート | 内容 | 段階 |
+|---|---|---|
+| `/` | `/settings` へ redirect(ハブは段階 4) | 1 |
+| `/settings` | プロファイルの操作・対象リポジトリ・対象フォルダ(手入力 + 確認) | 2 A |
+| `/claude` | `~/.claude` の閲覧と保存(CLAUDE.md・settings.json・Explorer) | 2 B |
+| `/profiles/[[...profileId]]` | ビューア(セッション一覧・会話・画像・生の行、CLAUDE.md・Rules・Skills・設定ファイルの閲覧と保存) | 2 C |
+
+- 出していないもの(後の段階): 実行中セッションとの対話、利用状況、かんばん・GitHub 連携、複数ウィンドウの連携(段階 4 でブラウザ側に作る)。
+  「仕様」ボタンは作らない。
+- 会話の Markdown 内のリンクは別タブで開く(`target="_blank"`・`rel="noopener noreferrer"`。`src/externalLinks.ts`)。
+- どの画面も、購読(`session:changed` など)は画面を離れたとき・unmount のときに `unlisten` する。サーバへの SSE 接続は、
+  画面を移動しても 1 本のまま(`src/api/events.ts` が持つ)。
+- command・イベントの実装状況は `npm run diff-commands` で出す。
+
+## Markdown の表示と Content-Security-Policy(XSS の守り)
+
+CLAUDE.md・Rules・Skills・会話は、clone したリポジトリやエージェントが書くので、`<img src=x onerror=…>` のような細工が入りうる。
+この画面と同じオリジンで動くと、中継(`/api/rpc/*`)を通して `~/.claude/settings.json` の読み書きまで届く。3 重に守る。
+
+1. **Markdown を表示する所は、共通の部品を通す**: 閲覧専用は `SafeMarkdownViewer`(会話の `MessageText`・`RulesPane`・`SkillsPane`)、編集つきは `ClaudeMdEditor`。
+   `<markdown-viewer>` / `<markdown-workspace>` を直接置かない・`viewer.markdown = …` / `workspace.value = …` と直接代入しない(`tests/sanitizeMarkdown.test.ts` がソースを検査して落ちる)。
+   内容は `setViewerMarkdown` / `setWorkspaceValue`(`src/safeMarkdown.ts`)でしか渡さない。どちらも**先に無害化を仕込み**(`sanitize` を設定し、`parser` も包んで出力を必ず無害化する)、仕込めなければ内容を渡さない。
+   markdown.sitter の `sanitize` の既定は素通しで、effect の宣言順に頼ると最初の描画が素通しになる(実際に起きた)。新しい Markdown の表示を足すときも、この部品を使う。
+2. **無害化の設定を締めてある**(`src/sanitizeMarkdown.ts`): `<script>`・`on` 属性・`javascript:` に加えて、`<style>`・`<link>`・`<iframe>`・`<object>`・`<embed>`・`<form>`・`<base>`・`<meta>`・`<svg>`・`style` 属性を落とす。リンク・画像の URL は `http`・`https`・`mailto` とスキームの無い相対・`#` だけ。
+3. **Content-Security-Policy**(`src/proxy.ts`。Next の Proxy): 万一無害化を抜けても、インラインのスクリプト・on 属性は実行されず、外への送信・読み込みも出ていかない。
+   `script-src` はリクエストごとの nonce + `'strict-dynamic'`(`'unsafe-inline'` なし。そのためルートの layout が `connection()` で動的に描画する)、`connect-src 'self'`、`img-src 'self' data: blob:`、`object-src 'none'`、`base-uri 'none'`、`frame-ancestors 'none'`、`form-action 'self'`。
+   **緩めた所**: `style-src` は `'unsafe-inline'` を許す(command-dock・markdown.sitter が Shadow DOM の中に `<style>` を入れ、nonce を付けられないため)。`next dev` だけ React の都合で `'unsafe-eval'` と `ws:` を足す。
+   **会話の中の外部の画像は表示されない**(読み込むだけで、開いたことが外へ伝わるため。了承済み)。
+
+```bash
+npm run test --workspace=console    # 無害化のテスト(jsdom)
 ```

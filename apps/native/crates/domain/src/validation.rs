@@ -20,12 +20,14 @@ pub fn is_valid_session_id(id: &str) -> bool {
 /// プロジェクトフォルダ名(`~/.claude/projects/` 直下の1階層)がパスの構築に
 /// 使って安全な形式かを検証する(issue #313)。フロントから受け取った値を
 /// そのままパスに使わないための入力検証(native.md §4)。空・`.`・`..`・
-/// パス区切り(`/` `\`)・NUL を含むものは拒否する。
+/// パス区切り(`/` `\`)・`:`・NUL を含むものは拒否する。`:` は、Windows では `dir.join("C:x")` が
+/// ドライブ指定付きのパスと解釈され、`dir` の外を指してしまうため(Claude Code のフォルダ名は
+/// `:` を `-` に置き換えているので、正しい名前には現れない)。
 pub fn is_valid_project_dir_name(name: &str) -> bool {
     !name.is_empty()
         && name != "."
         && name != ".."
-        && !name.chars().any(|c| c == '/' || c == '\\' || c == '\0')
+        && !name.chars().any(|c| matches!(c, '/' | '\\' | ':' | '\0'))
 }
 
 /// ルールファイル名がパスの構築に使って安全な形式かを検証する。フロントから
@@ -38,6 +40,8 @@ pub fn is_valid_rule_file_name(file_name: &str) -> bool {
         && file_name.ends_with(".md")
         && !file_name.contains('/')
         && !file_name.contains('\\')
+        && !file_name.contains(':')
+        && !file_name.contains('\0')
         && !file_name.contains("..")
 }
 
@@ -47,7 +51,12 @@ pub fn is_valid_rule_file_name(file_name: &str) -> bool {
 /// `<repo_dir>/.claude/skills/<name>/SKILL.md` の解決先が常にそのディレクトリ
 /// 配下に収まることを保証する。
 pub fn is_valid_skill_name(name: &str) -> bool {
-    !name.is_empty() && !name.contains('/') && !name.contains('\\') && !name.contains("..")
+    !name.is_empty()
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains(':')
+        && !name.contains('\0')
+        && !name.contains("..")
 }
 
 /// `~/.claude` からの相対パスが、`~/.claude` 配下に収まることを保証できる
@@ -111,7 +120,20 @@ mod tests {
 
     #[test]
     fn is_valid_project_dir_name_rejects_path_traversal_attempts() {
-        for bad in ["", ".", "..", "a/b", "a\\b", "../x", "a\0b"] {
+        for bad in [
+            "",
+            ".",
+            "..",
+            "a/b",
+            "a\\b",
+            "../x",
+            "a\0b",
+            "C:",
+            "C:x",
+            "D:foo",
+            "a:b",
+            "x::$INDEX_ALLOCATION",
+        ] {
             assert!(!is_valid_project_dir_name(bad), "should reject {bad:?}");
         }
     }
@@ -135,6 +157,10 @@ mod tests {
             "native.txt",
             "native.md.txt",
             "..md",
+            "C:x.md",
+            "C:native.md",
+            "a\0.md",
+            "x.md::$DATA.md",
         ] {
             assert!(!is_valid_rule_file_name(bad), "should reject {bad:?}");
         }
@@ -157,6 +183,10 @@ mod tests {
             "a/b",
             "a\\b",
             "/etc",
+            "C:",
+            "C:x",
+            "a:b",
+            "a\0b",
         ] {
             assert!(!is_valid_skill_name(bad), "should reject {bad:?}");
         }
