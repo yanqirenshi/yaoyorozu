@@ -29,7 +29,7 @@ cargo run -p server --manifest-path apps/native/Cargo.toml --target-dir <別の 
   実在する一番深い親を解決してから残りを足す)。名前が `com.yaoyorozu.native` のフォルダ、または本物の
   `%APPDATA%\com.yaoyorozu.native` を同じ方法で解決したもの自身かその下なら断る。`:` を含む名前(代替データストリーム)など
   フォルダにできない指定も、何も書く前に断る(断った場合に `.tmp` を含む残骸は残らない)。
-- データフォルダの中身: `settings.json`(読むだけ。無ければ既定値)、`server-token`(起動のたびに作り直す)、
+- データフォルダの中身: `settings.json`(起動時に読む。無ければ既定値。**壊れているときは `settings.json.corrupt.<時刻>` へ退避して既定値で起動し、古い版のときは新しい版へ書き直す**。どちらも既存の infra(`FileSettingsStore`)の動きで、サーバ自身は書き込まない)、`server-token`(起動のたびに作り直す)、
   `server-port`(実際のポート)。Next の中継が `server-token`・`server-port` を読む。
 
 ## エンドポイント

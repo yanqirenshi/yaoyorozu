@@ -16,6 +16,7 @@ npm run console:dev    # ターミナル 2: 画面(http://127.0.0.1:3200/setting
 - 開発サーバは **127.0.0.1 の 3200 番**だけで待ち受ける(3000 = web、3100/4000 = hub、1420/1425 = Vite は使用中)。
 - サーバのデータフォルダを変えたときは、`console:dev` にも同じ環境変数 `YAOYOROZU_DATA_DIR` を渡す
   (中継が `server-token`・`server-port` をそこから読む)。MSI 版のフォルダは読まない。
+- **ふだん使うときは `next build` → `next start` で起動する(`next dev` は開発のときだけ)**。開発サーバにだけある口(`/__nextjs_launch-editor`)があり、本番の起動では 404 になるため。
 - `console:dev` は先にデザイントークン(`tokens.css`)を生成する(`npm run tokens`)。
 
 ## 構成
