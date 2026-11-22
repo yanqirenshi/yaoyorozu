@@ -6,6 +6,7 @@ edition = "2021"
 
 [dependencies]
 axum = "0.8"
+http-body = "1"
 domain = { path = "../crates/domain" }
 app = { path = "../crates/app" }
 infra = { path = "../crates/infra" }

@@ -5,6 +5,7 @@ pub mod config;
 pub mod corruption;
 pub mod data_files;
 pub mod dismissed;
+pub mod drain;
 pub mod dto;
 pub mod error;
 pub mod events;
@@ -160,5 +161,7 @@ pub fn router(ctx: AppContext) -> Router {
         .route("/events", get(events))
         .merge(rpc::routes())
         .layer(middleware::from_fn_with_state(ctx.clone(), auth::guard))
+        // 本文を読まずに応答した入口でも、読み残しを読み捨ててから接続を閉じる(送り側が、応答を読む前に切られない)。
+        .layer(middleware::from_fn(drain::drain_unread_body))
         .with_state(ctx)
 }
