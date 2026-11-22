@@ -1,0 +1,3226 @@
+/* デザイントークン(scripts/generate-tokens.ts の生成物。issue #93)。
+   配色のソースオブトゥルースは apps/web/src/data/ui*.ts。 */
+@import "./tokens.css";
+
+:root {
+  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 400;
+
+  color: var(--text-primary);
+  background-color: var(--surface-base);
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+
+  /* command-dock テーマ契約(既存の伝統色パレットに合わせる) */
+  --dock-bg: var(--surface-base);
+  --dock-fg: var(--text-primary);
+  --dock-border: var(--border-default);
+  --dock-accent: var(--color-primary);
+
+  /* markdown.sitter テーマ契約(伝統色パレットに合わせる。issue #57) */
+  --md-bg: var(--surface-base);
+  --md-fg: var(--text-primary);
+  --md-fg-muted: var(--text-secondary);
+  --md-border: var(--border-default);
+  --md-link: var(--color-primary);
+  --md-link-hover: var(--link-default);
+  --md-heading-fg: var(--color-primary);
+  --md-code-bg: var(--state-hover);
+  --md-quote-bg: color-mix(in srgb, var(--color-primary) 6%, transparent);
+  --md-mono-font: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* 下端はdock(画面下部に浮くフローティングツールバー)と重なるため、
+     余白を残す(issue #59)。 */
+  --md-padding: 0 0 222px 0;
+  --md-max-width: none;
+  --md-editor-bg: var(--surface-base);
+  --md-editor-fg: var(--text-primary);
+  --md-editor-padding: 0 0 222px 0;
+  --md-editor-font-size: 0.9rem;
+  --md-resizer-bg: var(--border-default);
+  --md-resizer-active-bg: var(--color-primary);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow-x: hidden;
+}
+
+.app-shell {
+  position: relative;
+  display: flex;
+  height: 100vh;
+  border: 1px solid var(--border-default);
+  box-sizing: border-box;
+  /* 各画面が自前のスクロール領域(`.settings-profile-pane` 等)を持つ前提のため、
+     外枠自体はどちらの方向にもスクロールさせない(issue #109で判明: 縦方向の
+     指定が漏れていたため、内容が縦に長くなるページ(ハブのグラフ等)で
+     ウィンドウ全体に不要な縦スクロールバーが出ていた)。 */
+  overflow: hidden;
+}
+
+/* ハブ画面(issue #84)。`.app-shell` 直下の唯一のフレックス子として
+   d3.network のSVGを全面に表示する(D3Networkは react-measure で親要素の
+   サイズに追従するため、この要素自体が高さを持つ必要がある)。`position:
+   relative` はインスペクタ(issue #109)をこの要素基準で絶対配置するため。
+   `min-height: 0` はflexアイテムの既定値(`auto`)がコンテンツの最小サイズを
+   確保しようとして`.app-shell`をはみ出させるのを防ぐ(issue #109で判明。
+   `min-width: 0` と対になる縦方向の対策)。 */
+.hub-page {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.hub-page .error {
+  flex-shrink: 0;
+  margin: 8px 16px 0;
+}
+
+/* 起動後のバックグラウンド読み込み中の案内(issue #212)。グラフの
+   再レイアウトを起こさないよう、absolute でオーバーレイする(ノードの
+   グラフ自体は空/未確定のまま裏で描かれる)。 */
+.hub-page .hub-loading {
+  position: absolute;
+  top: 8px;
+  left: 16px;
+  z-index: 1;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+/* グラフ調整の吹き出し(issue #246)。dock(画面下部中央に浮くツールバー)の
+   すぐ上に、グラフへオーバーレイで被せる(再レイアウトを起こさない)。 */
+.hub-tuning {
+  position: absolute;
+  left: 50%;
+  bottom: 100px;
+  transform: translateX(-50%);
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  box-shadow: var(--elevation-3);
+}
+
+.hub-tuning-row {
+  display: grid;
+  grid-template-columns: 120px 200px 44px;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.hub-tuning-row input[type="range"] {
+  width: 100%;
+  accent-color: var(--color-primary);
+}
+
+.hub-tuning-value {
+  text-align: right;
+  color: var(--text-primary);
+}
+
+/* ノードの右クリックで表示するインスペクタ(issue #109)。オーバーレイで
+   被せるだけでグラフの再レイアウトを起こさない。高さは画面いっぱい(top/
+   bottom とも0)。dock(画面下部に浮くフローティングツールバー)との重なりは
+   このコンテナ自身の `padding-bottom` 1箇所だけで避ける(issue #59と同じ
+   理由)。子要素側にも余白を足すと合算されて不要なスクロールを生むため、
+   ここでだけ確保する。幅はインラインスタイル(`width` prop。初期444px・
+   最小222px・最大888px)で決まるため、ここでは指定しない
+   (`.hub-inspector-resizer` でドラッグ変更する。この要素自身が
+   `position: absolute` なので、その左端に置く resizer の位置決めの
+   基準にもなる)。 */
+.hub-inspector {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  box-sizing: border-box;
+  padding-bottom: 96px;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-raised);
+  border-left: 1px solid var(--border-default);
+  box-shadow: var(--elevation-3);
+  overflow-y: auto;
+  z-index: 5;
+}
+
+/* 幅変更用のつまみ。パネルの左端に半分はみ出す形で置き、掴みやすい当たり
+   判定を確保する(見た目の境界線は `.hub-inspector` の `border-left` が
+   兼ねる)。 */
+.hub-inspector-resizer {
+  position: absolute;
+  top: 0;
+  left: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 6;
+}
+
+.hub-inspector-resizer:hover {
+  background: var(--color-primary);
+}
+
+.hub-inspector-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.hub-inspector-header h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.hub-inspector-close {
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  font-size: 1.1rem;
+  line-height: 1;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px;
+}
+
+.hub-inspector-close:hover {
+  color: var(--text-primary);
+}
+
+/* 項目一覧。`flex: 1` で残りの高さに収め、あふれる分はこの中で縦スクロール
+   させる(issue #408)。スクロールさせないと、項目の多いセッションの
+   インスペクタで中身が枠からはみ出し、後ろに置いた入力欄・アクション
+   ボタンの上に重なって描かれてしまう。 */
+.hub-inspector-fields {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.hub-inspector-field dt {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin: 0 0 2px;
+}
+
+/* 長い値(フルパス・IDなど)は折り返し、選択してコピーできるようにする
+   (issue #109)。会話ファイルパス等、値に改行(`\n`)を含めて複数件を
+   1フィールドに詰める場合があるため、改行をそのまま表示する
+   (issue #217)。 */
+.hub-inspector-field dd {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+  user-select: text;
+}
+
+.hub-inspector-action {
+  flex-shrink: 0;
+  margin: 0 16px 16px;
+  border: 1px solid var(--color-primary);
+  border-radius: 4px;
+  padding: 8px 16px;
+  font-size: 0.9rem;
+  font-family: inherit;
+  color: var(--color-primary);
+  background: none;
+  cursor: pointer;
+}
+
+.hub-inspector-action:hover {
+  background: var(--state-hover);
+}
+
+/* 押せないアクション(起動に必要な値が揃っていない・backend への操作の最中。
+   issue #408)。 */
+.hub-inspector-action:disabled {
+  color: var(--text-disabled);
+  border-color: var(--border-default);
+  cursor: not-allowed;
+}
+
+.hub-inspector-action:disabled:hover {
+  background: none;
+}
+
+/* インスペクタの入力欄(実行中セッションの起動。issue #408)。項目一覧と
+   アクションボタンの間に置く。 */
+.hub-inspector-body {
+  flex-shrink: 0;
+  margin: 0 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hub-inspector-form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+/* 入力欄に添える注意書き(表示名でタイトルが変わること。issue #424)。 */
+.hub-inspector-form-note {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+/* 起動に失敗した理由(worktree の用意の失敗など。issue #438)。押したボタンの
+   すぐ上に出して、起動できていないことが分かるようにする。 */
+.hub-inspector-form-error {
+  margin: 0;
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  color: var(--color-suou-700);
+  background: var(--color-suou-50);
+  overflow-wrap: anywhere;
+}
+
+/* 「動き方」の切り替え(issue #558)。ノード種別を問わず共通で足す
+   (`buildMoveControl`)ため、他の body の内容と並ぶ1ブロックとして最後に置く。 */
+.hub-inspector-move {
+  flex-shrink: 0;
+  margin: 0 16px 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-default);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hub-inspector-move-label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.hub-inspector-move-options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.hub-inspector-move-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+}
+
+.hub-inspector-move-reset {
+  align-self: flex-start;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  font-family: inherit;
+  color: var(--text-secondary);
+  background: none;
+  cursor: pointer;
+}
+
+.hub-inspector-move-reset:hover {
+  background: var(--state-hover);
+}
+
+.hub-inspector-move-reset:disabled {
+  color: var(--text-disabled);
+  cursor: not-allowed;
+}
+
+.hub-inspector-form-row select,
+.hub-inspector-form-row input {
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 0.9rem;
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--surface-raised);
+}
+
+/* 画面左の一覧ペイン(固定幅)。ビューアのセッション一覧と設定のプロファイル一覧
+   (issue #74)で骨格を共有する。ビューアのセッション一覧は #348 でヘッダのタブに
+   移したが、#379 で左ペインの縦一覧へ戻した。
+   スクロールの仕方は issue #531 で分かれた: 設定のプロファイル一覧はペイン全体が
+   スクロールするまま(`.settings-profile-pane` 側にだけ overflow-y を残す)。
+   ビューアのセッション一覧は上部(ヘッダ・検索・区分トグル。`.project-list-top`)を
+   固定し、行の一覧(`.project-list-rows`)だけをスクロールさせるため、`.project-list`
+   自体は overflow を持たない(内側の `.project-list-rows` が overflow-y: auto)。 */
+.project-list,
+.settings-profile-pane {
+  width: 320px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border-default);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 一覧の末尾(「追加」フォーム)がdock(画面下部中央に浮くツールバー)の
+   下に隠れないよう、下端に余白を残す(issue #59 と同じ理由)。 */
+.settings-profile-pane {
+  padding-bottom: 96px;
+  overflow-y: auto;
+}
+
+/* 固定する上部(issue #531)。`.project-list` 自身は overflow を持たないため、
+   子要素の高さの合計で縦に伸びようとするが、flex-shrink: 0 で潰れないようにする
+   だけで良く、特別な高さ指定は要らない。 */
+.project-list-top {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 行だけをスクロールさせる領域(issue #531)。`.project-list` が
+   `display: flex; flex-direction: column` なので、残りの高さいっぱいに
+   広がるよう flex: 1 + min-height: 0(flex item の既定の min-height: auto を
+   打ち消して縮められるようにする)。行が少なく中身がこの領域より低いときは、
+   overflow-y: auto の既定どおりスクロールバーは出ない。 */
+.project-list-rows {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-profile-pane h2 {
+  font-size: 1rem;
+  font-weight: 400;
+  margin: 0 0 8px;
+}
+
+/* 一覧ペインのヘッダ(issue #521)。左にこのウィンドウのプロファイル名、右に
+   「仕様」(apps/web のドキュメンテーションツール)へのリンク。`.project-list` の
+   gap で検索欄と自然に間隔が空く(個別の margin は持たない)。 */
+.project-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.project-list-header-profile {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* リンクの見た目(枠・塗りなし、下線)は会話の「データ」ボタン(.message-meta-data)と
+   同じ流儀。 */
+.project-list-header-spec-link {
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--text-secondary);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.project-list-header-spec-link:hover {
+  color: var(--text-primary);
+}
+
+.project-list-header-spec-link:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.project-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: var(--surface-base);
+  color: var(--text-primary);
+  padding: 10px 14px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.session-item-title,
+.settings-profile-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 実行中セッションの状態での色分け(issue #491)。ハブの sessionNodeCircleStyle
+   (HubPage.tsx)と同じ 3 色 + 無色。背景全体を塗ると選択中の行(.selected)と
+   区別しにくくなるため、左端の帯(border-left)だけで示す。権限待ちは太めにして
+   目立たせる(人が答えるまで進まないため)。更新日時・状態バッジ(.session-item-updated)
+   は行を詰めるため issue #519 で廃止し、具体的な状態は行の title(ホバー)に移した
+   (色帯だけでは「実行中かどうか」までしか伝わらないが、それ以上の詳細は常時は
+   出さない判断)。 */
+.session-list-item-running {
+  border-left-color: var(--color-kincha-500);
+  border-left-width: 4px;
+}
+
+.session-list-item-awaiting {
+  border-left-color: var(--color-kincha-700);
+  border-left-width: 6px;
+}
+
+.session-list-item-idle {
+  border-left-color: var(--color-sumi-400);
+  border-left-width: 4px;
+}
+
+/* 選択中(.selected)は四辺の border-color を var(--color-primary) に変えるため、
+   左端の帯の色だけ詳細度を上げて保持する(選択中でも実行中の状態が分かるように)。 */
+.project-item.selected.session-list-item-running {
+  border-left-color: var(--color-kincha-500);
+}
+
+.project-item.selected.session-list-item-awaiting {
+  border-left-color: var(--color-kincha-700);
+}
+
+.project-item.selected.session-list-item-idle {
+  border-left-color: var(--color-sumi-400);
+}
+
+/* 左ペインの全セッション一覧(issue #487)。検索欄と「+ 新規」は一覧の先頭。
+   行は選択用のボタン(`.project-item`)のみ(「外す」操作を廃止したため、以前の
+   重ね配置の「×」は無くなった)。 */
+.session-list-add {
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  border: 1px dashed var(--border-default);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 10px 14px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.session-list-add:hover {
+  background-color: var(--state-hover);
+  color: var(--text-primary);
+}
+
+.session-list-add:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* 対象フォルダが複数のときだけ添える、そのセッションのフォルダ名(見分け用)。 */
+.session-item-folder {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-item:hover {
+  background-color: var(--state-hover);
+}
+
+.project-item.selected {
+  background-color: color-mix(in srgb, var(--color-primary) 16%, transparent);
+  border-color: var(--color-primary);
+  font-weight: 600;
+}
+
+.session-conversation {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ビューアの上部: タブ(左)とページ内ツールバー(右。issue #257)。 */
+/* ビューアの全体(issue #291): 最上段の全幅ヘッダ / その下に本体(サイドメニュー |
+   セッション一覧 | コンテンツ)の2段構成。 */
+.viewer-page {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.viewer-body {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+}
+
+/* コンテンツ領域(`.session-conversation`)の下端に置くフッター(ユーザー指示)。
+   ビューアの操作(表示の切り替え・再読み込み・保存など)をまとめて置く。
+   サイドメニュー・セッション一覧の下には回り込ませない(ページ全体のフッターには
+   しない)。以前はヘッダの右端にあった(issue #257)。
+   重なり順を上げて、吹き出しメニューがコンテンツの上に出るようにする。 */
+.viewer-footer {
+  position: relative;
+  z-index: 40;
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  border-top: 1px solid var(--border-default);
+  background: var(--surface-base);
+}
+
+/* フッターでは吹き出しメニューを上向きに開く(下向きだと画面外に出る)。 */
+.viewer-footer .viewer-toolbar-menu {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
+/* ビューアの最左端のサイドメニュー(issue #263)。アイコンのみ(名前は
+   ツールチップ)で幅を取らない。選択中の項目はセッション一覧の選択中
+   (`.project-item.selected`)と同じ配色。 */
+.viewer-sidemenu {
+  width: 52px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 0;
+  border-right: 1px solid var(--border-default);
+  background: var(--surface-sunken);
+}
+
+/* 開(`.expanded`。issue #266)は幅を広げてアイコン+項目名を出す。会話
+   ペイン等は flex で縮んで追従する(セッション一覧ペインは固定幅のまま)。 */
+.viewer-sidemenu.expanded {
+  width: 188px;
+  align-items: stretch;
+  padding-left: 7px;
+  padding-right: 7px;
+}
+
+.viewer-sidemenu-item {
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.viewer-sidemenu.expanded .viewer-sidemenu-item {
+  width: auto;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 0 9px;
+}
+
+.viewer-sidemenu-icon {
+  flex-shrink: 0;
+  display: flex;
+}
+
+.viewer-sidemenu-label {
+  min-width: 0;
+  font-family: inherit;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 下部の「設定」(issue #299)。項目の残り高さを押しのけて、開閉トグルの上(下端側)へ。
+   上の7項目とは罫線で区切る。 */
+.viewer-sidemenu-settings {
+  margin-top: auto;
+  position: relative;
+}
+
+.viewer-sidemenu-settings::before {
+  content: "";
+  position: absolute;
+  top: -5px;
+  left: 6px;
+  right: 6px;
+  border-top: 1px solid var(--border-default);
+}
+
+/* 幅が狭いときは、開いても会話ペイン等を押し縮めない(潰れて崩れるため)。
+   場所は閉のままの幅(52px)を確保し、開いたメニューはセッション一覧の上に
+   重ねて表示する(背景・枠線・影は疑似要素の面で描く)。 */
+@media (max-width: 900px) {
+  .viewer-sidemenu.expanded {
+    width: 52px;
+    position: relative;
+    z-index: 30;
+    overflow: visible;
+  }
+
+  .viewer-sidemenu.expanded::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 188px;
+    background: var(--surface-sunken);
+    border-right: 1px solid var(--border-default);
+    box-shadow: var(--elevation-3);
+  }
+
+  .viewer-sidemenu.expanded .viewer-sidemenu-item {
+    position: relative;
+    width: 174px;
+  }
+}
+
+.viewer-sidemenu-item:hover {
+  background-color: var(--state-hover);
+  color: var(--text-primary);
+}
+
+.viewer-sidemenu-item.active {
+  background-color: color-mix(in srgb, var(--color-primary) 16%, transparent);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.viewer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  flex-shrink: 0;
+}
+
+.viewer-toolbar-item {
+  position: relative;
+}
+
+.viewer-toolbar-button {
+  box-sizing: border-box;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-default);
+  border-radius: 50%;
+  background: var(--surface-base);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.viewer-toolbar-button:hover:not(:disabled),
+.viewer-toolbar-button.open {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.viewer-toolbar-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.viewer-toolbar-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  min-width: 170px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  box-shadow: var(--elevation-3);
+}
+
+.viewer-toolbar-menu-item {
+  border: none;
+  background: none;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.viewer-toolbar-menu-item:hover {
+  background: var(--state-hover);
+}
+
+.viewer-toolbar-menu-item.active {
+  font-weight: 600;
+  color: var(--color-primary);
+}
+
+/* 共通部品「タブ」(issue #287。仕様の正は apps/web の uiTab.ts)。
+   値は tokens.css の変数で参照する。太さは全状態で同じ(選択で幅が揺れない)。 */
+.tabs {
+  display: flex;
+  gap: var(--space-1);
+  padding: 0 var(--space-4);
+  /* 下罫線は影で描き、選択中の下線をその上に重ねる。border + margin-bottom: -1px だと
+     overflow-x: auto で縦スクロールバーが出て下線が欠ける(issue #289)。 */
+  border-bottom: none;
+  box-shadow: inset 0 -1px 0 var(--border-default);
+  /* 収まらないときは折り返さず横スクロール(issue #79)。 */
+  overflow-x: auto;
+}
+
+.tab {
+  box-sizing: border-box;
+  flex-shrink: 0;
+  display: block;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  cursor: pointer;
+  margin-bottom: 0;
+  border-bottom: 3px solid transparent;
+  /* 1行に収め、200px を超えるラベルは末尾を省略(全体は title で確認できる)。 */
+  max-width: 200px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tabs-small .tab {
+  height: 40px;
+  padding: 0 var(--space-3);
+  font-size: var(--text-ui-14m-100-size);
+  font-weight: var(--text-ui-14m-100-weight);
+  line-height: 40px;
+  letter-spacing: var(--text-ui-14m-100-tracking);
+}
+
+.tabs-medium .tab {
+  height: 48px;
+  padding: 0 var(--space-4);
+  font-size: var(--text-ui-16m-100-size);
+  font-weight: var(--text-ui-16m-100-weight);
+  line-height: 48px;
+  letter-spacing: var(--text-ui-16m-100-tracking);
+}
+
+.tab:hover:not(:disabled) {
+  background: var(--color-kusairo-50);
+  color: var(--text-primary);
+}
+
+.tab:active:not(:disabled):not([aria-selected="true"]) {
+  background: var(--color-kusairo-100);
+  color: var(--text-primary);
+}
+
+.tab[aria-selected="true"] {
+  color: var(--color-kusairo-800);
+  border-bottom-color: var(--color-kusairo-600);
+}
+
+/* :hover(詳細度が上)に負けず、選択中・ホバーも文字は草色-800(issue #289)。 */
+.tab[aria-selected="true"]:hover:not(:disabled) {
+  color: var(--color-kusairo-800);
+}
+
+.tab:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.tab:disabled {
+  background: transparent;
+  color: var(--text-disabled);
+  cursor: not-allowed;
+}
+
+/* 「×」つきのタブ(issue #353。Tabs の onClose を指定したときだけ)。見た目の仕様の
+   正は uiTab.ts の `TAB_CLOSE`(issue #358)。タブと × はボタンの入れ子にできない
+   ため、セルの中で並べて × をタブの右端に重ねる。 */
+.tab-cell {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  /* × の線の色はタブの文字色を継ぐ(`.tab-close` は color: inherit)。× はタブの
+     兄弟なので、タブの状態に応じたタブの文字色をセルに持たせて揃える。 */
+  color: var(--text-secondary);
+}
+
+/* ホバー(タブ本体でも × の上でも)。無効のタブは除く。 */
+.tab-cell:hover:not(:has(> .tab:disabled)) {
+  color: var(--text-primary);
+}
+
+/* × の上にポインタがあるときも、タブ本体のホバーと同じ背景・文字色にする
+   (仕様では × はタブの中にあり、× の上でもタブのホバーが続くため)。 */
+.tab-cell:hover > .tab:not(:disabled) {
+  background: var(--color-kusairo-50);
+  color: var(--text-primary);
+}
+
+/* 選択中(ホバー中も)は草色-800。上のホバーより後に置いて勝たせる。 */
+.tab-cell:has(> .tab[aria-selected="true"]:not(:disabled)) {
+  color: var(--color-kusairo-800);
+}
+
+.tab-cell:hover > .tab[aria-selected="true"]:not(:disabled) {
+  color: var(--color-kusairo-800);
+}
+
+.tab-cell:has(> .tab:disabled) {
+  color: var(--text-disabled);
+}
+
+/* × の分だけ右の余白を広げる(ラベルと重ならないように)。右の余白 = タブの左右
+   パディング + × のクリック領域 + ラベルとの間隔(`--space-1`)。 */
+.tabs-small .tab.tab-closable {
+  padding-right: calc(var(--space-3) + var(--space-6) + var(--space-1));
+}
+
+.tabs-medium .tab.tab-closable {
+  padding-right: calc(var(--space-4) + var(--space-6) + var(--space-1));
+}
+
+.tab-close {
+  position: absolute;
+  top: 0;
+  /* 選択中の下線(3px)の上の領域で上下中央に置く。 */
+  bottom: 3px;
+  margin: auto 0;
+  /* × の右側の余白は、タブの左右パディングと同じ。 */
+  right: var(--space-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-6);
+  height: var(--space-6);
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-4);
+  background: transparent;
+  /* 線の色はタブの文字色を継ぐ。状態で変わるのは背景だけ。 */
+  color: inherit;
+  cursor: pointer;
+}
+
+.tabs-medium .tab-close {
+  right: var(--space-4);
+}
+
+.tab-close svg {
+  width: var(--icon-16);
+  height: var(--icon-16);
+}
+
+.tab-close:hover {
+  background: var(--color-sumi-100);
+}
+
+.tab-close:active {
+  background: var(--color-sumi-200);
+}
+
+.tab-close:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.claude-md-pane {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+}
+
+/* ビューア(`/profiles/:id`)の CLAUDE.md。内容が枠に貼り付かないよう、
+   markdown-viewer / markdown-editor を包むアプリ側の要素(markdown-workspace)
+   に余白を持たせる(ユーザー指示)。
+   markdown-viewer 自体を div 等で包むことはできない — markdown-workspace は
+   `[slot="preview"]` で中身を取得して直接操作するため(dist の `get viewer()`)、
+   間に要素を挟むとその要素を掴んでしまう。
+   部品が内部に持つ余白(:root の --md-padding。既定は dock 避けの下端222px。
+   issue #59)は、この余白と二重になるうえ、ビューアには dock が無い
+   (issue #257)ため 0 にする。 */
+.claude-md-pane .claude-md-editor-workspace {
+  box-sizing: border-box;
+  padding: 22px;
+  --md-padding: 0;
+  --md-editor-padding: 0;
+}
+
+.claude-md-editor {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.claude-md-editor-workspace {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+/* 「左: ファイル一覧 / 右: markdown-viewerで内容表示」という2ペイン構成の
+   共通レイアウト(表示専用)。Rules(issue #61)・Skills(issue #65)で
+   共有する。 */
+.file-list-pane {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+}
+
+.file-list {
+  width: 260px;
+  flex-shrink: 0;
+  min-height: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--border-default);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.file-list-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: var(--surface-base);
+  color: var(--text-primary);
+  padding: 10px 14px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.file-list-item:hover {
+  background-color: var(--state-hover);
+}
+
+.file-list-item.selected {
+  background-color: color-mix(in srgb, var(--color-primary) 16%, transparent);
+  border-color: var(--color-primary);
+  font-weight: 600;
+}
+
+.file-list-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-list-item-updated {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.file-content-pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+}
+
+.file-content-viewer {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* settings.json/settings.local.jsonタブ(issue #70)。CLAUDE.mdタブと同じ
+   骨格だが、中身がJSONのためmarkdown.sitterではなく素のtextareaを使う。 */
+.json-settings-pane {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  padding: 16px;
+}
+
+.json-file-editor {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.json-file-editor-textarea {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  resize: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  padding: 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: var(--surface-base);
+  color: var(--text-primary);
+}
+
+.github-project-pane {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 16px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* かんばんの列を横並びにし、この行だけを横スクロールさせる
+   (ページ全体は横スクロールさせない。issue #50)。 */
+.kanban-board {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 16px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 8px;
+}
+
+.kanban-column {
+  flex: 0 0 260px;
+  width: 260px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--color-sumi-100);
+  padding: 10px;
+}
+
+.kanban-column.is-drop-target {
+  border-color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 10%, transparent);
+}
+
+.kanban-column-heading {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin: 0;
+  color: var(--text-primary);
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.kanban-column-count {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+.kanban-column-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.project-item-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: var(--surface-base);
+  color: var(--text-primary);
+  padding: 10px 14px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  cursor: grab;
+}
+
+.project-item-card:hover {
+  background-color: var(--state-hover);
+}
+
+.project-item-card.is-busy {
+  cursor: default;
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.project-item-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-item-meta {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+/* 設定画面の右ペイン。縦のflexにしておき、Claudeタブ(.is-fill)では対象
+   フォルダの一覧が残りの高さいっぱいに伸びるようにする。他のタブは従来
+   どおりペインごとスクロールする。 */
+.settings-page {
+  flex: 1;
+  min-width: 0;
+  padding: 24px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-page .tabs {
+  padding: 0;
+  margin-bottom: 20px;
+}
+
+/* 右ペイン上部のプロファイル名と名前変更ボタン。名前変更中は見出しが
+   入力欄に入れ替わるため、行の高さを固定して下のタブが動かないようにする。 */
+.settings-profile-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 40px;
+  margin-bottom: 12px;
+}
+
+/* 長い名前は省略して、名前変更ボタンを押し出さない。 */
+.settings-profile-header h2 {
+  margin: 0;
+  min-width: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-profile-header button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* 一覧が内側でスクロールするため、ペイン自体はスクロールさせない。
+   dock(画面下部に浮くフローティングツールバー)との重なりは、この
+   ペインの `padding-bottom` 1箇所だけで避ける(.claude-page-section と
+   同じ値)。 */
+.settings-page.is-fill {
+  overflow-y: hidden;
+  padding-bottom: 96px;
+}
+
+.settings-page.is-fill .settings-form {
+  flex: 1;
+  min-height: 0;
+  max-width: none;
+}
+
+.corruption-warning {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  margin: 0;
+  padding: 10px 24px;
+  color: var(--semantic-error-fg);
+  background-color: var(--semantic-error-bg);
+  border-bottom: 1px solid var(--semantic-error-border);
+}
+
+.app-warning-list {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+}
+
+.app-warning {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+  padding: 10px 24px;
+  color: var(--semantic-error-fg);
+  background-color: var(--semantic-error-bg);
+  border-bottom: 1px solid var(--semantic-error-border);
+}
+
+.app-warning-dismiss {
+  flex: none;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  max-width: 480px;
+}
+
+.settings-section h3 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin: 0 0 10px;
+}
+
+/* 見出しの右横に操作(検索欄・保存ボタン等)を並べる行。ウィンドウが狭く
+   1行に収まらないときは、はみ出さずに折り返す。 */
+.settings-section-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 0 0 10px;
+}
+
+.settings-section-header h3 {
+  margin: 0;
+}
+
+/* 保存ボタンは行の右端に寄せる。 */
+.settings-section-header .settings-save {
+  align-self: auto;
+  margin-left: auto;
+}
+
+/* 見出しと保存ボタンは縮めない(日本語は1文字ごとに折り返せるため、縮むと
+   見出しが「対象フォル/ダ」のように割れる)。狭いときは検索欄が縮む。 */
+.settings-section-header h3,
+.settings-section-header .settings-save {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* 保存結果・エラーは見出しの行の下に出す(行の中に置くと、表示された瞬間に
+   検索欄が押し縮められたり、狭いウィンドウで保存ボタンが次の行へ飛んだり
+   するため)。 */
+.settings-folder-section > .settings-saved,
+.settings-folder-section > .error {
+  margin: 0 0 10px;
+}
+
+/* 対象フォルダの絞り込み欄。見出しのすぐ右に置き、幅は160px〜最大320px。 */
+.settings-folder-search {
+  flex: 1 1 160px;
+  max-width: 320px;
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: var(--surface-base);
+  color: var(--text-primary);
+  padding: 8px 12px;
+  font-size: 0.9rem;
+  font-family: inherit;
+}
+
+.settings-folder-picker {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-folder-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-placeholder);
+}
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.85rem;
+  color: var(--text-placeholder);
+  margin-bottom: 12px;
+}
+
+.settings-field input,
+.settings-field select {
+  box-sizing: border-box;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--surface-base);
+}
+
+/* on/off の単一チェックボックス(issue #464 等)。.settings-field(ラベル+入力欄の
+   縦並び)とは異なり、チェックボックスと文言を1行に横並びにする。 */
+.settings-checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-ui-14n-100-size);
+  font-weight: var(--text-ui-14n-100-weight);
+  color: var(--text-primary);
+}
+
+/* チェックボックス付きの設定項目の補足説明(new-session-hint と同じ書式)。 */
+.settings-hint {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-dns-14n-150-size);
+  font-weight: var(--text-dns-14n-150-weight);
+  color: var(--text-secondary);
+}
+
+/* 「仕様フォルダ(yyz/)を作る」(issue #547)。 */
+.settings-yyz-scaffold {
+  margin-top: var(--space-2);
+}
+
+.settings-yyz-scaffold-files {
+  margin: var(--space-1) 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-dns-14n-150-size);
+  font-weight: var(--text-dns-14n-150-weight);
+  color: var(--text-secondary);
+}
+
+.settings-github-auth {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.settings-user-code {
+  font-size: 1.2rem;
+  letter-spacing: 0.1em;
+}
+
+/* 対象フォルダ欄は残りの高さいっぱいに伸ばし、一覧を内側でスクロールさせる。 */
+.settings-folder-section {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-folder-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.settings-folder-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: var(--surface-base);
+  color: var(--text-primary);
+  padding: 10px 14px;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.settings-folder-item:hover {
+  background-color: var(--state-hover);
+}
+
+.settings-folder-item.selected {
+  background-color: color-mix(in srgb, var(--color-primary) 16%, transparent);
+  border-color: var(--color-primary);
+  font-weight: 600;
+}
+
+.settings-folder-item input[type="checkbox"] {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+/* 一覧の行は .project-item(ビューアのセッション行)をそのまま使うため、
+   ここではリスト自体の並びだけを定義する(issue #74)。 */
+.settings-profile-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 名前変更中の入力欄(右ペイン上部のプロファイル名の位置に出す)。見出しと
+   入れ替わっても文字の大きさが変わらないよう、見出しと同じ書体に揃え、
+   .settings-profile-header の高さに収める。 */
+.settings-profile-rename-input {
+  flex: 0 1 320px;
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--color-primary);
+  border-radius: 4px;
+  background: var(--surface-base);
+  color: var(--text-primary);
+  padding: 4px 10px;
+  font-size: 1.1rem;
+  font-weight: 600;
+  font-family: inherit;
+}
+
+/* 一覧の行。削除ボタンを行の右端に重ねて置くための基準。 */
+.settings-profile-row {
+  position: relative;
+}
+
+/* 削除アイコンに名前が重ならないよう、アイコンのある行(選択中)は右側を空ける。 */
+.settings-profile-row .project-item.selected {
+  padding-right: 44px;
+}
+
+/* プロファイルの削除ボタン(アイコンのみ)。選択中の行の右端・上下中央に
+   重ねる。アクティブな行にだけ出す(issue #74 からの方針)。 */
+.settings-profile-delete {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.settings-profile-delete:hover:not(:disabled) {
+  color: var(--semantic-error-fg);
+  background-color: var(--state-hover);
+}
+
+/* プロファイルが1件だけのときは削除できない。 */
+.settings-profile-delete:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* 確認用のモーダルダイアログ(プロファイル削除の確認)。`<dialog>` の
+   showModal() で画面中央に出る。 */
+.settings-dialog {
+  box-sizing: border-box;
+  padding: 0;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  box-shadow: var(--elevation-3);
+  max-width: min(420px, calc(100vw - 32px));
+}
+
+/* 後ろの画面を暗くして、操作できないことを示す。 */
+.settings-dialog::backdrop {
+  background: color-mix(in srgb, var(--text-primary) 40%, transparent);
+}
+
+.settings-dialog-body {
+  padding: 20px 24px;
+}
+
+.settings-dialog-body h3 {
+  margin: 0 0 12px;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+/* 長いプロファイル名でもダイアログの幅に収めて折り返す。 */
+.settings-dialog-body p {
+  margin: 0 0 20px;
+  overflow-wrap: anywhere;
+}
+
+.settings-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+/* 取り消せない操作のボタン。 */
+.settings-dialog-danger {
+  border: 1px solid var(--semantic-error-fg);
+  border-radius: 4px;
+  padding: 6px 16px;
+  font-family: inherit;
+  color: var(--surface-base);
+  background-color: var(--semantic-error-fg);
+  cursor: pointer;
+}
+
+/* タブに出すセッションを選ぶモーダル(issue #353)。プロファイル削除の確認と同じ
+   `settings-dialog` を土台に、幅を広げ、一覧は枠の中でスクロールさせる。 */
+.session-picker {
+  width: min(640px, calc(100vw - 32px));
+  max-width: none;
+}
+
+.session-picker-body {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 96px);
+  box-sizing: border-box;
+}
+
+.session-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.session-picker-head h3 {
+  margin: 0;
+}
+
+.session-picker-close {
+  border: none;
+  background: none;
+  font-size: 1.4rem;
+  line-height: 1;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.session-picker-close:hover {
+  color: var(--text-primary);
+}
+
+.session-picker-search {
+  box-sizing: border-box;
+  width: 100%;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.9rem;
+}
+
+.session-picker-list {
+  flex: 1;
+  min-height: 0;
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+}
+
+.session-picker-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.session-picker-item:hover:not(.disabled) {
+  background: var(--color-kusairo-50);
+}
+
+.session-picker-item.selected {
+  background: var(--color-kusairo-100);
+}
+
+/* 追加済み(すでにタブにあるもの)は選べない表示。 */
+.session-picker-item.disabled {
+  color: var(--text-disabled);
+  cursor: not-allowed;
+}
+
+.session-picker-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.session-picker-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-picker-meta {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.session-picker-item.disabled .session-picker-meta {
+  color: var(--text-disabled);
+}
+
+/* 元データ(jsonl の1行)のモーダル(issue #313)。プロファイル削除の確認と同じ
+   `settings-dialog` を土台に、幅を広げ、長い行は中身の枠の中でスクロールさせる。 */
+.raw-line-dialog {
+  width: min(880px, calc(100vw - 32px));
+  max-width: none;
+}
+
+.raw-line-dialog-body {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 96px);
+  box-sizing: border-box;
+}
+
+.raw-line-dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.raw-line-dialog-head h3 {
+  margin: 0;
+}
+
+.raw-line-dialog-close {
+  border: none;
+  background: none;
+  font-size: 1.4rem;
+  line-height: 1;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.raw-line-dialog-close:hover {
+  color: var(--text-primary);
+}
+
+.raw-line-dialog-body .raw-line-dialog-uuid {
+  margin: 0 0 12px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.raw-line-dialog-pre {
+  flex: 1;
+  min-height: 0;
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  overflow: auto;
+  background-color: var(--surface-sunken);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 共通部品「追加ボタン」「変更ボタン」(issue #277)。仕様の正は apps/web の
+   `src/data/uiButton.ts`(`/ui?item=part-button`)。値は書き写さず、tokens.css の
+   CSS 変数だけで参照する(hex の直書きなし)。アイコンは付けず文字だけ。 */
+.action-button {
+  box-sizing: border-box;
+  /* 幅はラベルの文字に合わせる。親(縦並びの flex 等)の幅いっぱいに伸ばさない
+     ため、置き場所ごとの左寄せ指定は要らない(仕様: uiButton.ts の BUTTON_WIDTH)。 */
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid;
+  border-radius: var(--radius-4);
+  padding-top: 0;
+  padding-bottom: 0;
+  font-family: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 120ms,
+    border-color 120ms;
+}
+
+.action-button-small {
+  height: 32px;
+  padding-left: var(--space-3);
+  padding-right: var(--space-3);
+  font-size: var(--text-ui-14m-100-size);
+  font-weight: var(--text-ui-14m-100-weight);
+  line-height: var(--text-ui-14m-100-line-height);
+  letter-spacing: var(--text-ui-14m-100-tracking);
+}
+
+.action-button-medium {
+  height: 40px;
+  padding-left: var(--space-4);
+  padding-right: var(--space-4);
+  font-size: var(--text-ui-16m-100-size);
+  font-weight: var(--text-ui-16m-100-weight);
+  line-height: var(--text-ui-16m-100-line-height);
+  letter-spacing: var(--text-ui-16m-100-tracking);
+}
+
+.action-button-large {
+  height: 48px;
+  padding-left: var(--space-6);
+  padding-right: var(--space-6);
+  font-size: var(--text-ui-18m-100-size);
+  font-weight: var(--text-ui-18m-100-weight);
+  line-height: var(--text-ui-18m-100-line-height);
+  letter-spacing: var(--text-ui-18m-100-tracking);
+}
+
+/* 追加ボタン・保存ボタン(塗り。issue #334 で保存を追加)。見た目は完全に
+   同一で違いはラベルだけのため、セレクタを併記して値は複製しない(web 側も
+   `FILLED_COLORS` の1定義を追加・保存で共有している。片方だけ変わる状態を
+   作らないため)。ラベルは白・陰なし(issue #328)。白 on 金茶-500 は
+   コントラスト 2.61:1 で基準未達だが、色味を優先したユーザー判断
+   (2026-09-23)のためそのまま採用する(直さない。.action-button-edit と
+   同じ扱い)。文字が白いので、ホバー・押下中は背景を暗くする方向に変える
+   (issue #328 追記。以前の墨文字版は逆に明るくしていたが、白文字化に
+   伴って反転した)。 */
+.action-button-add,
+.action-button-save {
+  background-color: var(--color-kincha-500);
+  color: var(--text-inverse);
+  border-color: var(--color-kincha-500);
+}
+
+.action-button-add:hover:not(:disabled),
+.action-button-save:hover:not(:disabled) {
+  background-color: var(--color-kincha-600);
+  border-color: var(--color-kincha-600);
+}
+
+.action-button-add:active:not(:disabled),
+.action-button-save:active:not(:disabled) {
+  background-color: var(--color-kincha-700);
+  border-color: var(--color-kincha-700);
+}
+
+.action-button-add:disabled,
+.action-button-save:disabled {
+  background-color: var(--state-disabled);
+  color: var(--text-disabled);
+  border-color: var(--state-disabled);
+}
+
+/* 変更ボタン(線)。文字(金茶-500 on 白)はコントラスト基準に届かないが、
+   ユーザー判断で採用された仕様のためそのまま(直さない)。 */
+.action-button-edit {
+  background-color: var(--surface-raised);
+  color: var(--color-kincha-500);
+  border-color: var(--color-kincha-600);
+}
+
+.action-button-edit:hover:not(:disabled) {
+  background-color: var(--color-kincha-50);
+  border-color: var(--color-kincha-700);
+}
+
+.action-button-edit:active:not(:disabled) {
+  background-color: var(--color-kincha-100);
+  border-color: var(--color-kincha-800);
+}
+
+.action-button-edit:disabled {
+  background-color: var(--surface-raised);
+  color: var(--text-disabled);
+  border-color: var(--border-default);
+}
+
+/* 選択ボタン(線。issue #339)。形は変更ボタンと同じだが、値は独立して持つ
+   (変更ボタンとは色の系統が異なるため、#334 の保存ボタンのようなセレクタ
+   併記にはしない)。文字色は 墨-500(変更ボタンの金茶-500に対応する段階)
+   ではなく `--text-primary`(墨-900)。墨-500 は白背景に対し 3.56:1 で本文の
+   基準(4.5:1)に届かず、対象を指定するだけの操作でニュートラルな配色に
+   色味を優先する理由もないため。 */
+.action-button-select {
+  background-color: var(--surface-raised);
+  color: var(--text-primary);
+  border-color: var(--color-sumi-600);
+}
+
+.action-button-select:hover:not(:disabled) {
+  background-color: var(--color-sumi-50);
+  border-color: var(--color-sumi-700);
+}
+
+.action-button-select:active:not(:disabled) {
+  background-color: var(--color-sumi-100);
+  border-color: var(--color-sumi-800);
+}
+
+.action-button-select:disabled {
+  background-color: var(--surface-raised);
+  color: var(--text-disabled);
+  border-color: var(--border-default);
+}
+
+/* 操作できないときはカーソルを not-allowed に。フォーカスはキーボード操作
+   (`:focus-visible`)のときだけ出し、ポインタで押したときには出さない。 */
+.action-button:disabled {
+  cursor: not-allowed;
+}
+
+.action-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.settings-profile-add {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.settings-profile-add input {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: var(--surface-base);
+  color: var(--text-primary);
+  padding: 8px 12px;
+  font-size: 0.9rem;
+  font-family: inherit;
+}
+
+.settings-save {
+  align-self: flex-start;
+  border: 1px solid var(--color-primary);
+  border-radius: 4px;
+  padding: 8px 20px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  color: var(--surface-base);
+  background-color: var(--color-primary);
+  cursor: pointer;
+}
+
+.settings-save:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.settings-saved {
+  color: var(--semantic-success-fg);
+}
+
+.message-form {
+  flex-shrink: 0;
+  display: flex;
+  /* 複数行入力欄(issue #483)が伸びてもボタン類は下端に揃える(デフォルトの
+     stretch だとボタンまで縦に引き伸ばされる)。 */
+  align-items: flex-end;
+  gap: 8px;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.message-input {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  line-height: var(--text-body-16n-170-line-height);
+  color: var(--text-primary);
+  background: var(--surface-base);
+  /* 複数行(issue #483)。高さは JS 側(SessionsPage.tsx の useEffect)が
+     scrollHeight から決め、ユーザーのドラッグでの手動リサイズは不要なため resize は
+     無効にする。8行分(line-height × 8 + 上下 padding)を超えたらスクロールに切り替える。
+     calc() はパーセンテージ同士の乗算ができないため、上の line-height(170%)と同じ比率を
+     1.7 として数値で書き直している(値はこの170%と必ず揃えること)。 */
+  resize: none;
+  overflow-y: auto;
+  max-height: calc(0.95rem * 1.7 * 8 + 16px);
+}
+
+.message-input:disabled {
+  opacity: 0.6;
+}
+
+.message-send {
+  flex-shrink: 0;
+  border: 1px solid var(--color-primary);
+  border-radius: 4px;
+  padding: 8px 16px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  color: var(--surface-base);
+  background-color: var(--color-primary);
+  cursor: pointer;
+}
+
+.message-send:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 画像の添付ボタン(issue #349)。送信ボタンより控えめな枠線のみのボタン。 */
+.message-attach {
+  flex-shrink: 0;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--surface-base);
+  cursor: pointer;
+}
+
+.message-attach:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 送信前の添付画像のサムネイル(issue #349) */
+.message-attachments {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 24px;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.message-attachment {
+  position: relative;
+}
+
+.message-attachment-thumb {
+  display: block;
+  height: 64px;
+  max-width: 160px;
+  object-fit: cover;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+}
+
+.message-attachment-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--border-default);
+  border-radius: 50%;
+  font-size: 0.9rem;
+  line-height: 1;
+  color: var(--text-primary);
+  background: var(--surface-base);
+  cursor: pointer;
+}
+
+.message-attachment-remove:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 会話表示の「画像 n 枚」(issue #349)。「データ」ボタンと同じ控えめな下線ボタン。 */
+.message-images-button {
+  display: block;
+  margin-top: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--color-primary);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.message-images-count {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-secondary);
+}
+
+.message-images-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  margin-bottom: 12px;
+}
+
+.message-images-item {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+}
+
+.conversation-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 24px;
+  /* 会話領域の背景は墨-100。コメントは白+影で浮かせる(issue #297)。 */
+  background-color: var(--color-sumi-100);
+}
+
+/* アーカイブ/戻す(issue #511)。会話ペイン(.session-conversation)の最後の子要素
+   (.conversation-scroll は flex: 1 なので、これは常に一番下に来る)。左寄せで、
+   会話の表示・入力欄とは別の行にして重ならないようにする。 */
+.conversation-archive-bar {
+  flex-shrink: 0;
+  display: flex;
+  padding: var(--space-2) var(--space-6);
+  border-top: 1px solid var(--border-default);
+}
+
+.error {
+  color: var(--semantic-error-fg);
+}
+
+.messages {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.load-more {
+  display: block;
+  margin: 16px auto 0;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  padding: 8px 16px;
+  font-size: 0.9rem;
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--surface-base);
+  cursor: pointer;
+}
+
+.load-more:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.message {
+  border-radius: 8px;
+  padding: 10px 14px;
+  max-width: 720px;
+}
+
+/* 会話メッセージ本文(issue #319)。marked による自前描画から markdown-viewer
+   (markdown.sitter。Shadow DOM の Web Component)に置き換えたため、以前の
+   子孫セレクタ(.message-text p 等)はもう内部に届かない。テーマ契約の
+   CSS 変数(issue #57。:root の --md-* )は Shadow DOM を貫通するので、
+   このスコープだけ上書きして吹き出しに収める。色・見出しサイズ等は
+   :root の既定(ClaudeMdEditor/RulesPane と共通のテーマ)をそのまま使う。 */
+.message-text {
+  display: block;
+  /* word-break は継承プロパティとして Shadow DOM 内へも伝わる(#293 の見出し
+     行間は viewer 側が line-height: 1.35 を持つため、ここでの指定は不要)。
+     長い1トークン(URLやID)が吹き出しの幅(720px)をはみ出さないように。 */
+  word-break: break-word;
+  --md-bg: transparent;
+  --md-padding: 0;
+  --md-max-width: none;
+  /* 本文の文字サイズは、他のUI要素と揃える(既定の15pxではなくアプリの
+     基準16pxに。実装時判断)。行間は viewer の既定(1.7)のまま。 */
+  --md-font-size: 1rem;
+  /* アクセントを京紫(:root の既定。--color-primary 系)から草色に(issue #321)。
+     CLAUDE.md/Rules/Skills 等、他の markdown 表示は :root のテーマ(京紫)の
+     ままなので変わらない(このスコープだけの上書き)。
+     見出し・リンクは草色-800(白背景 6.87:1・墨-50 背景 6.41:1。ともに本文の
+     基準 4.5:1 を満たす。草色-700 は白 4.46:1・墨-50 4.16:1 で墨-50側が届かず、
+     草色-600 はどちらも届かないため不採用。リンクは hover でも同じ濃さのまま
+     とし、下線が破線→実線に変わることで差を示す(component 既定の挙動)。
+     引用線・コード網掛けは文字色ではなく面のため基準の対象外。淡い面の
+     トーンとして草色-50/100 を使う(#297 で assistant 枠に使った草色-100と
+     同系)。 */
+  --md-heading-fg: var(--color-kusairo-800);
+  --md-link: var(--color-kusairo-800);
+  --md-link-hover: var(--color-kusairo-800);
+  --md-quote-bg: var(--color-kusairo-50);
+  --md-code-bg: var(--color-kusairo-100);
+}
+
+/* コメントは user / assistant とも白背景+影。枠線で描き分ける: user は白、
+   assistant は草色-100(issue #297)。 */
+.message-user,
+.message-assistant {
+  background-color: var(--surface-raised);
+  box-shadow: var(--elevation-1);
+}
+
+.message-user {
+  /* user の背景だけ墨-50(assistant は白のまま。issue #303)。 */
+  background-color: var(--color-sumi-50);
+  border: 1px solid var(--surface-raised);
+}
+
+.message-assistant {
+  border: 1px solid var(--color-kusairo-100);
+}
+
+/* 送信に失敗したことの見分け(issue #364)。エラー行は普通の返事と見分けがつくよう
+   セマンティックカラー(error)の控えめな面と細い枠にし、答えのない質問は破線の枠と
+   メタ情報の「送信に失敗」だけを添える(本文は普通の質問のまま)。 */
+.message-send-error {
+  background-color: var(--semantic-error-bg);
+  border: 1px solid var(--semantic-error-border);
+  box-shadow: none;
+}
+
+.message-failed-question {
+  border: 1px dashed var(--semantic-error-border);
+}
+
+.message-meta-failed {
+  color: var(--semantic-error-fg);
+}
+
+.send-error-title {
+  margin: 0;
+  color: var(--semantic-error-fg);
+  font-weight: 600;
+}
+
+.send-error-hint {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.send-error-details {
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.send-error-details summary {
+  cursor: pointer;
+}
+
+.send-error-text {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
+
+/* 吹き出し(.message)とメタ情報(種類・日時。issue #258)を横に並べる行。
+   user は吹き出しの右、assistant は吹き出しの左にメタ情報を置く(吹き出しの
+   配置は従来どおり: user は左寄せ、assistant は右寄せの幅77%)。 */
+.message-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.message-row-user {
+  align-self: flex-start;
+  max-width: 100%;
+}
+
+.message-row-assistant {
+  align-self: stretch;
+  justify-content: flex-end;
+}
+
+.message-row .message {
+  min-width: 0;
+}
+
+.message-row-user .message {
+  flex: 0 1 auto;
+}
+
+.message-row-assistant .message {
+  flex: 0 1 77%;
+  max-width: none;
+}
+
+/* メタ情報は本文より小さく薄く。狭い幅では吹き出しを優先して縮み、日時は
+   折り返す(はみ出さない)。assistant のメタ情報は吹き出しの左(order)。 */
+.message-meta {
+  flex: 0 0 auto;
+  max-width: 11em;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 10px;
+  font-size: 0.7rem;
+  line-height: 1.2;
+  /* 墨-100 の背景上でも読めるよう、placeholder(約4.2:1)より濃い secondary にする(issue #297)。 */
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+/* 「データ」ボタン(issue #313)。メタ情報と同じ淡いトーンの小さなテキストボタン。 */
+.message-meta-data {
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--text-secondary);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.message-meta-assistant .message-meta-data {
+  align-self: flex-end;
+}
+
+.message-meta-data:hover {
+  color: var(--text-primary);
+}
+
+.message-meta-data:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.message-meta-assistant {
+  order: -1;
+  text-align: right;
+}
+
+/* user のメタ情報は吹き出しの右。 */
+.message-meta-user {
+  order: 1;
+}
+
+.message-meta-role {
+  font-weight: 600;
+}
+
+/* 幅が狭い(左の一覧ペインを除くと会話の幅が足りない)ときは、吹き出しが
+   細くなりすぎないよう、メタ情報を吹き出しの上に1行で置く。 */
+@media (max-width: 900px) {
+  .message-row {
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .message-row-user,
+  .message-row-assistant {
+    align-self: stretch;
+  }
+
+  .message-row .message,
+  .message-row-assistant .message {
+    flex: 0 1 auto;
+    align-self: stretch;
+    width: auto;
+  }
+
+  .message-meta,
+  .message-meta-user,
+  .message-meta-assistant {
+    order: 0;
+    flex-direction: row;
+    align-items: baseline;
+    gap: 8px;
+    max-width: none;
+    padding-top: 0;
+    text-align: left;
+  }
+}
+
+/* Claude画面(/claude)。タブ(CLAUDE.md / settings.json / Explorer)・対象
+   パス・表示中タブの内容を縦に並べ、内容側が残りの高さを埋める。 */
+.claude-page {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  padding: 24px 24px 0;
+}
+
+.claude-page .tabs {
+  flex-shrink: 0;
+  padding: 0;
+  margin-bottom: 12px;
+}
+
+.claude-page-path {
+  flex-shrink: 0;
+  margin: 0 0 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+/* dock(画面下部に浮くフローティングツールバー)との重なりは、この
+   コンテナの `padding-bottom` 1箇所だけで避ける(.hub-inspector と同じ値)。 */
+.claude-page-section {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  max-width: 960px;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 96px;
+}
+
+/* Explorerタブ: `~/.claude` 配下のツリー(ClaudeDirExplorer)。 */
+.claude-explorer {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: var(--surface-base);
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+.claude-explorer-header,
+.claude-explorer-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 6rem 9.5rem;
+  gap: 12px;
+  align-items: center;
+  padding-right: 12px;
+}
+
+.claude-explorer-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding-block: 6px;
+  background: var(--surface-sunken);
+  border-bottom: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.claude-explorer-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+}
+
+.claude-explorer-row:hover {
+  background: var(--state-hover);
+}
+
+/* 字下げは階層(`--depth`。ClaudeDirExplorer がインラインで渡す)から計算する。
+   見出し行は `--depth` を持たないため 0 段として扱う。 */
+.claude-explorer-name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding-left: calc(12px + var(--depth, 0) * 16px);
+}
+
+button.claude-explorer-name {
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding-top: 0;
+  padding-bottom: 0;
+  padding-right: 0;
+}
+
+.claude-explorer-chevron {
+  display: inline-block;
+  width: 16px;
+  flex-shrink: 0;
+  text-align: center;
+  color: var(--text-secondary);
+  transition: transform 0.1s;
+}
+
+.claude-explorer-chevron.open {
+  transform: rotate(90deg);
+}
+
+.claude-explorer-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claude-explorer-label.directory {
+  color: var(--color-primary);
+  font-weight: 500;
+}
+
+.claude-explorer-label.symlink {
+  font-style: italic;
+}
+
+.claude-explorer-tag {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+.claude-explorer-size,
+.claude-explorer-modified {
+  text-align: right;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 読み込み中・エラー・空・「さらに表示」の行。名前列(シェブロン幅を含む)に
+   字下げを揃える。 */
+.claude-explorer-status {
+  padding: 2px 12px 2px calc(12px + 20px + var(--depth, 0) * 16px);
+  color: var(--text-secondary);
+}
+
+.claude-explorer-status.error {
+  color: var(--semantic-error-fg);
+}
+
+.claude-explorer-more {
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  font: inherit;
+  color: var(--text-primary);
+  padding: 0 10px;
+  cursor: pointer;
+}
+
+.claude-explorer-more:hover {
+  background: var(--state-hover);
+}
+
+/* ローディングアイコン(LoadingIcon。issue #393)。仕様の正は apps/web の uiLoading.ts。
+   枠は inline-flex で、幅・高さをアイコンと同じにする(余分な余白を持たない)。色は
+   指定しない(置いた場所の文字色を継ぐ)。
+   Ring は SVG の style 属性に `--ld-size: <size>px` を必ず書く(size の既定 20)ため、
+   px の直書きを避けて `--icon-*` トークンを使うには、この変数を `!important` で
+   上書きする(スタイルシートの !important は style 属性の値に勝つ)。 */
+.loading-icon {
+  display: inline-flex;
+}
+
+.loading-icon-small {
+  width: var(--icon-16);
+  height: var(--icon-16);
+}
+
+.loading-icon-medium {
+  width: var(--icon-20);
+  height: var(--icon-20);
+}
+
+.loading-icon-large {
+  width: var(--icon-32);
+  height: var(--icon-32);
+}
+
+.loading-icon-small .ld-ring {
+  --ld-size: var(--icon-16) !important;
+}
+
+.loading-icon-medium .ld-ring {
+  --ld-size: var(--icon-20) !important;
+}
+
+.loading-icon-large .ld-ring {
+  --ld-size: var(--icon-32) !important;
+}
+
+/* ====== バッジ(部品。issue #411)======
+   仕様の正は apps/web の uiBadge.ts(/ui?item=part-badge)。値はトークンだけで書く。
+   境界は持たない(境界を持つボタンと形で区別する)。文字の太さはトーン・サイズで変えない。 */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  padding: 0 var(--space-2);
+  border: none;
+  border-radius: var(--radius-4);
+  white-space: nowrap;
+  font-size: var(--text-ui-14n-100-size);
+  font-weight: var(--text-ui-14n-100-weight);
+  line-height: var(--text-ui-14n-100-line-height);
+  letter-spacing: var(--text-ui-14n-100-tracking);
+}
+
+/* 高さは仕様の値(small = 20px / medium = 24px)。 */
+.badge-small {
+  height: 20px;
+}
+
+.badge-medium {
+  height: 24px;
+}
+
+.badge-idle {
+  background: var(--color-sumi-100);
+  color: var(--text-secondary);
+}
+
+.badge-running {
+  background: var(--color-kincha-100);
+  color: var(--color-kincha-800);
+}
+
+.badge-done {
+  background: var(--color-kusairo-100);
+  color: var(--color-kusairo-800);
+}
+
+.badge-error {
+  background: var(--color-suou-100);
+  color: var(--color-suou-700);
+}
+
+/* ====== 実行中セッション(issue #392。Phase 1)====== */
+
+/* 会話ビューの上部の状態表示(プロセスの状態・権限モード・中断/終了)。 */
+.running-bar {
+  flex-shrink: 0;
+  display: flex;
+  /* 幅に収まらない要素(表示名の入力欄と注意書きなど)は次の行へ(issue #426)。 */
+  flex-wrap: wrap;
+  row-gap: var(--space-1);
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-6);
+  border-bottom: 1px solid var(--border-default);
+  font-size: var(--text-dns-14n-150-size);
+  color: var(--text-secondary);
+}
+
+/* 状態表示(バッジ)を包む領域。状態が変わったことを支援技術に伝える(role="status")。 */
+.running-bar-status {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* 状態バッジの高さ・左右の余白を、隣の選択ボタン(.action-button-small)と揃える
+   (issue #511)。Badge は仕様(uiButton.ts 同様 uiBadge.ts が正)を持つ共有部品で、
+   他の利用箇所(一覧の行等)は仕様どおりの小さいバッジのままでよいため、Badge 自体や
+   `size` の値を変えず、この状態バー内に限定したセレクタで上書きする。 */
+.running-bar-status .badge {
+  height: 32px;
+  padding: 0 var(--space-3);
+}
+
+.running-bar-actions {
+  margin-left: auto;
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* 控えめな枠線のみのボタン(添付ボタン .message-attach と同じ見た目の小さい版)。 */
+.running-bar-button,
+.permission-button {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-4);
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-ui-14n-100-size);
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--surface-base);
+  cursor: pointer;
+}
+
+.running-bar-button:hover,
+.permission-button:hover:not(:disabled) {
+  background: var(--state-hover);
+}
+
+.running-bar-button:focus-visible,
+.permission-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* 返答中の表示(作成中の AI の吹き出し・送信中の行)。確定した行と見分けがつくよう、
+   枠を破線にして、メタ情報に「作成中」「送信中」を添える。 */
+.message-live {
+  border-style: dashed;
+}
+
+.message-meta-live {
+  color: var(--color-kincha-800);
+}
+
+/* 「作成中」とローディングアイコンを横に並べるラッパ(issue #517)。`.message-meta`
+   自体は縦並び(flex-direction: column)なので、ここだけ横並びにする。 */
+.message-meta-live-group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.live-tools {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--text-dns-14n-150-size);
+}
+
+.live-tool {
+  display: inline-flex;
+  gap: var(--space-2);
+  padding: 2px var(--space-2);
+  border: 1px solid var(--color-kusairo-100);
+  border-radius: var(--radius-4);
+  color: var(--text-secondary);
+}
+
+.live-tool-name {
+  color: var(--text-primary);
+}
+
+/* ツールがエラーになったときだけ、失敗を示すセマンティックカラーを使う。 */
+.live-tool-error {
+  border-color: var(--semantic-error-border);
+}
+
+.live-tool-error .live-tool-state {
+  color: var(--semantic-error-fg);
+}
+
+/* AI からの問い合わせ(権限の問い合わせ・選択肢の質問・計画の承認)のカード。
+   会話の吹き出しとは別物と分かるよう、幅いっぱいで警告色の面にせず、草色の枠にする。 */
+.permission-card {
+  box-sizing: border-box;
+  max-width: 720px;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-kusairo-800);
+  border-radius: var(--radius-8);
+  background: var(--surface-raised);
+  box-shadow: var(--elevation-1);
+}
+
+.permission-title {
+  margin: 0;
+  font-weight: var(--text-dns-14b-150-weight);
+  color: var(--text-primary);
+}
+
+.permission-tool {
+  margin-left: var(--space-2);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-4);
+  background: var(--surface-sunken);
+  font-weight: var(--text-dns-14n-150-weight);
+  font-family: monospace;
+}
+
+.permission-description {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-dns-14n-150-size);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.permission-details {
+  margin-top: var(--space-2);
+  font-size: var(--text-dns-14n-150-size);
+  color: var(--text-secondary);
+}
+
+.permission-details summary {
+  cursor: pointer;
+}
+
+.permission-input {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) var(--space-3);
+  max-height: 240px;
+  overflow: auto;
+  border-radius: var(--radius-4);
+  background: var(--surface-sunken);
+  font-size: var(--text-mono-14n-150-size);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.permission-actions,
+.permission-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.permission-suggestions {
+  margin-top: var(--space-2);
+}
+
+.permission-button-primary {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: var(--surface-base);
+}
+
+.permission-button-primary:hover:not(:disabled) {
+  background: var(--color-primary);
+  opacity: 0.9;
+}
+
+/* 無効は色だけ(不透明度)で表さない。部品「ボタン」の無効の状態と同じ値(/ui?item=part-button)。 */
+.permission-button:disabled {
+  background: var(--state-disabled);
+  color: var(--text-disabled);
+  border-color: var(--border-default);
+  cursor: not-allowed;
+}
+
+.permission-question {
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  border: none;
+}
+
+.permission-question-text {
+  padding: 0;
+  font-weight: var(--text-dns-14b-150-weight);
+}
+
+.permission-question-header {
+  margin-right: var(--space-2);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-4);
+  background: var(--surface-sunken);
+  font-weight: var(--text-dns-14n-150-weight);
+  font-size: var(--text-dns-14n-150-size);
+}
+
+.permission-question-note {
+  margin-left: var(--space-2);
+  font-weight: var(--text-dns-14n-150-weight);
+  font-size: var(--text-dns-14n-150-size);
+  color: var(--text-secondary);
+}
+
+.permission-option {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  font-size: var(--text-dns-14n-150-size);
+}
+
+.permission-option-label {
+  color: var(--text-primary);
+}
+
+.permission-option-description {
+  flex-basis: 100%;
+  padding-left: var(--space-6);
+  font-size: var(--text-dns-14n-150-size);
+  color: var(--text-secondary);
+}
+
+.permission-other-input {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-4);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-ui-14n-100-size);
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--surface-base);
+}
+
+.permission-feedback {
+  display: block;
+  width: 100%;
+  margin-top: var(--space-3);
+}
+
+.permission-plan {
+  margin-top: var(--space-2);
+  max-height: 360px;
+  overflow: auto;
+}
+
+/* ====== 状態バーの切り替え・新規セッション(issue #409)====== */
+
+/* 状態バーの、値の表示 + 選択ボタン + 一覧(位置の基準)。 */
+.running-bar-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* セッション名のボタン(issue #524)は会話のタイトルをそのまま出すため、他の
+   ボタン(固定の語)と違って長くなりうる。共有部品(ActionButton)自体は変えず、
+   ここだけ幅の上限と省略(…)を上書きする(issue #511 のバッジの扱いと同じ流儀)。 */
+.running-bar-session-name .action-button {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.running-bar-menu {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  z-index: 20;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-1);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-8);
+  box-shadow: var(--elevation-3);
+}
+
+.running-bar-menu-item {
+  border: none;
+  background: none;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-4);
+  font-family: inherit;
+  font-size: var(--text-ui-14n-100-size);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.running-bar-menu-item:hover {
+  background: var(--state-hover);
+}
+
+.running-bar-menu-item:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.running-bar-menu-item.active {
+  font-weight: var(--text-dns-14b-150-weight);
+  color: var(--color-primary);
+}
+
+/* 再開に付ける表示名の入力欄。高さは選択ボタン(.action-button-small)と揃え、
+   幅は `.running-bar-name-field`(flex: 1)いっぱいに広げる(issue #513)。 */
+.running-bar-name {
+  min-width: 0;
+  width: 100%;
+  height: 32px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-4);
+  padding: 0 var(--space-2);
+  font-size: var(--text-ui-14n-100-size);
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--surface-base);
+}
+
+/* 左の一覧の先頭: 検索欄と「+ 新規」を並べる(issue #487)。 */
+.session-list-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* 検索欄は「+ 新規」と高さを揃える(同じ padding・font-size)。 */
+.session-list-search {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  padding: 10px 14px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--surface-base);
+}
+
+.session-list-search:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* 「+ 新規」は文字の幅だけ(検索欄を圧迫しない)。 */
+.session-list-actions .session-list-add {
+  width: auto;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.session-pending-note {
+  margin: 0 0 var(--space-3);
+  color: var(--text-secondary);
+}
+
+/* 一覧の区分トグル(issue #506。#495 の「アーカイブを表示」チェックボックスを置き換え)。
+   検索欄・「+」の下に置く、セグメント風の3つのボタン(起動・未起動・アーカイブ)。
+   ON(aria-pressed="true")は塗り、OFF は枠だけ(SelectButton 等と見分けるため、ここだけの配色)。 */
+/* 行が詰まった(issue #519)分、区分トグルの余白も詰める(issue #521。
+   0.3 倍。直値を書かず、元の間隔(--space-2 / --space-3)からの比率で持つ)。 */
+.session-list-category-toggle {
+  display: flex;
+  gap: var(--space-1);
+  margin: calc(var(--space-2) * 0.3) 0 calc(var(--space-3) * 0.3);
+}
+
+.session-list-category-button {
+  flex: 1;
+  box-sizing: border-box;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-4);
+  background: transparent;
+  color: var(--text-secondary);
+  padding: var(--space-1) var(--space-2);
+  font-size: 0.75rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.session-list-category-button:hover {
+  background: var(--state-hover);
+  color: var(--text-primary);
+}
+
+.session-list-category-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.session-list-category-button[aria-pressed="true"] {
+  background: var(--color-kincha-500);
+  border-color: var(--color-kincha-500);
+  color: var(--text-inverse);
+  font-weight: 600;
+}
+
+.session-list-category-button[aria-pressed="true"]:hover {
+  background: var(--color-kincha-600);
+  border-color: var(--color-kincha-600);
+}
+
+/* 新規セッションのモーダル(`settings-dialog` を土台にする)。 */
+.new-session-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 360px;
+}
+
+.new-session-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.new-session-label {
+  padding: 0;
+  font-size: var(--text-dns-14b-150-size);
+  font-weight: var(--text-dns-14b-150-weight);
+  color: var(--text-primary);
+}
+
+.new-session-name,
+.new-session-select {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-4);
+  padding: var(--space-2);
+  font-size: var(--text-ui-14n-100-size);
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--surface-base);
+}
+
+.new-session-mode {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-dns-14n-150-size);
+}
+
+.new-session-note {
+  margin: 0;
+  font-size: var(--text-dns-14n-150-size);
+  color: var(--text-secondary);
+}
+
+/* 表示名の入力欄(issue #426)。注意書き(.running-bar-name-note)は状態バーの
+   縦幅を取るため issue #513 で廃止し、入力欄の残り幅いっぱいに広げる
+   (`.running-bar-actions` の margin-left: auto で「起動」ボタンは右のまま、
+   狭いときは `.running-bar` の flex-wrap で折り返す)。
+   flex-basis を 0 にすると(`flex: 1` の既定)、他の要素で埋まった行に
+   ほぼ 0px の隙間しか無くてもそこへ置かれてしまい、読めない幅まで潰れる。
+   旧来の固定幅だった 160px を flex-basis / min-width にすることで、その幅の
+   余地が無い行には乗せず、次の行へ丸ごと折り返させてから目一杯広げる。 */
+.running-bar-name-field {
+  flex: 1 1 160px;
+  min-width: 160px;
+}
+
+.new-session-hint {
+  font-size: var(--text-dns-14n-150-size);
+  font-weight: var(--text-dns-14n-150-weight);
+  color: var(--text-secondary);
+}
+
+/* セッション間メッセージ(受信・送信・送信の結果。issue #437)。通常の会話と見分けがつくよう、
+   枠を点線にする(色だけに頼らない)。 */
+.message-peer {
+  border-style: dotted;
+}
+
+/* 状態バーの補足(セッション間メッセージに対応していない版の警告。issue #437)。 */
+.running-bar-note {
+  font-size: var(--text-dns-14n-150-size);
+  color: var(--text-secondary);
+}
+
+/* Claude.ai の利用状況(issue #613)。アカウント全体の値で、この会話の値ではない。 */
+.running-bar-usage {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* CLI が1つも動いていないとき、最後に取れた値であることが伝わるよう薄くする
+   (「取得できません」より役に立つ。issue #613)。 */
+.running-bar-usage-stale {
+  opacity: 0.6;
+}
+
+.running-bar-usage-fetched-at {
+  font-size: var(--text-dns-14n-150-size);
+  color: var(--text-secondary);
+}
