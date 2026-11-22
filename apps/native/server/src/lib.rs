@@ -2,6 +2,7 @@
 
 pub mod auth;
 pub mod config;
+pub mod corruption;
 pub mod data_files;
 pub mod dto;
 pub mod error;

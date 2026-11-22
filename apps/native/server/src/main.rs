@@ -83,6 +83,7 @@ async fn run() -> Result<(), String> {
     }
     // Git 台帳(最小。読むだけ。観測と更新は再開の前にバックグラウンドで行う)。
     let git_ledger_path = data_dir.join("git-ledger.json");
+    let ledger_watch = server::corruption::Watch::start(&data_dir, "git-ledger.json");
     state.git_ledger =
         app::load_git_ledger(&infra::FileGitLedgerStore::new(git_ledger_path.clone()))
             .unwrap_or_else(|e| {
@@ -90,6 +91,12 @@ async fn run() -> Result<(), String> {
                 Default::default()
             });
     state.git_ledger_path = git_ledger_path;
+    // 台帳が壊れていて退避したときは、ログと保留中の警告に出す(起動直後は誰も SSE を購読していないので、控えへ積む)。
+    for name in ledger_watch.evacuated() {
+        let message = ledger_watch.message(&name);
+        eprintln!("{message}");
+        state.push_warning("app:warning", message);
+    }
     let projects_root = server::state::resolve_effective_projects_dir(&state.settings);
     let claude_override =
         ClaudeOverride::from_env_value(std::env::var(FAKE_CLAUDE_ENV_VAR).ok().as_deref());

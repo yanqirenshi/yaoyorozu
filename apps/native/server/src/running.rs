@@ -167,10 +167,12 @@ where
 {
     let path = ctx.data_dir.join("running-sessions.json");
     let _lane = ctx.running.store_lane.lock().await;
+    let watch = crate::corruption::Watch::start(&ctx.data_dir, "running-sessions.json");
     let result =
         tokio::task::spawn_blocking(move || change(&FileRestorableRunningSessionsStore::new(path)))
             .await
             .unwrap_or_else(|_| Err(background_failed()));
+    watch.report(ctx).await;
     if let Err(e) = result {
         eprintln!("{what}に失敗しました: {e}");
     }
@@ -184,9 +186,12 @@ where
 {
     let path = ctx.data_dir.join("archived-sessions.json");
     let _lane = ctx.running.store_lane.lock().await;
-    tokio::task::spawn_blocking(move || change(&FileArchivedSessionsStore::new(path)))
+    let watch = crate::corruption::Watch::start(&ctx.data_dir, "archived-sessions.json");
+    let result = tokio::task::spawn_blocking(move || change(&FileArchivedSessionsStore::new(path)))
         .await
-        .unwrap_or_else(|_| Err(background_failed()))
+        .unwrap_or_else(|_| Err(background_failed()));
+    watch.report(ctx).await;
+    result
 }
 
 /// 起動・再開の「ついで」の処理用(失敗はログだけ)。
@@ -966,6 +971,10 @@ pub fn start_restoring_running_sessions(ctx: AppContext) {
         };
         let path = ctx.data_dir.join("running-sessions.json");
         let archived_path = ctx.data_dir.join("archived-sessions.json");
+        let watches = [
+            crate::corruption::Watch::start(&ctx.data_dir, "running-sessions.json"),
+            crate::corruption::Watch::start(&ctx.data_dir, "archived-sessions.json"),
+        ];
         let entries = tokio::task::spawn_blocking(move || {
             let archived =
                 app::load_archived_sessions(&FileArchivedSessionsStore::new(archived_path))?;
@@ -977,6 +986,9 @@ pub fn start_restoring_running_sessions(ctx: AppContext) {
         })
         .await
         .unwrap_or_else(|_| Err(background_failed()));
+        for watch in &watches {
+            watch.report(&ctx).await;
+        }
         let entries = match entries {
             Ok(entries) => entries,
             Err(e) => {

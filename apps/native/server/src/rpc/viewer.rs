@@ -77,6 +77,7 @@ pub async fn list_sessions(
     let root = effective_projects_dir(&ctx).await?;
     let archived_path = ctx.data_dir.join("archived-sessions.json");
     let project = args.project.clone();
+    let watch = crate::corruption::Watch::start(&ctx.data_dir, "archived-sessions.json");
     let (list, skipped) = blocking(move || {
         let source = infra::FileSystemRepository::new(root);
         // 壊れた・読めない会話ファイルは飛ばして、残りを返す(1 つで一覧全体が失敗しない)。
@@ -96,6 +97,7 @@ pub async fn list_sessions(
         Ok((sessions, listed.skipped_files))
     })
     .await?;
+    watch.report(&ctx).await;
     notify_skipped_sessions(&ctx, &project, &skipped).await;
     Ok(Json(list))
 }
