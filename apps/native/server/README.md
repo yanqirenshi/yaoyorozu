@@ -29,7 +29,8 @@ cargo run -p server --manifest-path apps/native/Cargo.toml --target-dir <別の 
   実在する一番深い親を解決してから残りを足す)。名前が `com.yaoyorozu.native` のフォルダ、または本物の
   `%APPDATA%\com.yaoyorozu.native` を同じ方法で解決したもの自身かその下なら断る。`:` を含む名前(代替データストリーム)など
   フォルダにできない指定も、何も書く前に断る(断った場合に `.tmp` を含む残骸は残らない)。
-- 一時ファイルは**新規作成に限る**(`data_files.rs`。リンクが残っていてもリンク先を書き換えない)。
+- **書き込みの形**(`infra::write_atomic`。サーバが書くファイルは、これを使う): 保存ごとに**別の名前の一時ファイルを新規作成**(`create_new`)→ fsync → rename。リンクが残っていてもリンク先を書き換えず、失敗しても一時ファイルを残さない。
+- **設定の保存は直列化**する(`AppContext.save_lane`): 設定を変える command は、状態を更新したあと保存のレーンを 1 つずつ通り、**レーンに入った時点の最新の状態**を書く(同時に送っても、最後に書かれるのは最新の状態)。ロックの順は「レーン → 状態」の一方向で、状態のロックを持ったままレーンを待たず、ファイル I/O もしない。段階 3 以降の `running-sessions.json`・`hub-layout.json` なども同じ形(`write_atomic` + 専用のレーン)にする。
 - データフォルダの中身: `settings.json`(起動時に読む。無ければ既定値。**壊れているときは `settings.json.corrupt.<時刻>` へ退避して既定値で起動し、古い版のときは新しい版へ書き直す**。どちらも既存の infra(`FileSettingsStore`)の動きで、サーバ自身は書き込まない)、`server-token`(起動のたびに作り直す)、
   `server-port`(実際のポート)。Next の中継が `server-token`・`server-port` を読む。
 

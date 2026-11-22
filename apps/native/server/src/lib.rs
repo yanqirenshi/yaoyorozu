@@ -34,6 +34,9 @@ pub struct AppContext {
     pub data_dir: Arc<std::path::PathBuf>,
     /// 会話ファイルの監視。差し替えると前の監視は止まる。
     pub watcher: Arc<std::sync::Mutex<Option<infra::SessionWatcher>>>,
+    /// 設定ファイルの保存のレーン。保存はここを 1 つずつ通る(ロックの順は「レーン → 状態」の一方向。
+    /// 状態のロックを持ったままレーンを待たない)。
+    pub save_lane: Arc<tokio::sync::Mutex<()>>,
     /// 終了の合図。SSE を閉じて、Ctrl+C で止まれるようにする。
     pub shutdown: watch::Receiver<bool>,
 }

@@ -27,6 +27,7 @@ fn app() -> axum::Router {
         version: Arc::new("0.0.0".to_string()),
         data_dir: Arc::new(std::path::PathBuf::from(".")),
         watcher: Arc::new(std::sync::Mutex::new(None)),
+        save_lane: Arc::new(tokio::sync::Mutex::new(())),
         shutdown: rx,
     })
 }

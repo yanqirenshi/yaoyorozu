@@ -1,6 +1,5 @@
 use app::{AppError, LocalApiPortStore};
 use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
 
 /// ローカルAPIサーバが実際に使っているポートを `app_data_dir/local-api-port` へ保存する
@@ -28,25 +27,7 @@ impl LocalApiPortStore for FileLocalApiPortStore {
             })?;
         }
 
-        let tmp_path = PathBuf::from(format!("{}.tmp", self.path.display()));
-        let mut file = fs::File::create(&tmp_path).map_err(|e| {
-            AppError::Io(format!("{} の作成に失敗しました: {e}", tmp_path.display()))
-        })?;
-        file.write_all(port.to_string().as_bytes()).map_err(|e| {
-            AppError::Io(format!(
-                "{} への書き込みに失敗しました: {e}",
-                tmp_path.display()
-            ))
-        })?;
-        file.sync_all().map_err(|e| {
-            AppError::Io(format!("{} の同期に失敗しました: {e}", tmp_path.display()))
-        })?;
-        fs::rename(&tmp_path, &self.path).map_err(|e| {
-            AppError::Io(format!(
-                "{} への置換に失敗しました: {e}",
-                self.path.display()
-            ))
-        })?;
+        crate::write_atomic(&self.path, port.to_string().as_bytes())?;
 
         Ok(())
     }

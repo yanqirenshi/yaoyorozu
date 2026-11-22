@@ -4,7 +4,6 @@
 //! 状態変更の処理順は native.md §3.1: ① ロック取得 → ② 状態更新 → ③ 永続化に要る値を clone して
 //! ロック解放 → ④ 永続化 → ⑤ イベント(`settings:updated`)→ ⑥ 最小限の戻り値。
 
-use crate::data_files::remove_stale_tmp;
 use crate::dto::{
     FolderCheckDto, GithubProjectDto, PendingWarningDto, ProfileSummaryDto, SettingsDto,
     SettingsInputDto,
@@ -21,21 +20,35 @@ use axum::Json;
 use serde::Deserialize;
 use std::path::{Component, Path, PathBuf};
 
-/// 設定をバックグラウンドで永続化する(Tauri 版 `persist_settings`)。
-/// `protect_existing` が真なら、復旧直後の最初の保存として、上書きする前に今のファイルの複製を残す
-/// (issue #538)。保存の直前に、固定名の古い一時ファイル(`settings.json.tmp`)のエントリを消す
-/// (ハードリンクなどで残っていても、リンク先を書き換えないため。infra の保存は `File::create` を使う)。
-async fn persist_settings(
-    settings: domain::Settings,
-    save_path: PathBuf,
-    protect_existing: bool,
-) -> Result<(), ApiError> {
-    blocking(move || {
-        remove_stale_tmp(&save_path);
+/// 設定を永続化する(Tauri 版 `persist_settings` の置き換え)。
+///
+/// 保存は**レーン(`ctx.save_lane`)を 1 つずつ**通る。レーンに入ってから、**その時点の最新の状態**を
+/// 写して書く(呼び出しの順が前後しても、最後に書かれるのは最新の状態になる)。ロックの順は
+/// 「レーン → 状態」の一方向で、状態のロックはレーンに入ったあとの短い間(clone するだけ)しか持たず、
+/// 状態のロックを持ったままレーンを待たない・ファイル I/O をしない(native.md §2・§3.1)。
+///
+/// `protect_existing`(復旧直後の最初の保存で、上書きする前に今のファイルの複製を残す。issue #538)は
+/// レーンの中で取り出し、保存に失敗したら戻す(次の保存で複製を残せるように)。
+/// 一時ファイルは infra の `write_atomic` が保存ごとに別の名前で新規作成する。
+async fn persist_latest(ctx: &AppContext) -> Result<(), ApiError> {
+    let _lane = ctx.save_lane.lock().await;
+    let (settings, save_path, protect_existing) = {
+        let mut guard = ctx.state.lock().await;
+        (
+            guard.settings.clone(),
+            guard.save_path.clone(),
+            std::mem::take(&mut guard.settings_recovery_pending),
+        )
+    };
+    let result = blocking(move || {
         let store = infra::FileSettingsStore::new(save_path);
         store.save(&settings, protect_existing)
     })
-    .await
+    .await;
+    if result.is_err() && protect_existing {
+        ctx.state.lock().await.settings_recovery_pending = true;
+    }
+    result
 }
 
 #[derive(Deserialize, Default)]
@@ -92,7 +105,7 @@ pub async fn update_settings(
 
     // ロックの中は候補値の組み立てとバリデーションだけ(I/O はしない)。失敗したときは
     // 状態を書き換えないまま抜ける(無効な値をメモリ上に残さない)。
-    let (to_persist, save_path, projects_dir_changed, protect_existing) = {
+    let (to_persist, projects_dir_changed) = {
         let mut guard = ctx.state.lock().await;
         let mut candidate = guard.settings.clone();
         let target_id = args
@@ -117,15 +130,10 @@ pub async fn update_settings(
         let projects_dir_changed =
             guard.settings.claude_projects_dir != candidate.claude_projects_dir;
         guard.settings = candidate.clone();
-        (
-            candidate,
-            guard.save_path.clone(),
-            projects_dir_changed,
-            std::mem::take(&mut guard.settings_recovery_pending),
-        )
+        (candidate, projects_dir_changed)
     };
 
-    persist_settings(to_persist.clone(), save_path, protect_existing).await?;
+    persist_latest(&ctx).await?;
 
     if projects_dir_changed {
         match resolve_effective_projects_dir(&to_persist) {
@@ -143,18 +151,13 @@ async fn change_settings<T>(
     ctx: &AppContext,
     change: impl FnOnce(&domain::Settings) -> Result<(domain::Settings, T), app::AppError>,
 ) -> Result<T, ApiError> {
-    let (to_persist, save_path, protect_existing, extra) = {
+    let extra = {
         let mut guard = ctx.state.lock().await;
         let (updated, extra) = change(&guard.settings)?;
-        guard.settings = updated.clone();
-        (
-            updated,
-            guard.save_path.clone(),
-            std::mem::take(&mut guard.settings_recovery_pending),
-            extra,
-        )
+        guard.settings = updated;
+        extra
     };
-    persist_settings(to_persist, save_path, protect_existing).await?;
+    persist_latest(ctx).await?;
     ctx.events.emit("settings:updated", &());
     Ok(extra)
 }

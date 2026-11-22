@@ -33,7 +33,6 @@ async fn run() -> Result<(), String> {
 
     // 設定の読み込み(壊れていれば既定値へ。FileSettingsStore の責務)。
     let save_path = data_dir.join("settings.json");
-    data_files::remove_stale_tmp(&save_path);
     let store = FileSettingsStore::new(save_path.clone());
     let loaded = app::load_settings(&store).map_err(|e| format!("設定を読めません: {e:?}"))?;
 
@@ -72,6 +71,7 @@ async fn run() -> Result<(), String> {
         version: Arc::new(env!("CARGO_PKG_VERSION").to_string()),
         data_dir: Arc::new(data_dir.clone()),
         watcher: Arc::new(std::sync::Mutex::new(None)),
+        save_lane: Arc::new(tokio::sync::Mutex::new(())),
         shutdown: shutdown_rx,
     };
     match projects_root {

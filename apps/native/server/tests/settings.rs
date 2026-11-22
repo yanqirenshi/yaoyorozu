@@ -35,6 +35,7 @@ fn fixture() -> Fixture {
         version: Arc::new("0".to_string()),
         data_dir: Arc::new(dir.path().to_path_buf()),
         watcher: Arc::new(std::sync::Mutex::new(None)),
+        save_lane: Arc::new(tokio::sync::Mutex::new(())),
         shutdown: rx,
     };
     Fixture {
@@ -245,4 +246,77 @@ async fn check_folder_reports_existence_and_rejects_unsafe_input() {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{bad:?}");
         assert_eq!(body["code"], "invalid_input");
     }
+}
+
+/// 設定を変える command を同時に大量に送っても、保存が衝突せず(エラー 0)、
+/// settings.json が壊れず、ディスクの内容が最後のメモリの状態と一致する。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn many_concurrent_settings_writes_never_collide_or_corrupt_the_file() {
+    let f = fixture();
+    // 並行に書き換える対象のプロファイルを 2 つ用意する。
+    let (_, a) = call(&f.ctx, "create_profile", serde_json::json!({"name": "a"})).await;
+    let (_, b) = call(&f.ctx, "create_profile", serde_json::json!({"name": "b"})).await;
+    let ids = [
+        a["id"].as_str().unwrap().to_string(),
+        b["id"].as_str().unwrap().to_string(),
+    ];
+
+    for round in 0..10 {
+        let mut tasks = Vec::new();
+        for i in 0..40usize {
+            let ctx = f.ctx.clone();
+            let id = ids[i % 2].clone();
+            tasks.push(tokio::spawn(async move {
+                match i % 4 {
+                    0 => {
+                        call(
+                            &ctx,
+                            "rename_profile",
+                            serde_json::json!({"profileId": id, "name": format!("n-{round}-{i}")}),
+                        )
+                        .await
+                    }
+                    1 => {
+                        call(
+                            &ctx,
+                            "update_settings",
+                            serde_json::json!({"profileId": id, "input": {
+                                "repository_path": format!("C:/repo-{round}-{i}"),
+                                "github_project": null,
+                                "selected_project_folders": [format!("f{i}")],
+                                "claude_projects_dir": null
+                            }}),
+                        )
+                        .await
+                    }
+                    2 => call(&ctx, "switch_profile", serde_json::json!({"profileId": id})).await,
+                    _ => call(&ctx, "get_settings", serde_json::json!({})).await,
+                }
+            }));
+        }
+        for t in tasks {
+            let (status, body) = t.await.unwrap();
+            assert_eq!(status, StatusCode::OK, "round {round}: {body}");
+        }
+
+        // ディスク = メモリ(最後に書かれたのは最新の状態)で、JSON として読める。
+        let on_disk: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&f.save_path).unwrap())
+                .expect("settings.json は JSON として読める");
+        let in_memory = f.ctx.state.lock().await.settings.clone();
+        let expected = serde_json::to_value(&in_memory).unwrap();
+        assert_eq!(
+            on_disk, expected,
+            "round {round}: ディスクとメモリが一致する"
+        );
+    }
+
+    // 一時ファイルが残っていない。
+    let leftovers: Vec<_> = std::fs::read_dir(f.save_path.parent().unwrap())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n != "settings.json")
+        .collect();
+    assert!(leftovers.is_empty(), "残骸: {leftovers:?}");
 }
