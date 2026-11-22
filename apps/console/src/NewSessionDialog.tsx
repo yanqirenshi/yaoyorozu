@@ -1,0 +1,144 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import AddButton from "./AddButton";
+import type { RunningPermissionModeDto, StartModelDto } from "@/api/types";
+import {
+  MAX_SESSION_NAME_CHARS,
+  PERMISSION_MODE_LABELS,
+  START_MODELS,
+  START_MODEL_DEFAULT_LABEL,
+  START_MODEL_LABELS,
+} from "./runningSessionLabels";
+
+// 新規セッションを作るモーダル(issue #409)。表示名(任意)・権限モード・モデル(issue #445。
+// 別名の選択だけで、自由入力はさせない)を入れて「作成」で、
+// app が新しい会話(`--session-id`)を起動する。開き方・閉じ方は既存のモーダル
+// (`RawLineDialog` など)と同じ: `<dialog>` の showModal()、Esc・×・外側クリックで
+// 閉じる。閉じるときは close() を呼ばず、親の状態を戻して(アンマウントして)閉じる。
+// 作成の失敗(同時数の上限など)は、親が既存のバナーで理由を出す。
+
+export type NewSessionInput = {
+  /** 表示名(`--name`)。空なら `null`。 */
+  name: string | null;
+  mode: RunningPermissionModeDto;
+  /** 起動時のモデル(`--model`)。`null` は既定。 */
+  model: StartModelDto | null;
+};
+
+type NewSessionDialogProps = {
+  /** 権限モードの初期値(ビューアで選んでいる「次の起動」のモード)。 */
+  initialMode: RunningPermissionModeDto;
+  onCreate: (input: NewSessionInput) => void;
+  onClose: () => void;
+};
+
+const MODES: RunningPermissionModeDto[] = ["default", "plan", "accept_edits", "auto"];
+
+function NewSessionDialog({ initialMode, onCreate, onClose }: NewSessionDialogProps) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [name, setName] = useState("");
+  const [mode, setMode] = useState<RunningPermissionModeDto>(initialMode);
+  const [model, setModel] = useState<StartModelDto | null>(null);
+
+  useEffect(() => {
+    // 開発時の StrictMode では effect が2回走るため、開いていなければ開く。
+    const dialog = dialogRef.current;
+    if (dialog && !dialog.open) dialog.showModal();
+  }, []);
+
+  return (
+    <dialog
+      ref={dialogRef}
+      className="settings-dialog new-session"
+      aria-labelledby="new-session-title"
+      onCancel={(e) => {
+        e.preventDefault();
+        onClose();
+      }}
+      onClose={onClose}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <form
+        className="settings-dialog-body new-session-body"
+        onSubmit={(e) => {
+          e.preventDefault();
+          onCreate({ name: name.trim() === "" ? null : name.trim(), mode, model });
+        }}
+      >
+        <div className="session-picker-head">
+          <h3 id="new-session-title">新規セッション</h3>
+          <button
+            type="button"
+            className="session-picker-close"
+            onClick={onClose}
+            title="閉じる"
+            aria-label="閉じる"
+          >
+            ×
+          </button>
+        </div>
+        <label className="new-session-field">
+          <span className="new-session-label">表示名(任意)</span>
+          <input
+            type="text"
+            className="new-session-name"
+            value={name}
+            maxLength={MAX_SESSION_NAME_CHARS}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="会話のタイトルになります"
+            aria-describedby="new-session-name-hint"
+          />
+          {/* 新規では、表示名がそのまま会話のタイトルになる(意図どおり。注意ではなく説明。issue #426) */}
+          <span id="new-session-name-hint" className="new-session-hint">
+            入れた名前が、この会話のタイトルになります(空のままなら、あとから自動で付きます)
+          </span>
+        </label>
+        <fieldset className="new-session-field new-session-modes">
+          <legend className="new-session-label">権限モード</legend>
+          {MODES.map((value) => (
+            <label key={value} className="new-session-mode">
+              <input
+                type="radio"
+                name="new-session-mode"
+                checked={mode === value}
+                onChange={() => setMode(value)}
+              />
+              <span>{PERMISSION_MODE_LABELS[value]}</span>
+            </label>
+          ))}
+        </fieldset>
+        <label className="new-session-field">
+          <span className="new-session-label">モデル</span>
+          {/* 一覧が縦に長くならないよう選択欄にする。選択肢は別名の固定(自由入力にしない) */}
+          <select
+            className="new-session-select"
+            value={model ?? ""}
+            onChange={(e) => setModel(e.target.value === "" ? null : (e.target.value as StartModelDto))}
+          >
+            <option value="">{START_MODEL_DEFAULT_LABEL}</option>
+            {START_MODELS.map((value) => (
+              <option key={value} value={value}>
+                {START_MODEL_LABELS[value]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className="new-session-note">
+          プロファイルのリポジトリで新しい会話を始めます。会話ファイルは、最初のメッセージを送ると
+          できます。
+        </p>
+        <div className="settings-dialog-actions">
+          <button type="button" onClick={onClose}>
+            キャンセル
+          </button>
+          <AddButton size="small" label="作成" type="submit" />
+        </div>
+      </form>
+    </dialog>
+  );
+}
+
+export default NewSessionDialog;

@@ -3,7 +3,7 @@
 // `invoke`/`listen` から `fetch`/`EventSource` に替えている(呼び出し側を変えないため)。
 // コンポーネントから `fetch` / `EventSource` を直接使わない(native.md §3.5 と同旨)。
 
-import { listen } from "./events";
+import { listen, openProgressSubscription } from "./events";
 import type {
   AppErrorDto,
   AppWarningEvent,
@@ -15,6 +15,16 @@ import type {
   SettingsCorruptedEvent,
   SettingsDto,
   SettingsInputDto,
+  AddressedProgressDto,
+  ClaudeUsageSnapshotDto,
+  PermissionBehaviorDto,
+  PermissionSuggestionDto,
+  RunningSessionChangedEvent,
+  RunningSessionDto,
+  RunningSessionRefDto,
+  RunningSessionSummaryDto,
+  RunningSessionSwitchDto,
+  StartRunningSessionDto,
   ClaudeDirPageDto,
   ClaudeMdDto,
   ClaudeSettingsDto,
@@ -352,4 +362,120 @@ export function isAppError(error: unknown): error is AppErrorDto {
     "code" in error &&
     "message" in error
   );
+}
+
+// ---- 実行中セッション(段階 3。native の api と同じ関数名・引数・戻り値) ----
+// 対象は `RunningSessionRefDto`(pid_domain + pid + started_at)で指す。パスは渡さない(サーバが会話ファイル・
+// プロファイルから解決する)。`profileId` は**必ず**画面が開いているプロファイルの ID を渡す(省略に頼らない)。
+
+export type {
+  AvailableModelDto,
+  RunningSessionSummaryDto,
+  ProcessStateDto,
+  ProgressEventDto,
+  RunningPermissionModeDto,
+  StartModelDto,
+  WorktreeSpecDto,
+} from "./types";
+
+export function startRunningSession(
+  profileId: string,
+  request: StartRunningSessionDto,
+): Promise<RunningSessionDto> {
+  return invoke<RunningSessionDto>("start_running_session", { profileId, request });
+}
+
+export function listRunningSessions(): Promise<RunningSessionSummaryDto[]> {
+  return invoke<RunningSessionSummaryDto[]>("list_running_sessions");
+}
+
+export function getRunningSession(target: RunningSessionRefDto): Promise<RunningSessionDto | null> {
+  return invoke<RunningSessionDto | null>("get_running_session", { target });
+}
+
+export function getClaudeUsage(): Promise<ClaudeUsageSnapshotDto> {
+  return invoke<ClaudeUsageSnapshotDto>("get_claude_usage");
+}
+
+// 途中経過を、この画面(タブの接続)へ流し始める。返る関数で購読をやめる。接続が切れたら、つなぎ直したときに
+// 購読し直す(接続の持ち方は `events.ts` の中に閉じている)。同期で返る(購読の確立は裏で行う)。
+export function subscribeRunningSessionProgress(
+  target: RunningSessionRefDto,
+  onProgress: (progress: AddressedProgressDto) => void,
+): Promise<() => void> {
+  const stop = openProgressSubscription(
+    (connectionId) =>
+      invoke<number>("subscribe_running_session_progress", { target, connectionId }),
+    (subscriptionId, connectionId) =>
+      invoke<void>("unsubscribe_running_session_progress", { subscriptionId, connectionId }),
+    (progress) => onProgress(progress as AddressedProgressDto),
+  );
+  return Promise.resolve(stop);
+}
+
+export function sendToRunningSession(
+  target: RunningSessionRefDto,
+  text: string,
+  images: string[],
+): Promise<void> {
+  return invoke<void>("send_to_running_session", { target, text, images });
+}
+
+export function respondPermission(
+  target: RunningSessionRefDto,
+  requestId: string,
+  behavior: PermissionBehaviorDto,
+  options: {
+    updatedInput?: unknown;
+    updatedPermissions?: PermissionSuggestionDto[];
+    message?: string;
+  } = {},
+): Promise<void> {
+  return invoke<void>("respond_permission", {
+    target,
+    requestId,
+    behavior,
+    updatedInput: options.updatedInput ?? null,
+    updatedPermissions: options.updatedPermissions ?? null,
+    message: options.message ?? null,
+  });
+}
+
+export function interruptRunningSession(target: RunningSessionRefDto): Promise<void> {
+  return invoke<void>("interrupt_running_session", { target });
+}
+
+export function switchRunningSession(
+  target: RunningSessionRefDto,
+  switchTo: RunningSessionSwitchDto,
+): Promise<void> {
+  return invoke<void>("switch_running_session", { target, switch: switchTo });
+}
+
+export function stopRunningSession(target: RunningSessionRefDto): Promise<void> {
+  return invoke<void>("stop_running_session", { target });
+}
+
+export function archiveSession(project: string, sessionId: string): Promise<void> {
+  return invoke<void>("archive_session", { project, sessionId });
+}
+
+export function unarchiveSession(project: string, sessionId: string): Promise<void> {
+  return invoke<void>("unarchive_session", { project, sessionId });
+}
+
+export function renameSession(project: string, sessionId: string, title: string): Promise<void> {
+  return invoke<void>("rename_session", { project, sessionId, title });
+}
+
+export function onRunningSessionChanged(
+  callback: (event: RunningSessionChangedEvent) => void,
+): Promise<() => void> {
+  return listen<RunningSessionChangedEvent>("running-session:changed", callback);
+}
+
+export function onClaudeUsageUpdated(
+  callback: (event: ClaudeUsageSnapshotDto) => void,
+): Promise<() => void> {
+  return listen<ClaudeUsageSnapshotDto>("claude-usage:updated", callback);
 }
