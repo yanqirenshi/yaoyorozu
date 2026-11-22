@@ -1,13 +1,14 @@
 use domain::{
-    extract_message_images, is_valid_claude_dir_path, is_valid_json, is_valid_project_dir_name,
-    is_valid_rule_file_name, is_valid_session_id, is_valid_skill_name, mark_failed_questions,
-    order_messages_newest_first, paginate_messages, reconcile_branches, reconcile_worktrees,
-    repositories_from_profiles, sort_claude_dir_entries, sort_projects_by_recency,
-    sort_sessions_newest_first, validate_image_attachment, validate_image_count, Camera,
-    ClaudeDirEntry, ClaudeDirPage, ClaudeMdFile, ClaudeSettingsFile, Conversation, GitLedger,
-    GitRepositoryLedger, HubLayout, HubTuning, LogLine, Message, MessageImage, NodeMove,
-    NodePosition, ParsedSession, Project, RuleSummary, SessionSummary, Settings, SkillSummary,
-    CURRENT_GIT_LEDGER_VERSION, CURRENT_HUB_LAYOUT_VERSION, CURRENT_HUB_TUNING_VERSION,
+    extract_message_images, is_valid_claude_dir_path, is_valid_json, is_valid_json_object,
+    is_valid_project_dir_name, is_valid_rule_file_name, is_valid_session_id, is_valid_skill_name,
+    mark_failed_questions, order_messages_newest_first, paginate_messages, reconcile_branches,
+    reconcile_worktrees, repositories_from_profiles, sort_claude_dir_entries,
+    sort_projects_by_recency, sort_sessions_newest_first, validate_image_attachment,
+    validate_image_count, Camera, ClaudeDirEntry, ClaudeDirPage, ClaudeMdFile, ClaudeSettingsFile,
+    Conversation, GitLedger, GitRepositoryLedger, HubLayout, HubTuning, LogLine, Message,
+    MessageImage, NodeMove, NodePosition, ParsedSession, Project, RuleSummary, SessionSummary,
+    Settings, SkillSummary, CURRENT_GIT_LEDGER_VERSION, CURRENT_HUB_LAYOUT_VERSION,
+    CURRENT_HUB_TUNING_VERSION,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -198,6 +199,15 @@ pub trait SessionSource {
     /// 指定プロジェクトの全セッションを一覧表示用に要約して返す(ビューア
     /// 左ペイン用。issue #33)。
     fn list_sessions(&self, project: &str) -> Result<Vec<SessionSummary>, AppError>;
+
+    /// `list_sessions` と同じ一覧を、**読めない・壊れた会話ファイルを飛ばして**返す。戻り値の 2 つ目は、
+    /// 飛ばした会話ファイルの名前(パスではない)。既定は `list_sessions` と同じ(飛ばさない)。
+    fn list_sessions_lenient(
+        &self,
+        project: &str,
+    ) -> Result<(Vec<SessionSummary>, Vec<String>), AppError> {
+        Ok((self.list_sessions(project)?, Vec::new()))
+    }
 
     /// 指定プロジェクトの全セッションを `ParsedSession`(`User::load_sessions`
     /// への入力。session_id/custom_title/ai_title/mode/slug/last_prompt、
@@ -737,6 +747,28 @@ pub fn list_sessions(
     let mut sessions = source.list_sessions(project)?;
     sort_sessions_newest_first(&mut sessions);
     Ok(sessions)
+}
+
+/// 一覧から飛ばした(読めなかった・壊れた)会話ファイルの名前と、残りの一覧。
+pub struct ListedSessions {
+    pub sessions: Vec<SessionSummary>,
+    /// 飛ばした会話ファイルの名前(パスではない)。
+    pub skipped_files: Vec<String>,
+}
+
+/// `list_sessions` の、壊れた会話ファイルに強い版。読めない・壊れたファイルが 1 つあっても、
+/// それを飛ばして残りを返す(以前は 1 つで一覧全体が失敗した)。飛ばしたファイル名は
+/// `skipped_files` で返す(画面に知らせるため)。サーバが使う。
+pub fn list_sessions_lenient(
+    source: &dyn SessionSource,
+    project: &str,
+) -> Result<ListedSessions, AppError> {
+    let (mut sessions, skipped_files) = source.list_sessions_lenient(project)?;
+    sort_sessions_newest_first(&mut sessions);
+    Ok(ListedSessions {
+        sessions,
+        skipped_files,
+    })
 }
 
 /// 画像を1枚添付しようとしたときの事前検証(ビューアの添付時。issue #349)。
@@ -1544,6 +1576,24 @@ pub fn read_claude_settings(
     store.read()
 }
 
+/// 設定ファイル(`settings.json`・`settings.local.json`)として保存してよい内容かを確かめる。
+/// JSON として正しく、かつ**最上位がオブジェクト**であること(Claude Code はオブジェクトとして読む。
+/// 配列・数値・文字列・`null` だけの JSON は書かせない)。どちらも `InvalidInput`。
+fn validate_settings_json(content: &str) -> Result<(), AppError> {
+    if !is_valid_json(content) {
+        return Err(AppError::InvalidInput(
+            "JSONの形式が正しくありません".to_string(),
+        ));
+    }
+    if !is_valid_json_object(content) {
+        return Err(AppError::InvalidInput(
+            "設定ファイルは { } のオブジェクトで書いてください(配列・数値・文字列・null だけの JSON は保存できません)"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// `~/.claude/settings.json` を保存する。壊れたJSONは書き込まず
 /// `InvalidInput` を返す(Claude Code本体が起動不能になる事故の防止。
 /// 整形はしない)。`expected_modified_at_ms` が実際の状態と一致しない場合は
@@ -1554,11 +1604,7 @@ pub fn save_claude_settings(
     content: &str,
     expected_modified_at_ms: Option<u64>,
 ) -> Result<(), AppError> {
-    if !is_valid_json(content) {
-        return Err(AppError::InvalidInput(
-            "JSONの形式が正しくありません".to_string(),
-        ));
-    }
+    validate_settings_json(content)?;
     let current_modified_at_ms = store.read()?.map(|f| f.modified_at_ms);
     if current_modified_at_ms != expected_modified_at_ms {
         return Err(AppError::FileConflict(
@@ -1588,11 +1634,7 @@ pub fn save_project_settings_file(
     content: &str,
     expected_modified_at_ms: Option<u64>,
 ) -> Result<(), AppError> {
-    if !is_valid_json(content) {
-        return Err(AppError::InvalidInput(
-            "JSONの形式が正しくありません".to_string(),
-        ));
-    }
+    validate_settings_json(content)?;
     let current_modified_at_ms = store.read(repo_dir, which)?.map(|f| f.modified_at_ms);
     if current_modified_at_ms != expected_modified_at_ms {
         return Err(AppError::FileConflict(

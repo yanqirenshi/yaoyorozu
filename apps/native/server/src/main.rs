@@ -29,6 +29,11 @@ async fn run() -> Result<(), String> {
     )?;
     std::fs::create_dir_all(&data_dir)
         .map_err(|e| format!("データフォルダを作れません({}): {e}", data_dir.display()))?;
+    // 保存の途中で止められて残った古い一時ファイルを、データフォルダの中だけ片付ける。
+    let removed = data_files::cleanup_stale_tmp(&data_dir);
+    if !removed.is_empty() {
+        println!("古い一時ファイルを {} 個、片付けました", removed.len());
+    }
     let port = config::resolve_port(std::env::var(PORT_ENV_VAR).ok().as_deref());
 
     // 設定の読み込み(壊れていれば既定値へ。FileSettingsStore の責務)。

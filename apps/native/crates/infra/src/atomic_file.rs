@@ -70,6 +70,62 @@ pub fn write_atomic(path: &Path, content: &[u8]) -> Result<(), AppError> {
     )))
 }
 
+/// `write_atomic` の一時ファイルの名前の形: `<元の名前>.<pid>.<時刻(ナノ秒)>.<連番>.tmp`。
+/// 後ろの 3 つが数字で、元の名前が空でなければ、`write_atomic` が作ったものとみなす(`a.b.c.tmp` や
+/// `settings.json.tmp` のような、利用者のファイルには当たらない)。
+pub fn is_write_atomic_tmp_name(name: &str) -> bool {
+    let Some(stem) = name.strip_suffix(".tmp") else {
+        return false;
+    };
+    let mut parts = stem.rsplitn(4, '.');
+    let (Some(seq), Some(nanos), Some(pid), Some(original)) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    digits(seq) && digits(nanos) && digits(pid) && !original.is_empty()
+}
+
+/// `dir` の直下から、`write_atomic` が作った**古い一時ファイル**を消す(保存の途中でプロセスが止められると
+/// 残る)。消すのは、名前が [`is_write_atomic_tmp_name`] の形で、**通常のファイル**で(リンクはたどらない・
+/// 消さない)、最後に更新されてから `older_than` 以上たったものだけ。保存中のものを消さないための時間で、
+/// 長めにとる。サブフォルダは見ない。消した名前を返す。
+/// 呼ぶのは、自分のデータフォルダだけ(リポジトリや `~/.claude` の中は、勝手に消さない)。
+pub fn remove_stale_write_atomic_tmp_files(
+    dir: &Path,
+    older_than: std::time::Duration,
+) -> Vec<String> {
+    let mut removed = Vec::new();
+    let Ok(entries) = fs::read_dir(dir) else {
+        return removed;
+    };
+    let now = SystemTime::now();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !is_write_atomic_tmp_name(&name) {
+            continue;
+        }
+        let path = entry.path();
+        // `symlink_metadata` は、リンクをたどらずリンクそのものを見る。通常のファイルだけを対象にする。
+        let Ok(meta) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !meta.file_type().is_file() {
+            continue;
+        }
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        if now.duration_since(modified).unwrap_or_default() >= older_than
+            && fs::remove_file(&path).is_ok()
+        {
+            removed.push(name);
+        }
+    }
+    removed
+}
+
 fn mtime_ms(time: SystemTime) -> u64 {
     time.duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -221,6 +277,99 @@ mod tests {
             assert!(now > last, "{i}: {now} > {last}");
             last = now;
         }
+    }
+
+    #[test]
+    fn tmp_names_written_by_write_atomic_are_recognised_and_user_files_are_not() {
+        let dir = tempfile::tempdir().unwrap();
+        // 実際に作られる名前の形。途中で止められたものを模して、一時ファイルを直接作る。
+        let seen = std::sync::Mutex::new(Vec::new());
+        // write_atomic の成功後は残らないので、名前の形は関数で直接確かめる。
+        for good in [
+            "settings.json.1234.1700000000000000000.0.tmp",
+            "server-token.9.8.7.tmp",
+            "CLAUDE.md.12.34.56.tmp",
+            "a.b.c.1.2.3.tmp",
+        ] {
+            assert!(is_write_atomic_tmp_name(good), "{good}");
+            seen.lock().unwrap().push(good);
+        }
+        for bad in [
+            "settings.json",
+            "settings.json.tmp",
+            "a.b.c.tmp",
+            "a.1.2.tmp",
+            ".1.2.3.tmp",
+            "x.1.2.three.tmp",
+            "x.1.2.3.tmp.bak",
+            "x.1.2.3",
+            "x.1.2.3.TMP",
+        ] {
+            assert!(!is_write_atomic_tmp_name(bad), "{bad}");
+        }
+        // write_atomic 自身が作る名前は、この形に合う(成功後は消えるので、ディレクトリの中身で確かめる)。
+        let target = dir.path().join("a.json");
+        write_atomic(&target, b"x").unwrap();
+        assert_eq!(entries(dir.path()), 1);
+    }
+
+    #[test]
+    fn stale_tmp_files_are_removed_but_fresh_ones_links_folders_and_user_files_are_kept() {
+        use std::time::Duration;
+        let dir = tempfile::tempdir().unwrap();
+        let old = SystemTime::now() - Duration::from_secs(3 * 3600);
+        let set_age = |path: &Path, time: SystemTime| {
+            fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(time)
+                .unwrap();
+        };
+
+        // 古い一時ファイル(消える)・新しい一時ファイル(残る)。
+        let stale = dir.path().join("settings.json.100.200.1.tmp");
+        let fresh = dir.path().join("settings.json.100.200.2.tmp");
+        fs::write(&stale, "x").unwrap();
+        fs::write(&fresh, "y").unwrap();
+        set_age(&stale, old);
+        // 古いが名前の形が合わないもの・利用者のファイル(残る)。
+        let user_files = [
+            "settings.json",
+            "settings.json.tmp",
+            "notes.tmp",
+            "a.1.2.tmp",
+        ];
+        for name in user_files {
+            let p = dir.path().join(name);
+            fs::write(&p, "keep").unwrap();
+            set_age(&p, old);
+        }
+        // 名前が合うフォルダ(残る)。
+        let folder = dir.path().join("dir.100.200.3.tmp");
+        fs::create_dir(&folder).unwrap();
+        // ハードリンク: 古い一時ファイルの名前のエントリだけが消え、リンク先の中身は変わらない。
+        let victim = dir.path().join("victim.txt");
+        fs::write(&victim, "precious").unwrap();
+        let linked = dir.path().join("victim.100.200.4.tmp");
+        fs::hard_link(&victim, &linked).unwrap();
+        set_age(&linked, old);
+
+        let mut removed =
+            remove_stale_write_atomic_tmp_files(dir.path(), Duration::from_secs(3600));
+        removed.sort();
+        assert_eq!(
+            removed,
+            vec!["settings.json.100.200.1.tmp", "victim.100.200.4.tmp"]
+        );
+        assert!(!stale.exists());
+        assert!(fresh.exists(), "新しい一時ファイルは残す");
+        for name in user_files {
+            assert!(dir.path().join(name).exists(), "{name} は残す");
+        }
+        assert!(folder.is_dir(), "フォルダは残す");
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "precious");
+        assert!(!linked.exists(), "リンクの名前のエントリは消える");
     }
 
     #[test]

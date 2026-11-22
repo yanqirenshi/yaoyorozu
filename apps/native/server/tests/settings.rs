@@ -51,6 +51,11 @@ async fn call(
     command: &str,
     body: serde_json::Value,
 ) -> (StatusCode, serde_json::Value) {
+    // update_settings は「どの版を元にした変更か」が必須。指定の無い呼び出しには、今の版を補う。
+    let mut body = body;
+    if command == "update_settings" && body.get("expectedRevision").is_none() {
+        body["expectedRevision"] = serde_json::json!(ctx.state.lock().await.settings.revision);
+    }
     let req = Request::builder()
         .method("POST")
         .uri(format!("/rpc/{command}"))
@@ -295,9 +300,14 @@ async fn many_concurrent_settings_writes_never_collide_or_corrupt_the_file() {
                 }
             }));
         }
-        for t in tasks {
+        for (i, t) in tasks.into_iter().enumerate() {
             let (status, body) = t.await.unwrap();
-            assert_eq!(status, StatusCode::OK, "round {round}: {body}");
+            // update_settings は、同時の変更で版が古くなると 409(競合)になりうる。それ以外は必ず 200。
+            let ok = status == StatusCode::OK
+                || (i % 4 == 1
+                    && status == StatusCode::CONFLICT
+                    && body["code"] == "settings_conflict");
+            assert!(ok, "round {round} #{i}: {status} {body}");
         }
 
         // ディスク = メモリ(最後に書かれたのは最新の状態)で、JSON として読める。

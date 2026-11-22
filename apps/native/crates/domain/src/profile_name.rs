@@ -19,7 +19,9 @@ impl ProfileNameError {
         match self {
             Self::Empty => "プロファイル名を入力してください",
             Self::TooLong => "プロファイル名は 100 文字以内で入力してください",
-            Self::ControlCharacter => "プロファイル名に改行などの制御文字を含めることはできません",
+            Self::ControlCharacter => {
+                "プロファイル名に制御文字(改行など)・見えない文字(ゼロ幅・向きを変える文字)を含めることはできません"
+            }
         }
     }
 }
@@ -33,7 +35,7 @@ impl ProfileName {
         if trimmed.is_empty() {
             return Err(ProfileNameError::Empty);
         }
-        if trimmed.chars().any(char::is_control) {
+        if trimmed.chars().any(crate::is_control_or_invisible) {
             return Err(ProfileNameError::ControlCharacter);
         }
         if trimmed.chars().count() > MAX_PROFILE_NAME_CHARS {
@@ -88,6 +90,27 @@ mod tests {
                 "{bad:?}"
             );
         }
+    }
+
+    #[test]
+    fn rejects_zero_width_and_bidirectional_control_characters() {
+        for bad in [
+            "\u{200B}",
+            "a\u{200B}b",
+            "名前\u{200D}",
+            "\u{202E}gpj.exe",
+            "a\u{2066}b",
+            "\u{2060}x",
+            "\u{FEFF}name",
+        ] {
+            assert_eq!(
+                ProfileName::parse(bad).unwrap_err(),
+                ProfileNameError::ControlCharacter,
+                "{bad:?}"
+            );
+        }
+        // 見える文字(絵文字・結合文字を含む日本語)は通る。
+        assert!(ProfileName::parse("開発 😀 café").is_ok());
     }
 
     #[test]

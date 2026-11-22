@@ -226,4 +226,44 @@ async fn concurrent_saves_with_the_same_expected_time_let_exactly_one_through_an
             content_for(door, "linked")
         );
     }
+
+    // --- 設定ファイル(JSON)の最上位がオブジェクトでなければ 400(配列・数値・文字列・null・真偽値) ---
+    for door in doors.iter().filter(|d| d.json) {
+        for bad in [
+            "[1,2]",
+            "[]",
+            "123",
+            "\"text\"",
+            "null",
+            "true",
+            "  [ {} ]  ",
+        ] {
+            let before = std::fs::read_to_string(&door.file).unwrap();
+            let (_, current) = call(&ctx, door.get, door.get_args.clone()).await;
+            let mut args = door.save_args.clone();
+            args["content"] = serde_json::json!(bad);
+            args["expectedModifiedAtMs"] = current["modified_at_ms"].clone();
+            let (status, body) = call(&ctx, door.save, args).await;
+            assert_eq!(
+                status,
+                StatusCode::BAD_REQUEST,
+                "{} {bad:?}: {body}",
+                door.name
+            );
+            assert_eq!(body["code"], "invalid_input");
+            assert_eq!(
+                std::fs::read_to_string(&door.file).unwrap(),
+                before,
+                "{} {bad:?}: ファイルは変わらない",
+                door.name
+            );
+        }
+        // オブジェクトは通る(空のオブジェクトも)。
+        let (_, current) = call(&ctx, door.get, door.get_args.clone()).await;
+        let mut args = door.save_args.clone();
+        args["content"] = serde_json::json!("{}");
+        args["expectedModifiedAtMs"] = current["modified_at_ms"].clone();
+        let (status, body) = call(&ctx, door.save, args).await;
+        assert_eq!(status, StatusCode::OK, "{}: {body}", door.name);
+    }
 }

@@ -8,6 +8,17 @@ pub fn write_atomic(path: &Path, content: &[u8]) -> Result<(), String> {
     infra::write_atomic(path, content).map_err(|e| format!("{e:?}"))
 }
 
+/// 起動時に、**データフォルダの中だけ**、`write_atomic` が作った古い一時ファイルを消す(保存の途中で
+/// プロセスが止められると残る)。消すのは、名前が `<名前>.<pid>.<時刻>.<連番>.tmp` の形の通常のファイルで、
+/// 最後の更新から [`STALE_TMP_AGE`] 以上たったものだけ(リンクはたどらない)。リポジトリや `~/.claude` の
+/// 中に残ったものは、勝手に消さない(呼ばない)。消した名前を返す。
+pub fn cleanup_stale_tmp(data_dir: &Path) -> Vec<String> {
+    infra::remove_stale_write_atomic_tmp_files(data_dir, STALE_TMP_AGE)
+}
+
+/// 古い一時ファイルとみなす経過時間。保存中のものを消さないよう、長めにとる。
+pub const STALE_TMP_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
 #[cfg(test)]
 mod tests {
     use super::*;

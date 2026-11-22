@@ -33,7 +33,11 @@ pub enum LocalFolderPathError {
     NotDriveAbsolute,
     /// ドライブ文字以外の `:`(代替データストリームなど)。
     ExtraColon,
+    /// Windows のパスに使えない文字(`< > " | ? *`)。`C:\?\x` のような途中のデバイスの形もここで断る。
+    InvalidCharacter,
     ParentDirectory,
+    /// `.`・`...`・`.. ` のような、点と空白だけの要素(Windows は末尾の点・空白を落とすので `..` になる)。
+    DotsOnlyComponent,
     ReservedDeviceName,
 }
 
@@ -43,7 +47,11 @@ impl LocalFolderPathError {
         match self {
             Self::Empty => "パスを入力してください",
             Self::TooLong => "パスが長すぎます",
-            Self::ControlCharacter => "パスに制御文字(改行など)を含めることはできません",
+            Self::ControlCharacter => {
+                "パスに制御文字(改行など)・見えない文字(ゼロ幅・向きを変える文字)を含めることはできません"
+            }
+            Self::InvalidCharacter => "パスに使えない文字(< > \" | ? *)を含んでいます",
+            Self::DotsOnlyComponent => "「.」「...」など、点だけの名前は使えません",
             Self::NetworkOrDevice => {
                 "ネットワークパス(\\\\ホスト\\…)・デバイスの形(\\\\?\\ など)は使えません。このマシンのドライブ上のフォルダを指定してください"
             }
@@ -64,18 +72,31 @@ fn is_separator(c: char) -> bool {
     c == '\\' || c == '/'
 }
 
-/// `CON`・`NUL`・`COM1`…(拡張子付きも)。
+/// `CON`・`NUL`・`COM1`・`COM¹`(上付き数字も予約)・`CONIN$`・`CONOUT$`…(拡張子付きも)。
 fn is_reserved_device_name(component: &str) -> bool {
     let base = component
         .split('.')
         .next()
         .unwrap_or("")
         .trim_end()
-        .to_ascii_uppercase();
-    matches!(base.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || (base.len() == 4
-            && (base.starts_with("COM") || base.starts_with("LPT"))
-            && matches!(base.as_bytes()[3], b'1'..=b'9'))
+        .to_uppercase();
+    if matches!(
+        base.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) {
+        return true;
+    }
+    // COM1〜COM9・LPT1〜LPT9(`¹`・`²`・`³` も)。
+    let numbered = base
+        .strip_prefix("COM")
+        .or_else(|| base.strip_prefix("LPT"));
+    numbered.is_some_and(|rest| {
+        let mut it = rest.chars();
+        matches!(
+            (it.next(), it.next()),
+            (Some('1'..='9' | '¹' | '²' | '³'), None)
+        )
+    })
 }
 
 impl LocalFolderPath {
@@ -89,7 +110,7 @@ impl LocalFolderPath {
         if text.chars().count() > MAX_LEN {
             return Err(E::TooLong);
         }
-        if text.chars().any(char::is_control) {
+        if text.chars().any(crate::is_control_or_invisible) {
             return Err(E::ControlCharacter);
         }
         let chars: Vec<char> = text.chars().collect();
@@ -112,9 +133,17 @@ impl LocalFolderPath {
         if rest.contains(':') {
             return Err(E::ExtraColon);
         }
+        // Windows のパスに使えない文字。`C:\\?\x` のような、途中に現れるデバイスの形もここで断る。
+        if rest.contains(['<', '>', '"', '|', '?', '*']) {
+            return Err(E::InvalidCharacter);
+        }
         for component in rest.split(is_separator) {
             if component == ".." {
                 return Err(E::ParentDirectory);
+            }
+            // 末尾の点・空白は Windows が落とす(`.. ` や `...` は `..` になる)。点と空白だけの要素は断る。
+            if !component.is_empty() && component.trim_end_matches(['.', ' ']).is_empty() {
+                return Err(E::DotsOnlyComponent);
             }
             if is_reserved_device_name(component) {
                 return Err(E::ReservedDeviceName);
@@ -284,5 +313,96 @@ mod tests {
             );
         }
         assert!(LocalFolderPath::parse(r"C:\console\COM10").is_ok());
+    }
+
+    #[test]
+    fn rejects_superscript_com_lpt_and_console_devices() {
+        for bad in [
+            "C:\\a\\COM\u{b9}",
+            "C:\\a\\com\u{b2}.txt",
+            "C:\\a\\LPT\u{b3}",
+            "C:\\a\\COM1",
+            r"C:\a\CONIN$",
+            r"C:\a\conout$",
+            r"C:\a\CONIN$.txt",
+        ] {
+            assert_eq!(
+                LocalFolderPath::parse(bad).unwrap_err(),
+                LocalFolderPathError::ReservedDeviceName,
+                "{bad:?}"
+            );
+        }
+        // 予約名に見えて、そうでないもの。
+        for good in [
+            r"C:\a\COM0",
+            r"C:\a\COM10",
+            r"C:\a\COMX",
+            r"C:\a\CONINX",
+            "C:\\a\\COM\u{2074}",
+        ] {
+            assert!(LocalFolderPath::parse(good).is_ok(), "{good:?}");
+        }
+    }
+
+    #[test]
+    fn rejects_device_forms_in_the_middle_and_other_invalid_characters() {
+        for bad in [
+            r"C:\\?\x",
+            r"C:\a\?\x",
+            r"C:\a\b*",
+            r"C:\a<b",
+            r"C:\a>b",
+            "C:\\a\"b",
+            r"C:\a|b",
+        ] {
+            assert_eq!(
+                LocalFolderPath::parse(bad).unwrap_err(),
+                LocalFolderPathError::InvalidCharacter,
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_components_made_only_of_dots_and_spaces() {
+        for bad in [
+            r"C:\a\.\b",
+            r"C:\a\...\b",
+            "C:\\a\\.. \\b",
+            "C:\\a\\. \\b",
+            r"C:\a\....",
+            "C:\\a\\ \\b",
+        ] {
+            assert_eq!(
+                LocalFolderPath::parse(bad).unwrap_err(),
+                LocalFolderPathError::DotsOnlyComponent,
+                "{bad:?}"
+            );
+        }
+        // `..` そのものは別の理由(親のフォルダ)で断る。名前の一部に点があるだけなら通る。
+        assert_eq!(
+            LocalFolderPath::parse(r"C:\a\..\b").unwrap_err(),
+            LocalFolderPathError::ParentDirectory
+        );
+        assert!(LocalFolderPath::parse(r"C:\a.b\.git\c...d").is_ok());
+    }
+
+    #[test]
+    fn rejects_zero_width_and_bidirectional_control_characters() {
+        for c in [
+            '\u{200B}', '\u{200C}', '\u{200D}', '\u{200E}', '\u{200F}', '\u{202A}', '\u{202B}',
+            '\u{202C}', '\u{202D}', '\u{202E}', '\u{2060}', '\u{2063}', '\u{2066}', '\u{2069}',
+            '\u{FEFF}',
+        ] {
+            let path = format!("C:\\repo{c}\\x");
+            assert_eq!(
+                LocalFolderPath::parse(&path).unwrap_err(),
+                LocalFolderPathError::ControlCharacter,
+                "U+{:04X}",
+                c as u32
+            );
+        }
+        // 見える日本語・絵文字などは通る。
+        assert!(LocalFolderPath::parse("C:\\日本語\\フォルダ\\😀").is_ok());
     }
 }

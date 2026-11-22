@@ -33,6 +33,8 @@ export type SettingsDto = {
   claude_projects_dir: string | null;
   effective_projects_dir: string;
   restore_running_sessions: boolean;
+  // 設定の版(保存のたびに増える番号。この構成だけの項目)。`updateSettings` に渡す。
+  revision: number;
 };
 
 /** 確認用の `ping` イベントのペイロード(段階 1 のみ)。 */

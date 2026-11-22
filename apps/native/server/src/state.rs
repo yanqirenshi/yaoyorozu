@@ -13,7 +13,7 @@ use std::path::PathBuf;
 /// 設定の取得(`get_settings`)は [`describe_effective_projects_dir`] を使う。
 pub fn resolve_effective_projects_dir(settings: &Settings) -> Result<PathBuf, app::AppError> {
     if let Some(dir) = settings.claude_projects_dir.as_deref() {
-        app::validate_folder_path(&dir.to_string_lossy()).map_err(|e| match e {
+        crate::folders::guard_folder_path(&dir.to_string_lossy()).map_err(|e| match e {
             app::AppError::InvalidInput(why) => app::AppError::InvalidInput(format!(
                 "保存されているセッションのルートのパスが不正です(設定で直してください): {why}"
             )),
@@ -65,6 +65,18 @@ impl ServerState {
             message,
         });
         id
+    }
+
+    /// 同じ内容の警告が控えに無いときだけ積む(積んだら割り当てた ID を返す)。同じ内容を何度も出さない。
+    pub fn push_warning_once(&mut self, kind: &str, message: String) -> Option<u64> {
+        if self
+            .warnings
+            .iter()
+            .any(|w| w.kind == kind && w.message == message)
+        {
+            return None;
+        }
+        Some(self.push_warning(kind, message))
     }
 
     /// 読み直した会話をキャッシュへ入れる(遅れて終わった古い読みが新しいキャッシュを
