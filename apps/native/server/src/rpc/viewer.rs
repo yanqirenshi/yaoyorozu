@@ -35,7 +35,16 @@ async fn repository_dir_for_profile(
     profile_id: Option<&str>,
 ) -> Result<PathBuf, ApiError> {
     let settings = ctx.state.lock().await.settings.clone();
-    Ok(app::resolve_repository_dir(&settings, profile_id)?)
+    let repo = app::resolve_repository_dir(&settings, profile_id)?;
+    // すでに保存されている値が不正(古い版や手書きで入った相対・UNC・`..` 入りなど)なら、起動は止めず、
+    // この値を起点にした読み書きだけを断る(設定画面で直す)。
+    app::validate_folder_path(&repo.to_string_lossy()).map_err(|e| match e {
+        app::AppError::InvalidInput(why) => app::AppError::InvalidInput(format!(
+            "保存されている対象リポジトリのパスが不正です(設定で直してください): {why}"
+        )),
+        other => other,
+    })?;
+    Ok(repo)
 }
 
 pub async fn list_projects(

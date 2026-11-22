@@ -7,7 +7,19 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// 設定の `claude_projects_dir` と既定値(`~/.claude/projects/`)から、実際に使うルートを求める。
+///
+/// すでに保存されている上書き値が不正(相対・UNC・`..`・制御文字入りなど。古い版や手書きで入った値)
+/// なら、起動は止めず、**この値を起点にした読み書きだけを断る**(`InvalidInput`)。画面で直せるように、
+/// 設定の取得(`get_settings`)は [`describe_effective_projects_dir`] を使う。
 pub fn resolve_effective_projects_dir(settings: &Settings) -> Result<PathBuf, app::AppError> {
+    if let Some(dir) = settings.claude_projects_dir.as_deref() {
+        app::validate_folder_path(&dir.to_string_lossy()).map_err(|e| match e {
+            app::AppError::InvalidInput(why) => app::AppError::InvalidInput(format!(
+                "保存されているセッションのルートのパスが不正です(設定で直してください): {why}"
+            )),
+            other => other,
+        })?;
+    }
     let default = infra::FileSystemRepository::default_projects_dir()?;
     Ok(domain::effective_projects_dir(
         settings.claude_projects_dir.as_deref(),
@@ -63,5 +75,19 @@ impl ServerState {
         }
         self.loaded_log_lines.insert(path.clone(), reloaded.lines);
         self.loaded_messages.insert(path, reloaded.messages);
+    }
+}
+
+/// 設定画面に出す「実際に使うセッションのルート」。上書き値が不正でも失敗させず、その値をそのまま
+/// 見せる(画面で直せるように。読み書きは [`resolve_effective_projects_dir`] が断る)。
+pub fn describe_effective_projects_dir(settings: &Settings) -> Result<String, app::AppError> {
+    match resolve_effective_projects_dir(settings) {
+        Ok(dir) => Ok(dir.display().to_string()),
+        Err(app::AppError::InvalidInput(_)) => Ok(settings
+            .claude_projects_dir
+            .as_deref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default()),
+        Err(other) => Err(other),
     }
 }

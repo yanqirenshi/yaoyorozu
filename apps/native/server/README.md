@@ -86,3 +86,14 @@ cargo test -p server
   (未登録の `profileId` は 404、`repository_path` 未設定は 400)。ルール名・スキル名は単一セグメントだけ(`:` も拒否)、設定ファイルは
   `which`(`settings` / `settings_local`)の列挙値だけ。
 - 手入力のフォルダ確認(`check_folder`): 絶対パスだけ。`..`・`:` は 400。存在・フォルダか・`.git` の有無だけを返す。
+
+### 保存するパス・名前の検証(`domain::LocalFolderPath`・`domain::ProfileName`)
+
+- 設定に保存するパス(`update_settings` の `repository_path`・`claude_projects_dir`)と、画面のパスの確認(`check_folder`)は、**同じ規則**(`app::validate_folder_path` →
+  `domain::LocalFolderPath`)で判定する。受け付けるのは `X:\…` / `X:/…`(`X` は英字 1 文字)の絶対パスだけ。**断るもの**: 相対パス・ドライブ相対(`C:x`)・
+  `\` 始まり、UNC(`\ホスト\…`)・デバイスの形(`\?\`・`\.\`・`\??\`・`GLOBALROOT`)、ドライブ文字以外の `:`(代替データストリーム)、制御文字(改行・NUL・タブなど)、
+  `..` の要素、予約デバイス名(`CON`・`NUL`・`COM1` など)。**形だけで即座に断る**(UNC を受けると、サーバが宛先へ SMB で読みに行ってしまうため。存在の確認より前)。
+  空(未設定)は `update_settings` では今の仕様どおり許す(`check_folder` は断る)。
+- **すでに保存されている不正な値**(古い版や手書きで入ったもの)は、起動を止めない。`get_settings` は成功し(画面で直せる)、その値を起点にした読み書き
+  (CLAUDE.md・Rules・Skills・設定ファイル・yyz、セッションの一覧・会話)だけを 400 で断る。
+- プロファイル名(`create_profile`・`rename_profile`): 前後の空白を落とし、空・100 文字超・制御文字は 400(`create_profile` の名前の省略・空白だけは既定名)。

@@ -94,17 +94,18 @@ function ClaudePage() {
   };
 
   // つなぎ直せたら、切れている間の変更を取り込むため表示中のタブを取り直す。
-  // 未保存の編集があるときは、編集を失わないよう取り直さない。
-  const reconnectState = useRef({ tab, claudeMdDirty, settingsDirty });
-  reconnectState.current = { tab, claudeMdDirty, settingsDirty };
+  // 未保存の編集があるときは、編集を上書きしない(エディタが「ほかで変更されました」と
+  // 「取り直す」ボタンを出す。`refresh`)。無ければ今までどおり取り直す。
+  const reconnectTab = useRef(tab);
+  reconnectTab.current = tab;
   useEffect(() => {
     const unlistenPromise = onReconnected(() => {
-      const current = reconnectState.current;
-      if (current.tab === "claude-md" && !current.claudeMdDirty) {
-        void claudeMdEditorRef.current?.reload();
-      } else if (current.tab === "settings" && !current.settingsDirty) {
-        void settingsEditorRef.current?.reload();
-      } else if (current.tab === "explorer") {
+      const current = reconnectTab.current;
+      if (current === "claude-md") {
+        void claudeMdEditorRef.current?.refresh();
+      } else if (current === "settings") {
+        void settingsEditorRef.current?.refresh();
+      } else if (current === "explorer") {
         explorerRef.current?.reload();
       }
     });

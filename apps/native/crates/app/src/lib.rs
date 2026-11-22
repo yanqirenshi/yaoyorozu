@@ -1370,6 +1370,33 @@ pub fn create_profile(settings: &Settings, name: Option<String>) -> (Settings, d
     (updated, profile)
 }
 
+/// 名前を検証して空のプロファイルを作成し、アクティブにする(サーバ版の `create_profile`)。
+/// `name` が省略・空白だけなら既定名にする。**指定があるのに不正**(100 文字超・制御文字)なら
+/// `InvalidInput`。検証の規則は `domain::ProfileName`(`rename_profile` と同じ)。
+pub fn create_profile_checked(
+    settings: &Settings,
+    name: Option<String>,
+) -> Result<(Settings, domain::Profile), AppError> {
+    let checked = match name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+        Some(raw) => Some(
+            domain::ProfileName::parse(raw)
+                .map_err(|e| AppError::InvalidInput(e.message().to_string()))?
+                .into_string(),
+        ),
+        None => None,
+    };
+    Ok(create_profile(settings, checked))
+}
+
+/// 設定に保存するパス・画面で確認するパスを検証する(同じ規則を 1 か所に置く。`domain::LocalFolderPath`)。
+/// このマシンのドライブ上の絶対パスだけを受け付け、UNC・デバイスの形・`..`・`:`・制御文字を断る
+/// (存在の確認の前に、形だけで断る)。空は `InvalidInput`(未設定を許すかは呼び出し側が決める)。
+pub fn validate_folder_path(raw: &str) -> Result<PathBuf, AppError> {
+    domain::LocalFolderPath::parse(raw)
+        .map(domain::LocalFolderPath::into_path_buf)
+        .map_err(|e| AppError::InvalidInput(e.message().to_string()))
+}
+
 /// プロファイルを削除する。最後の1件は削除できない(`InvalidInput`)。
 /// 存在しない `profile_id` は `NotFound`。アクティブプロファイルを削除した
 /// 場合は残りの先頭をアクティブにする(issue #72)。
@@ -1411,12 +1438,10 @@ pub fn rename_profile(
     profile_id: &str,
     name: &str,
 ) -> Result<Settings, AppError> {
-    let trimmed = name.trim();
-    if trimmed.is_empty() {
-        return Err(AppError::InvalidInput(
-            "プロファイル名を入力してください".to_string(),
-        ));
-    }
+    let trimmed = domain::ProfileName::parse(name)
+        .map_err(|e| AppError::InvalidInput(e.message().to_string()))?
+        .into_string();
+    let trimmed = trimmed.as_str();
     if !settings.profiles.iter().any(|p| p.id == profile_id) {
         return Err(AppError::NotFound(
             "指定されたプロファイルが見つかりません".to_string(),
@@ -2633,6 +2658,70 @@ mod tests {
         let loaded = load_settings(&store).expect("should load settings");
         assert_eq!(loaded.settings, settings);
         assert!(!loaded.recovered_from_corruption);
+    }
+
+    #[test]
+    fn create_profile_checked_trims_and_uses_the_default_name_for_blank_input() {
+        let settings = Settings::default();
+        let (_, created) = create_profile_checked(&settings, Some("  work  ".to_string())).unwrap();
+        assert_eq!(created.name, "work");
+        for blank in [None, Some(String::new()), Some("   ".to_string())] {
+            let (_, created) = create_profile_checked(&settings, blank).unwrap();
+            assert_eq!(created.name, "新しいプロファイル");
+        }
+    }
+
+    #[test]
+    fn create_and_rename_profile_reject_invalid_names_with_the_same_rule() {
+        let settings = Settings::default();
+        let id = settings.profiles[0].id.clone();
+        let too_long = "a".repeat(101);
+        for bad in [too_long.as_str(), "a\nb", "a\0b", "a\tb"] {
+            assert!(
+                matches!(
+                    create_profile_checked(&settings, Some(bad.to_string())),
+                    Err(AppError::InvalidInput(_))
+                ),
+                "create should reject {bad:?}"
+            );
+            assert!(
+                matches!(
+                    rename_profile(&settings, &id, bad),
+                    Err(AppError::InvalidInput(_))
+                ),
+                "rename should reject {bad:?}"
+            );
+        }
+        assert!(matches!(
+            rename_profile(&settings, &id, "   "),
+            Err(AppError::InvalidInput(_))
+        ));
+        let renamed = rename_profile(&settings, &id, "  ok  ").unwrap();
+        assert_eq!(renamed.profiles[0].name, "ok");
+    }
+
+    #[test]
+    fn validate_folder_path_accepts_only_local_drive_absolute_paths() {
+        assert_eq!(
+            validate_folder_path(r"  C:\repo\a ").unwrap(),
+            PathBuf::from(r"C:\repo\a")
+        );
+        for bad in [
+            "",
+            "repo",
+            r"\\host\share\x",
+            r"\\?\C:\x",
+            r"\\.\PhysicalDrive0",
+            r"C:\a\..\b",
+            r"C:\a::$DATA",
+            "C:\\a\nb",
+            "C:x",
+        ] {
+            assert!(
+                matches!(validate_folder_path(bad), Err(AppError::InvalidInput(_))),
+                "should reject {bad:?}"
+            );
+        }
     }
 
     #[test]

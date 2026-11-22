@@ -10,7 +10,7 @@ use crate::dto::{
 };
 use crate::error::ApiError;
 use crate::rpc::{blocking, parse_args};
-use crate::state::resolve_effective_projects_dir;
+use crate::state::{describe_effective_projects_dir, resolve_effective_projects_dir};
 use crate::watcher::start_session_watcher;
 use crate::AppContext;
 use app::SettingsStore as _;
@@ -18,7 +18,7 @@ use axum::body::Bytes;
 use axum::extract::State;
 use axum::Json;
 use serde::Deserialize;
-use std::path::{Component, Path, PathBuf};
+use std::path::PathBuf;
 
 /// 設定を永続化する(Tauri 版 `persist_settings` の置き換え)。
 ///
@@ -63,7 +63,7 @@ pub async fn get_settings(
 ) -> Result<Json<SettingsDto>, ApiError> {
     let args: ProfileIdArgs = parse_args(&body)?;
     let settings = ctx.state.lock().await.settings.clone();
-    let effective = resolve_effective_projects_dir(&settings)?;
+    let effective = describe_effective_projects_dir(&settings)?;
     let profile = app::resolve_profile(&settings, args.profile_id.as_deref())?.clone();
     Ok(Json(SettingsDto {
         active_profile_id: settings.active_profile_id,
@@ -81,7 +81,7 @@ pub async fn get_settings(
         claude_projects_dir: settings
             .claude_projects_dir
             .map(|p| p.display().to_string()),
-        effective_projects_dir: effective.display().to_string(),
+        effective_projects_dir: effective,
         restore_running_sessions: settings.restore_running_sessions,
     }))
 }
@@ -99,9 +99,10 @@ pub async fn update_settings(
 ) -> Result<Json<()>, ApiError> {
     let args: UpdateSettingsArgs = parse_args(&body)?;
     let input = args.input;
-    let repository_path = input.repository_path.map(PathBuf::from);
+    // 保存するパスは、状態に触る前に検証する(不正なら何も変えずに 400)。
+    let repository_path = optional_folder(input.repository_path)?;
     let github_project = input.github_project.map(domain::GithubProject::from);
-    let claude_projects_dir = input.claude_projects_dir.map(PathBuf::from);
+    let claude_projects_dir = optional_folder(input.claude_projects_dir)?;
 
     // ロックの中は候補値の組み立てとバリデーションだけ(I/O はしない)。失敗したときは
     // 状態を書き換えないまま抜ける(無効な値をメモリ上に残さない)。
@@ -191,7 +192,7 @@ pub async fn create_profile(
 ) -> Result<Json<ProfileSummaryDto>, ApiError> {
     let args: CreateProfileArgs = parse_args(&body)?;
     let created = change_settings(&ctx, |s| {
-        let (updated, created) = app::create_profile(s, args.name);
+        let (updated, created) = app::create_profile_checked(s, args.name)?;
         Ok((updated, created))
     })
     .await?;
@@ -264,7 +265,7 @@ pub struct CheckFolderArgs {
 /// 絶対パスだけを受け付け、`..` や `:`(代替データストリーム)を含む形は拒否する。
 pub async fn check_folder(body: Bytes) -> Result<Json<FolderCheckDto>, ApiError> {
     let args: CheckFolderArgs = parse_args(&body)?;
-    let path = validate_folder_input(&args.path)?;
+    let path = app::validate_folder_path(&args.path)?;
     let dto = blocking(move || {
         let meta = std::fs::metadata(&path).ok();
         let is_dir = meta.as_ref().is_some_and(|m| m.is_dir());
@@ -279,45 +280,11 @@ pub async fn check_folder(body: Bytes) -> Result<Json<FolderCheckDto>, ApiError>
     Ok(Json(dto))
 }
 
-fn validate_folder_input(raw: &str) -> Result<PathBuf, ApiError> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err(ApiError::new("invalid_input", "パスを入力してください"));
-    }
-    let path = Path::new(trimmed);
-    if !path.is_absolute() {
-        return Err(ApiError::new("invalid_input", "絶対パスで入力してください"));
-    }
-    for component in path.components() {
-        match component {
-            Component::ParentDir => {
-                return Err(ApiError::new(
-                    "invalid_input",
-                    "「..」を含むパスは使えません",
-                ))
-            }
-            Component::Normal(name) if name.to_string_lossy().contains(':') => {
-                return Err(ApiError::new(
-                    "invalid_input",
-                    "「:」を含む名前は使えません",
-                ))
-            }
-            _ => {}
-        }
-    }
-    Ok(path.to_path_buf())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn folder_input_must_be_absolute_without_dotdot_or_streams() {
-        assert!(validate_folder_input("").is_err());
-        assert!(validate_folder_input("relative\\dir").is_err());
-        assert!(validate_folder_input(r"C:\a\..\b").is_err());
-        assert!(validate_folder_input(r"C:\a\b::$DATA").is_err());
-        assert!(validate_folder_input(r" C:\a\b ").is_ok());
+/// 保存するパス(任意)を検証する。`None`・空白だけは「未設定」として許す(今の仕様)。それ以外は
+/// 画面の「パスの確認」(`check_folder`)と同じ規則(`app::validate_folder_path`)で断る。
+fn optional_folder(raw: Option<String>) -> Result<Option<PathBuf>, ApiError> {
+    match raw.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        None => Ok(None),
+        Some(text) => Ok(Some(app::validate_folder_path(text)?)),
     }
 }

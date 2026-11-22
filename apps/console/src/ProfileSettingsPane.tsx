@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
@@ -20,7 +20,9 @@ import type {
   ProjectDto,
   YyzScaffoldStatusDto,
 } from "@/api";
+import StaleNotice from "@/StaleNotice";
 import Tabs, { tabPanelProps } from "@/Tabs";
+import { useRefreshGuard } from "@/useRefreshGuard";
 
 // プロファイル1件分の設定ペイン(プロファイル名・名前変更・Claude 等のタブとその中身)。
 // 写し元: `apps/native/react/src/ProfileSettingsPane.tsx`。違い:
@@ -173,20 +175,67 @@ function ProfileSettingsPane({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  // 名前変更の送信中(確定の二重送信・送信中の再編集を防ぐ)。
+  const [renaming, setRenaming] = useState(false);
+  const savingRef = useRef(false);
+  const renamingRef = useRef(false);
+  const yyzCreatingRef = useRef(false);
 
-  // 対象プロファイルの内容を取り直す。自分自身の操作(名前変更・保存)の直後と、
-  // 他画面からの変更(`settings:updated`)の両方で使う。
-  const loadSettingsData = useCallback((): Promise<void> => {
+  // 「入力中(未保存の変更がある)の欄は、取り直しで上書きしない」(`useRefreshGuard`)。
+  // 未保存かどうかは、最後に読み込んだ(または保存した)値と、今の入力値の比較で持つ。
+  type FormValues = {
+    repositoryPath: string;
+    claudeProjectsDir: string;
+    restoreRunningSessions: boolean;
+    folders: string;
+  };
+  const [baseline, setBaseline] = useState<FormValues | null>(null);
+  const currentForm: FormValues = {
+    repositoryPath,
+    claudeProjectsDir,
+    restoreRunningSessions,
+    folders: [...selectedProjectFolders].sort().join("\n"),
+  };
+  const dirty =
+    baseline !== null &&
+    (baseline.repositoryPath !== currentForm.repositoryPath ||
+      baseline.claudeProjectsDir !== currentForm.claudeProjectsDir ||
+      baseline.restoreRunningSessions !== currentForm.restoreRunningSessions ||
+      baseline.folders !== currentForm.folders);
+  const { stale, shouldApply, clear: clearStale } = useRefreshGuard(dirty);
+  // 最後に読み込んだ対象プロファイル。対象そのものが変わったとき(切替・削除)は、入力中の内容は
+  // 別のプロファイルのものなので、取り直しの結果で置き換える。
+  const loadedTargetRef = useRef<string | null>(null);
+
+  // 対象プロファイルの内容を取り直す。自分自身の操作(名前変更)の直後と、他画面からの変更
+  // (`settings:updated`)・つなぎ直し(`refreshToken`)の両方で使う。
+  // `force` が偽(既定)なら、未保存の入力がある欄は上書きせず、「ほかで変更されました」を出す
+  // (表示専用の部分 = プロファイル名・仕様フォルダの状態は常に取り直す)。`force` が真なら
+  // 入力を捨てて取り直す(「取り直す」ボタン)。
+  const loadSettingsData = useCallback(
+    (force = false): Promise<void> => {
     return getSettings(profileId)
       .then((settings) => {
         const targetId = profileId ?? settings.active_profile_id;
         setProfile(settings.profiles.find((p) => p.id === targetId) ?? null);
-        setRepositoryPath(settings.repository_path ?? "");
-        setClaudeProjectsDir(settings.claude_projects_dir ?? "");
-        setRestoreRunningSessions(settings.restore_running_sessions);
-        setGithubProject(settings.github_project);
-        setSelectedProjectFolders(settings.selected_project_folders);
-        setError(null);
+        const targetChanged =
+          loadedTargetRef.current !== null && loadedTargetRef.current !== targetId;
+        loadedTargetRef.current = targetId;
+        if (force || targetChanged || shouldApply()) {
+          setRepositoryPath(settings.repository_path ?? "");
+          setClaudeProjectsDir(settings.claude_projects_dir ?? "");
+          setRestoreRunningSessions(settings.restore_running_sessions);
+          setGithubProject(settings.github_project);
+          setSelectedProjectFolders(settings.selected_project_folders);
+          setBaseline({
+            repositoryPath: settings.repository_path ?? "",
+            claudeProjectsDir: settings.claude_projects_dir ?? "",
+            restoreRunningSessions: settings.restore_running_sessions,
+            folders: [...settings.selected_project_folders].sort().join("\n"),
+          });
+          clearStale();
+          setError(null);
+        }
 
         setSavedRepositoryPath(settings.repository_path);
         setYyzCreateError(null);
@@ -206,7 +255,9 @@ function ProfileSettingsPane({
           });
       })
       .catch((e) => setError(isAppError(e) ? e.message : String(e)));
-  }, [profileId]);
+    },
+    [profileId, shouldApply, clearStale],
+  );
 
   useEffect(() => {
     void loadSettingsData().finally(() => setLoading(false));
@@ -229,6 +280,8 @@ function ProfileSettingsPane({
   }, [refreshToken]);
 
   const handleCreateYyzScaffold = () => {
+    if (yyzCreating || yyzCreatingRef.current) return;
+    yyzCreatingRef.current = true;
     setYyzCreating(true);
     setYyzCreateError(null);
     createYyzScaffold(profileId)
@@ -237,7 +290,10 @@ function ProfileSettingsPane({
         setYyzStatusError(null);
       })
       .catch((e) => setYyzCreateError(isAppError(e) ? e.message : String(e)))
-      .finally(() => setYyzCreating(false));
+      .finally(() => {
+        yyzCreatingRef.current = false;
+        setYyzCreating(false);
+      });
   };
 
   const handleStartRenameProfile =(target: ProfileSummaryDto) => {
@@ -246,14 +302,27 @@ function ProfileSettingsPane({
   };
 
   const handleCommitRenameProfile = (targetId: string) => {
+    // 送信中の確定(Enter のあとの blur など)は無視する。
+    if (renaming || renamingRef.current) return;
     const name = renameDraft.trim();
     setRenamingProfileId(null);
     if (!name) return;
     setProfileError(null);
+    renamingRef.current = true;
+    setRenaming(true);
+    // 失敗(サーバ停止など)したときは、入力した名前を残したまま入力欄へ戻し、エラーを出す。
     renameProfile(targetId, name)
       .then(() => loadSettingsData())
       .then(() => onProfileRenamed?.())
-      .catch((e) => setProfileError(isAppError(e) ? e.message : String(e)));
+      .catch((e) => {
+        setRenamingProfileId(targetId);
+        setRenameDraft(renameDraft);
+        setProfileError(isAppError(e) ? e.message : String(e));
+      })
+      .finally(() => {
+        renamingRef.current = false;
+        setRenaming(false);
+      });
   };
 
   const toggleProjectFolder = (name: string) => {
@@ -264,6 +333,10 @@ function ProfileSettingsPane({
 
   const handleSave = (event: FormEvent) => {
     event.preventDefault();
+    // 保存中の再送信(Enter の連打・ダブルクリック)は無視する。
+    // 状態(`saving`)は再描画までの間は古いままなので、同じ瞬間の 2 回目は ref で止める。
+    if (saving || savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
     setError(null);
     setSaved(false);
@@ -278,9 +351,18 @@ function ProfileSettingsPane({
       },
       profileId,
     )
-      .then(() => setSaved(true))
+      .then(() => {
+        // 保存できた入力を「読み込んだ値」にする(未保存の変更ではなくなる。「ほかで変更されました」も消す)。
+        // 失敗したとき(サーバ停止など)は、入力も未保存の状態もそのまま残し、エラーだけを出す。
+        setBaseline(currentForm);
+        clearStale();
+        setSaved(true);
+      })
       .catch((e) => setError(isAppError(e) ? e.message : String(e)))
-      .finally(() => setSaving(false));
+      .finally(() => {
+        savingRef.current = false;
+        setSaving(false);
+      });
   };
 
   const activeProfile = profile;
@@ -335,7 +417,11 @@ function ProfileSettingsPane({
           ) : (
             <>
               <h2 title={activeProfile.name}>{activeProfile.name}</h2>
-              <button type="button" onClick={() => handleStartRenameProfile(activeProfile)}>
+              <button
+                type="button"
+                onClick={() => handleStartRenameProfile(activeProfile)}
+                disabled={renaming}
+              >
                 名前変更
               </button>
             </>
@@ -343,6 +429,8 @@ function ProfileSettingsPane({
         </div>
       )}
       {profileError && <p className="error">{profileError}</p>}
+      {/* 入力中(未保存)の欄は、ほかのタブの変更・つなぎ直しで上書きしない。代わりにこの知らせを出す。 */}
+      {stale && <StaleNotice onReload={() => void loadSettingsData(true)} />}
       <Tabs
         id="settings-tabs"
         aria-label="設定の切り替え"

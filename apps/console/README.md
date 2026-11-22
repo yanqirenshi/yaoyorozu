@@ -57,6 +57,45 @@ useEffect(() => {
 }, []);
 ```
 
+### 入力中(未保存)の欄は、取り直しで上書きしない
+
+つなぎ直し(`onReconnected`)・他のタブの変更(`settings:updated`)・`session:changed` などの**自動の取り直しは、入力中の欄を上書きしない**。
+代わりに「ほかで変更されました」の知らせと「取り直す」ボタン(押すと今の入力を捨てて取り直す)を出す。未保存の変更が無ければ、今までどおり取り直す。
+
+- 部品: `src/useRefreshGuard.ts`(hook)と `src/StaleNotice.tsx`(知らせ + ボタン)。
+- 未保存かどうかは、画面が持つ dirty 状態、または「最後に読み込んだ(保存した)値と、今の入力値の比較」で持つ。
+- 保存に失敗したとき(サーバ停止など)は、入力も未保存の状態もそのまま残し、エラーだけを出す(つなぎ直しで消さない)。
+- 対象そのものが変わったとき(プロファイルの切替など)は、入力中の内容は別の対象のものなので、取り直しの結果で置き換える。
+  ファイルの編集画面(`ClaudeMdEditor`・`JsonFileEditor`)は、保存先が変わったら取り直すまで保存を止める。
+
+```ts
+const { stale, shouldApply, clear } = useRefreshGuard(dirty);   // dirty = 未保存の変更があるか
+
+const load = useCallback((force = false) =>
+  getSettings().then((settings) => {
+    setLabel(settings.label);                                   // 表示専用の部分は常に取り直す
+    if (force || shouldApply()) {                               // 未保存が無ければ(または force)欄へ入れる
+      setInput(settings.value);
+      setBaseline(settings.value);                              // 「読み込んだ値」(dirty の比較元)
+      clear();
+    }                                                           // 未保存があれば shouldApply() が stale を立てる
+  }), [shouldApply, clear]);
+
+// 保存できたら、その入力を「読み込んだ値」にする(失敗したら何もしない = 入力を残す)
+save(input).then(() => { setBaseline(input); clear(); });
+
+{stale && <StaleNotice onReload={() => void load(true)} />}     // 「取り直す」= 入力を捨てて取り直す
+```
+
+編集用の部品は `ref` で `refresh()`(自動の取り直し。未保存なら知らせを出す)と `reload()`(入力を捨てて取り直す。dock の「再読み込み」)を出す。
+自動の取り直しからは `refresh()` を呼ぶ(`/claude`・ビューアの `onReconnected` が手本)。
+
+### 書き込みボタンは、応答が返るまで押せなくする
+
+「追加」「保存」「削除する」「切替」「名前変更の確定」「作成」など、書き込み(や重い問い合わせ)を起こすボタンは、応答が返るまで `disabled` にし、
+ハンドラの先頭でも送信中なら何もしない(Enter の連打・ダブルクリックで 2 つできるのを防ぐ)。応答が返ったら(成功・失敗どちらでも)戻す。
+手本: `src/app/settings/page.tsx` の `runWrite`、`src/ProfileSettingsPane.tsx` の `saving`・`renaming`・`yyzCreating`。
+
 ## 確認
 
 ```bash

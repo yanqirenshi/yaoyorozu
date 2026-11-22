@@ -279,6 +279,11 @@ function SessionsPage({ nav }: SessionsPageProps) {
         void refreshSessionInPlace(projectParam, sessionParam);
       }
       setReconnectToken((n) => n + 1);
+      // 表示中の編集画面(CLAUDE.md・設定ファイル)も取り直す。未保存の入力があるものは上書きせず、
+      // エディタが「ほかで変更されました」と「取り直す」ボタンを出す(開いていないものは null)。
+      void claudeMdEditorRef.current?.refresh();
+      void settingsJsonEditorRef.current?.refresh();
+      void settingsLocalJsonEditorRef.current?.refresh();
     });
     return () => {
       void unlistenPromise.then((unlisten) => unlisten());

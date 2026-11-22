@@ -96,6 +96,8 @@ function SettingsPage() {
   const [deleteTarget, setDeleteTarget] = useState<ProfileSummaryDto | null>(null);
   // 右ペイン(ProfileSettingsPane)へ、自分の操作の直後に取り直しを促す(issue #299)。
   const [refreshToken, setRefreshToken] = useState(0);
+  // 書き込み(追加・削除・切替)の応答待ち。待っている間は、書き込みのボタンを押せなくする。
+  const [busy, setBusy] = useState(false);
 
   // プロファイル一覧・アクティブプロファイルを取り直す。自分自身の操作(作成・
   // 削除・切り替え)の直後と、他画面(dock等)からの切り替え(`settings:updated`)の
@@ -137,14 +139,30 @@ function SettingsPage() {
     };
   }, [reloadAll]);
 
-  const handleCreateProfile = () => {
+  // 書き込み(追加・削除・切替)は、応答が返るまで次を受け付けない(ダブルクリックで 2 つできるのを防ぐ)。
+  // 失敗(サーバ停止など)したときは、入力(新しいプロファイル名)を残したままエラーを出す。
+  // 状態(`busy`)は再描画までの間は古いままなので、同じ瞬間の 2 回目のクリックは ref で止める。
+  const busyRef = useRef(false);
+  const runWrite = (write: () => Promise<unknown>): void => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
     setProfileError(null);
-    createProfile(newProfileName.trim() || undefined)
-      .then(() => {
+    write()
+      .catch((e) => setProfileError(isAppError(e) ? e.message : String(e)))
+      .finally(() => {
+        busyRef.current = false;
+        setBusy(false);
+      });
+  };
+
+  const handleCreateProfile = () => {
+    runWrite(() =>
+      createProfile(newProfileName.trim() || undefined).then(() => {
         setNewProfileName("");
         return reloadAll();
-      })
-      .catch((e) => setProfileError(isAppError(e) ? e.message : String(e)));
+      }),
+    );
   };
 
   // 確認ダイアログ(DeleteProfileDialog)で「削除する」が押されてから呼ぶ。
@@ -152,18 +170,12 @@ function SettingsPage() {
   // ため使わない。
   const handleDeleteProfile = (profileId: string) => {
     setDeleteTarget(null);
-    setProfileError(null);
-    deleteProfile(profileId)
-      .then(() => reloadAll())
-      .catch((e) => setProfileError(isAppError(e) ? e.message : String(e)));
+    runWrite(() => deleteProfile(profileId).then(() => reloadAll()));
   };
 
   const handleSwitchProfileFromList = (profileId: string) => {
     if (profileId === activeProfileId) return;
-    setProfileError(null);
-    switchProfile(profileId)
-      .then(() => reloadAll())
-      .catch((e) => setProfileError(isAppError(e) ? e.message : String(e)));
+    runWrite(() => switchProfile(profileId).then(() => reloadAll()));
   };
 
   return (
@@ -181,6 +193,7 @@ function SettingsPage() {
                 type="button"
                 className={`project-item ${p.id === activeProfileId ? "selected" : ""}`}
                 onClick={() => handleSwitchProfileFromList(p.id)}
+                disabled={busy}
               >
                 <span className="settings-profile-name">{p.name}</span>
               </button>
@@ -190,7 +203,7 @@ function SettingsPage() {
                   type="button"
                   className="settings-profile-delete"
                   onClick={() => setDeleteTarget(p)}
-                  disabled={profiles.length <= 1}
+                  disabled={profiles.length <= 1 || busy}
                   title="削除"
                   aria-label={`${p.name} を削除`}
                 >
@@ -207,7 +220,7 @@ function SettingsPage() {
             onChange={(e) => setNewProfileName(e.target.value)}
             placeholder="新しいプロファイル名(省略可)"
           />
-          <AddButton size="small" onClick={handleCreateProfile} />
+          <AddButton size="small" onClick={handleCreateProfile} disabled={busy} />
         </div>
         {profileError && <p className="error">{profileError}</p>}
       </div>
