@@ -384,7 +384,9 @@ function ProfileSettingsPane({
       .catch((e) => {
         setError(isAppError(e) ? e.message : String(e));
         // ほかで変更されていた(古い版を元にした保存)ときは、入力は残したまま、取り直しを促す。
-        if (isAppError(e) && e.code === "settings_conflict") shouldApply();
+        if (isAppError(e) && (e.code === "settings_conflict" || e.code === "settings_global_conflict")) {
+          shouldApply();
+        }
       })
       .finally(() => {
         savingRef.current = false;

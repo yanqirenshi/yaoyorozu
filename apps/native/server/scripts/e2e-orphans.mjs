@@ -9,8 +9,9 @@
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import {
-  alive, check, dirs, openSse, projects, refOf, results, root, rpc, sleep, slash, startedPids, startServer,
+  alive, check, dirs, openSse, projects, refOf, results, root, rpc, sendCtrlC, sleep, slash, startedPids, startServer,
   waitHealthy, waitState,
 } from "./e2e-lib.mjs";
 
@@ -71,6 +72,30 @@ async function main() {
   await sleep(800);
   check("会話 b を止めると、b の子孫も 0 件", !alive(bChild) && !alive(bGrand), `b: ${bChild},${bGrand}`);
   tab.close();
+
+  // ---- 起動の直後に子を作る偽の claude(会話用のジョブへ入れられる前に作られた子)----
+  // 起動したあとで PID をジョブへ入れるので、入れる前に作られた子は、会話のジョブの外(サーバのジョブの中)に残る。
+  // その結果(事実)を出す: 停止のあと、その子が残るか。サーバが終わると、サーバのジョブが止める。
+  sendCtrlC(srv.child.pid);
+  for (let i = 0; i < 100 && alive(srv.child.pid); i++) await sleep(100);
+  const earlyFile = path.join(root, "early-child.pid");
+  process.env.FAKE_CLAUDE_EARLY_CHILD_FILE = earlyFile;
+  const srv2 = startServer();
+  await waitHealthy(srv2);
+  const r2 = await rpc(srv2, "start_running_session", { request: { kind: "new", mode: "default", name: "early", sync_origin_main: false } });
+  const t2 = refOf(r2.json);
+  await waitState(srv2, t2, "idle");
+  const early = Number(fs.readFileSync(earlyFile, "utf8"));
+  spawned.push(early);
+  check("起動の直後に作られた子が、生きている", alive(early), `PID ${early}`);
+  await rpc(srv2, "stop_running_session", { target: t2 });
+  await waitState(srv2, t2, "exited", 15000);
+  await sleep(800);
+  console.log(`  事実: 起動の直後に作られた子は、会話を止めたあと ${alive(early) ? "残った(会話のジョブの外。サーバのジョブの中)" : "残らなかった(PID をジョブへ入れるのが先に間に合った)"}`);
+  sendCtrlC(srv2.child.pid);
+  for (let i = 0; i < 100 && alive(srv2.child.pid); i++) await sleep(100);
+  await sleep(800);
+  check("サーバが終わると、サーバのジョブが、残った子も止める", !alive(early), `PID ${early}`);
 }
 
 try {

@@ -6,6 +6,8 @@
 //   ASK   → AskUserQuestion(選択肢の質問。2問・うち1問は複数選択)の問い合わせを出す
 //   PLAN  → ExitPlanMode(計画の承認)の問い合わせを出す
 //   SLOW  → 100ms ごとに text_delta を出し続け、interrupt で止まる
+//   (環境変数 FAKE_CLAUDE_EARLY_CHILD_FILE があれば、起動した直後に切り離した子を作り、その PID をそのファイルへ書く。
+//    会話用のジョブへ入れられる前に子が作られた場合の確認用)
 //   ORPHAN → 切り離した子(長く生きる)と、親が先に終わった孫(長く生きる)を作り、その PID を text_delta で返す
 //   HANG  → 標準入力を閉じても終了しない(kill されるまで生きている)
 //   ARGS  → 起動引数(argv)を text_delta で返す(--session-id / --name / --permission-mode / --settings の確認用)
@@ -17,6 +19,12 @@
 // system/init の model / permissionMode に反映する。issue #407)。
 const readline = require("readline");
 const fs = require("fs");
+
+if (process.env.FAKE_CLAUDE_EARLY_CHILD_FILE) {
+  const child = require("child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore" });
+  child.unref();
+  fs.writeFileSync(process.env.FAKE_CLAUDE_EARLY_CHILD_FILE, String(child.pid));
+}
 
 // 環境変数 FAKE_CLAUDE_SESSION_FILE があれば、実物の CLI と同じく会話ファイル(jsonl)へ
 // 行を追記する(送信した user 行と、確定した assistant 行)。画面の「作成中の表示が、確定した

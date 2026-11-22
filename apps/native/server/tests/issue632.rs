@@ -557,6 +557,10 @@ async fn a_stale_profile_version_or_a_stale_global_version_is_a_conflict() {
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        body["code"], "settings_conflict",
+        "プロファイルの版の食い違いは、code で分かる"
+    );
 
     // 全体の欄(claude_projects_dir)を別のタブが変えたら、古い全体の版からの保存は、別のプロファイルでも 409
     // (全体の欄を、古い値で黙って戻さない)。
@@ -575,6 +579,10 @@ async fn a_stale_profile_version_or_a_stale_global_version_is_a_conflict() {
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        body["code"], "settings_global_conflict",
+        "全体の版の食い違いは、code で分かる"
+    );
     // 取り直した全体の版からなら通る。
     let (status, _) = call(
         &f.ctx,
@@ -597,4 +605,25 @@ async fn expected_global_revision_is_required() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}
+
+#[tokio::test]
+async fn saving_the_same_values_does_not_advance_either_version() {
+    let f = fixture();
+    let first = f.ctx.state.lock().await.settings.active_profile_id.clone();
+    std::fs::create_dir_all(f.dir.path().join("repo-a")).unwrap();
+    let repo = forward(&f.dir.path().join("repo-a"));
+    let (rev, global) = get_revisions(&f.ctx, &first).await;
+    let save = |rev: u64, global: u64| {
+        serde_json::json!({"input": settings_input(&repo, None), "profileId": first,
+            "expectedRevision": rev, "expectedGlobalRevision": global})
+    };
+    let (_, body) = call(&f.ctx, "update_settings", save(rev, global)).await;
+    assert_eq!(body["revision"], rev + 1, "値が変わったので進む");
+    assert_eq!(body["global_revision"], global, "全体の欄は変わっていない");
+    // 同じ値をもう一度保存しても、どちらの版も進まない。
+    let (status, body) = call(&f.ctx, "update_settings", save(rev + 1, global)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["revision"], rev + 1);
+    assert_eq!(body["global_revision"], global);
 }

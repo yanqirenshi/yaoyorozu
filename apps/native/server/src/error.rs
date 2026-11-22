@@ -10,7 +10,7 @@
 //! | `forbidden_host`(Host 違い。同上) | 403 |
 //! | `github_unauthenticated` `github_auth_expired` `github_scope_insufficient` | 403(401 はサーバの認証失敗専用に空けておく) |
 //! | `not_found` | 404 |
-//! | `session_busy` `file_conflict` `claude_md_conflict` `settings_conflict`(設定の版が古い) | 409 |
+//! | `session_busy` `file_conflict` `claude_md_conflict` `settings_conflict`(プロファイルの設定の版が古い)・`settings_global_conflict`(全体の欄の版が古い) | 409 |
 //! | `cwd_missing` | 422 |
 //! | `github_api_failed` | 502 |
 //! | `timeout` | 504 |
@@ -25,7 +25,7 @@ pub fn status_for_code(code: &str) -> StatusCode {
     match code {
         "invalid_input" => StatusCode::BAD_REQUEST,
         "unauthorized" => StatusCode::UNAUTHORIZED,
-        "settings_conflict" => StatusCode::CONFLICT,
+        "settings_conflict" | "settings_global_conflict" => StatusCode::CONFLICT,
         "forbidden_host"
         | "github_unauthenticated"
         | "github_auth_expired"

@@ -155,10 +155,17 @@ pub async fn update_settings(
         };
         // 古い版を元にした保存は断る(別のタブが変えた別の欄を、古い値で黙って戻さないため)。比べるのは、保存先の
         // プロファイルの版と、全体の欄の版。別のプロファイルの保存・切替・作成・削除・改名では、どちらも進まない。
-        if profile.revision != expected_revision || global_before != expected_global_revision {
+        // どちらが食い違ったかは code で分ける(プロファイルの版が先)。画面は文面でなく code で見分ける。
+        if profile.revision != expected_revision {
             return Err(ApiError::new(
                 "settings_conflict",
-                "設定がほかで変更されています。取り直してからやり直してください",
+                "このプロファイルの設定がほかで変更されています。取り直してからやり直してください",
+            ));
+        }
+        if global_before != expected_global_revision {
+            return Err(ApiError::new(
+                "settings_global_conflict",
+                "全体の設定(セッションのルート・自動再開)がほかで変更されています。取り直してからやり直してください",
             ));
         }
         let profile_changed = profile.repository_path != repository_path

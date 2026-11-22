@@ -137,7 +137,7 @@ export function getSettings(profileId?: string | null): Promise<SettingsDto> {
 
 // native の `updateSettings(input, profileId)` との違い: `profileId` は必須(省略・null は 400。アクティブへは保存しない。
 // 対象が削除されていれば 404)。`expectedRevision`(保存先のプロファイルの版。`getSettings` の `revision`)と
-// `expectedGlobalRevision`(全体の欄の版。`global_revision`)が必須で、どちらかが古ければ `settings_conflict`(409)で
+// `expectedGlobalRevision`(全体の欄の版。`global_revision`)が必須で、プロファイルの版が古ければ `settings_conflict`、全体の版が古ければ `settings_global_conflict`(どちらも 409)で
 // 断られる(別のタブが変えた別の欄を、古い値で黙って戻さないため)。戻り値は保存後の 2 つの版(次の保存に使える)。
 export function updateSettings(
   input: SettingsInputDto,
