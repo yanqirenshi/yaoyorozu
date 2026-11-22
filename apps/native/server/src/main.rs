@@ -91,6 +91,8 @@ async fn run() -> Result<(), String> {
                 Default::default()
             });
     state.git_ledger_path = git_ledger_path;
+    // 閉じた警告の印(サーバを起動し直しても、閉じた警告を出し直さない)。
+    state.dismissed_skips = server::dismissed::load(&data_dir);
     // 台帳が壊れていて退避したときは、ログと保留中の警告に出す(起動直後は誰も SSE を購読していないので、控えへ積む)。
     for name in ledger_watch.evacuated() {
         let message = ledger_watch.message(&name);

@@ -86,7 +86,7 @@ fn is_separator(c: char) -> bool {
     c == '\\' || c == '/'
 }
 
-/// `CON`・`NUL`・`COM1`・`COM¹`(上付き数字も予約)・`CONIN$`・`CONOUT$`…(拡張子付きも)。
+/// `CON`・`NUL`・`COM1`・`COM¹`(上付き数字も予約)・`CONIN$`・`CONOUT$`・`CONERR$`・`CLOCK$`…(拡張子付きも)。
 pub fn is_reserved_device_name(component: &str) -> bool {
     let base = component
         .split('.')
@@ -96,7 +96,7 @@ pub fn is_reserved_device_name(component: &str) -> bool {
         .to_uppercase();
     if matches!(
         base.as_str(),
-        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$" | "CONERR$" | "CLOCK$"
     ) {
         return true;
     }

@@ -136,6 +136,10 @@ pub async fn subscribe_running_session_progress(
     }
     let id = guard.next_subscription_id;
     let slot = find_slot_mut(&mut guard, &target).ok_or_else(not_running)?;
+    // 終了したセッションは、もう途中経過が出ない(購読を残さない)。
+    if slot.session.process_state == ProcessState::Exited {
+        return Err(not_running());
+    }
     slot.subscribers.push(Subscription {
         id,
         conn_id: args.connection_id.clone(),

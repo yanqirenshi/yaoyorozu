@@ -270,3 +270,132 @@ async fn an_existing_uppercase_row_is_normalized_and_merged_when_the_ledger_is_r
         serde_json::json!([UPPER_ID.to_ascii_lowercase()])
     );
 }
+
+// --- 7. 細かい点 ---
+
+#[tokio::test]
+async fn a_dismissed_skip_warning_stays_dismissed_after_a_restart_and_a_touch_but_not_after_a_real_change(
+) {
+    let f = fixture();
+    let projects = f.dir.path().join("projects");
+    let proj = projects.join("proj1");
+    std::fs::create_dir_all(&proj).unwrap();
+    let broken = proj.join("broken.jsonl");
+    std::fs::write(&broken, "壊れた内容\n{ 途中").unwrap();
+    let repo = f.dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let (status, _) = call(
+        &f.ctx,
+        "update_settings",
+        serde_json::json!({"input": {
+            "repository_path": forward(&repo), "github_project": null,
+            "selected_project_folders": [], "claude_projects_dir": forward(&projects)
+        }}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let list = |ctx: AppContext| async move {
+        call(
+            &ctx,
+            "list_sessions",
+            serde_json::json!({"project": "proj1"}),
+        )
+        .await
+    };
+    let warning_id = |ctx: AppContext| async move {
+        let (_, body) = call(&ctx, "list_pending_warnings", serde_json::json!({})).await;
+        body.as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["message"].as_str().unwrap().contains("broken.jsonl"))
+            .map(|w| w["id"].as_u64().unwrap())
+    };
+
+    list(f.ctx.clone()).await;
+    let id = warning_id(f.ctx.clone()).await.expect("警告が出る");
+    let (status, _) = call(
+        &f.ctx,
+        "dismiss_pending_warning",
+        serde_json::json!({"id": id}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        f.dir.path().join(server::dismissed::FILE_NAME).is_file(),
+        "閉じた印がデータフォルダに保存される"
+    );
+
+    // サーバを起動し直した(新しい状態が、保存した印を読む)。更新時刻だけが変わっても、出し直さない。
+    let restarted = fixture_in(f.dir.path());
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&broken)
+        .unwrap();
+    file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(120))
+        .unwrap();
+    drop(file);
+    restarted.state.lock().await.dismissed_skips = server::dismissed::load(f.dir.path());
+    let (status, _) = call(
+        &restarted,
+        "update_settings",
+        serde_json::json!({"input": {
+            "repository_path": forward(&repo), "github_project": null,
+            "selected_project_folders": [], "claude_projects_dir": forward(&projects)
+        }}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    list(restarted.clone()).await;
+    assert!(
+        warning_id(restarted.clone()).await.is_none(),
+        "更新時刻だけの変化では、出し直さない"
+    );
+
+    // 中身が実際に変わったら、また出る。
+    std::fs::write(&broken, "別の壊れた内容\n{ 途中 2").unwrap();
+    list(restarted.clone()).await;
+    assert!(warning_id(restarted.clone()).await.is_some());
+}
+
+/// 同じデータフォルダを使う、新しいサーバの状態(再起動のつもり)。
+fn fixture_in(dir: &Path) -> AppContext {
+    let (_tx, rx) = watch::channel(false);
+    AppContext {
+        state: Arc::new(Mutex::new(ServerState::new(
+            domain::Settings::default(),
+            dir.join("settings.json"),
+            false,
+        ))),
+        events: EventBus::new(),
+        token: Arc::new(TOKEN.to_string()),
+        port: PORT,
+        version: Arc::new("0".to_string()),
+        data_dir: Arc::new(dir.to_path_buf()),
+        watcher: Arc::new(std::sync::Mutex::new(None)),
+        save_lane: Arc::new(tokio::sync::Mutex::new(())),
+        file_lane: Arc::new(tokio::sync::Mutex::new(())),
+        shutdown: rx,
+        running: Default::default(),
+    }
+}
+
+#[test]
+fn the_reserved_names_include_the_superscript_digits_and_the_extra_device_names() {
+    for name in [
+        "COM\u{B9}",
+        "COM\u{B2}",
+        "COM\u{B3}",
+        "LPT\u{B9}",
+        "LPT\u{B2}",
+        "LPT\u{B3}",
+        "CONERR$",
+        "CLOCK$",
+        "conerr$.txt",
+        "Clock$",
+    ] {
+        assert!(domain::is_reserved_device_name(name), "{name:?}");
+    }
+    for name in ["COM\u{2074}", "CONSOLE", "clock", "repo"] {
+        assert!(!domain::is_reserved_device_name(name), "{name:?}");
+    }
+}

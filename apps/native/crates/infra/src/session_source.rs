@@ -268,13 +268,28 @@ fn fingerprint_of(file: &fs::File, path: &Path) -> Result<FileFingerprint, AppEr
     })
 }
 
-/// claude が作っている最中のファイルか(空、または 1 MB 以下で改行がまだ 1 つも無い)。
+/// 作っている最中とみなす間(最後の更新からの時間)。これを過ぎても改行の無いファイルは、作っている最中ではなく、
+/// 壊れたファイルとして数える(警告に出る)。
+const CREATING_GRACE: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// claude が作っている最中のファイルか(空、または 1 MB 以下で改行がまだ 1 つも無い。かつ、最後の更新から
+/// [`CREATING_GRACE`] 以内)。
 fn is_being_created(path: &Path) -> bool {
     use std::io::Read;
     const LIMIT: u64 = 1024 * 1024;
     let Ok(file) = fs::File::open(path) else {
         return false;
     };
+    // 更新から時間がたっている(または更新時刻が読めない)ファイルは、作っている最中ではない。
+    let recent = file
+        .metadata()
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|age| age < CREATING_GRACE);
+    if !recent {
+        return false;
+    }
     let mut buf = Vec::new();
     if file.take(LIMIT + 1).read_to_end(&mut buf).is_err() {
         return false;
@@ -1387,6 +1402,34 @@ mod tests {
         let (sessions, skipped) = repo.list_sessions_lenient("proj").unwrap();
         assert!(sessions.is_empty());
         assert!(skipped.is_empty(), "{skipped:?}");
+    }
+
+    #[test]
+    fn a_file_without_a_newline_is_counted_once_it_has_not_been_updated_for_a_while() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir_all(&project_dir).unwrap();
+        let stale_time = std::time::SystemTime::now() - std::time::Duration::from_secs(5 * 60);
+        for (name, content) in [
+            ("empty.jsonl", ""),
+            ("partial.jsonl", "これは JSON ではない"),
+        ] {
+            let path = project_dir.join(name);
+            fs::write(&path, content).unwrap();
+            fs::OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(stale_time)
+                .unwrap();
+        }
+        // 更新したばかり(作っている最中)のファイルは、これまでどおり数えない。
+        fs::write(project_dir.join("fresh.jsonl"), r#"{"type":"user","sess"#).unwrap();
+        let repo = FileSystemRepository::new(dir.path().to_path_buf());
+        let (_, skipped) = repo.list_sessions_lenient("proj").unwrap();
+        let mut skipped = skipped;
+        skipped.sort();
+        assert_eq!(skipped, vec!["empty.jsonl", "partial.jsonl"]);
     }
 
     #[test]

@@ -28,7 +28,7 @@ pub fn resolve_effective_projects_dir(settings: &Settings) -> Result<PathBuf, ap
     ))
 }
 
-/// ファイルの状態(更新時刻のミリ秒, サイズ)。変わったかの判定に使う。
+/// ファイルの指紋(サイズ, 先頭の中身の指紋。`dismissed::fingerprint`)。変わったかの判定に使う(更新時刻は使わない)。
 pub type FileFingerprint = (u64, u64);
 
 /// 「飛ばした会話ファイル」の警告 1 件の、対象のファイル。

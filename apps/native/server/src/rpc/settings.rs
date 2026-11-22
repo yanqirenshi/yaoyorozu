@@ -287,7 +287,18 @@ pub async fn dismiss_pending_warning(
     body: Bytes,
 ) -> Result<Json<()>, ApiError> {
     let args: DismissArgs = parse_args(&body)?;
-    ctx.state.lock().await.dismiss_warning(args.id);
+    let dismissed = {
+        let mut guard = ctx.state.lock().await;
+        guard.dismiss_warning(args.id);
+        guard.dismissed_skips.clone()
+    };
+    // サーバを起動し直しても出し直さないよう、閉じた印を保存する(ロックの外・ファイル I/O)。
+    let data_dir = ctx.data_dir.as_ref().clone();
+    blocking(move || {
+        crate::dismissed::save(&data_dir, &dismissed);
+        Ok(())
+    })
+    .await?;
     Ok(Json(()))
 }
 

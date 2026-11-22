@@ -111,7 +111,7 @@ async fn notify_skipped_sessions(ctx: &AppContext, project: &str, skipped: &[Str
     if skipped.is_empty() {
         return;
     }
-    // 各ファイルの今の状態(更新時刻のミリ秒, サイズ)。閉じられた警告は、ファイルが変わるまで出さない。
+    // 各ファイルの今の指紋(サイズ, 先頭の中身。更新時刻は使わない)。閉じられた警告は、ファイルが実際に変わるまで出さない。
     let root = match effective_projects_dir(ctx).await {
         Ok(r) => r,
         Err(_) => return,
@@ -120,17 +120,7 @@ async fn notify_skipped_sessions(ctx: &AppContext, project: &str, skipped: &[Str
     {
         let state = ctx.state.lock().await;
         for name in skipped {
-            let fingerprint = std::fs::metadata(root.join(project).join(name))
-                .map(|m| {
-                    let ms = m
-                        .modified()
-                        .ok()
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| d.as_millis() as u64)
-                        .unwrap_or(0);
-                    (ms, m.len())
-                })
-                .unwrap_or((0, 0));
+            let fingerprint = crate::dismissed::fingerprint(&root.join(project).join(name));
             if state
                 .dismissed_skips
                 .get(&(project.to_string(), name.clone()))
