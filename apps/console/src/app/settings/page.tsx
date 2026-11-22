@@ -4,13 +4,20 @@
 // 写し元: `apps/native/react/src/pages/SettingsPage.tsx` の左ペイン。作成・削除・切替は段階 2 以降。
 
 import { useCallback, useEffect, useState } from "react";
-import { getSettings, isAppError, onPing } from "@/api";
-import type { ProfileSummaryDto } from "@/api";
+import {
+  getSettings,
+  isAppError,
+  onConnectionChange,
+  onPing,
+  onReconnected,
+} from "@/api";
+import type { ConnectionState, ProfileSummaryDto } from "@/api";
 
 export default function SettingsPage() {
   const [profiles, setProfiles] = useState<ProfileSummaryDto[]>([]);
   const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
   const [profileError, setProfileError] = useState<string | null>(null);
+  const [connection, setConnection] = useState<ConnectionState>("connecting");
   // 確認用: 最後に届いた ping と受信件数(SSE が 1 件ずつ届くことの目視用)。
   const [lastPing, setLastPing] = useState<{ n: number; at: string } | null>(null);
   const [pingCount, setPingCount] = useState(0);
@@ -26,9 +33,25 @@ export default function SettingsPage() {
   }, []);
 
   useEffect(() => {
-    // eslint の「effect 内の setState」を避けるため、非同期の完了後にだけ状態を更新する。
     void loadSettingsData();
   }, [loadSettingsData]);
+
+  // つなぎ直せたら、切れている間のイベントは失われているので、表示を取り直す。
+  useEffect(() => {
+    const unlistenPromise = onReconnected(() => {
+      void loadSettingsData();
+    });
+    return () => {
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, [loadSettingsData]);
+
+  useEffect(() => {
+    const unlistenPromise = onConnectionChange(setConnection);
+    return () => {
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
 
   useEffect(() => {
     const unlistenPromise = onPing(({ n }) => {
@@ -56,6 +79,11 @@ export default function SettingsPage() {
         ))}
       </ul>
       {profileError && <p className="error">{profileError}</p>}
+      {connection === "disconnected" && (
+        <p className="error" data-testid="connection-status">
+          サーバに接続できません。つながり次第、自動で表示を取り直します。
+        </p>
+      )}
       <p data-testid="ping-status" style={{ fontSize: "0.8rem", opacity: 0.6 }}>
         {lastPing
           ? `ping #${lastPing.n}(${lastPing.at} 受信、計 ${pingCount} 件)`

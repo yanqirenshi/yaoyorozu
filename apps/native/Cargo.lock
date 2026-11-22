@@ -3550,6 +3550,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tower",
+ "windows",
 ]
 
 [[package]]

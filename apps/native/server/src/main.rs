@@ -20,9 +20,12 @@ async fn main() {
 }
 
 async fn run() -> Result<(), String> {
+    // 何かを作る・書く前に、実体のパスへ解決して MSI 版のフォルダでないことを確かめる。
+    let cwd = std::env::current_dir().map_err(|e| format!("作業フォルダを取得できません: {e}"))?;
     let data_dir = config::resolve_data_dir(
         std::env::var(DATA_DIR_ENV_VAR).ok().as_deref(),
         std::env::var("APPDATA").ok().as_deref(),
+        &cwd,
     )?;
     std::fs::create_dir_all(&data_dir)
         .map_err(|e| format!("データフォルダを作れません({}): {e}", data_dir.display()))?;
