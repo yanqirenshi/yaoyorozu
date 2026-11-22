@@ -54,12 +54,23 @@ async fn call(
     mut body: serde_json::Value,
 ) -> (StatusCode, serde_json::Value) {
     if command == "update_settings" {
-        if body.get("expectedRevision").is_none() {
-            body["expectedRevision"] = serde_json::json!(ctx.state.lock().await.settings.revision);
-        }
+        let guard = ctx.state.lock().await;
         if body.get("profileId").is_none() {
-            body["profileId"] =
-                serde_json::json!(ctx.state.lock().await.settings.active_profile_id);
+            body["profileId"] = serde_json::json!(guard.settings.active_profile_id);
+        }
+        let target = body["profileId"].as_str().unwrap_or("").to_string();
+        let profile_revision = guard
+            .settings
+            .profiles
+            .iter()
+            .find(|p| p.id == target)
+            .map(|p| p.revision)
+            .unwrap_or(0);
+        if body.get("expectedRevision").is_none() {
+            body["expectedRevision"] = serde_json::json!(profile_revision);
+        }
+        if body.get("expectedGlobalRevision").is_none() {
+            body["expectedGlobalRevision"] = serde_json::json!(guard.settings.revision);
         }
     }
     let req = Request::builder()
@@ -398,4 +409,192 @@ fn the_reserved_names_include_the_superscript_digits_and_the_extra_device_names(
     for name in ["COM\u{2074}", "CONSOLE", "clock", "repo"] {
         assert!(!domain::is_reserved_device_name(name), "{name:?}");
     }
+}
+
+// --- 11. 設定の版を、プロファイルごとに持つ ---
+
+fn settings_input(repo: &str, root: Option<&str>) -> serde_json::Value {
+    serde_json::json!({
+        "repository_path": repo, "github_project": null,
+        "selected_project_folders": [], "claude_projects_dir": root
+    })
+}
+
+async fn get_revisions(ctx: &AppContext, profile: &str) -> (u64, u64) {
+    let (_, body) = call(
+        ctx,
+        "get_settings",
+        serde_json::json!({"profileId": profile}),
+    )
+    .await;
+    (
+        body["revision"].as_u64().unwrap(),
+        body["global_revision"].as_u64().unwrap(),
+    )
+}
+
+#[tokio::test]
+async fn two_tabs_saving_different_profiles_from_the_same_version_both_succeed() {
+    let f = fixture();
+    let first = f.ctx.state.lock().await.settings.active_profile_id.clone();
+    let (_, created) = call(&f.ctx, "create_profile", serde_json::json!({"name": "b"})).await;
+    let second = created["id"].as_str().unwrap().to_string();
+    let a = forward(&f.dir.path().join("repo-a"));
+    let b = forward(&f.dir.path().join("repo-b"));
+    std::fs::create_dir_all(f.dir.path().join("repo-a")).unwrap();
+    std::fs::create_dir_all(f.dir.path().join("repo-b")).unwrap();
+
+    // どちらのタブも、同じ時点(両プロファイルの版は 0)から保存する。
+    let (rev_a, global) = get_revisions(&f.ctx, &first).await;
+    let (rev_b, _) = get_revisions(&f.ctx, &second).await;
+    let (status, body) = call(
+        &f.ctx,
+        "update_settings",
+        serde_json::json!({"input": settings_input(&a, None), "profileId": first,
+            "expectedRevision": rev_a, "expectedGlobalRevision": global}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["revision"], rev_a + 1);
+    let (status, body) = call(
+        &f.ctx,
+        "update_settings",
+        serde_json::json!({"input": settings_input(&b, None), "profileId": second,
+            "expectedRevision": rev_b, "expectedGlobalRevision": global}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "後のタブの保存も通る: {body}");
+    // 別のプロファイルの保存では、お互いの版は進まない。
+    assert_eq!(get_revisions(&f.ctx, &first).await.0, rev_a + 1);
+    assert_eq!(get_revisions(&f.ctx, &second).await.0, rev_b + 1);
+    assert_eq!(
+        get_revisions(&f.ctx, &first).await.1,
+        global,
+        "全体の版は進まない"
+    );
+}
+
+#[tokio::test]
+async fn unrelated_profile_operations_do_not_make_a_save_conflict() {
+    let f = fixture();
+    let first = f.ctx.state.lock().await.settings.active_profile_id.clone();
+    let repo = forward(&f.dir.path().join("repo-a"));
+    std::fs::create_dir_all(f.dir.path().join("repo-a")).unwrap();
+    let (rev, global) = get_revisions(&f.ctx, &first).await;
+    // 関係のない操作(作成・切替・改名・別のプロファイルの削除)。
+    let (_, created) = call(&f.ctx, "create_profile", serde_json::json!({"name": "x"})).await;
+    let other = created["id"].as_str().unwrap().to_string();
+    call(
+        &f.ctx,
+        "switch_profile",
+        serde_json::json!({"profileId": other}),
+    )
+    .await;
+    call(
+        &f.ctx,
+        "rename_profile",
+        serde_json::json!({"profileId": other, "name": "y"}),
+    )
+    .await;
+    call(
+        &f.ctx,
+        "switch_profile",
+        serde_json::json!({"profileId": first}),
+    )
+    .await;
+    call(
+        &f.ctx,
+        "delete_profile",
+        serde_json::json!({"profileId": other}),
+    )
+    .await;
+    assert_eq!(
+        get_revisions(&f.ctx, &first).await,
+        (rev, global),
+        "どの版も進まない"
+    );
+    let (status, body) = call(
+        &f.ctx,
+        "update_settings",
+        serde_json::json!({"input": settings_input(&repo, None), "profileId": first,
+            "expectedRevision": rev, "expectedGlobalRevision": global}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn a_stale_profile_version_or_a_stale_global_version_is_a_conflict() {
+    let f = fixture();
+    let first = f.ctx.state.lock().await.settings.active_profile_id.clone();
+    let (_, created) = call(&f.ctx, "create_profile", serde_json::json!({"name": "b"})).await;
+    let second = created["id"].as_str().unwrap().to_string();
+    for d in ["repo-a", "repo-b", "root"] {
+        std::fs::create_dir_all(f.dir.path().join(d)).unwrap();
+    }
+    let a = forward(&f.dir.path().join("repo-a"));
+    let b = forward(&f.dir.path().join("repo-b"));
+    let root = forward(&f.dir.path().join("root"));
+    let (rev_a, global) = get_revisions(&f.ctx, &first).await;
+    let (rev_b, _) = get_revisions(&f.ctx, &second).await;
+
+    // 同じプロファイルを、同じ版から 2 回: 後のほうは 409。
+    let save = |profile: &str, repo: &str, root: Option<&str>, rev: u64, global: u64| {
+        serde_json::json!({"input": settings_input(repo, root), "profileId": profile,
+            "expectedRevision": rev, "expectedGlobalRevision": global})
+    };
+    let (status, _) = call(
+        &f.ctx,
+        "update_settings",
+        save(&first, &a, None, rev_a, global),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = call(
+        &f.ctx,
+        "update_settings",
+        save(&first, &b, None, rev_a, global),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+
+    // 全体の欄(claude_projects_dir)を別のタブが変えたら、古い全体の版からの保存は、別のプロファイルでも 409
+    // (全体の欄を、古い値で黙って戻さない)。
+    let (status, body) = call(
+        &f.ctx,
+        "update_settings",
+        save(&second, &b, Some(&root), rev_b, global),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["global_revision"], global + 1);
+    let (status, body) = call(
+        &f.ctx,
+        "update_settings",
+        save(&first, &a, None, rev_a + 1, global),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    // 取り直した全体の版からなら通る。
+    let (status, _) = call(
+        &f.ctx,
+        "update_settings",
+        save(&first, &a, Some(&root), rev_a + 1, global + 1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn expected_global_revision_is_required() {
+    let f = fixture();
+    let first = f.ctx.state.lock().await.settings.active_profile_id.clone();
+    let (status, body) = call(
+        &f.ctx,
+        "update_settings",
+        serde_json::json!({"input": settings_input("", None), "profileId": first, "expectedRevision": 0,
+            "expectedGlobalRevision": null}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 }

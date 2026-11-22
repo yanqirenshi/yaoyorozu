@@ -12,6 +12,13 @@ pub struct Profile {
     pub github_project: Option<GithubProject>,
     #[serde(default)]
     pub selected_project_folders: Vec<String>,
+    /// このプロファイルの設定の版(ローカルサーバが使う。`repository_path`・`github_project`・
+    /// `selected_project_folders` が実際に変わるときだけ 1 つ増える)。`update_settings` は、保存先のプロファイルの
+    /// この版と比べる(別のプロファイルの保存・切替・作成・削除・改名では進まない)。
+    ///
+    /// スキーマの `version` は上げない: `#[serde(default)]` により、この項目の無い既存の `settings.json` は版 0 として読める。
+    #[serde(default)]
+    pub revision: u64,
 }
 
 impl Profile {
@@ -23,6 +30,7 @@ impl Profile {
             repository_path: None,
             github_project: None,
             selected_project_folders: Vec::new(),
+            revision: 0,
         }
     }
 }
@@ -39,5 +47,13 @@ mod tests {
         assert_eq!(profile.repository_path, None);
         assert_eq!(profile.github_project, None);
         assert!(profile.selected_project_folders.is_empty());
+    }
+
+    #[test]
+    fn a_profile_saved_before_the_per_profile_revision_is_read_as_revision_zero() {
+        let old = r#"{"id":"p","name":"n","repository_path":null,"github_project":null,"selected_project_folders":["a"]}"#;
+        let profile: Profile = serde_json::from_str(old).unwrap();
+        assert_eq!(profile.revision, 0);
+        assert_eq!(profile.selected_project_folders, vec!["a".to_string()]);
     }
 }

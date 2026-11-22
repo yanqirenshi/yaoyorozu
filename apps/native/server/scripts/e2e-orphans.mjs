@@ -41,6 +41,7 @@ async function main() {
     input: { repository_path: slash(dirs.repo), github_project: null, selected_project_folders: [], claude_projects_dir: slash(projects) },
     profileId: settings.json.active_profile_id,
     expectedRevision: settings.json.revision,
+    expectedGlobalRevision: settings.json.global_revision,
   });
   const tab = await openSse(srv);
   const start = async (name) => {

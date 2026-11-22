@@ -39,6 +39,7 @@ async function main() {
     },
     profileId: settings.json.active_profile_id,
     expectedRevision: settings.json.revision,
+    expectedGlobalRevision: settings.json.global_revision,
   });
   check("設定(リポジトリ・会話フォルダ)の保存", upd.status === 200, upd.text);
 

@@ -54,6 +54,7 @@ async function main() {
     input: { repository_path: slash(dirs.repo), github_project: null, selected_project_folders: [], claude_projects_dir: slash(projects) },
     profileId: settings.json.active_profile_id,
     expectedRevision: settings.json.revision,
+    expectedGlobalRevision: settings.json.global_revision,
   });
   const r = await rpc(srv, "start_running_session", { request: { kind: "new", mode: "default", name: "queue", sync_origin_main: false } });
   const target = refOf(r.json);

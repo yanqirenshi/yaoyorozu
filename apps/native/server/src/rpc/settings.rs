@@ -63,8 +63,10 @@ pub async fn get_settings(
 ) -> Result<Json<SettingsDto>, ApiError> {
     let args: ProfileIdArgs = parse_args(&body)?;
     let settings = ctx.state.lock().await.settings.clone();
+    let settings_revision = settings.revision;
     let effective = describe_effective_projects_dir(&settings)?;
     let profile = app::resolve_profile(&settings, args.profile_id.as_deref())?.clone();
+    let profile_revision = profile.revision;
     Ok(Json(SettingsDto {
         active_profile_id: settings.active_profile_id,
         profiles: settings
@@ -83,7 +85,8 @@ pub async fn get_settings(
             .map(|p| p.display().to_string()),
         effective_projects_dir: effective,
         restore_running_sessions: settings.restore_running_sessions,
-        revision: settings.revision,
+        revision: profile_revision,
+        global_revision: settings_revision,
     }))
 }
 
@@ -93,14 +96,20 @@ pub struct UpdateSettingsArgs {
     input: SettingsInputDto,
     /// 保存先のプロファイル。必須(省略・null は 400。「アクティブへ保存する」動きは、この構成には無い)。
     profile_id: Option<String>,
-    /// どの版の設定を元にした変更か(`get_settings` の `revision`)。必須。今の版と違えば 409。
+    /// どの版の設定を元にした変更か(`get_settings` の `revision` = 保存先のプロファイルの版)。必須。今の版と違えば 409。
     expected_revision: Option<u64>,
+    /// 全体の欄の版(`get_settings` の `global_revision`)。必須。今の版と違えば 409(全体の欄は、どのプロファイルの
+    /// 保存でも書かれるので、別のタブが変えた全体の欄を、古い値で黙って戻さないために比べる)。
+    expected_global_revision: Option<u64>,
 }
 
 /// `update_settings` の応答。保存後の版(次の保存に使える)。
 #[derive(serde::Serialize)]
 pub struct UpdateSettingsResultDto {
+    /// 保存後の、そのプロファイルの版。
     pub revision: u64,
+    /// 保存後の、全体の欄の版。
+    pub global_revision: u64,
 }
 
 pub async fn update_settings(
@@ -112,6 +121,12 @@ pub async fn update_settings(
         return Err(ApiError::new(
             "invalid_input",
             "expectedRevision(どの版を元にした変更か)を指定してください",
+        ));
+    };
+    let Some(expected_global_revision) = args.expected_global_revision else {
+        return Err(ApiError::new(
+            "invalid_input",
+            "expectedGlobalRevision(全体の欄がどの版を元にした変更か)を指定してください",
         ));
     };
     let Some(target_id) = args.profile_id else {
@@ -128,37 +143,51 @@ pub async fn update_settings(
 
     // ロックの中は候補値の組み立てとバリデーションだけ(I/O はしない)。失敗したときは
     // 状態を書き換えないまま抜ける(無効な値をメモリ上に残さない)。
-    let (to_persist, projects_dir_changed) = {
+    let (to_persist, projects_dir_changed, saved_revision) = {
         let mut guard = ctx.state.lock().await;
-        // 古い版を元にした保存は断る(別のタブが変えた別の欄を、古い値で黙って戻さないため)。
-        if guard.settings.revision != expected_revision {
-            return Err(ApiError::new(
-                "settings_conflict",
-                "設定がほかで変更されています。取り直してからやり直してください",
-            ));
-        }
         let mut candidate = guard.settings.clone();
+        let global_before = guard.settings.revision;
         let Some(profile) = candidate.profiles.iter_mut().find(|p| p.id == target_id) else {
             return Err(ApiError::new(
                 "not_found",
                 "指定されたプロファイルが見つかりません",
             ));
         };
+        // 古い版を元にした保存は断る(別のタブが変えた別の欄を、古い値で黙って戻さないため)。比べるのは、保存先の
+        // プロファイルの版と、全体の欄の版。別のプロファイルの保存・切替・作成・削除・改名では、どちらも進まない。
+        if profile.revision != expected_revision || global_before != expected_global_revision {
+            return Err(ApiError::new(
+                "settings_conflict",
+                "設定がほかで変更されています。取り直してからやり直してください",
+            ));
+        }
+        let profile_changed = profile.repository_path != repository_path
+            || profile.github_project != github_project
+            || profile.selected_project_folders != input.selected_project_folders;
         profile.repository_path = repository_path;
         profile.github_project = github_project;
         profile.selected_project_folders = input.selected_project_folders;
+        // 版は、その欄が実際に変わるときだけ進める(あふれない足し算。人が手で書けるファイルの値)。
+        if profile_changed {
+            profile.revision = profile.revision.saturating_add(1);
+        }
+        let saved_revision = profile.revision;
         candidate.claude_projects_dir = claude_projects_dir;
         // 省略(null)は「変えない」(issue #459)。
         if let Some(restore) = input.restore_running_sessions {
             candidate.restore_running_sessions = restore;
         }
         app::validate_settings(&candidate)?;
-        candidate.revision = candidate.revision.saturating_add(1);
+        let global_changed = guard.settings.claude_projects_dir != candidate.claude_projects_dir
+            || guard.settings.restore_running_sessions != candidate.restore_running_sessions;
+        if global_changed {
+            candidate.revision = global_before.saturating_add(1);
+        }
 
         let projects_dir_changed =
             guard.settings.claude_projects_dir != candidate.claude_projects_dir;
         guard.settings = candidate.clone();
-        (candidate, projects_dir_changed)
+        (candidate, projects_dir_changed, saved_revision)
     };
 
     persist_latest(&ctx).await?;
@@ -171,7 +200,8 @@ pub async fn update_settings(
     }
     ctx.events.emit("settings:updated", &());
     Ok(Json(UpdateSettingsResultDto {
-        revision: to_persist.revision,
+        revision: saved_revision,
+        global_revision: to_persist.revision,
     }))
 }
 

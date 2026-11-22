@@ -44,6 +44,7 @@ async function main() {
     input: { repository_path: slash(dirs.repo), github_project: null, selected_project_folders: [], claude_projects_dir: null },
     profileId: settings.json.active_profile_id,
     expectedRevision: settings.json.revision,
+    expectedGlobalRevision: settings.json.global_revision,
   });
   check("設定(使い捨てのリポジトリ)の保存", upd.status === 200, upd.text);
 

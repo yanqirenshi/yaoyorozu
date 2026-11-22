@@ -136,18 +136,20 @@ export function getSettings(profileId?: string | null): Promise<SettingsDto> {
 // --- Command(設定。native の api/index.ts と同じ関数名・引数・戻り値) ---
 
 // native の `updateSettings(input, profileId)` との違い: `profileId` は必須(省略・null は 400。アクティブへは保存しない。
-// 対象が削除されていれば 404)。第 3 引数 `expectedRevision`(どの版の設定を元にした
-// 変更か。`getSettings` の `revision`)が必須で、古ければ `settings_conflict`(409)で断られる(別のタブが
-// 変えた別の欄を、古い値で黙って戻さないため)。戻り値は保存後の版(次の保存に使える)。
+// 対象が削除されていれば 404)。`expectedRevision`(保存先のプロファイルの版。`getSettings` の `revision`)と
+// `expectedGlobalRevision`(全体の欄の版。`global_revision`)が必須で、どちらかが古ければ `settings_conflict`(409)で
+// 断られる(別のタブが変えた別の欄を、古い値で黙って戻さないため)。戻り値は保存後の 2 つの版(次の保存に使える)。
 export function updateSettings(
   input: SettingsInputDto,
   profileId: string,
   expectedRevision: number,
-): Promise<{ revision: number }> {
-  return invoke<{ revision: number }>("update_settings", {
+  expectedGlobalRevision: number,
+): Promise<{ revision: number; global_revision: number }> {
+  return invoke<{ revision: number; global_revision: number }>("update_settings", {
     input,
     profileId,
     expectedRevision,
+    expectedGlobalRevision,
   });
 }
 

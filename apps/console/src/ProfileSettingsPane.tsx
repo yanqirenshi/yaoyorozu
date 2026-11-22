@@ -209,6 +209,8 @@ function ProfileSettingsPane({
   // 入力の元にした設定の版。取り直して入力へ反映したときだけ更新する(未保存の入力を守って取り直しを
   // 見送ったときは更新しない。そのまま保存すると、サーバが 409 で断る)。
   const loadedRevisionRef = useRef<number | null>(null);
+  // 同じく、全体の欄(`claude_projects_dir`・`restore_running_sessions`)の版。
+  const loadedGlobalRevisionRef = useRef<number | null>(null);
 
   // 対象プロファイルの内容を取り直す。自分自身の操作(名前変更)の直後と、他画面からの変更
   // (`settings:updated`)・つなぎ直し(`refreshToken`)の両方で使う。
@@ -224,13 +226,20 @@ function ProfileSettingsPane({
         const targetChanged =
           loadedTargetRef.current !== null && loadedTargetRef.current !== targetId;
         loadedTargetRef.current = targetId;
-        if (force || targetChanged || shouldApply()) {
+        // 「ほかで変更されました」は、表示しているプロファイルの版か全体の版が、読み込んだものから変わったときだけ出す
+        // (関係のない通知 = 別のプロファイルの保存・切替・作成・改名では、入力中でも出さない)。
+        const versionsChanged =
+          loadedRevisionRef.current === null ||
+          loadedRevisionRef.current !== settings.revision ||
+          loadedGlobalRevisionRef.current !== settings.global_revision;
+        if (force || targetChanged || (versionsChanged && shouldApply())) {
           setRepositoryPath(settings.repository_path ?? "");
           setClaudeProjectsDir(settings.claude_projects_dir ?? "");
           setRestoreRunningSessions(settings.restore_running_sessions);
           setGithubProject(settings.github_project);
           setSelectedProjectFolders(settings.selected_project_folders);
           loadedRevisionRef.current = settings.revision;
+          loadedGlobalRevisionRef.current = settings.global_revision;
           setBaseline({
             repositoryPath: settings.repository_path ?? "",
             claudeProjectsDir: settings.claude_projects_dir ?? "",
@@ -361,11 +370,13 @@ function ProfileSettingsPane({
       },
       targetProfileId,
       loadedRevisionRef.current ?? -1,
+      loadedGlobalRevisionRef.current ?? -1,
     )
       .then((result) => {
         // 保存できた入力を「読み込んだ値」にする(未保存の変更ではなくなる。「ほかで変更されました」も消す)。
         // 失敗したとき(サーバ停止など)は、入力も未保存の状態もそのまま残し、エラーだけを出す。
         loadedRevisionRef.current = result.revision;
+        loadedGlobalRevisionRef.current = result.global_revision;
         setBaseline(currentForm);
         clearStale();
         setSaved(true);

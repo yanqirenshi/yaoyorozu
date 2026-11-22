@@ -52,6 +52,7 @@ async function main() {
     input: { repository_path: slash(dirs.repo), github_project: null, selected_project_folders: [projectName], claude_projects_dir: slash(projects) },
     profileId: settings.json.active_profile_id,
     expectedRevision: settings.json.revision,
+    expectedGlobalRevision: settings.json.global_revision,
   });
   const started = await rpc(srv, "start_running_session", {
     request: { kind: "resume", project: projectName, session_id: convId, mode: "default", name: "ledger", worktree: { kind: "branch", branch_name: "ledger-test" }, sync_origin_main: false },
